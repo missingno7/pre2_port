@@ -1,0 +1,21 @@
+This package consists of two parts with distinct licensing:
+
+1. The vendored Nuked-OPL3 emulator core (nuked_opl3/vendor/opl3.c and
+   nuked_opl3/vendor/opl3.h) is:
+
+       Nuked OPL3
+       Copyright (C) 2013-2020 Nuke.YKT
+       Licensed under the GNU Lesser General Public License, version 2.1
+       or (at your option) any later version.
+
+   See https://github.com/nukeykt/Nuked-OPL3 for the upstream source.
+   The full text of the LGPL-2.1 is available at
+   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+2. The Python binding code (everything else in this package) is released
+   under the same terms (LGPL-2.1-or-later) so that the package as a whole
+   can be distributed and reused without licensing ambiguity.
+
+Because the core is LGPL, you may link/use this module from software under
+any license, provided the LGPL obligations for the core (notably: keep this
+notice, and allow relinking against a modified core) are met.

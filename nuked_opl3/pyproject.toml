@@ -1,0 +1,34 @@
+# Standalone packaging metadata for the nuked_opl3 binding.
+#
+# This file lets the package be lifted into its own repository and built /
+# published independently.  Within the Ancient Empires editor repo the
+# extension is normally built in place with:
+#
+#     python -m nuked_opl3._ffi_build
+#
+# To build/install as a standalone distribution, place this directory's
+# contents at a repo root so the import package lives at ``nuked_opl3/`` and
+# run ``pip install .`` (a C compiler is required).
+[build-system]
+requires = ["setuptools>=61", "cffi>=1.15"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuked-opl3"
+version = "0.1.0"
+description = "cffi Python bindings for the Nuked-OPL3 (OPL3/OPL2) emulator core"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "LGPL-2.1-or-later"
+authors = [{ name = "Ancient Empires reverse-engineering project" }]
+dependencies = ["cffi>=1.15"]
+
+[project.urls]
+"Nuked-OPL3 upstream" = "https://github.com/nukeykt/Nuked-OPL3"
+
+[tool.setuptools]
+# The compiled extension is produced by the cffi hook in setup.py.
+packages = ["nuked_opl3"]
+
+[tool.setuptools.package-data]
+nuked_opl3 = ["vendor/opl3.c", "vendor/opl3.h", "LICENSE"]
