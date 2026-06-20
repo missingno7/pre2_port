@@ -81,6 +81,10 @@ def write_snapshot(rt: Runtime, out_dir: str | Path, *, status: str, steps: int,
             "pit_channel2_latch": rt.dos._pit_channel2_latch,
             "pit_channel2_write_low": rt.dos._pit_channel2_write_low,
             "pit_channel2_reload": rt.dos.pit_channel2_reload,
+            "pit_channel0_access": getattr(rt.dos, "_pit_channel0_access", 3),
+            "pit_channel0_latch": getattr(rt.dos, "_pit_channel0_latch", 0),
+            "pit_channel0_write_low": getattr(rt.dos, "_pit_channel0_write_low", True),
+            "pit_channel0_reload": getattr(rt.dos, "pit_channel0_reload", 0),
             "speaker_control": rt.dos.speaker_control,
             "opl_selected_register": rt.dos.opl_selected_register,
             "opl_status": rt.dos.opl_status,
@@ -149,6 +153,10 @@ def load_snapshot(exe_path: str | Path, snapshot_dir: str | Path, *, game_root: 
     rt.dos._pit_channel2_latch = dos_meta.get("pit_channel2_latch", rt.dos._pit_channel2_latch)
     rt.dos._pit_channel2_write_low = dos_meta.get("pit_channel2_write_low", rt.dos._pit_channel2_write_low)
     rt.dos.pit_channel2_reload = dos_meta.get("pit_channel2_reload", rt.dos.pit_channel2_reload)
+    rt.dos._pit_channel0_access = dos_meta.get("pit_channel0_access", rt.dos._pit_channel0_access)
+    rt.dos._pit_channel0_latch = dos_meta.get("pit_channel0_latch", rt.dos._pit_channel0_latch)
+    rt.dos._pit_channel0_write_low = dos_meta.get("pit_channel0_write_low", rt.dos._pit_channel0_write_low)
+    rt.dos.pit_channel0_reload = dos_meta.get("pit_channel0_reload", rt.dos.pit_channel0_reload)
     rt.dos.speaker_control = dos_meta.get("speaker_control", rt.dos.speaker_control)
     rt.dos.opl_selected_register = dos_meta.get("opl_selected_register", rt.dos.opl_selected_register)
     rt.dos.opl_status = dos_meta.get("opl_status", rt.dos.opl_status)

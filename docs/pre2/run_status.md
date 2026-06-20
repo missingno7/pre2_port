@@ -46,6 +46,14 @@ native code is now part of the normal runtime.
   hybrid runtime** — hybrid renders level 1 correctly with ~950 native blits/frame.
   The island stops at the blit primitive; the tilemap/sprite-list **draw loops**
   (`34A0`/`3552`) that iterate game state are the next island.
+- **Real-time pacing (live `--view`):** the VM now models **PIT channel 0** (the
+  program programs ch0 reload `0x4000` → 72.83 Hz itself; we read it, never
+  hardcode) and advances the **70 Hz VGA-retrace** bit on the wall clock, so PRE2's
+  own timer/vsync waits set the speed. Live play self-paces to its native **~21.8
+  Hz** with no `--speed` knob (the game's `1030:1C52` governor waits 3 ticks/frame).
+  Record/replay keep the deterministic fixed-chunk clock (demos stay byte-exact).
+  Snapshots now persist the PIT ch0 state. See `dos_re/dos.py` (`pit_channel0_*`,
+  `_vga_status`) and `scripts/play.py`.
 - **Next:** the tilemap / object draw loops + background scroll/compose (the frame
   draw), then the object/player update. See [`recovery_architecture.md`](recovery_architecture.md)
   and [`symbol_ledger.md`](symbol_ledger.md).

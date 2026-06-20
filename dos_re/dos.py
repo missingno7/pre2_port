@@ -73,6 +73,20 @@ class DOSMachine:
     _pit_channel2_latch: int = 0
     _pit_channel2_write_low: bool = True
     pit_channel2_reload: int = 0
+    # PIT channel 0 = the system timer that drives IRQ0/INT 08h.  Tracked exactly
+    # like channel 2 so a front-end can read the rate the program *itself*
+    # programmed (1193182 / reload) and fire INT 08h at that frequency — no
+    # game-specific timing is baked in.
+    _pit_channel0_access: int = 3
+    _pit_channel0_latch: int = 0
+    _pit_channel0_write_low: bool = True
+    pit_channel0_reload: int = 0  # 0 => 0x10000, the BIOS default ~18.2 Hz
+    # Optional emulated-time source in seconds.  When set, the VGA input-status
+    # vertical-retrace bit (03DAh/03BAh) advances with time at the display refresh
+    # rate instead of toggling per read.  An interactive front-end sets it to
+    # wall-clock so the program's own vsync/timer waits pace it to real time; left
+    # None for headless/deterministic runs (per-read toggle preserved).
+    time_source: Callable[[], float] | None = None
     speaker_control: int = 0
     speaker_callback: Callable[[bool, float], None] | None = None
     adlib_callback: Callable[[int, int], None] | None = None
@@ -285,15 +299,35 @@ class DOSMachine:
         return direct
 
 
+    # PIT channel 0 (IRQ0/INT 08h) frequency the program itself programmed.
+    PIT_INPUT_HZ = 1193182.0
+
+    def pit_channel0_hz(self) -> float:
+        return self.PIT_INPUT_HZ / (self.pit_channel0_reload or 0x10000)
+
+    def display_refresh_hz(self) -> float:
+        # VGA 320x200 graphics and text modes refresh at ~70 Hz; a property of the
+        # CRTC timing, not of any particular program.
+        return 70.0
+
+    def _vga_status(self, retrace_bit: int) -> int:
+        # VGA input status register 1. The named bit reflects vertical retrace.
+        # With a time source it advances at the display refresh rate (so the
+        # program's own vsync waits run at real speed); otherwise it toggles per
+        # read so busy-wait loops still make progress in deterministic runs.
+        ts = self.time_source
+        if ts is None:
+            self.vga_status_reads += 1
+            return retrace_bit if (self.vga_status_reads & 1) else 0x00
+        phase = (ts() * self.display_refresh_hz()) % 1.0
+        return retrace_bit if phase >= 0.72 else 0x00
+
     def port_read(self, cpu: CPU8086, port: int, bits: int) -> int:
-        # VGA input status register 1. Bit 3 is vertical retrace. Toggle it so
-        # busy-wait loops that wait for retrace high/low both make progress.
+        # VGA input status register 1. Bit 3 is vertical retrace.
         if port == 0x03BA and bits == 8:
-            self.vga_status_reads += 1
-            return 0x80 if (self.vga_status_reads & 1) else 0x00
+            return self._vga_status(0x80)
         if port == 0x03DA and bits == 8:
-            self.vga_status_reads += 1
-            return 0x08 if (self.vga_status_reads & 1) else 0x00
+            return self._vga_status(0x08)
         if port == 0x60 and bits == 8:
             # 8042 keyboard data port: the game's INT 9 handler reads the scan code here.
             return self.current_scancode & 0xFF
@@ -411,12 +445,31 @@ class DOSMachine:
         value &= 0xFF
         if port == 0x43:
             channel = (value >> 6) & 0x03
+            access = (value >> 4) & 0x03
             if channel == 2:
-                access = (value >> 4) & 0x03
                 self._pit_channel2_access = access
                 self._pit_channel2_write_low = True
                 if access in (1, 2):
                     self._pit_channel2_latch = 0
+            elif channel == 0:
+                self._pit_channel0_access = access
+                self._pit_channel0_write_low = True
+                if access in (1, 2):
+                    self._pit_channel0_latch = 0
+            return
+        if port == 0x40:
+            access = self._pit_channel0_access
+            if access == 1:
+                self.pit_channel0_reload = (self.pit_channel0_reload & 0xFF00) | value
+            elif access == 2:
+                self.pit_channel0_reload = (self.pit_channel0_reload & 0x00FF) | (value << 8)
+            else:
+                if self._pit_channel0_write_low:
+                    self._pit_channel0_latch = value
+                    self._pit_channel0_write_low = False
+                else:
+                    self.pit_channel0_reload = ((value << 8) | self._pit_channel0_latch) & 0xFFFF
+                    self._pit_channel0_write_low = True
             return
         if port == 0x42:
             access = self._pit_channel2_access

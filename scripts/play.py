@@ -139,8 +139,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     """
     import pygame
     import numpy as np
+    from time import perf_counter
     from sdl_view import NukedAdlibAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
-    from dos_re.cpu import HaltExecution, UnsupportedInstruction
+    from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
 
     replaying = playback is not None
@@ -154,6 +155,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     steps_done = 0
     frame = 0
     running = True
+
+    # Real-time pacing for live play: model the PIT (the program programmed ch0
+    # itself) and the 70 Hz VGA retrace on the wall clock, and let the game's own
+    # timer/vsync waits set the speed — no per-game constants.  Demo record/replay
+    # keep the deterministic fixed-chunk clock so recordings stay reproducible.
+    present_period = 1.0 / max(1, int(args.present_hz))
+    next_tick = perf_counter()
+    realtime_batch = 2000  # VM steps between wall-clock checks (keeps ticks on time)
     status = "replaying" if replaying else "running"
     rt.cpu.trace_enabled = False
     rt.dos.console_input_fallback = None
@@ -283,13 +292,32 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 key_dispatcher.pump(allow_release=True)
                 flush_dos_keys()
 
-            chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
+            # Live play self-paces on the wall clock via the emulated PIT/retrace;
+            # record/replay keep the deterministic fixed-chunk clock.
+            realtime = not replaying and demo["rec"] is None
+            rt.dos.time_source = perf_counter if realtime else None
             try:
-                for _ in range(chunk):
-                    rt.cpu.step()
-                steps_done += chunk
-                if args.timer_irq:
-                    deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
+                if realtime:
+                    deadline = perf_counter() + present_period
+                    while running and perf_counter() < deadline:
+                        now = perf_counter()
+                        tick_period = 1.0 / max(1.0, rt.dos.pit_channel0_hz())
+                        if args.timer_irq and now >= next_tick and rt.cpu.get_flag(IF):
+                            deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
+                            next_tick += tick_period
+                            if next_tick < now:  # fell behind: resync, no tick burst
+                                next_tick = now + tick_period
+                        else:
+                            for _ in range(realtime_batch):
+                                rt.cpu.step()
+                            steps_done += realtime_batch
+                else:
+                    chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
+                    for _ in range(chunk):
+                        rt.cpu.step()
+                    steps_done += chunk
+                    if args.timer_irq:
+                        deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
             except ConsoleInputWouldBlock:
                 status = "waiting for DOS key"
             except HaltExecution:
@@ -313,7 +341,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 + (" | REC" if demo["rec"] is not None else "")
             )
             frame += 1
-            clock.tick(max(1, int(args.present_hz)))
+            if not realtime:
+                clock.tick(max(1, int(args.present_hz)))
     finally:
         if not replaying:
             stop_recording()
@@ -413,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--demo-dir", default=str(ROOT / "artifacts"), help="directory to write recorded demos into")
     p.add_argument("--audio", default="adlib", choices=("adlib", "off"), help="viewer sound-card (OPL3) audio")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
-    p.add_argument("--speed", type=int, default=120_000, help="target VM steps/sec in --view (game+music tempo; lower=slower, raise to reach the game faster)")
+    p.add_argument("--speed", type=int, default=120_000, help="VM steps/sec for record/replay's deterministic clock; live --view ignores this and self-paces on the emulated PIT/retrace at native speed")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=30, help="live presents per second (also paces the VM to real time)")
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
