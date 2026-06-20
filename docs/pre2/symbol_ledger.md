@@ -71,6 +71,65 @@ The current sub-island is the **draw primitive layer**.
   [0x2DF4], bg buffer, GC/map-mask state)` → framebuffer delta (note the masked
   path's `xchg` also writes `[0x2DF4]`, a read/write contract).
 
+### Next island — frame renderer / scroll engine (boundary MAPPED 2026-06-20)
+
+**Merge target:** these routines are one landmass = the **frame renderer + scroll engine**. They
+recover into a `pre2/recovered/frame_renderer.py` driven by a `Camera`/`ScrollState`/`TileMap` model in
+`pre2/bridge/` — NOT a pile of per-routine hooks. Coastline note: the per-frame entry (`3B40`) and the
+directional scroll routines (`3344/338E/33F5/…`) have **no direct callers in the code segment — they are
+dispatched indirectly** (movement/direction dispatch; cf. `3300: call dx`). So the eventual checkpoint is a
+**semantic frame/tick contract** (camera + dirty + framebuffer), not a static CALL hook. Capture witness +
+build the Camera/TileMap bridge first (task #2); wire one thin frame-boundary adapter, not one-per-routine.
+
+**Game data model (ds=1A13) — the emerging `Camera`/`ScrollState`/`TileMap`:**
+`[0x2DE0]`=camera X (tile col), `[0x2DE2]`=camera Y (tile row); `[0x2DDC]/[0x2DDE]`=previous camera X/Y
+(dirty compare, `3582` seeds `0x55AA`); `[0x2DE4]`=column ring index (0..0x13=19), `[0x2DE6]`=row ring index
+(wrap 0xB=11 down / 0xC=12 up); `[0x6BC0]`=fine pixel scroll (0..0x10); `[0x6BF4]`=row-stride factor;
+`[0x2DB6]`=scroll source offset (computed by `3569` from camera, base `0x3F40`); `[0x2DD2]/[0x2DD4]`=dest
+offsets; `[0x2DD6]`=tilesheet segment; `[0x2CF1]`=level height in rows; `[0x2DF0]/[0x2DF1]`=dirty flags;
+`[0x2DEE]`=accumulated tile-type flags; `0x3F40`=ring-buffer wrap base; xlat `0x6984`→`[0x6BB9]`,
+`0x805A`→`[0x2DEE]`, type table `0x4DF4`→`[0x2DF0]`.
+
+**WITNESSED + BRIDGED 2026-06-20.** `pre2/bridge/frame.py` reconstructs this as `Camera`/`ScrollState`
+dataclasses + memory views (mirrors `pre2/bridge/sprites.py`); `tests/test_frame_bridge.py` (3 pass).
+Witness `pre2/probes/capture_frame_state.py` (saved `artifacts/frame_state_witness/`) recorded the state
+block per frame of gameplay demo 091827 and **confirmed**: `[0x2DE6] row_ring == camera_y % 12` exactly as
+camera panned 0→0x21; `[0x2DF1]` counts tile-rows scrolled per frame (reset after redraw); `[0x2DDC]` carries
+the `0x55AA` dirty sentinel; `[0x2DD2]/[0x2DD4]` are the two double-buffer pages (0 / 0x2000). Both ring
+invariants also hold against the live snapshot.
+
+**TileMap RESOLVED 2026-06-20** (full `346E` disasm + dump). The level segment `[0x2DD6]` holds the
+row-major tile map at **base offset 0, stride 0x100 (256) bytes/row, 1 byte/tile = tile index**: `346E`'s
+caller passes `ah=camera_y, al=camera_x` so `si = camera_y*256 + camera_x` (`33E9` adds `0xB00` = +11 rows
+for the bottom fill row). Same segment also holds the three per-tile attribute tables `346E` xlats by tile
+index: `0x6984`→`[0x6BB9]` (plane/attr), `0x805A`→`[0x2DEE]` (tile flags), `0x4DF4`→`[0x2DF0]` (type/dirty);
+then `al`=tile index → `call 3B69` (recovered blit). Confirmed by dump: row 33 = `21 44 6B 21 44 1D 1E 46 7E…`
+(`7E`=sky, matches the all-`7E` top rows). Modelled as `TileMap` in `pre2/bridge/frame.py` (`read_tilemap`,
+reproduces the witnessed row byte-exact); `tests/test_frame_bridge.py`. **NOTE:** the three attribute
+tables `346E` xlats are in the DATA segment 1A13 (the xlatb carry an `es:` override, es=1A13), NOT the
+level block — and the third (`1A13:0x4DF4`) IS the same sprite-type table the blit dispatches on.
+
+**`346E` RECOVERED + VERIFIED + WIRED 2026-06-20.** `pre2/recovered/frame_renderer.py:draw_tile_row`
+recovers the 20-tile row draw; per the island-composition rule it calls the verified `blit_sprite` directly
+(no ASM contact point inside the row). Contract = the four A000 planes for the row + OR-accumulated
+`[0x6BB9]/[0x2DEE]/[0x2DF0]` + `di` (and other pushed regs) preserved (346E push/pops di). Verified
+byte-exact vs **pure-ASM oracle** in-VM by `pre2/probes/verify_frame.py` (33 row-draws, 0 divergence) and
+unit-tested (`tests/test_frame_renderer.py`). Wired hybrid + verify in `pre2/checkpoints/frame.py`
+(auto-installed; 5 replacements now). Carries an `OracleLink` (1030:346E, VERIFIED). Hybrid vs ASM whole-
+frame differs only by the expected speed/progress gap (native is faster), not correctness — removing the
+346E hook leaves hybrid behaviour unchanged.
+
+| Location | Name | Confidence | Role | Coverage | Known unknowns |
+|---|---|---|---|---|---|
+| `1030:3B40` | **frame compositor** — `sti`; set dirty `[0x2DF0]=1`,`[0x2DDC]=0x55AA`; `call 3582` (redraw dirty grid) → `call 3A08` (scroll-copy window to A000) → `call 3035` (panel/HUD copy); ret. **Indirectly dispatched** (no direct CALL site) | OBSERVED | (frame entry) | — | who dispatches it (movement/tick table) |
+| `1030:3582` | **dirty grid redraw** — if camera `[0x2DE0/2DE2]` == prev `[0x2DDC/2DDE]` and `[0x2DF0]==0` → skip (jmp `363C`); else redraw 12 (`ch=0xC`) × 20 (`cl=0x14`) tile grid: per tile `mov bl,es:[si]` index → flags via `[bx-0x7FA6]`(`0x805A`) & type `[bx+0x4DF4]`, `call 3B5C`(→blit). Resets `[0x2DEE]/2DF0/2DF1`, `[0x2DF2]=0x7E80`, `di=[0x2DB6]` | OBSERVED | (draw) | — | full grid stride/wrap detail |
+| `1030:346E` | **tile-row draw** (incremental fill) — sets bg ptr `[0x2DF2]=di+0x7E80`; `ds=[0x2DD6]`; row of `cx=0x14`(20) tiles: `lodsb` index, 3-table xlat → per-tile flags, `call 3B69` (blit, `es=A000`); `[0x2DF2]+=2`; bg vert wrap `di≥0x5D40→-0x1E00`; `di-=0x28`/row | OBSERVED | (draw) | — | exact `si` row-ptr arithmetic |
+| `1030:3344` / `338E` / `33F5` (+1) | **directional scroll-and-fill** (down/up/left/+right) — adjust camera `[0x2DE0/2DE2]`, fine `[0x6BC0]` (wrap 0x10), ring idx `[0x2DE4/2DE6]`; `call 3569` (recompute scroll src) then `call 346E` to fill the newly-exposed row/col. Return CF=clear if scrolled / CF=set at level edge (`[0x2CF1]-0xB` clamp). **Indirectly dispatched** | OBSERVED | (scroll) | — | the dispatch table / 4th (right) routine entry |
+| `1030:3569` | **calc scroll source** — `[0x2DB6]` = f(camera col `ax`, `[0x2DE6]`, base `0x3F40`) | OBSERVED | (helper) | — | — |
+| `1030:3A08` | **scroll copy** — `si=[0x2DB6]`,`di=[0x2DD4]`; planar `rep movsb` rows (split `dl`+`dh` halves around `0x3F40` wrap) into `es=A000`; then SC plane-mask `out 3C4,0F02` + zero-fill the newly exposed strip. `452F`/`451F` = EGA SC/GC save/restore | OBSERVED | (present) | — | — |
+| `1030:3035` | **panel/HUD copy** — screen-to-screen (`ds=es=A000`) copy via `[0x2DD2]/[0x2DD4]`, 0x14-wide × 0xB0-tall band stepping `di` by 4 (calls `452F`/`451F`/`44C1`) | GUESS | (draw) | — | exact purpose (HUD vs split-screen) |
+| tables `0x6984`→`[0x6BB9]` / `0x805A`→`[0x2DEE]` / `0x4DF4`(type)→`[0x2DF0]`; tilemap `es:si` | tile→flag xlat tables + tilemap data | OBSERVED | data | — | tilemap layout/encoding |
+
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
 |---|---|---|---|---|---|
 | `1030:3B69` | sprite **blit dispatcher** — `idx`→`bx`; dispatch on `[0x4DF4+idx]`. Exit contract: `di+=2` (next tile column), `bx/cx/dx/si/ds` preserved. Entry `3B58` adds `di+=0x3F40`, `es=ds=0xA000` | **VERIFIED** | replacement | `pre2/recovered/renderer.py` + `pre2/replacements.py`; `tests/test_blit_renderer.py`; in-VM lockstep `pre2/probes/verify_blit.py` (1002 blits, all 3 paths, 0 divergence) + hybrid renders level 1 correctly | — |

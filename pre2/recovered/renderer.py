@@ -21,6 +21,8 @@ translation lives in ``pre2/bridge/sprites.py``. A sprite is 16 rows of 2 bytes
 """
 from __future__ import annotations
 
+from pre2.recovered.oracle import oracle_link
+
 __all__ = [
     "ROW_STRIDE",
     "ROWS",
@@ -91,6 +93,7 @@ def blit_masked(planes: list[bytearray], idx: int, di: int, bg_off: int, mask: b
                 planes[p][d + c] = ((mask[k] & planes[p][d + c]) | planes[p][src + k]) & 0xFF
 
 
+@oracle_link("1030:3B69", "A000 planar framebuffer (one 16x16 slot); di += 2", "VERIFIED")
 def blit_sprite(planes: list[bytearray], idx: int, di: int, sprite_type: int,
                 bg_off: int, mask: bytes = b"") -> None:
     """Dispatch one sprite blit on its transparency class (``1030:3B69``)."""

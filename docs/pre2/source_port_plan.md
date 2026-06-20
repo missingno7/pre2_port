@@ -20,12 +20,17 @@ against the ASM, then wire a thin adapter — and only then trust it.
 
 ### Recovered islands
 
-| Island | Module | Status |
-|---|---|---|
-| SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/replacements.py` | **done, verified vs ASM** |
-| sprite/tile decode | `pre2/recovered/` (planned) | next — first *stateful* island (stands up `pre2/bridge/`) |
-| masked blit / tilemap-background draw | `pre2/recovered/` (planned) | after sprite/tile |
-| gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | later; semantic-state verification |
+Each island declares the larger subsystem it will **merge into** (the coastline must move upward
+over time — see `recovery_architecture.md`; hooks are scaffolding, not the final architecture).
+
+| Island | Module | Merge target | Status |
+|---|---|---|---|
+| SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/replacements.py` | asset loader | **done, verified vs ASM** |
+| sprite/tile decode | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` | sprite/asset pipeline | **done, verified vs ASM** (first stateful island; stood up `pre2/bridge/`) |
+| sprite blit + background restore + type dispatch | `pre2/recovered/renderer.py` + `pre2/replacements.py` | renderer | **done, verified vs ASM** (in-VM lockstep, hybrid renders level 1) |
+| SoundBlaster audio (DSP + 8237 DMA + 8259 PIC) | `dos_re/sblaster.py` + `dos_re/pic.py` (generic hw) | DOS machine (not game layer) | **done** — game auto-detects + DMA-streams PCM; user-confirmed |
+| frame renderer — tile-row draw (346E) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, verified vs ASM** (in-VM lockstep, 33 row-draws 0-div; composes the verified blit). Scroll-copy/compositor (`3A08`/`3582`/`3B40`) + directional scroll remain (indirectly dispatched → semantic frame/tick checkpoint) |
+| gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | object system / player update / physics | later; semantic-state verification |
 
 ## Recovery rules (kept short; full posture in `recovery_architecture.md`)
 

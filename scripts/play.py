@@ -52,7 +52,7 @@ def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
     """
     if not getattr(args, "verify_hooks", False):
         return
-    from pre2.replacements import enable_pre2_hook_verification
+    from pre2.checkpoints import enable_pre2_hook_verification
 
     def _on_result(name: str, ok: bool, detail) -> None:
         if ok:

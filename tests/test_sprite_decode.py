@@ -89,7 +89,7 @@ from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE  # noqa: E402
 
 from pre2.bridge.sprites import DATA_SEG, CACHE_OFF, read_slot  # noqa: E402
 from pre2.recovered.sprite_decode import PIXEL_BASE, SPRITE_BYTES  # noqa: E402
-from pre2 import replacements as R  # noqa: E402
+from pre2 import checkpoints as R  # noqa: E402
 
 
 class _FakeRegs:

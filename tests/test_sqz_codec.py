@@ -139,7 +139,7 @@ def test_sqz_hook_verifies_against_asm_in_vm():
     decompression's contract was diffed against the ASM with zero divergence.
     Slow (runs the VM); skipped when assets are absent.
     """
-    from pre2.replacements import enable_pre2_hook_verification
+    from pre2.checkpoints import enable_pre2_hook_verification
     from pre2.runtime import create_pre2_runtime
 
     rt = create_pre2_runtime(str(ASSETS / "pre2.exe"), game_root=str(ASSETS), fast_adlib=True)

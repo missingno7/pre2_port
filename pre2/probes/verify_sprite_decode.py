@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
-from pre2.replacements import enable_pre2_hook_verification
+from pre2.checkpoints import enable_pre2_hook_verification
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"

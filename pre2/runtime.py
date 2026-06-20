@@ -7,7 +7,7 @@ from dos_re.bootstrap_lzexe import install_lzexe_0069_accelerator
 from dos_re.runtime import Runtime, create_runtime as create_dos_runtime
 from dos_re.snapshot import load_snapshot as load_dos_snapshot
 from pre2.bootstrap_hooks import install_fast_adlib_service
-from pre2.replacements import install_pre2_replacements, uninstall_pre2_replacements
+from pre2.checkpoints import install_pre2_replacements, uninstall_pre2_replacements
 
 ORIGINAL_EXE = "pre2.exe"
 
