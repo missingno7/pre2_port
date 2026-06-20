@@ -188,6 +188,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             if rec is not None and rec.active:
                 rec.record_dos_key(boundary=frame, scancode=sc, text=text, value=value)
 
+    last_rgb = [None]  # most recent rendered frame, for F10 screenshots
+
     def render_current():
         mem = bytes(rt.program.memory.data)
         mode = rt.dos.video_mode & 0x7F
@@ -204,6 +206,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             screen.fill((0, 0, 0))
             pygame.display.flip()
             return
+        last_rgb[0] = rgb
         _present_surface(pygame, np, screen, rgb)
 
     def replay_deliver(runtime, scancode: int) -> None:
@@ -223,6 +226,15 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     out = _default_snapshot_dir(ROOT / "artifacts")
                     write_snapshot(rt, out, status="manual viewer snapshot", steps=steps_done)
                     print(f"snapshot: {out}")
+                elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
+                    rgb = last_rgb[0]
+                    if rgb is not None:
+                        h, w = rgb.shape[0], rgb.shape[1]
+                        surf = pygame.image.frombuffer(
+                            np.ascontiguousarray(rgb).tobytes(), (w, h), "RGB")
+                        out = ROOT / "artifacts" / f"shot_pre2_{datetime.now():%Y%m%d_%H%M%S}.png"
+                        pygame.image.save(surf, str(out))
+                        print(f"screenshot: {out}")
                 elif replaying:
                     continue  # ignore host keys while a demo drives input
                 elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F11:
