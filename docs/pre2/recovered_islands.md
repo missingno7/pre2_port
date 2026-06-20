@@ -7,6 +7,7 @@
 | ASM boundary | Function | Status | Merge target | Contract |
 |---|---|---|---|---|
 | `1030:1068` | `codecs.sqz.unpack_sqz` | VERIFIED | asset loader | decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance |
+| `1030:3035` | `recovered.frame_renderer.panel_copy` | RECOVERED | frame renderer | A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, 0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only) |
 | `1030:346E` | `recovered.frame_renderer.draw_tile_row` | VERIFIED | frame renderer | A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BB9]/[0x2DEE]/[0x2DF0]; di preserved |
 | `1030:3582` | `recovered.frame_renderer.draw_grid` | VERIFIED | frame renderer | A000 framebuffer (visible-grid type>=1 tiles) + [0x2DEE]/[0x2DF0]/[0x2DF1] + prev camera [0x2DDC]/[0x2DDE]; di/regs preserved |
 | `1030:3A08` | `recovered.frame_renderer.scroll_copy` | VERIFIED | frame renderer | A000 planar scroll-copy of the visible window (ring buffer -> display page) + all-plane clear of the leading strip; bx/di/si/ds/es preserved |

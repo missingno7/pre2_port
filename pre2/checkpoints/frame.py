@@ -19,7 +19,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge import frame as _frame
 from pre2.bridge import sprites as _spr
-from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row, scroll_copy
+from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row, panel_copy, scroll_copy
 
 from .common import _DATA_SEG, report
 
@@ -29,7 +29,10 @@ _GRID_ENTRY = (0x1030, 0x3582)
 _GRID_EXIT = (0x1030, 0x3645)  # the grid redraw's near RET
 _SCROLL_ENTRY = (0x1030, 0x3A08)
 _SCROLL_EXIT = (0x1030, 0x3AD2)  # the scroll-copy's near RET
-_VAR_DEST_PAGE = 0x2DD4
+_PANEL_ENTRY = (0x1030, 0x3035)
+_PANEL_EXIT = (0x1030, 0x307B)   # the page-flip copy's near RET
+_VAR_DEST_PAGE = 0x2DD4          # back page (scroll/panel source)
+_VAR_FRONT_PAGE = 0x2DD2         # front page (panel dest)
 _VAR_ROW_RING = 0x2DE6
 _VAR_ROW_FACTOR = 0x6BF4
 _VAR_PLANE_ATTR = 0x6BB9
@@ -164,6 +167,34 @@ def frame_scroll_copy(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret; bx/di/si/ds/es preserved
 
 
+@registry.replace(*_PANEL_ENTRY, "frame_panel_copy")
+def frame_panel_copy(cpu) -> None:
+    """Native replacement for the double-buffer page-flip copy at 1030:3035."""
+    mem = cpu.mem
+    src = mem.rw(_DATA_SEG, _VAR_DEST_PAGE)
+    dst = mem.rw(_DATA_SEG, _VAR_FRONT_PAGE)
+
+    if getattr(cpu, "pre2_verify_mode", False):
+        snap = _spr.snapshot_planes(mem)
+        panel_copy(snap, src, dst)
+        cpu.pre2_frame_panel_pending.append(snap)
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    panel_copy(_spr.plane_views(mem), src, dst)
+    cpu.s.ip = cpu.pop()  # near ret; regs preserved (vsync wait omitted, timing-only)
+
+
+# NOTE on 1030:3B40 (the frame compositor): it is a static composition —
+# sti; [0x2DF0]=1; [0x2DDC]=0x55AA; call 3582; call 3A08; call 3035; pop es; pop ds;
+# ret — i.e. draw_grid -> scroll_copy -> panel_copy over the now-native leaves. We do
+# NOT wire it as a native replacement: no available demo reaches 3B40 (its leaves are
+# exercised via their other callers: 0237 / 01E2 / 023A), so a native 3B40 cannot be
+# verified yet. The hybrid runtime already runs the three leaves natively when the ASM
+# 3B40 calls them; wire a native compositor only once a scenario exercises 3B40 so it
+# can be lockstep-verified (the call order itself is static: 3B4C/3B4F/3B52).
+
+
 @registry.replace(*_ROW_ENTRY, "frame_tile_row")
 def frame_tile_row(cpu) -> None:
     """Native replacement for the tile-row draw at 1030:346E."""
@@ -254,3 +285,19 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
 
     cpu.replacement_hooks[_SCROLL_EXIT] = _scroll_verify_at_exit
     cpu.hook_names[_SCROLL_EXIT] = "frame_scroll_copy_verify"
+
+    def _panel_verify_at_exit(c) -> None:
+        if c.pre2_frame_panel_pending:
+            snap = c.pre2_frame_panel_pending.pop()
+            mem = c.mem
+            reason = None
+            live = _spr.snapshot_planes(mem)
+            for p in range(4):
+                if bytes(live[p]) != bytes(snap[p]):
+                    reason = f"plane {p}"
+                    break
+            report(stats, on_result, raise_on_divergence, "frame_panel_copy", reason)
+        interpret_current_instruction_without_hook(c)
+
+    cpu.replacement_hooks[_PANEL_EXIT] = _panel_verify_at_exit
+    cpu.hook_names[_PANEL_EXIT] = "frame_panel_copy_verify"

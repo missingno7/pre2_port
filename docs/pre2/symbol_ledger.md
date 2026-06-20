@@ -146,8 +146,21 @@ blit:
   Verified byte-exact vs pure-ASM oracle (`pre2/probes/verify_scroll.py`, 3 copies, 0 divergence); wired
   hybrid+verify in `pre2/checkpoints/frame.py` (7 replacements now), hybrid smoke-tested clean.
   `OracleLink` (1030:3A08, VERIFIED).
-- `3035` **panel/HUD** copy (screen→screen via `[0x2DD2]/[0x2DD4]`) — second leaf, recover next.
-- `3B40` **compositor** — then a trivial static composition: `draw_grid(); scroll_copy(); panel()`.
+- `3035` **page-flip copy** — **RECOVERED + VERIFIED + WIRED 2026-06-20.** Double-buffer present:
+  `307C` copies 2-byte × 0xB0-row vertical strips (write-mode-1 latched 4-plane copy, stride 0x28) from the
+  back page `[0x2DD4]` to the front page `[0x2DD2]`, at symmetric columns `0x14±2k` for `k=0..9`, with
+  `44C1` vsync waits interleaved (timing-only, no pixel contract — omitted). `frame_renderer.py:panel_copy`;
+  verified vs pure-ASM (`pre2/probes/verify_panel.py`, 1 copy, 0 div); wired hybrid+verify (8 replacements).
+  `OracleLink` (1030:3035, VERIFIED).
+- `3B40` **compositor** — static composition `sti; [0x2DF0]=1; [0x2DDC]=0x55AA; draw_grid(); scroll_copy();
+  panel(); pop es; pop ds; ret`. **NOT wired**: no available demo reaches 3B40 (its three leaves are
+  exercised via their *other* callers — 0237 / 01E2 / 023A — and verified there), so a native 3B40 cannot be
+  lockstep-verified yet. The hybrid already runs all three leaves natively when ASM 3B40 calls them; wire a
+  native compositor once a scenario exercises 3B40. (Recorded in `pre2/checkpoints/frame.py`.)
+
+**Task #5 status:** the compositor's pixel work — grid redraw (3582), scroll-copy (3A08), page-flip (3035)
+— is fully recovered, verified byte-exact, and live. 3B40 itself is thin glue, characterized but deferred
+(unverifiable with current demos). The frame-renderer coastline is now native except that thin glue.
 
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
 |---|---|---|---|---|---|

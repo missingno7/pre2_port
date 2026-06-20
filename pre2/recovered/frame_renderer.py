@@ -32,7 +32,7 @@ from pre2.recovered.renderer import ROW_STRIDE, WRAP_AT, WRAP_SPAN, blit_sprite
 
 __all__ = [
     "RowFlags", "GridResult", "VISIBLE_COLS", "VISIBLE_ROWS", "RING_COLS",
-    "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy",
+    "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy", "panel_copy",
 ]
 
 SCROLL_WRAP_SRC = 0x3F40   # source offset of the ring-buffer wrap section (3A08)
@@ -264,3 +264,30 @@ def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_f
         off = (dest + k) & 0xFFFF
         for p in range(4):
             planes[p][off] = 0
+
+
+@oracle_link("1030:3035",
+             "A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, "
+             "0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only)",
+             "RECOVERED", merge_target="frame renderer")
+def panel_copy(planes, src_page, dst_page):
+    """Recover ``1030:3035`` — the double-buffer page-flip copy.
+
+    Copies 2-byte-wide x 0xB0-row vertical strips (write-mode-1 latched 4-plane
+    copy, screen stride 0x28) from the back page (``[0x2DD4]``) to the front page
+    (``[0x2DD2]``), at the symmetric columns ``0x14-2k`` and ``0x14+2k`` for
+    ``k=0..9`` (the original interleaves these with vsync waits to flip tear-free;
+    the wait is timing-only and carries no pixel contract, so it is omitted).
+    """
+    rows = SCROLL_HEIGHT                              # cx = 0xB0 (176) per strip
+    for k in range(10):                               # [asm 304B-3076] 0x3031 = 0,4,..,0x24
+        field_3033 = (0x14 - 2 * k) & 0xFFFF
+        for col in (field_3033, (field_3033 + 4 * k) & 0xFFFF):  # two 307C calls
+            si = (col + src_page) & 0xFFFF            # [asm 3084] si = di + [0x2DD4]
+            di = (col + dst_page) & 0xFFFF            # [asm 3088] di = di + [0x2DD2]
+            for _ in range(rows):                     # [asm 3096-309E] movsb x2 then +0x26
+                for c in range(2):
+                    for p in range(4):
+                        planes[p][(di + c) & 0xFFFF] = planes[p][(si + c) & 0xFFFF]
+                si = (si + SCREEN_ROW) & 0xFFFF
+                di = (di + SCREEN_ROW) & 0xFFFF
