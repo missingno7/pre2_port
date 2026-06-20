@@ -42,6 +42,27 @@ def _default_snapshot_dir(root: Path) -> Path:
     return root / f"snapshot_pre2_{stamp}"
 
 
+def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
+    """Install recovered-native verification checkpoints when --verify-hooks is set.
+
+    These are non-replacing: the original ASM still executes and remains the
+    oracle. Each recovered subsystem re-derives its result natively and the
+    checkpoint asserts it equals what the ASM wrote, printing OK/DIVERGENCE live.
+    """
+    if not getattr(args, "verify_hooks", False):
+        return
+    from pre2.codecs.sqz_hook import install_sqz_decode_checkpoint
+
+    def _on_sqz(name: str, ok: bool, detail) -> None:
+        if ok:
+            print(f"[verify-hooks] sqz OK          {name}", flush=True)
+        else:
+            print(f"[verify-hooks] sqz DIVERGENCE  {name}: {detail}", flush=True)
+
+    install_sqz_decode_checkpoint(rt, on_result=_on_sqz)
+    print("[verify-hooks] installed: SQZ decode (native == original ASM, checked live)", flush=True)
+
+
 def _make_runtime(args: argparse.Namespace, *, fast_adlib: bool | None = None):
     exe = Path(args.exe)
     game_root = Path(args.game_root)
@@ -397,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
+    p.add_argument("--verify-hooks", action="store_true", help="install recovered-native verification checkpoints (e.g. SQZ decode): the original ASM still runs and stays the oracle; each result is compared to native and printed OK/DIVERGENCE")
     args = p.parse_args(argv)
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
@@ -422,11 +444,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.play_demo:
         playback = InputDemoPlayback.load(args.play_demo)
         rt = _make_replay_runtime(args, playback)
+        _install_verification_hooks(rt, args)
         if args.view:
             return _run_view(rt, args, playback=playback)
         return _run_replay_headless(rt, args, playback)
 
     rt = _make_runtime(args)
+    _install_verification_hooks(rt, args)
     if args.view:
         return _run_view(rt, args)
 
