@@ -206,6 +206,62 @@ def sprite_decode_shared(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret to caller (1030:3FAB)
 
 
+# ---- per-frame sprite blit (1030:3B69) ---------------------------------------
+# Renders one 16x16 sprite/tile from the planar VRAM cache, dispatching on the
+# classifier's type (see pre2/recovered/renderer.py). The original saves/restores
+# its own EGA state (451F/452F), so the native path leaves the sequencer/GC alone;
+# the only register the caller reads back is di (advanced by 2 to the next column).
+from pre2.recovered.renderer import blit_sprite, dest_rows
+
+_BLIT_ENTRY = (0x1030, 0x3B69)
+# the three dispatch RET sites: plain (type 0), empty (type 1), masked (type >=2).
+_BLIT_EXITS = ((0x1030, 0x3BD6), (0x1030, 0x3BE6), (0x1030, 0x3D64))
+_TYPE_TABLE = 0x4DF4       # [0x4DF4+idx] sprite type
+_MASK_BASE = 0x2DF4        # [0x2DF4+(id-2)*0x20] transparency mask for partial sprites
+_VAR_BG_PTR = 0x2DF2       # [0x2DF2] background source pointer
+_VAR_BG_ROW = 0x6BC0       # [0x6BC0] scroll row (bg_off = [0x2DF2] - 0x28*[0x6BC0])
+
+
+def _blit_inputs(mem, cpu):
+    idx = cpu.s.ax & 0xFF
+    typ = mem.data[(_DATA_SEG << 4) + _TYPE_TABLE + idx]
+    di = cpu.s.di & 0xFFFF
+    bg_off = (mem.rw(_DATA_SEG, _VAR_BG_PTR) - 0x28 * mem.data[(_DATA_SEG << 4) + _VAR_BG_ROW]) & 0xFFFF
+    mask = b""
+    if typ >= 2:
+        base = (_DATA_SEG << 4) + _MASK_BASE + (typ - 2) * 0x20
+        mask = bytes(mem.data[base: base + 0x20])
+    return idx, typ, di, bg_off, mask
+
+
+def _blit_slot(planes, di):
+    return [bytes(planes[p][(d + c) & 0xFFFF] for _r, d in dest_rows(di) for c in range(2))
+            for p in range(4)]
+
+
+@registry.replace(*_BLIT_ENTRY, "sprite_blit")
+def sprite_blit(cpu) -> None:
+    """Native replacement for the per-sprite blit dispatcher at 1030:3B69."""
+    mem = cpu.mem
+    if (cpu.s.es & 0xFFFF) != 0xA000:
+        raise Pre2HybridGap(
+            f"sprite blit with es={cpu.s.es & 0xFFFF:04X} (not A000) at 1030:3B69 "
+            "is not recovered — the renderer only targets the A000 planar planes."
+        )
+    idx, typ, di, bg_off, mask = _blit_inputs(mem, cpu)
+
+    if getattr(cpu, "pre2_verify_mode", False):
+        snap = _spr.snapshot_planes(mem)
+        blit_sprite(snap, idx, di, typ, bg_off, mask)
+        cpu.pre2_blit_pending.append((typ, di, _blit_slot(snap, di), (di + 2) & 0xFFFF))
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    blit_sprite(_spr.plane_views(mem), idx, di, typ, bg_off, mask)
+    cpu.s.di = (di + 2) & 0xFFFF  # [asm: di advanced one tile column]
+    cpu.s.ip = cpu.pop()
+
+
 def install_pre2_replacements(rt) -> int:
     """Install the native replacement hooks (the hybrid runtime). Returns count.
 
@@ -244,6 +300,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.pre2_verify_mode = True
     cpu.pre2_verify_pending = []
     cpu.pre2_sprite_pending = []
+    cpu.pre2_blit_pending = []
     stats = HookVerifyStats()
 
     def _verify_at_exit(c) -> None:
@@ -320,4 +377,32 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.hook_names[_SPR_LOCAL_EXIT] = "sprite_verify_local"
     cpu.replacement_hooks[_SPR_SHARED_EXIT] = _sprite_verify_exit("shared")
     cpu.hook_names[_SPR_SHARED_EXIT] = "sprite_verify_shared"
+
+    def _blit_verify_exit(c) -> None:
+        # Reached one of the blit's RET sites (verify mode let the ASM draw).
+        if c.pre2_blit_pending:
+            typ, di, native, exp_di = c.pre2_blit_pending.pop(0)
+            asm = _blit_slot(_spr.plane_views(c.mem), di)
+            if asm != native:
+                reason = "framebuffer"
+            elif (c.s.di & 0xFFFF) != exp_di:
+                reason = f"exit di {c.s.di & 0xFFFF:04X}!={exp_di:04X}"
+            else:
+                reason = None
+            name = f"sprite_blit_type{typ}"
+            if reason is None:
+                stats.verified += 1
+                if on_result is not None:
+                    on_result(name, True, None)
+            else:
+                stats.diverged.append((name, reason))
+                if on_result is not None:
+                    on_result(name, False, reason)
+                if raise_on_divergence:
+                    raise AssertionError(f"hook verify divergence on {name}: {reason}")
+        interpret_current_instruction_without_hook(c)
+
+    for exit_addr in _BLIT_EXITS:
+        cpu.replacement_hooks[exit_addr] = _blit_verify_exit
+        cpu.hook_names[exit_addr] = "sprite_blit_verify"
     return stats

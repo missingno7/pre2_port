@@ -155,3 +155,18 @@ def read_slot(mem, slot: int) -> list[bytes]:
     off = slot * SLOT_BYTES
     return [bytes(mem.data[_plane_base(p) + off: _plane_base(p) + off + SLOT_BYTES])
             for p in range(PLANES)]
+
+
+# ---- whole-plane views (the per-frame blit/renderer operates on these) --------
+
+def plane_views(mem) -> list[memoryview]:
+    """Writable views of the four EGA planes (writes land in shadow VRAM)."""
+    mv = memoryview(mem.data)
+    return [mv[EGA_APERTURE + p * EGA_PLANE_STRIDE: EGA_APERTURE + (p + 1) * EGA_PLANE_STRIDE]
+            for p in range(PLANES)]
+
+
+def snapshot_planes(mem) -> list[bytearray]:
+    """A detached copy of the four EGA planes (for verify-mode oracle compares)."""
+    return [bytearray(mem.data[EGA_APERTURE + p * EGA_PLANE_STRIDE: EGA_APERTURE + (p + 1) * EGA_PLANE_STRIDE])
+            for p in range(PLANES)]

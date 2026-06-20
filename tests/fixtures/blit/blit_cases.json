@@ -1,0 +1,75 @@
+{
+ "0": {
+  "di": 22592,
+  "idx": 21,
+  "type": 0,
+  "bg_off": 39424,
+  "cache": [
+   "308004474e204d1044884c8449a48c365956119600c6881e0080007880000000",
+   "dfbebbdfb1efb0f7b87bb07f305f73cfa68fee0bff0b77e3ff7dff9bf807c77f",
+   "fffffff8ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "3fc17fe77ff07ff87ffc7ffcfffefffe7ffebffe9ffecffec7fec1fc87f83f80"
+  ],
+  "bg": [
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "expected": [
+   "308004474e204d1044884c8449a48c365956119600c6881e0080007880000000",
+   "dfbebbdfb1efb0f7b87bb07f305f73cfa68fee0bff0b77e3ff7dff9bf807c77f",
+   "fffffff8ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "3fc17fe77ff07ff87ffc7ffcfffefffe7ffebffe9ffecffec7fec1fc87f83f80"
+  ]
+ },
+ "1": {
+  "di": 16192,
+  "idx": 126,
+  "type": 1,
+  "bg_off": 39424,
+  "cache": [
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "bg": [
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "expected": [
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "0000000000000000000000000000000000000000000000000000000000000000"
+  ]
+ },
+ "2": {
+  "di": 21952,
+  "idx": 33,
+  "type": 6,
+  "bg_off": 39424,
+  "mask": "fffffffffffffffffffefff8fff0ffe0ff807f003f001e000c00000000000000",
+  "cache": [
+   "000000000000000000000002000a001d00718007c040a000d200c90065130231",
+   "0000000000000000000000010009001b0074807dc03fe07ff27f7fffbfecfeee",
+   "00000000000000000001000700070007000f80fec0ffe1fff1fffefffeffffdf",
+   "000000000000000000010007000f001f007b80ffc0ffe1fff3bff91ffd1fff3f"
+  ],
+  "bg": [
+   "0000000000000000000000000000000000000000000000000000000000000000",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "expected": [
+   "000000000000000000000002000a001d00718007c040a000d200c90065130231",
+   "fffffffffffffffffffefff9fff9fffbfff4ff7dff3ffe7ffe7f7fffbfecfeee",
+   "fffffffffffffffffffffffffff7ffe7ff8ffffefffffffffdfffefffeffffdf",
+   "000000000000000000010007000f001f007b80ffc0ffe1fff3bff91ffd1fff3f"
+  ]
+ }
+}

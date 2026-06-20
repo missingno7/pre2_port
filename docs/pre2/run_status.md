@@ -35,9 +35,20 @@ native code is now part of the normal runtime.
   cache byte-exact across 211 slots) with verify-mode lockstep coverage. The
   per-frame blit/scroll and the sprite classifier (`4213`, an EGA read-plane
   question) remain to recover.
-- **Next:** masked blits / tilemap-background draw, and the sprite classifier.
-  See [`recovery_architecture.md`](recovery_architecture.md) and
-  [`symbol_ledger.md`](symbol_ledger.md).
+- **Third recovered-native island: the sprite blit + classifier** (`1030:3B69`
+  dispatcher + plain/empty/masked paths + `3D65` bg-restore, and the classifier
+  `4213`). The classifier reads the cache in EGA read-mode-1 (colour compare) to
+  build the per-sprite transparency type + masks; the blit renders each sprite
+  from the planar cache by class — opaque copy, background restore, or masked
+  composite `screen=(screen AND mask) OR sprite`. Recovered to a pure planar
+  `renderer` module and **verified byte-for-byte vs the ASM** (per-blit witness +
+  in-VM lockstep: 1002 blits across all paths, 0 divergence). Runs **live in the
+  hybrid runtime** — hybrid renders level 1 correctly with ~950 native blits/frame.
+  The island stops at the blit primitive; the tilemap/sprite-list **draw loops**
+  (`34A0`/`3552`) that iterate game state are the next island.
+- **Next:** the tilemap / object draw loops + background scroll/compose (the frame
+  draw), then the object/player update. See [`recovery_architecture.md`](recovery_architecture.md)
+  and [`symbol_ledger.md`](symbol_ledger.md).
 - **Known gap (deferred):** gameplay audio is silent. The intro/title music is
   **AdLib FM** and plays (`0x388/0x389` → vendored `nuked_opl3`); but gameplay
   (mode `0x0D`) uses PRE2's **SoundBlaster digital path** (MOD music + PCM SFX via
