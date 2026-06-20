@@ -29,6 +29,12 @@ native code is now part of the normal runtime.
   tilemap/background draw — where the first memory-view ↔ dataclass bridge is
   stood up. See [`recovery_architecture.md`](recovery_architecture.md) and
   [`symbol_ledger.md`](symbol_ledger.md).
+- **Known gap (deferred):** gameplay audio is silent. The intro/title music is
+  **AdLib FM** and plays (`0x388/0x389` → vendored `nuked_opl3`); but gameplay
+  (mode `0x0D`) uses PRE2's **SoundBlaster digital path** (MOD music + PCM SFX via
+  DSP/DMA), which the VM does **not** emulate yet — no SB DSP, no 8237 DMA, no SB
+  IRQ. Recovering it is a game-independent `dos_re` subsystem (SB DSP + DMA channel
+  + IRQ + PCM mix + `BLASTER` env). Deferred to after the sprite/tile pass.
 
 ## 2026-06-19 VGA boot milestone
 
