@@ -156,6 +156,11 @@ class CPU8086:
     # front-end sets it to throttle the game to real time.
     timer_pacer: Callable[[], None] | None = None
     timer_ticks_elapsed: int = 0
+    # Optional hardware-interrupt source (a PIC).  When set, it is polled at each
+    # instruction boundary with IF set; returning an IRQ number delivers it inline
+    # (real hardware-interrupt entry into the IVT handler).  Left None on the
+    # deterministic demo/test path so that timing there is unchanged.
+    pending_irq: "Callable[[], int | None] | None" = None
     max_rep_count: int = 1_000_000
     # Optional generic execution telemetry sink. The CPU emits only raw events;
     # game-specific island classification lives outside the interpreter.
@@ -361,9 +366,28 @@ class CPU8086:
         m = self.fetch8()
         return m, (m >> 6) & 3, (m >> 3) & 7, m & 7
 
+    def _enter_hardware_interrupt(self, irq: int) -> None:
+        """Real IRQ entry: push flags/cs/ip, clear IF/TF, jump to the IVT handler."""
+        vec = (0x08 + irq) if irq < 8 else (0x70 + irq - 8)
+        off = self.mem.rw(0, vec * 4)
+        seg = self.mem.rw(0, vec * 4 + 2)
+        self.push(self.s.flags)
+        self.push(self.s.cs & 0xFFFF)
+        self.push(self.s.ip & 0xFFFF)
+        self.set_flag(IF, False)
+        self.set_flag(TF, False)
+        self.s.cs, self.s.ip = seg & 0xFFFF, off & 0xFFFF
+
     def step(self) -> None:
         if self.halted:
             raise HaltExecution()
+
+        # Deliver a pending hardware interrupt at this instruction boundary.
+        if self.pending_irq is not None and (self.s.flags & IF):
+            irq = self.pending_irq()
+            if irq is not None:
+                self._enter_hardware_interrupt(irq)
+                return
 
         start_cs, start_ip = self.s.cs & 0xFFFF, self.s.ip & 0xFFFF
         hook_key = (start_cs, start_ip)

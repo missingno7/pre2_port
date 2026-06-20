@@ -99,6 +99,12 @@ class DOSMachine:
     opl_status: int = 0
     opl_registers: dict[int, int] = field(default_factory=dict)
     port_log: list[tuple[str, int, int, int]] = field(default_factory=list)
+    # Optional emulated sound hardware (a Sound Blaster + its DMA channel) and the
+    # master PIC.  Left None on the deterministic/headless path; an interactive
+    # front-end enables them (see runtime.enable_sound_blaster) so the program's
+    # own driver detects the card and streams PCM.
+    sound_blaster: "object | None" = None
+    pic: "object | None" = None
     # Pending BIOS keystrokes as 16-bit values (high byte = scan code, low byte =
     # ASCII).  An interactive front-end pushes keys here; when empty the runtime
     # keeps its previous deterministic headless behaviour.
@@ -323,6 +329,12 @@ class DOSMachine:
         return retrace_bit if phase >= 0.72 else 0x00
 
     def port_read(self, cpu: CPU8086, port: int, bits: int) -> int:
+        sb = self.sound_blaster
+        if sb is not None and bits == 8:
+            if sb.owns_port(port):
+                return sb.port_read(port)
+            if port == 0x21 and self.pic is not None:
+                return self.pic.get_mask()
         # VGA input status register 1. Bit 3 is vertical retrace.
         if port == 0x03BA and bits == 8:
             return self._vga_status(0x80)
@@ -370,10 +382,38 @@ class DOSMachine:
         if len(self.port_log) < 4096:
             self.port_log.append(("out", port & 0xFFFF, value & ((1 << bits) - 1), bits))
         port &= 0xFFFF
+        if self.sound_blaster is not None and bits == 8 and self._route_sound_write(port, value):
+            return
         self._track_pc_speaker(port, value, bits)
         self._track_vga_dac_ports(port, value, bits)
         self._track_ega_ports(cpu, port, value, bits)
         self._track_adlib_ports(port, value, bits)
+
+    def _route_sound_write(self, port: int, value: int) -> bool:
+        """Route a byte write to the Sound Blaster / its DMA channel / the PIC.
+
+        Returns True if it was a sound/DMA/PIC port (the PIT at 0x40-0x43 and the
+        speaker at 0x61 stay with _track_pc_speaker).
+        """
+        sb = self.sound_blaster
+        if sb.owns_port(port):
+            sb.port_write(port, value)
+            return True
+        if port <= 0x0F:                    # 8237 DMA controller #1
+            sb.dma_controller_write(port, value)
+            return True
+        if 0x80 <= port <= 0x8F:            # DMA page registers
+            sb.page_write(port, value)
+            return True
+        if self.pic is not None:
+            if port == 0x20:                # PIC command (non-specific EOI = 0x20)
+                if value == 0x20:
+                    self.pic.eoi()
+                return True
+            if port == 0x21:                # PIC mask
+                self.pic.set_mask(value)
+                return True
+        return False
 
     def _track_vga_dac_ports(self, port: int, value: int, bits: int) -> None:
         if bits == 16:
@@ -842,6 +882,13 @@ class DOSMachine:
             # shifted the level (the game relies on the BIOS reset and does not
             # re-write the start-address low byte for the play screen).
             cpu.mem.ega_display_start = 0
+            # Maintain the BIOS data area CRTC base port at 0040:0063 the way a
+            # real BIOS mode-set does (color 3D4h / mono 3B4h).  Programs read it to
+            # find the status port for retrace waits (e.g. via es=0, offset 0463h ==
+            # flat 0040:0063).  (We deliberately do NOT touch 0040:0049/004A here —
+            # the game manages its own video state and we keep this minimal.)
+            crtc_base = 0x03B4 if effective_mode == 7 else 0x03D4
+            cpu.mem.ww(0x0040, 0x0063, crtc_base)
             self.cursor_row = 0
             self.cursor_col = 0
             if self.text_mode_active:

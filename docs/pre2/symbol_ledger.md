@@ -11,6 +11,26 @@ code segment in the current VM layout, `1A13` is a fixed data segment.
 **Confidence:** GUESS · OBSERVED · ASM_MATCHED · VERIFIED · CANONICAL.
 **Role:** probe · checkpoint/verifier · replacement · data · canonical.
 
+## Audio / SoundBlaster (IMPLEMENTED — generic hw in dos_re; gameplay audio plays)
+
+Emulated as generic PC hardware: `dos_re/sblaster.py` (SB DSP + 8237 DMA channel,
+8-bit unsigned PCM), `dos_re/pic.py` (8259), wired via `runtime.enable_sound_blaster`
+(live viewer only). The DSP→bump uses `sqz_bump_advance` (LZSS pre-shift fixed).
+Verified: detection passes, IRQ auto-detect succeeds, blocks stream; `--verify-hooks`
+shows the bump matches (no divergence). Below is the probe map that got us there.
+
+PRE2 **auto-detects** the SoundBlaster (no `BLASTER` env needed if the hw responds).
+Assets (confirmed): SFX = 8-bit signed PCM @ 8000 Hz, 11 effects (`SAMPLE.SQZ`,
+60768 B, our "other" codec); music = `.TRK` = LZSS/EAT-compressed ProTracker MOD.
+The game software-mixes MOD + SFX to PCM and streams it via SB DMA.
+
+| Location | Name | Confidence | Role | Coverage | Known unknowns |
+|---|---|---|---|---|---|
+| `1030:1D42`/`1D4F` | **SB base-scan + DSP reset detect** — for base `0x210..0x260` (step 0x10): `OUT base+6` =1,delay,=0; poll `base+0xE` bit7 (≤2000); read `base+0xA` == `0xAA`. On hit stores ports `cs:[0x266]=base`, `[0x268]=base+0xA` (read-data), `[0x26A]=base+0xC` (write-cmd), `[0x26C]=base+0xE` (read-status/IRQ-ack) | OBSERVED | (hw probe) | captured live (cold boot → reset `0x216`, poll `0x21E`) | — |
+| `1030:1F6D` | **IRQ auto-detect setup** — swaps 8 IVT vectors (INT 08–0Fh) for counting ISRs (`1FAA`/`1FC0`/`1FD6`/…): each reads `cs:[0x26C]` (= `base+0xE`, SB IRQ ack), bumps a per-IRQ counter `[0xE67…]`, `OUT 0x20,0x20` (EOI), chains old vector. Triggers an SB IRQ and sees which counter moved → the SB IRQ | OBSERVED | (hw probe) | — | how the trigger transfer / DMA channel is auto-detected (next) |
+| ports `base+6/0xA/0xC/0xE` | SB DSP: reset / read-data / write-cmd+status / read-buffer-status+IRQ-ack | OBSERVED | (hw) | — | DSP command set the driver uses (0x14/0x1C/0x40/0x41/0xD1/0xF2…) — capture once detection passes |
+| 8237 DMA ch + page, PIC `0x20/0x21` | DMA channel for PCM + SB IRQ via PIC | GUESS | (hw) | — | which DMA channel; needs the playback capture |
+
 ## SQZ decompressor (first recovered island → merges into the asset loader)
 
 | Location | Name | Confidence | Role | Coverage | Known unknowns |

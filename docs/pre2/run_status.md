@@ -54,15 +54,23 @@ native code is now part of the normal runtime.
   Record/replay keep the deterministic fixed-chunk clock (demos stay byte-exact).
   Snapshots now persist the PIT ch0 state. See `dos_re/dos.py` (`pit_channel0_*`,
   `_vga_status`) and `scripts/play.py`.
+- **Gameplay audio now works (SoundBlaster emulated).** PRE2's digital audio (MOD
+  music + PCM SFX) plays. The VM now models a generic **SB DSP + 8237 DMA channel +
+  8259 PIC** (`dos_re/sblaster.py`, `dos_re/pic.py`), so the game's own driver
+  auto-detects the card (base/IRQ/DMA — no `BLASTER` env needed) and streams 8-bit
+  unsigned PCM, which the viewer resamples and mixes with the OPL stream
+  (`scripts/sdl_view.py`). Enabled in the live viewer via `runtime.enable_sound_blaster`
+  (off for deterministic demos/tests). Two BIOS-correctness fixes were needed: the
+  BIOS data area CRTC port (`0040:0063`) and `IRET` stubs on the hardware-IRQ
+  vectors. A residual audio-pacing nicety (occasional buffer pressure) remains.
+- **Bug fixed (also fixed a graphics-corruption regression):** the SQZ **LZSS bump
+  advance** used `(reserved>>4)+1`, but the ASM (`1030:1450`) pre-shifts the size's
+  high byte twice — so we over-reserved ~4× for assets with a non-zero high byte
+  (sprites/union/menu/.trk), eventually pushing decodes into VRAM. Now
+  `sqz_bump_advance()` matches the ASM exactly.
 - **Next:** the tilemap / object draw loops + background scroll/compose (the frame
   draw), then the object/player update. See [`recovery_architecture.md`](recovery_architecture.md)
   and [`symbol_ledger.md`](symbol_ledger.md).
-- **Known gap (deferred):** gameplay audio is silent. The intro/title music is
-  **AdLib FM** and plays (`0x388/0x389` → vendored `nuked_opl3`); but gameplay
-  (mode `0x0D`) uses PRE2's **SoundBlaster digital path** (MOD music + PCM SFX via
-  DSP/DMA), which the VM does **not** emulate yet — no SB DSP, no 8237 DMA, no SB
-  IRQ. Recovering it is a game-independent `dos_re` subsystem (SB DSP + DMA channel
-  + IRQ + PCM mix + `BLASTER` env). Deferred to after the sprite/tile pass.
 
 ## 2026-06-19 VGA boot milestone
 

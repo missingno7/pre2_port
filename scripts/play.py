@@ -140,9 +140,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     import pygame
     import numpy as np
     from time import perf_counter
-    from sdl_view import NukedAdlibAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
+    from sdl_view import NukedAdlibAudio, SoundBlasterAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
+    from dos_re.runtime import enable_sound_blaster
 
     replaying = playback is not None
     pygame.mixer.pre_init(frequency=44100, size=-16, channels=1, buffer=1024)
@@ -174,6 +175,17 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     if getattr(args, "audio", "adlib") == "adlib":
         adlib = NukedAdlibAudio(pygame, audio_status, enabled=True)
         rt.dos.set_adlib_callback(lambda reg, value: adlib.write(reg, value), emit_current=True)
+
+    # Gameplay digital audio: enable the emulated Sound Blaster so the original
+    # driver detects it and DMA-streams its PCM (MOD music + PCM SFX).  Live play
+    # only — record/replay keep the deterministic clock with no SB.  IRQ0/IRQ7 are
+    # then delivered inline by the CPU via the PIC.
+    sb_audio = None
+    sound_blaster = None
+    if not replaying and getattr(args, "audio", "adlib") != "off":
+        sound_blaster = enable_sound_blaster(rt)
+        sound_blaster.clock = perf_counter  # pace block-complete IRQs to real time
+        sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
 
     demo: dict[str, InputDemoRecorder | None] = {"rec": None}
     fast_adlib = bool(getattr(args, "fast_adlib", False))
@@ -298,19 +310,36 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             rt.dos.time_source = perf_counter if realtime else None
             try:
                 if realtime:
+                    # Hardware IRQs (timer IRQ0, Sound Blaster IRQ7) are raised on
+                    # the wall clock and delivered at *batch boundaries* (not mid-
+                    # instruction) so an ISR never interrupts a stateful EGA render
+                    # sequence.  The SB's block IRQ is paced by its own clock.
                     deadline = perf_counter() + present_period
+                    pic = rt.dos.pic
                     while running and perf_counter() < deadline:
                         now = perf_counter()
                         tick_period = 1.0 / max(1.0, rt.dos.pit_channel0_hz())
-                        if args.timer_irq and now >= next_tick and rt.cpu.get_flag(IF):
-                            deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
-                            next_tick += tick_period
-                            if next_tick < now:  # fell behind: resync, no tick burst
-                                next_tick = now + tick_period
-                        else:
-                            for _ in range(realtime_batch):
-                                rt.cpu.step()
-                            steps_done += realtime_batch
+                        if args.timer_irq:
+                            while now >= next_tick:
+                                if pic is not None:
+                                    pic.raise_irq(0)               # via PIC (with SB)
+                                elif rt.cpu.get_flag(IF):
+                                    deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
+                                next_tick += tick_period
+                                if next_tick < now - 0.25:         # fell far behind: resync
+                                    next_tick = now + tick_period
+                        if sound_blaster is not None:
+                            sound_blaster.service()
+                        if pic is not None:                        # deliver pending IRQs at this
+                            while rt.cpu.get_flag(IF):             # batch boundary, IF-gated
+                                n = pic.acknowledge()
+                                if n is None:
+                                    break
+                                deliver_interrupt(rt, (0x08 + n) if n < 8 else (0x70 + n - 8),
+                                                  max_steps=args.input_irq_steps)
+                        for _ in range(realtime_batch):
+                            rt.cpu.step()
+                        steps_done += realtime_batch
                 else:
                     chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
                     for _ in range(chunk):
@@ -332,6 +361,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
 
             if adlib is not None:
                 adlib.pump()
+            if sb_audio is not None:
+                sb_audio.pump()
             render_current()
             caption_extra = audio_status.get("text", "")
             pygame.display.set_caption(
@@ -348,6 +379,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             stop_recording()
         if adlib is not None:
             adlib.close()
+        if sb_audio is not None:
+            sb_audio.close()
         pygame.quit()
 
     print(f"status: {status}")

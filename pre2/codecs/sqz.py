@@ -27,6 +27,7 @@ __all__ = [
     "unpack_sqz_other",
     "unpack_sqz",
     "sqz_reserved_size",
+    "sqz_bump_advance",
     "SQZ_LZSS_MAGIC",
 ]
 
@@ -58,20 +59,47 @@ def unpack_sqz(data: bytes) -> bytes:
 
 
 def sqz_reserved_size(data: bytes) -> int:
-    """The size field the original reads to reserve the output buffer.
+    """The raw size field the original reads from the asset header (24-bit).
 
-    The bump allocator at ``[1A13:2871]`` advances by ``(this >> 4) + 1``
-    paragraphs ([asm 1450/1464]). For LZW and the "other" format this equals the
-    decompressed length, but for **LZSS it over-reserves** — it can exceed the
-    actual decoded length (e.g. sprites: reserves 550200, decodes to 156984). The
-    hybrid hook must bump by this, not by ``len(decoded)``, to keep the next
-    asset at the same segment the original ASM would use.
+    For LZW and the "other" format this is the decompressed length; for LZSS it
+    is a 3-byte field whose top byte the ASM shifts before using it (see
+    :func:`sqz_bump_advance`).  Prefer ``sqz_bump_advance`` for the allocator
+    advance — that is the value the original actually uses.
     """
     if data[:2] == SQZ_LZSS_MAGIC:
         return (data[14] << 16) | data[15] | (data[16] << 8)
     if data[1] == 0x10:
         return ((data[0] & 15) << 16) | data[2] | (data[3] << 8)
     return ((data[0] | (data[1] << 8)) << 16) | data[2] | (data[3] << 8)
+
+
+def sqz_bump_advance(data: bytes) -> int:
+    """Paragraphs the bump allocator at ``[1A13:2871]`` advances after this asset.
+
+    A faithful translation of the original's per-format size→paragraphs math, in
+    16-bit arithmetic exactly as the ASM does it:
+
+    * **LZSS** (``1030:1450-1464``): ``dl = data[14]; ax = data[15] | data[16]<<8``;
+      then ``dl >>= 2`` (two ``shr dl`` whose carry is discarded); then four
+      ``shr dl`` / ``rcr ax`` (a 4-bit right shift of the ``dl:ax`` pair); ``ax+1``.
+      The two pre-shifts are why ``(reserved >> 4) + 1`` is **wrong** when the high
+      byte ``data[14]`` is non-zero (sprites/union/menu/.trk): that naive form
+      over-reserves ~4x, eventually pushing later decodes into VRAM.
+    * **LZW / "other"** (``1030:10C4`` / ``1240``): a clean ``(value >> 4) + 1``.
+
+    Returns a 16-bit paragraph count (the allocator segment is 16-bit).
+    """
+    if data[:2] == SQZ_LZSS_MAGIC:
+        dl = data[14]
+        ax = (data[15] | (data[16] << 8)) & 0xFFFF
+        dl >>= 1
+        dl >>= 1
+        for _ in range(4):
+            cf = dl & 1
+            dl >>= 1
+            ax = ((cf << 15) | (ax >> 1)) & 0xFFFF
+        return (ax + 1) & 0xFFFF
+    return ((sqz_reserved_size(data) >> 4) + 1) & 0xFFFF
 
 
 def unpack_sqz_other(data: bytes) -> bytes:

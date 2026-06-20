@@ -270,6 +270,103 @@ class NukedAdlibAudio:
             self._status["text"] = text
 
 
+class SoundBlasterAudio:
+    """Play the PCM the emulated Sound Blaster streams over DMA.
+
+    The VM runs the original SB driver, which DMA's 8-bit unsigned PCM (the game's
+    software MOD+SFX mix) at the sample rate it programmed.  This drains that
+    captured stream, resamples it to the mixer rate, and plays it on its own mixer
+    channel so it mixes with the OPL (AdLib) output.
+    """
+
+    def __init__(self, pygame, sound_blaster, status: dict | None = None, *, chunk_ms: float = 46.0) -> None:
+        self._pygame = pygame
+        self._sb = sound_blaster
+        self._status = status
+        self._available = False
+        self._channel = None
+        self._rate = 44100
+        self._channels = 1
+        self._buf = np.zeros(0, dtype=np.int16)
+        self._dc = 0.0
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+        init = pygame.mixer.get_init()
+        if init is None:
+            return
+        self._rate = int(init[0])
+        self._channels = int(init[2])
+        self._chunk = max(256, int(round(self._rate * max(10.0, float(chunk_ms)) / 1000.0)))
+        # The game produces PCM in per-frame bursts (~22/s); play through a jitter
+        # buffer so playback never drains between bursts.  Don't start (or restart
+        # after an underrun) until this much audio is queued ahead.
+        self._lead = int(self._rate * 0.12)   # ~120 ms
+        self._started = False
+        if pygame.mixer.get_num_channels() < 3:
+            pygame.mixer.set_num_channels(4)
+        self._channel = pygame.mixer.Channel(2)
+        self._available = True
+
+    def pump(self) -> None:
+        if not self._available or self._channel is None:
+            return
+        self._drain()
+        if not self._started:
+            # Build the lead before (re)starting; avoids click-restart loops.
+            if len(self._buf) >= self._lead:
+                self._channel.play(self._next_chunk())
+                if len(self._buf) >= self._chunk:
+                    self._channel.queue(self._next_chunk())
+                self._started = True
+            return
+        if not self._channel.get_busy():
+            self._started = False        # underran -> rebuild the lead, don't click-spam
+            return
+        # Keep one chunk queued ahead, but only ever emit *full* chunks (no silence pad).
+        if self._channel.get_queue() is None and len(self._buf) >= self._chunk:
+            self._channel.queue(self._next_chunk())
+
+    def _drain(self) -> None:
+        sb = self._sb
+        if not sb.pcm_out:
+            return
+        raw = bytes(sb.pcm_out)
+        sb.pcm_out.clear()
+        src_rate = sb.sample_rate or 8000
+        # SB 8-bit DMA is *unsigned* (silence = 0x80); reading it as signed would
+        # flip every mid-scale crossing into a full-scale jump (broadband noise).
+        sig = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128) * 256
+        # Remove residual DC (a one-pole high-pass with state carried across drains)
+        # so any offset in the stream doesn't sit the waveform off-centre.
+        sig = self._dc_block(sig)
+        n_out = max(1, len(sig) * self._rate // src_rate)  # nearest-neighbour resample
+        idx = np.minimum(np.arange(n_out) * src_rate // self._rate, len(sig) - 1)
+        self._buf = np.concatenate([self._buf, sig[idx]])
+        cap = self._rate                                   # cap buffered latency at ~1s
+        if len(self._buf) > cap:
+            self._buf = self._buf[-cap:]
+
+    def _dc_block(self, x):
+        # Slowly track the DC level across drains and subtract it (dependency-free
+        # high-pass).  The estimate moves gradually so there is no per-drain jump.
+        if len(x):
+            self._dc += 0.06 * (float(x.mean()) - self._dc)
+        return np.clip(x - self._dc, -32768, 32767).astype(np.int16)
+
+    def _next_chunk(self):
+        # Emit up to one chunk of whatever is buffered (callers gate on having a
+        # full chunk for the queue path; the initial play path may emit the lead).
+        n = min(self._chunk, len(self._buf)) or 1
+        chunk, self._buf = self._buf[:n], self._buf[n:]
+        if self._channels > 1:
+            chunk = np.repeat(chunk[:, None], self._channels, axis=1)
+        return self._pygame.mixer.Sound(buffer=chunk.astype(np.int16).tobytes())
+
+    def close(self) -> None:
+        if self._channel is not None:
+            self._channel.stop()
+
+
 def render_vga_rgb(mem: bytes, palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
     """Decode VGA mode 13h A000:0000 linear 320x200x8bpp to RGB."""
     arr = np.frombuffer(mem, dtype=np.uint8)
