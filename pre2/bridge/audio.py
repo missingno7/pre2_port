@@ -46,6 +46,12 @@ def _rw(mem, seg, off):
     return mem.data[b] | (mem.data[b + 1] << 8)
 
 
+def _ww(mem, seg, off, val):
+    b = ((seg << 4) + off) & 0xFFFFF
+    mem.data[b] = val & 0xFF
+    mem.data[b + 1] = (val >> 8) & 0xFF
+
+
 def read_channel(mem, ch: int) -> ChannelState:
     i = ch * 2
     return ChannelState(
@@ -53,6 +59,15 @@ def read_channel(mem, ch: int) -> ChannelState:
         instrument=_rw(mem, DATA_SEG, CH_INSTR + i), period=_rw(mem, DATA_SEG, CH_PERIOD + i),
         volume=_rw(mem, DATA_SEG, CH_VOL + i), frac=_rw(mem, DATA_SEG, CH_FRAC + i),
     )
+
+
+def write_channel(mem, ch: int, cs: ChannelState) -> None:
+    """Write back the fields 216B updates: pos (always), frac (always), end (loop).
+    (Writing end unchanged when there is no loop is a no-op, matching the ASM.)"""
+    i = ch * 2
+    _ww(mem, DATA_SEG, CH_POS + i, cs.pos)
+    _ww(mem, DATA_SEG, CH_END + i, cs.end)
+    _ww(mem, DATA_SEG, CH_FRAC + i, cs.frac)
 
 
 def read_instrument(mem, instr: int, channel_end: int) -> Instrument:

@@ -41,9 +41,16 @@ which is done in `dos_re`). A clean DSP island, NOT gameplay logic.
 `pre2/probes/verify_mixer.py` (216B per-channel: 200 mixes, 0 div) and `pre2/probes/verify_mixer_block.py`
 (full SFX + 4-channel block: 120 blocks, complete 168-byte PCM + channel/SFX state, 0 div); unit tests
 `tests/test_audio_mixer.py`. `OracleLink` (1030:216B, VERIFIED). NOTE the volume row is **`volume << 6`**
-(×64, six shifts — a truncated disasm earlier showed five). NOT wired live (Layer 5 / ASM-detach deferred);
-the ASM mixer still runs in hybrid, with the recovered mixer verified against it as the oracle. The tracker/
-sequencer `221A` (Layer 3) that sets up the channel state is the remaining piece.
+(×64, six shifts — a truncated disasm earlier showed five).
+
+**WIRED LIVE 2026-06-21** (`pre2/checkpoints/audio.py`): the per-channel mixer `216B` is replaced by the
+recovered `mix_channel` in hybrid play, so the audio you hear in `--view` is mixed by recovered code (it
+reads the channel state via the bridge, mixes into the live DMA block, writes the channel state back, near-
+rets; the caller reloads its regs and 216B's SP-scratch is its own). Smoke-tested: cold-boot streams audio
+with the live mixer (10192 mix calls, 428 KB PCM), no crash; each block byte-exact vs ASM (verify probes).
+Verify-mode (`--verify-hooks`) diffs it at the 2219 RET. The ASM ISR/SFX/tracker + SB hardware still run the
+rest. Remaining for a fully recovered AudioSystem (Layer 5 detach): the tracker/sequencer `221A` (Layer 3)
+that sets up the channel state, then driving audio without the ASM driver.
 
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
 |---|---|---|---|---|---|
