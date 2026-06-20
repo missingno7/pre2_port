@@ -35,17 +35,34 @@ native code is now part of the normal runtime.
   cache byte-exact across 211 slots) with verify-mode lockstep coverage. The
   per-frame blit/scroll and the sprite classifier (`4213`, an EGA read-plane
   question) remain to recover.
-- **Third recovered-native island: the sprite blit + classifier** (`1030:3B69`
-  dispatcher + plain/empty/masked paths + `3D65` bg-restore, and the classifier
-  `4213`). The classifier reads the cache in EGA read-mode-1 (colour compare) to
-  build the per-sprite transparency type + masks; the blit renders each sprite
-  from the planar cache by class — opaque copy, background restore, or masked
-  composite `screen=(screen AND mask) OR sprite`. Recovered to a pure planar
-  `renderer` module and **verified byte-for-byte vs the ASM** (per-blit witness +
-  in-VM lockstep: 1002 blits across all paths, 0 divergence). Runs **live in the
-  hybrid runtime** — hybrid renders level 1 correctly with ~950 native blits/frame.
-  The island stops at the blit primitive; the tilemap/sprite-list **draw loops**
-  (`34A0`/`3552`) that iterate game state are the next island.
+- **Third recovered-native island: the sprite blit** (`1030:3B69` dispatcher +
+  plain/empty/masked paths + `3D65` bg-restore). The blit renders each sprite from
+  the planar cache by class — opaque copy, background restore, or masked composite
+  `screen=(screen AND mask) OR sprite`. Recovered to a pure planar `renderer` module
+  and **verified byte-for-byte vs the ASM** (per-blit witness + in-VM lockstep: 1002
+  blits across all paths, 0 divergence). Runs **live in the hybrid runtime**.
+  **The classifier `4213` is NOT recovered** — it still runs as ASM and produces the
+  per-sprite type table (`[0x4DF4]`) + transparency masks the recovered blit
+  *consumes*; recovering it (an EGA read-mode-1 colour-compare over the cache) is a
+  pending island.
+- **Fourth island — the frame renderer (the background draw), recovered + verified +
+  live.** `pre2/recovered/frame_renderer.py` recovers the tile-row fill (`346E`), the
+  full visible-grid redraw (`3582`), the vertical scroll-copy (`3A08`), and the
+  double-buffer page-flip (`3035`) — each composing the verified blit *directly*
+  (recovered → recovered, no ASM contact point inside the draw), driven by the
+  `Camera`/`ScrollState`/`TileMap` bridge (`pre2/bridge/frame.py`). All four are
+  verified byte-for-byte vs a pure-ASM oracle (in-VM lockstep) and run live (8 native
+  replacements). The compositor `3B40` is a static composition of these three and is
+  documented but not wired (no available demo reaches it, so it can't be verified).
+  **Still ASM:** the moving-sprite / object-list draw loop (`~3552`), the classifier
+  `4213`, the directional-scroll camera logic, and all gameplay update.
+- **Self-describing islands.** Each recovered function carries `@oracle_link(boundary,
+  contract, status, merge_target)` (`pre2/islands.py`); the registry is auto-discovered
+  into the generated [`recovered_islands.md`](recovered_islands.md) (regen:
+  `python scripts/gen_island_manifest.py`) with a drift-check test — docs cannot
+  diverge from code. The frame **adapters** (`pre2/checkpoints/frame.py`) are thin:
+  they read VM state through the bridge dataclasses, call the recovered function, and
+  write the contract back — no raw segment:offsets and no renderer logic live there.
 - **Real-time pacing (live `--view`):** the VM now models **PIT channel 0** (the
   program programs ch0 reload `0x4000` → 72.83 Hz itself; we read it, never
   hardcode) and advances the **70 Hz VGA-retrace** bit on the wall clock, so PRE2's
@@ -68,9 +85,13 @@ native code is now part of the normal runtime.
   high byte twice — so we over-reserved ~4× for assets with a non-zero high byte
   (sprites/union/menu/.trk), eventually pushing decodes into VRAM. Now
   `sqz_bump_advance()` matches the ASM exactly.
-- **Next:** the tilemap / object draw loops + background scroll/compose (the frame
-  draw), then the object/player update. See [`recovery_architecture.md`](recovery_architecture.md)
-  and [`symbol_ledger.md`](symbol_ledger.md).
+- **Next:** the moving-sprite / object-list **draw** path (`~3552`) — treated as a
+  renderer island first (object draw-command stream → recovered `blit_sprite`), paired
+  with a `pre2/bridge/objects.py` `ObjectDrawState`; the classifier `4213` it depends
+  on; then object/player **update** (movement/physics/collision). See
+  [`recovery_architecture.md`](recovery_architecture.md) and
+  [`symbol_ledger.md`](symbol_ledger.md); recovered-island truth is
+  [`recovered_islands.md`](recovered_islands.md).
 
 ## 2026-06-19 VGA boot milestone
 

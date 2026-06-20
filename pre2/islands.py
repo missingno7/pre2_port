@@ -23,8 +23,14 @@ import pkgutil
 from dataclasses import dataclass
 from pathlib import Path
 
-#: allowed maturity levels, increasing confidence
-STATUSES = ("RECOVERED", "VERIFIED", "CANONICAL")
+#: allowed maturity levels, in increasing confidence
+#: GUESS        - hypothesised from a reference/heuristic, not yet checked vs ASM
+#: OBSERVED     - behaviour watched in the running ASM, not yet reimplemented
+#: RECOVERED    - reimplemented as clean source, not yet diffed vs ASM
+#: ASM_MATCHED  - output diffed against ASM on captured cases
+#: VERIFIED     - byte-exact vs ASM under in-VM lockstep over real runs
+#: CANONICAL    - verified and adopted as the source of truth (ASM retired for it)
+STATUSES = ("GUESS", "OBSERVED", "RECOVERED", "ASM_MATCHED", "VERIFIED", "CANONICAL")
 
 #: packages scanned for recovered islands (any function decorated with oracle_link)
 _ISLAND_PACKAGES = ("pre2.codecs", "pre2.recovered")

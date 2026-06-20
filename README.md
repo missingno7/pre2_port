@@ -14,11 +14,19 @@ recovered native code is now part of the normal runtime:
 - **The hybrid runtime is the default.** `pre2.runtime.create_pre2_runtime()`
   installs native **replacement** hooks that run *in place of* the original ASM.
   As coverage grows the game runs faster and more of it is clean source.
-- **First recovered-native island: SQZ asset decompression** (`pre2/codecs/sqz.py`)
-  — all three formats (LZSS, LZW, Huffman+RLE "other") recovered and verified
-  byte-for-byte against the ASM. The decompressor was the slow hot kernel on the
-  level-load path; the hybrid runtime now cold-boots into gameplay decoding every
-  asset natively.
+- **The recovered asset + rendering pipeline is real, verified source.** Recovered
+  byte-for-byte vs the ASM and running live: **SQZ asset decode** (all three formats —
+  LZSS / LZW / Huffman+RLE; `pre2/codecs/sqz.py`), **sprite-sheet demux** into the
+  planar cache (`pre2/recovered/sprite_decode.py`), the **sprite blit** primitive
+  (`pre2/recovered/renderer.py`), and the **frame renderer** — tile-row fill, grid
+  redraw, scroll-copy, page-flip (`pre2/recovered/frame_renderer.py`), each composing
+  the verified blit directly and driven by `Camera`/`ScrollState`/`TileMap` views
+  (`pre2/bridge/frame.py`). The authoritative, code-generated list of recovered
+  islands (with status + ASM boundary + contract + merge target) is
+  [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md).
+- **Still ASM (not yet recovered):** the moving-sprite / object-list draw loop, the
+  sprite classifier (`4213`, which produces the type/mask data the recovered blit
+  consumes), and all gameplay update (movement, physics, collision, objects/player).
 - **No silent fallbacks.** If the hybrid runtime reaches behaviour we have not
   recovered, it **fails loud** with a precise gap report (`Pre2HybridGap`) instead
   of secretly running the original ASM. Running the original ASM is allowed, but
@@ -51,7 +59,8 @@ python scripts/render_frame.py artifacts/<snapshot> --out frame.png
 ```
 
 In the viewer: `F10` saves a screenshot, `F11` toggles input-demo recording, `F12`
-saves a VM snapshot. `--speed N` (default `120000`) sets the game+music tempo;
+saves a VM snapshot. Live `--view` self-paces to PRE2's native tempo via the emulated
+PIT/VGA-retrace (no tempo knob); `--speed N` only affects deterministic record/replay.
 `--fast-adlib` reaches graphics fastest but mutes music.
 
 Demos are the regression substrate — a start snapshot plus VM-visible input on a
@@ -67,11 +76,17 @@ python scripts/play.py --play-demo artifacts/demo_run1_<ts> --verify-hooks   # p
 ```text
 original PRE2.EXE
   -> dos_re VM (oracle)
-  -> thin replacement adapters / checkpoints (pre2/replacements.py)
-  -> recovered VM-independent logic (pre2/codecs/ ... ; future pre2/recovered/)
-  -> memory views / dataclass bridge (future pre2/bridge/)
+  -> thin replacement adapters / checkpoints (pre2/checkpoints/, one module per subsystem)
+  -> memory views / dataclass bridge (pre2/bridge/: sprites, frame, ...)
+  -> recovered VM-independent logic (pre2/codecs/, pre2/recovered/)
   -> semantic state comparison -> source-port systems
 ```
+
+Each recovered function self-describes via `@oracle_link(...)` (`pre2/islands.py`),
+auto-discovered into the generated [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md)
+(a test fails if it drifts from the code). Adapters under `pre2/checkpoints/` stay
+thin — read VM state through the bridge, call the recovered function, write the
+contract back; renderer/game logic and raw segment:offsets do not live there.
 
 `dos_re/` must stay game-independent: anything that knows Prehistorik 2 filenames,
 addresses, or formats belongs under `pre2/`. The packed executable and VM remain

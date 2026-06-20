@@ -1,16 +1,11 @@
-"""Checkpoint for the frame renderer's tile-row draw (1030:346E).
+"""Checkpoints for the frame renderer (1030:346E / 3582 / 3A08 / 3035).
 
-Recovered logic: ``pre2.recovered.frame_renderer.draw_tile_row``; data model:
-``pre2.bridge.frame``. Merge target: the frame renderer.
-
-Per the island-composition rule, the recovered ``draw_tile_row`` calls the recovered
-``blit_sprite`` directly (no ASM contact point inside the row). This adapter just
-bridges VM state in/out: it reads the camera/scroll inputs + the level TileMap, runs
-the recovered row draw on the live planes, and writes back the OR-accumulated flags.
-
-Contract (verified vs ASM by pre2/probes/verify_frame.py): the four A000 planes for
-one 20-tile row, the OR-accumulated flag bytes [0x6BB9]/[0x2DEE]/[0x2DF0], and that
-``di`` (and the other pushed registers) are preserved.
+Thin VM contact points only: each adapter reads the original VM state **through the
+bridge** (``pre2.bridge.frame`` Camera/ScrollState/TileMap dataclasses + readers —
+the bridge owns every segment:offset), calls the recovered renderer function, writes
+the contract back through the bridge, and returns to original flow. No renderer logic
+and no raw memory offsets live here; that all lives in ``pre2/recovered`` and
+``pre2/bridge``. Verify mode diffs the recovered result against the ASM at each RET.
 """
 
 from __future__ import annotations
@@ -21,167 +16,117 @@ from pre2.bridge import frame as _frame
 from pre2.bridge import sprites as _spr
 from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row, panel_copy, scroll_copy
 
-from .common import _DATA_SEG, report
+from .common import report
 
 _ROW_ENTRY = (0x1030, 0x346E)
-_ROW_EXIT = (0x1030, 0x34EC)   # the routine's near RET
+_ROW_EXIT = (0x1030, 0x34EC)     # tile-row draw near RET
 _GRID_ENTRY = (0x1030, 0x3582)
-_GRID_EXIT = (0x1030, 0x3645)  # the grid redraw's near RET
+_GRID_EXIT = (0x1030, 0x3645)    # grid redraw near RET
 _SCROLL_ENTRY = (0x1030, 0x3A08)
-_SCROLL_EXIT = (0x1030, 0x3AD2)  # the scroll-copy's near RET
+_SCROLL_EXIT = (0x1030, 0x3AD2)  # scroll-copy near RET
 _PANEL_ENTRY = (0x1030, 0x3035)
-_PANEL_EXIT = (0x1030, 0x307B)   # the page-flip copy's near RET
-_VAR_DEST_PAGE = 0x2DD4          # back page (scroll/panel source)
-_VAR_FRONT_PAGE = 0x2DD2         # front page (panel dest)
-_VAR_ROW_RING = 0x2DE6
-_VAR_ROW_FACTOR = 0x6BF4
-_VAR_PLANE_ATTR = 0x6BB9
-_VAR_TILE_FLAGS = 0x2DEE
-_VAR_TILE_TYPE = 0x2DF0
-_VAR_DIRTY_ROWS = 0x2DF1
-_VAR_PREV_X = 0x2DDC
-_VAR_PREV_Y = 0x2DDE
-_VAR_CAMERA_X = 0x2DE0
-_VAR_CAMERA_Y = 0x2DE2
-_VAR_SCROLL_SRC = 0x2DB6
-_VAR_COL_RING = 0x2DE4
-_VAR_FINE_SCROLL = 0x6BC0
+_PANEL_EXIT = (0x1030, 0x307B)   # page-flip copy near RET
 
 
-def _rb(mem, off):
-    return mem.data[((_DATA_SEG << 4) + off) & 0xFFFFF]
-
-
-def _wb(mem, off, val):
-    mem.data[((_DATA_SEG << 4) + off) & 0xFFFFF] = val & 0xFF
-
-
-def _inputs(cpu):
-    """Read everything ``346E`` consumes from VM state into recovered-domain values."""
+# ---- tile-row draw (346E) ---------------------------------------------------
+def _run_row(cpu, planes):
     mem = cpu.mem
-    return {
-        "tile_offset": cpu.s.ax & 0xFFFF,
-        "di": cpu.s.di & 0xFFFF,
-        "scroll_src": mem.rw(_DATA_SEG, _VAR_SCROLL_SRC),
-        "col_ring": _rb(mem, _VAR_COL_RING),
-        "fine_scroll": _rb(mem, _VAR_FINE_SCROLL),
-        "tilemap": _frame.read_tilemap(mem),
-        "blit_type": _frame.read_blit_type_table(mem),
-        "mask_region": _frame.read_mask_region(mem),
-        "seed": RowFlags(_rb(mem, _VAR_PLANE_ATTR), _rb(mem, _VAR_TILE_FLAGS), _rb(mem, _VAR_TILE_TYPE)),
-    }
-
-
-def _run(planes, a) -> tuple[int, RowFlags]:
+    st = _frame.read_scroll_state(mem)
     return draw_tile_row(
-        planes, a["tilemap"], a["tile_offset"], a["di"], a["scroll_src"],
-        a["col_ring"], a["fine_scroll"], a["blit_type"], a["mask_region"], a["seed"],
+        planes, _frame.read_tilemap(mem),
+        cpu.s.ax & 0xFFFF, cpu.s.di & 0xFFFF,        # tile_offset, di — register inputs
+        st.scroll_src, st.camera.col_ring, st.camera.fine_scroll,
+        _frame.read_blit_type_table(mem), _frame.read_mask_region(mem),
+        RowFlags(*_frame.read_row_flags(mem)),       # seed = current accumulators
     )
 
 
-def _write_flags(mem, flags: RowFlags) -> None:
-    base = (_DATA_SEG << 4) & 0xFFFFF
-    mem.data[base + _VAR_PLANE_ATTR] = flags.plane_attr & 0xFF
-    mem.data[base + _VAR_TILE_FLAGS] = flags.tile_flags & 0xFF
-    mem.data[base + _VAR_TILE_TYPE] = flags.tile_type & 0xFF
-
-
-def _grid_inputs(cpu) -> dict:
-    """Read everything ``3582`` consumes from VM state."""
+@registry.replace(*_ROW_ENTRY, "frame_tile_row")
+def frame_tile_row(cpu) -> None:
+    """Native replacement for the tile-row draw at 1030:346E."""
     mem = cpu.mem
-    return {
-        "camera_x": mem.rw(_DATA_SEG, _VAR_CAMERA_X),
-        "camera_y": mem.rw(_DATA_SEG, _VAR_CAMERA_Y),
-        "prev_x": mem.rw(_DATA_SEG, _VAR_PREV_X),
-        "prev_y": mem.rw(_DATA_SEG, _VAR_PREV_Y),
-        "dirty": _rb(mem, _VAR_TILE_TYPE),         # [0x2DF0]
-        "dirty_rows": _rb(mem, _VAR_DIRTY_ROWS),   # [0x2DF1]
-        "scroll_src": mem.rw(_DATA_SEG, _VAR_SCROLL_SRC),
-        "col_ring": mem.rw(_DATA_SEG, _VAR_COL_RING),
-        "fine_scroll": _rb(mem, _VAR_FINE_SCROLL),
-        "tilemap": _frame.read_tilemap(mem),
-        "blit_type": _frame.read_blit_type_table(mem),
-        "mask_region": _frame.read_mask_region(mem),
-    }
+    if getattr(cpu, "pre2_verify_mode", False):
+        snap = _spr.snapshot_planes(mem)
+        _di, flags = _run_row(cpu, snap)
+        cpu.pre2_frame_pending.append((cpu.s.di & 0xFFFF, snap, flags))
+        interpret_current_instruction_without_hook(cpu)
+        return
+    _di, flags = _run_row(cpu, _spr.plane_views(mem))
+    _frame.write_row_flags(mem, flags.plane_attr, flags.tile_flags, flags.tile_type)
+    cpu.s.ip = cpu.pop()  # near ret; di and the other pushed regs are preserved
 
 
-def _run_grid(planes, g):
-    return draw_grid(planes, g["tilemap"], g["camera_x"], g["camera_y"], g["prev_x"], g["prev_y"],
-                     g["dirty"], g["dirty_rows"], g["scroll_src"], g["col_ring"], g["fine_scroll"],
-                     g["blit_type"], g["mask_region"])
-
-
-def _write_grid_result(mem, res) -> None:
-    mem.ww(_DATA_SEG, _VAR_PREV_X, res.prev_x & 0xFFFF)   # prev always written (3590/dirty_rows!=0: no-op)
-    mem.ww(_DATA_SEG, _VAR_PREV_Y, res.prev_y & 0xFFFF)
-    if res.redrew:                                        # flags reset+accumulated only on redraw
-        _wb(mem, _VAR_TILE_FLAGS, res.tile_flags)
-        _wb(mem, _VAR_TILE_TYPE, res.dirty)
-        _wb(mem, _VAR_DIRTY_ROWS, res.dirty_rows)
+# ---- grid redraw (3582) -----------------------------------------------------
+def _run_grid(cpu, planes):
+    mem = cpu.mem
+    st = _frame.read_scroll_state(mem)
+    c = st.camera
+    return draw_grid(
+        planes, _frame.read_tilemap(mem), c.x, c.y, c.prev_x, c.prev_y,
+        st.dirty, st.dirty_rows, st.scroll_src, c.col_ring, c.fine_scroll,
+        _frame.read_blit_type_table(mem), _frame.read_mask_region(mem),
+    )
 
 
 @registry.replace(*_GRID_ENTRY, "frame_grid")
 def frame_grid(cpu) -> None:
     """Native replacement for the visible-grid redraw at 1030:3582."""
     mem = cpu.mem
-    g = _grid_inputs(cpu)
-
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
-        res = _run_grid(snap, g)
-        cpu.pre2_frame_grid_pending.append((dict(g), snap, res))
+        res = _run_grid(cpu, snap)
+        cpu.pre2_frame_grid_pending.append((_frame.read_camera(mem), snap, res))
         interpret_current_instruction_without_hook(cpu)
         return
+    res = _run_grid(cpu, _spr.plane_views(mem))
+    _frame.write_dirty_state(
+        mem, res.prev_x, res.prev_y,
+        dirty=res.dirty if res.redrew else None,
+        dirty_rows=res.dirty_rows if res.redrew else None,
+        tile_flags=res.tile_flags if res.redrew else None,
+    )
+    cpu.s.ip = cpu.pop()  # near ret; di/regs preserved
 
-    res = _run_grid(_spr.plane_views(mem), g)
-    _write_grid_result(mem, res)
-    cpu.s.ip = cpu.pop()  # near ret; di and the other pushed regs are preserved
 
-
-def _scroll_inputs(cpu) -> dict:
-    mem = cpu.mem
-    return {
-        "scroll_src": mem.rw(_DATA_SEG, _VAR_SCROLL_SRC),
-        "dest": mem.rw(_DATA_SEG, _VAR_DEST_PAGE),
-        "col_ring": _rb(mem, _VAR_COL_RING),
-        "fine_scroll": _rb(mem, _VAR_FINE_SCROLL),
-        "row_ring": mem.rw(_DATA_SEG, _VAR_ROW_RING),
-        "row_factor": mem.rw(_DATA_SEG, _VAR_ROW_FACTOR),
-    }
+# ---- scroll-copy (3A08) -----------------------------------------------------
+def _run_scroll(cpu, planes):
+    st = _frame.read_scroll_state(cpu.mem)
+    c = st.camera
+    scroll_copy(planes, st.scroll_src, st.dest_page_b, c.col_ring,
+                c.fine_scroll, c.row_ring, st.row_factor)
 
 
 @registry.replace(*_SCROLL_ENTRY, "frame_scroll_copy")
 def frame_scroll_copy(cpu) -> None:
     """Native replacement for the vertical-scroll screen copy at 1030:3A08."""
     mem = cpu.mem
-    g = _scroll_inputs(cpu)
-
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
-        scroll_copy(snap, **g)
+        _run_scroll(cpu, snap)
         cpu.pre2_frame_scroll_pending.append(snap)
         interpret_current_instruction_without_hook(cpu)
         return
-
-    scroll_copy(_spr.plane_views(mem), **g)
+    _run_scroll(cpu, _spr.plane_views(mem))
     cpu.s.ip = cpu.pop()  # near ret; bx/di/si/ds/es preserved
+
+
+# ---- page-flip copy (3035) --------------------------------------------------
+def _run_panel(cpu, planes):
+    st = _frame.read_scroll_state(cpu.mem)
+    panel_copy(planes, st.dest_page_b, st.dest_page_a)
 
 
 @registry.replace(*_PANEL_ENTRY, "frame_panel_copy")
 def frame_panel_copy(cpu) -> None:
     """Native replacement for the double-buffer page-flip copy at 1030:3035."""
     mem = cpu.mem
-    src = mem.rw(_DATA_SEG, _VAR_DEST_PAGE)
-    dst = mem.rw(_DATA_SEG, _VAR_FRONT_PAGE)
-
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
-        panel_copy(snap, src, dst)
+        _run_panel(cpu, snap)
         cpu.pre2_frame_panel_pending.append(snap)
         interpret_current_instruction_without_hook(cpu)
         return
-
-    panel_copy(_spr.plane_views(mem), src, dst)
+    _run_panel(cpu, _spr.plane_views(mem))
     cpu.s.ip = cpu.pop()  # near ret; regs preserved (vsync wait omitted, timing-only)
 
 
@@ -195,109 +140,64 @@ def frame_panel_copy(cpu) -> None:
 # can be lockstep-verified (the call order itself is static: 3B4C/3B4F/3B52).
 
 
-@registry.replace(*_ROW_ENTRY, "frame_tile_row")
-def frame_tile_row(cpu) -> None:
-    """Native replacement for the tile-row draw at 1030:346E."""
-    mem = cpu.mem
-    a = _inputs(cpu)
-
-    if getattr(cpu, "pre2_verify_mode", False):
-        snap = _spr.snapshot_planes(mem)
-        _di, flags = _run(snap, a)
-        cpu.pre2_frame_pending.append((a["di"], snap, flags))
-        interpret_current_instruction_without_hook(cpu)
-        return
-
-    _di, flags = _run(_spr.plane_views(mem), a)
-    _write_flags(mem, flags)
-    cpu.s.ip = cpu.pop()  # near ret; di and the other pushed regs are preserved
+def _planes_match(mem, snap) -> str | None:
+    live = _spr.snapshot_planes(mem)
+    for p in range(4):
+        if bytes(live[p]) != bytes(snap[p]):
+            return f"plane {p}"
+    return None
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
-    """Install the lockstep verify-exit hook at the row draw's RET."""
+    """Install the lockstep verify-exit hooks at each routine's RET."""
 
-    def _verify_at_exit(c) -> None:
+    def _row_verify(c) -> None:
         if c.pre2_frame_pending:
             entry_di, snap, flags = c.pre2_frame_pending.pop()
             mem = c.mem
-            reason = None
-            live = _spr.snapshot_planes(mem)
-            for p in range(4):
-                if bytes(live[p]) != bytes(snap[p]):
-                    reason = f"plane {p}"
-                    break
+            reason = _planes_match(mem, snap)
             if reason is None and (c.s.di & 0xFFFF) != entry_di:
                 reason = f"di not preserved {c.s.di & 0xFFFF:04X}!={entry_di:04X}"
             if reason is None:
-                for name, off, val in (("plane_attr", _VAR_PLANE_ATTR, flags.plane_attr & 0xFF),
-                                       ("tile_flags", _VAR_TILE_FLAGS, flags.tile_flags & 0xFF),
-                                       ("tile_type", _VAR_TILE_TYPE, flags.tile_type & 0xFF)):
-                    if _rb(mem, off) != val:
-                        reason = f"{name} {_rb(mem, off):02X}!={val:02X}"
-                        break
+                if _frame.read_row_flags(mem) != (flags.plane_attr & 0xFF, flags.tile_flags & 0xFF,
+                                                  flags.tile_type & 0xFF):
+                    reason = "row flags [0x6BB9]/[0x2DEE]/[0x2DF0]"
             report(stats, on_result, raise_on_divergence, "frame_tile_row", reason)
-        interpret_current_instruction_without_hook(c)  # original near-ret
+        interpret_current_instruction_without_hook(c)
 
-    cpu.replacement_hooks[_ROW_EXIT] = _verify_at_exit
-    cpu.hook_names[_ROW_EXIT] = "frame_tile_row_verify"
-
-    def _grid_verify_at_exit(c) -> None:
+    def _grid_verify(c) -> None:
         if c.pre2_frame_grid_pending:
-            g, snap, res = c.pre2_frame_grid_pending.pop()
+            _entry_cam, snap, res = c.pre2_frame_grid_pending.pop()
             mem = c.mem
-            reason = None
-            if res.redrew:
-                live = _spr.snapshot_planes(mem)
-                for p in range(4):
-                    if bytes(live[p]) != bytes(snap[p]):
-                        reason = f"plane {p}"
-                        break
-            checks = [("[0x2DDC]", _VAR_PREV_X, res.prev_x & 0xFFFF, True),
-                      ("[0x2DDE]", _VAR_PREV_Y, res.prev_y & 0xFFFF, True)]
-            if res.redrew:
-                checks += [("[0x2DEE]", _VAR_TILE_FLAGS, res.tile_flags & 0xFF, False),
-                           ("[0x2DF0]", _VAR_TILE_TYPE, res.dirty & 0xFF, False),
-                           ("[0x2DF1]", _VAR_DIRTY_ROWS, res.dirty_rows & 0xFF, False)]
-            if reason is None:
-                for name, off, val, is_word in checks:
-                    actual = mem.rw(_DATA_SEG, off) if is_word else _rb(mem, off)
-                    if actual != val:
-                        reason = f"{name} asm={actual:X} rec={val:X}"
-                        break
+            reason = _planes_match(mem, snap) if res.redrew else None
+            cam = _frame.read_camera(mem)
+            pa, tf, tt = _frame.read_row_flags(mem)
+            if reason is None and (cam.prev_x, cam.prev_y) != (res.prev_x & 0xFFFF, res.prev_y & 0xFFFF):
+                reason = "prev camera [0x2DDC]/[0x2DDE]"
+            if reason is None and res.redrew:
+                st = _frame.read_scroll_state(mem)
+                if tf != (res.tile_flags & 0xFF) or tt != (res.dirty & 0xFF) or st.dirty_rows != (res.dirty_rows & 0xFF):
+                    reason = "dirty flags [0x2DEE]/[0x2DF0]/[0x2DF1]"
             report(stats, on_result, raise_on_divergence, "frame_grid", reason)
         interpret_current_instruction_without_hook(c)
 
-    cpu.replacement_hooks[_GRID_EXIT] = _grid_verify_at_exit
-    cpu.hook_names[_GRID_EXIT] = "frame_grid_verify"
-
-    def _scroll_verify_at_exit(c) -> None:
+    def _scroll_verify(c) -> None:
         if c.pre2_frame_scroll_pending:
             snap = c.pre2_frame_scroll_pending.pop()
-            mem = c.mem
-            reason = None
-            live = _spr.snapshot_planes(mem)
-            for p in range(4):
-                if bytes(live[p]) != bytes(snap[p]):
-                    reason = f"plane {p}"
-                    break
-            report(stats, on_result, raise_on_divergence, "frame_scroll_copy", reason)
+            report(stats, on_result, raise_on_divergence, "frame_scroll_copy", _planes_match(c.mem, snap))
         interpret_current_instruction_without_hook(c)
 
-    cpu.replacement_hooks[_SCROLL_EXIT] = _scroll_verify_at_exit
-    cpu.hook_names[_SCROLL_EXIT] = "frame_scroll_copy_verify"
-
-    def _panel_verify_at_exit(c) -> None:
+    def _panel_verify(c) -> None:
         if c.pre2_frame_panel_pending:
             snap = c.pre2_frame_panel_pending.pop()
-            mem = c.mem
-            reason = None
-            live = _spr.snapshot_planes(mem)
-            for p in range(4):
-                if bytes(live[p]) != bytes(snap[p]):
-                    reason = f"plane {p}"
-                    break
-            report(stats, on_result, raise_on_divergence, "frame_panel_copy", reason)
+            report(stats, on_result, raise_on_divergence, "frame_panel_copy", _planes_match(c.mem, snap))
         interpret_current_instruction_without_hook(c)
 
-    cpu.replacement_hooks[_PANEL_EXIT] = _panel_verify_at_exit
-    cpu.hook_names[_PANEL_EXIT] = "frame_panel_copy_verify"
+    for exit_addr, fn, name in (
+        (_ROW_EXIT, _row_verify, "frame_tile_row_verify"),
+        (_GRID_EXIT, _grid_verify, "frame_grid_verify"),
+        (_SCROLL_EXIT, _scroll_verify, "frame_scroll_copy_verify"),
+        (_PANEL_EXIT, _panel_verify, "frame_panel_copy_verify"),
+    ):
+        cpu.replacement_hooks[exit_addr] = fn
+        cpu.hook_names[exit_addr] = name

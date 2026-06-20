@@ -42,8 +42,12 @@ VAR_DEST_PAGE_A = 0x2DD2  # double-buffer page offset (front/back; 0 or 0x2000)
 VAR_DEST_PAGE_B = 0x2DD4  # the other double-buffer page offset
 VAR_SHEET_SEG = 0x2DD6   # tilesheet segment used by the draw loops
 VAR_LEVEL_HEIGHT = 0x2CF1  # level height in tile rows
-VAR_DIRTY = 0x2DF0       # composite dirty flags (rebuild-grid / type seen)
+VAR_DIRTY = 0x2DF0       # composite dirty flags (rebuild-grid / type seen); also the
+                         # tile-type accumulator 346E ORs into ([0x2DF0])
 VAR_DIRTY_ROWS = 0x2DF1  # tile-rows scrolled this frame (reset after redraw)
+# the two other per-row attribute accumulators 346E ORs into:
+VAR_PLANE_ATTR = 0x6BB9  # plane/attribute flags accumulator
+VAR_TILE_FLAGS = 0x2DEE  # tile-flags accumulator
 
 # --- tilemap layout (from 346E; witnessed) -----------------------------------
 # The level segment [0x2DD6] holds the row-major tile map (1 byte/tile = tile
@@ -131,6 +135,35 @@ class TileMap:
         """``count`` consecutive tile indices starting at (col, row) — one draw row."""
         start = row * self.stride + col
         return self.tiles[start:start + count]
+
+
+def read_row_flags(mem) -> tuple[int, int, int]:
+    """The three per-row attribute accumulators 346E ORs into:
+    ``(plane_attr [0x6BB9], tile_flags [0x2DEE], tile_type [0x2DF0])``."""
+    return _rb(mem, VAR_PLANE_ATTR), _rb(mem, VAR_TILE_FLAGS), _rb(mem, VAR_DIRTY)
+
+
+def write_row_flags(mem, plane_attr: int, tile_flags: int, tile_type: int) -> None:
+    """Write the three row-flag accumulators back (the 346E write-back contract)."""
+    base = (DATA_SEG << 4) & 0xFFFFF
+    mem.data[base + VAR_PLANE_ATTR] = plane_attr & 0xFF
+    mem.data[base + VAR_TILE_FLAGS] = tile_flags & 0xFF
+    mem.data[base + VAR_DIRTY] = tile_type & 0xFF
+
+
+def write_dirty_state(mem, prev_x: int, prev_y: int, *, dirty=None, dirty_rows=None,
+                      tile_flags=None) -> None:
+    """Write the grid-redraw side effects back (3582): prev camera always; the dirty
+    flags + tile-flags accumulator only when provided (i.e. only on an actual redraw)."""
+    mem.ww(DATA_SEG, VAR_PREV_CAMERA_X, prev_x & 0xFFFF)
+    mem.ww(DATA_SEG, VAR_PREV_CAMERA_Y, prev_y & 0xFFFF)
+    base = (DATA_SEG << 4) & 0xFFFFF
+    if tile_flags is not None:
+        mem.data[base + VAR_TILE_FLAGS] = tile_flags & 0xFF
+    if dirty is not None:
+        mem.data[base + VAR_DIRTY] = dirty & 0xFF
+    if dirty_rows is not None:
+        mem.data[base + VAR_DIRTY_ROWS] = dirty_rows & 0xFF
 
 
 def read_camera(mem) -> Camera:
