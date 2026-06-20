@@ -80,6 +80,12 @@ native code is now part of the normal runtime.
   (off for deterministic demos/tests). Two BIOS-correctness fixes were needed: the
   BIOS data area CRTC port (`0040:0063`) and `IRET` stubs on the hardware-IRQ
   vectors. A residual audio-pacing nicety (occasional buffer pressure) remains.
+  **Layering (be precise):** this is *generic SB/DMA/PIC hardware in `dos_re`* + the
+  *original PRE2 audio driver running as ASM*. It is **NOT recovered PRE2 audio
+  source** — the game's software mixer (`1030:216B` per-channel + SFX, the DMA-refill
+  ISR `2029`) and the audio asset models are still ASM. "Audio works through the
+  emulated SB + original driver" ≠ "audio decode/mixer recovered." `dos_re` holds no
+  PRE2-specific audio/asset knowledge.
 - **Bug fixed (also fixed a graphics-corruption regression):** the SQZ **LZSS bump
   advance** used `(reserved>>4)+1`, but the ASM (`1030:1450`) pre-shifts the size's
   high byte twice — so we over-reserved ~4× for assets with a non-zero high byte

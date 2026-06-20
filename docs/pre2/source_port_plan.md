@@ -48,6 +48,27 @@ is recovered.
 - **level-load orchestration** (decides what to load and sets up the segment pointers; the per-asset codec is recovered).
 - **all gameplay update** — movement, AI, collision, physics, object/player state.
 
+## Audio recovery (layered)
+
+The emulated SoundBlaster/DMA/PIC (`dos_re`) + the original ASM audio driver are the **oracle/bootstrap
+path, not the final architecture**. The goal is a clean recovered **`AudioSystem`** so hybrid play needs
+neither the ASM driver nor the emulated SB (which stay as oracle/verify backends). Recover in layers, with
+verification rising from bytes → state → PCM:
+
+1. **Asset decode** — **DONE** (`pre2/codecs/audio.py`, `tests/test_audio_assets.py`): `.TRK` = SQZ-LZSS
+   standard ProTracker **M.K.** module (all 12 parse, layout closes exactly); `SAMPLE.SQZ` = SQZ-"other" →
+   60768-byte 8-bit PCM SFX bank. (SQZ decode itself was already recovered.)
+2. **Data model** — `SampleBank`/`Module`/`Pattern`/`Instrument`/`ChannelState`/… (`ModModule`/`ModSample`
+   exist); raw layout → `pre2/bridge/audio.py`.
+3. **Tracker/playback** — sequencer `1030:221A` → `pre2/recovered/tracker.py` (only effects PRE2 uses).
+4. **Mixer** — per-channel `1030:216B` + SFX `20AB-20F3` + DMA-refill ISR `2029` → `pre2/recovered/mixer.py`;
+   verify same state+SFX+timing → same PCM block vs `sb.pcm_out`.
+5. **Integration** — detach hybrid play from the ASM audio path (recovered `AudioSystem.tick → mixer →
+   backend`); ASM/SB stay oracle-only.
+
+`dos_re` holds **no** PRE2-specific audio knowledge; tracker/mixer logic never lives in checkpoints/adapters.
+"Audio works via emulated SB + original driver" ≠ "audio decode/mixer recovered."
+
 ## Recovery rules (kept short; full posture in `recovery_architecture.md`)
 
 - Three explicit modes; the original ASM runs only in **oracle**/**verify** modes,
