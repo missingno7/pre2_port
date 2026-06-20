@@ -36,8 +36,8 @@ _VAR_OUT_SEG = 0x11F3
 _DECOMP_ENTRY = (0x1030, 0x1068)
 # The decompressor's own RET sites (ax=out_seg, [2871] bumped, output written) —
 # a robust verify boundary that pairs each decode with its completion regardless
-# of which caller invoked it. LZSS exits at 15EF, LZW at 1328.
-_DECOMP_EXITS = ((0x1030, 0x15EF), (0x1030, 0x1328))
+# of which caller invoked it. LZSS exits at 15EF, LZW at 1328, "other" at 11F0.
+_DECOMP_EXITS = ((0x1030, 0x15EF), (0x1030, 0x1328), (0x1030, 0x11F0))
 
 
 def _read_cstring(mem, seg: int, off: int) -> str:
@@ -123,10 +123,22 @@ def sqz_decompress(cpu) -> None:
 
 
 def install_pre2_replacements(rt) -> int:
-    """Install the native replacement hooks (the hybrid runtime). Returns count."""
+    """Install the native replacement hooks (the hybrid runtime). Returns count.
+
+    Note ``dos_re.create_runtime`` already auto-installs every ``@registry.replace``
+    hook; this additionally wires the asset resolver the hooks need.
+    """
     rt.cpu.pre2_dos = rt.dos
     registry.install(rt.cpu)
     return len(registry.replacements)
+
+
+def uninstall_pre2_replacements(rt) -> None:
+    """Remove the native replacement hooks so the runtime executes pure original
+    ASM — used for capturing reference output and as the verification oracle."""
+    for key in registry.replacements:
+        rt.cpu.replacement_hooks.pop(key, None)
+        rt.cpu.hook_names.pop(key, None)
 
 
 # ---- opt-in lockstep verification -------------------------------------------

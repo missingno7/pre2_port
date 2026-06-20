@@ -7,7 +7,7 @@ from dos_re.bootstrap_lzexe import install_lzexe_0069_accelerator
 from dos_re.runtime import Runtime, create_runtime as create_dos_runtime
 from dos_re.snapshot import load_snapshot as load_dos_snapshot
 from pre2.bootstrap_hooks import install_fast_adlib_service
-from pre2.replacements import install_pre2_replacements
+from pre2.replacements import install_pre2_replacements, uninstall_pre2_replacements
 
 ORIGINAL_EXE = "pre2.exe"
 
@@ -40,6 +40,8 @@ def create_pre2_runtime(
         install_fast_adlib_service(rt)
     if native_replacements:
         install_pre2_replacements(rt)
+    else:
+        uninstall_pre2_replacements(rt)  # dos_re auto-installs the registry; undo it
     return rt
 
 
@@ -61,4 +63,6 @@ def load_pre2_snapshot(
         install_fast_adlib_service(rt)
     if native_replacements:
         install_pre2_replacements(rt)
+    else:
+        uninstall_pre2_replacements(rt)  # dos_re auto-installs the registry; undo it
     return rt

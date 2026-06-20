@@ -21,12 +21,20 @@ block back to the original offsets in segment 1030).
 
 from __future__ import annotations
 
-__all__ = ["unpack_sqz_lzss", "unpack_sqz_lzw", "unpack_sqz", "SQZ_LZSS_MAGIC"]
+__all__ = [
+    "unpack_sqz_lzss",
+    "unpack_sqz_lzw",
+    "unpack_sqz_other",
+    "unpack_sqz",
+    "SQZ_LZSS_MAGIC",
+]
 
-# The 10-byte "don't-run-me" stub that prefixes every LZSS graphics asset; the
-# first four bytes are ``mov ah,4Ch ; int 21h``. A 7-byte header follows
-# (compressed length LE16 at +10, decompressed size at +15), then the bit-stream.
-SQZ_LZSS_MAGIC = bytes.fromhex("b44ccd219d89646c7a00")
+# LZSS graphics assets begin with a 10-byte "don't-run-me" stub
+# (b4 4c cd 21 ... = mov ah,4Ch; int 21h; the 10th byte is a flag that varies
+# between assets — e.g. sprites.sqz has 01, not 00), a 7-byte header (compressed
+# length LE16 at +10), then the bit-stream at +17. The original dispatch
+# (1030:10B4) only matches word[0]==0x4cb4, i.e. just these two bytes.
+SQZ_LZSS_MAGIC = b"\xb4\x4c"
 _LZSS_STREAM_OFFSET = 17
 # LZW assets carry a 4-byte header (magic+size); the code stream follows.
 _LZW_STREAM_OFFSET = 4
@@ -39,11 +47,77 @@ def unpack_sqz(data: bytes) -> bytes:
     hot path) and the LZW format (``keyb`` / ``castle`` / ``present`` / ``titus``,
     header ``(data[1] & 0xF0) == 0x10``).
     """
-    if data[:10] == SQZ_LZSS_MAGIC:
-        return unpack_sqz_lzss(data, _LZSS_STREAM_OFFSET)
-    if (data[1] & 0xF0) == 0x10:
+    # Dispatch matches the original at 1030:10B4/10BC: word[0]==0x4cb4 -> LZSS,
+    # else data[1]==0x10 -> LZW, else the Huffman+RLE "other" format.
+    if data[:2] == SQZ_LZSS_MAGIC:
+        out = unpack_sqz_lzss(data, _LZSS_STREAM_OFFSET)
+        # Contract: the decode must match the header's declared size ([asm 1450];
+        # 24-bit byte[14]<<16 | word[15]). This catches the known-incomplete LZSS
+        # path on large (>~64KB) outputs and the byte-9==01 variant, failing loud
+        # instead of returning corrupt data.
+        declared = (data[14] << 16) | data[15] | (data[16] << 8)
+        if len(out) != declared:
+            raise ValueError(
+                f"LZSS decode produced {len(out)} bytes but header declares {declared}; "
+                "the LZSS decoder is not yet correct for this asset"
+            )
+        return out
+    if data[1] == 0x10:
         return unpack_sqz_lzw(data, _LZW_STREAM_OFFSET)
-    raise NotImplementedError("unrecognised SQZ header " + data[:4].hex())
+    return unpack_sqz_other(data)
+
+
+def unpack_sqz_other(data: bytes) -> bytes:
+    """Decompress the "other" SQZ format — Huffman + RLE (sample/theend).
+
+    Original codec at ``1030:10E6`` with the Huffman tree-walker at ``1030:11BD``.
+    Header (6 bytes): decompressed size = ``word0<<16 | word1``, Huffman tree byte
+    size = ``word2``. The tree (LE-word nodes) follows, then an MSB-first
+    big-endian bit stream. Tree leaves are marked by bit 15; a leaf whose high
+    byte is 0 is a literal byte, otherwise its low byte is an RLE run length that
+    repeats the previously emitted byte (``[asm 1124]``). Low byte 0 / 1 select an
+    extended length read from one / two following symbols (``[asm 1138 / 114B]``).
+    """
+    word0 = data[0] | (data[1] << 8)
+    word1 = data[2] | (data[3] << 8)
+    size = (word0 << 16) | word1
+    tree_size = data[4] | (data[5] << 8)
+    tree = data[6 : 6 + tree_size]
+    bitpos = (6 + tree_size) * 8
+    out = bytearray()
+
+    def get_bit() -> int:
+        nonlocal bitpos
+        bit = (data[bitpos >> 3] >> (7 - (bitpos & 7))) & 1  # MSB-first big-endian
+        bitpos += 1
+        return bit
+
+    def symbol() -> int:
+        # [asm 11BD] walk the implicit-root Huffman tree: each bit picks the left
+        # (node) or right (node+2) child word; bit 15 set marks a leaf.
+        node = 0
+        while True:
+            if get_bit():
+                node += 2
+            node = tree[node] | (tree[node + 1] << 8)
+            if node & 0x8000:
+                return node & 0x7FFF
+
+    while len(out) < size:
+        sym = symbol()
+        if sym < 0x100:  # [asm 111B je 1165] literal byte
+            out.append(sym)
+            continue
+        low = sym & 0xFF  # [asm 111F] RLE run length of the previous byte
+        if low >= 2:
+            count = low
+        elif low == 0:  # [asm 1138]
+            count = symbol()
+        else:  # low == 1  [asm 114B]
+            count = ((symbol() & 0xFF) << 8) | (symbol() & 0xFF)
+        out.extend(bytes([out[-1]]) * count)
+
+    return bytes(out[:size])
 
 
 def unpack_sqz_lzw(data: bytes, start: int = 4) -> bytes:

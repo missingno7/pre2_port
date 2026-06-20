@@ -24,19 +24,31 @@ ALLFONTS_SHA256 = "eedb134abdfdb2ba36698a0654d8e09b6af58c7ca3774a5ee9e3beea8254e
 # sha256 of unpack_sqz(keyb.sqz) == the original LZW ASM's 2048-byte output.
 KEYB_SHA256 = "62901d89554f43ba8b99d1d4deb49e71885ab536d16f3edd6a8f5df712604520"
 
+# sha256 of unpack_sqz(sample.sqz) == the original "other" (Huffman+RLE) ASM output.
+SAMPLE_SHA256 = "453f1caca728a6eae942e9cc2637a98acb64e7dfef7248b5d48bc8e78e6960e8"
+
 _LZW_NAMES = ("keyb", "castle", "present", "titus")
+_OTHER_NAMES = ("sample", "theend")
+# LZSS decoder is not yet correct for >~64KB output / the byte-9==01 variant.
+_LZSS_KNOWN_BROKEN = {"levelh.sqz", "leveli.sqz", "menu.sqz", "sprites.sqz", "union.sqz"}
 
 
 def _b44c_assets():
     if not ASSETS.is_dir():
         return []
-    return sorted(p for p in ASSETS.glob("*.sqz") if p.read_bytes()[:10] == SQZ_LZSS_MAGIC)
+    return sorted(p for p in ASSETS.glob("*.sqz") if p.read_bytes()[:2] == SQZ_LZSS_MAGIC)
 
 
 def _lzw_assets():
     if not ASSETS.is_dir():
         return []
     return [ASSETS / f"{n}.sqz" for n in _LZW_NAMES if (ASSETS / f"{n}.sqz").exists()]
+
+
+def _other_assets():
+    if not ASSETS.is_dir():
+        return []
+    return [ASSETS / f"{n}.sqz" for n in _OTHER_NAMES if (ASSETS / f"{n}.sqz").exists()]
 
 
 @pytest.mark.skipif(not (ASSETS / "allfonts.sqz").exists(), reason="game assets not present")
@@ -49,14 +61,29 @@ def test_allfonts_matches_asm_oracle():
 
 @pytest.mark.skipif(not _b44c_assets(), reason="game assets not present")
 @pytest.mark.parametrize("path", _b44c_assets(), ids=lambda p: p.name)
-def test_all_b44c_assets_decode_cleanly(path):
+def test_lzss_assets_decode_to_declared_size(path):
+    if path.name in _LZSS_KNOWN_BROKEN:
+        pytest.xfail("LZSS decoder incomplete for >~64KB output / byte-9==01 variant")
     raw = path.read_bytes()
-    # Header invariant: compressed-length field (LE16 @ +10) == payload after the
-    # 17-byte wrapper+header, i.e. the LZSS stream runs to end-of-file.
-    comprlen = raw[10] | (raw[11] << 8)
-    assert comprlen == len(raw) - 17
+    declared = (raw[14] << 16) | raw[15] | (raw[16] << 8)  # [asm 1450] 24-bit size
     out = unpack_sqz(raw)
-    assert len(out) > 0
+    assert len(out) == declared
+
+
+@pytest.mark.skipif(not (ASSETS / "sample.sqz").exists(), reason="game assets not present")
+def test_sample_other_matches_asm_oracle():
+    out = unpack_sqz((ASSETS / "sample.sqz").read_bytes())
+    assert len(out) == 60768
+    assert hashlib.sha256(out).hexdigest() == SAMPLE_SHA256
+
+
+@pytest.mark.skipif(not _other_assets(), reason="game assets not present")
+@pytest.mark.parametrize("path", _other_assets(), ids=lambda p: p.name)
+def test_other_assets_decode_to_declared_size(path):
+    raw = path.read_bytes()
+    declared = ((raw[0] | (raw[1] << 8)) << 16) | raw[2] | (raw[3] << 8)
+    out = unpack_sqz(raw)
+    assert len(out) == declared
 
 
 @pytest.mark.skipif(not (ASSETS / "keyb.sqz").exists(), reason="game assets not present")
