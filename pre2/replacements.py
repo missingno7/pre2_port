@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.codecs.sqz import unpack_sqz
+from pre2.codecs.sqz import sqz_reserved_size, unpack_sqz
 
 # ---- original-binary contract for the .SQZ decompressor (1030:1068) ----------
 # Verified against PRE2.EXE: entry opens the file named at 1A13:DX, takes the
@@ -59,31 +59,35 @@ class Pre2HybridGap(RuntimeError):
 
 
 def _native_decode(cpu):
-    """Return ``(name, decompressed_bytes)`` or ``None`` if not natively recovered.
+    """Return ``(name, decompressed_bytes, reserved_size)``; ``out`` is None if
+    not natively recovered.
 
     Uses the DOS machine's own case-insensitive path resolution so the hook sees
-    exactly the file the ASM would.
+    exactly the file the ASM would. ``reserved_size`` is the original's output
+    reservation (header field), which the bump allocator advances by — it can
+    exceed ``len(out)`` for LZSS, so it must drive the bump, not the decode length.
     """
     dos = getattr(cpu, "pre2_dos", None)
     if dos is None:
-        return None
+        return None, None, 0
     name = _read_cstring(cpu.mem, _DATA_SEG, cpu.s.dx)
     try:
-        return name, unpack_sqz(dos.resolve_game_path(name).read_bytes())
+        raw = dos.resolve_game_path(name).read_bytes()
+        return name, unpack_sqz(raw), sqz_reserved_size(raw)
     except (FileNotFoundError, NotImplementedError, IndexError, ValueError, OSError):
-        return name, None
+        return name, None, 0
 
 
-def _expected_bump(out_seg: int, size: int) -> int:
-    return (out_seg + (size >> 4) + 1) & 0xFFFF
+def _expected_bump(out_seg: int, reserved: int) -> int:
+    return (out_seg + (reserved >> 4) + 1) & 0xFFFF
 
 
-def _commit_native(cpu, out_seg: int, out: bytes) -> None:
+def _commit_native(cpu, out_seg: int, out: bytes, reserved: int) -> None:
     """Write the contract the original would have produced, then near-ret."""
     mem = cpu.mem
     base = (out_seg << 4) & 0xFFFFF
     mem.data[base : base + len(out)] = out
-    mem.ww(_DATA_SEG, _BUMP_PTR, _expected_bump(out_seg, len(out)))
+    mem.ww(_DATA_SEG, _BUMP_PTR, _expected_bump(out_seg, reserved))
     mem.ww(_SQZ_SEG, _VAR_OUT_SEG, out_seg)
     cpu.s.ax = out_seg & 0xFFFF
     cpu.s.ip = cpu.pop()  # near ret to caller (1030:00EF)
@@ -100,8 +104,7 @@ def sqz_decompress(cpu) -> None:
     and lets the ASM execute everything (unrecovered formats are simply not
     diffed yet, not hidden).
     """
-    decoded = _native_decode(cpu)
-    name, out = decoded if decoded is not None else (None, None)
+    name, out, reserved = _native_decode(cpu)
     verify = getattr(cpu, "pre2_verify_mode", False)
 
     if out is None:
@@ -110,16 +113,16 @@ def sqz_decompress(cpu) -> None:
             return
         raise Pre2HybridGap(
             f"hybrid SQZ decompress of {name!r} at 1030:1068 is not recovered "
-            "(remaining 'other' Huffman+RLE format, or unreadable asset). Recover "
-            "this path — the hybrid runtime must not silently fall back to ASM."
+            "(unrecognised format or unreadable asset). Recover this path — the "
+            "hybrid runtime must not silently fall back to ASM."
         )
 
     out_seg = cpu.mem.rw(_DATA_SEG, _BUMP_PTR)
     if verify:
-        cpu.pre2_verify_pending.append((name, out_seg, out))
+        cpu.pre2_verify_pending.append((name, out_seg, out, reserved))
         interpret_current_instruction_without_hook(cpu)
         return
-    _commit_native(cpu, out_seg, out)
+    _commit_native(cpu, out_seg, out, reserved)
 
 
 def install_pre2_replacements(rt) -> int:
@@ -165,7 +168,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
         # Reached the original decompressor's RET (verify mode let the ASM run).
         # Diff the just-completed decode's contract, then perform the RET.
         if c.pre2_verify_pending:
-            name, out_seg, native = c.pre2_verify_pending.pop()
+            name, out_seg, native, reserved = c.pre2_verify_pending.pop()
             mem = c.mem
             base = (out_seg << 4) & 0xFFFFF
             asm_out = bytes(mem.data[base : base + len(native)])
@@ -173,7 +176,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
                 reason = "output bytes"
             elif (c.s.ax & 0xFFFF) != (out_seg & 0xFFFF):
                 reason = f"return ax {c.s.ax:04X}!={out_seg:04X}"
-            elif mem.rw(_DATA_SEG, _BUMP_PTR) != _expected_bump(out_seg, len(native)):
+            elif mem.rw(_DATA_SEG, _BUMP_PTR) != _expected_bump(out_seg, reserved):
                 reason = "bump pointer"
             else:
                 reason = None

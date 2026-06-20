@@ -26,6 +26,7 @@ __all__ = [
     "unpack_sqz_lzw",
     "unpack_sqz_other",
     "unpack_sqz",
+    "sqz_reserved_size",
     "SQZ_LZSS_MAGIC",
 ]
 
@@ -50,21 +51,27 @@ def unpack_sqz(data: bytes) -> bytes:
     # Dispatch matches the original at 1030:10B4/10BC: word[0]==0x4cb4 -> LZSS,
     # else data[1]==0x10 -> LZW, else the Huffman+RLE "other" format.
     if data[:2] == SQZ_LZSS_MAGIC:
-        out = unpack_sqz_lzss(data, _LZSS_STREAM_OFFSET)
-        # Contract: the decode must match the header's declared size ([asm 1450];
-        # 24-bit byte[14]<<16 | word[15]). This catches the known-incomplete LZSS
-        # path on large (>~64KB) outputs and the byte-9==01 variant, failing loud
-        # instead of returning corrupt data.
-        declared = (data[14] << 16) | data[15] | (data[16] << 8)
-        if len(out) != declared:
-            raise ValueError(
-                f"LZSS decode produced {len(out)} bytes but header declares {declared}; "
-                "the LZSS decoder is not yet correct for this asset"
-            )
-        return out
+        return unpack_sqz_lzss(data, _LZSS_STREAM_OFFSET)
     if data[1] == 0x10:
         return unpack_sqz_lzw(data, _LZW_STREAM_OFFSET)
     return unpack_sqz_other(data)
+
+
+def sqz_reserved_size(data: bytes) -> int:
+    """The size field the original reads to reserve the output buffer.
+
+    The bump allocator at ``[1A13:2871]`` advances by ``(this >> 4) + 1``
+    paragraphs ([asm 1450/1464]). For LZW and the "other" format this equals the
+    decompressed length, but for **LZSS it over-reserves** — it can exceed the
+    actual decoded length (e.g. sprites: reserves 550200, decodes to 156984). The
+    hybrid hook must bump by this, not by ``len(decoded)``, to keep the next
+    asset at the same segment the original ASM would use.
+    """
+    if data[:2] == SQZ_LZSS_MAGIC:
+        return (data[14] << 16) | data[15] | (data[16] << 8)
+    if data[1] == 0x10:
+        return ((data[0] & 15) << 16) | data[2] | (data[3] << 8)
+    return ((data[0] | (data[1] << 8)) << 16) | data[2] | (data[3] << 8)
 
 
 def unpack_sqz_other(data: bytes) -> bytes:

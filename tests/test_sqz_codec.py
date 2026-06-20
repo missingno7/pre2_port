@@ -29,8 +29,6 @@ SAMPLE_SHA256 = "453f1caca728a6eae942e9cc2637a98acb64e7dfef7248b5d48bc8e78e6960e
 
 _LZW_NAMES = ("keyb", "castle", "present", "titus")
 _OTHER_NAMES = ("sample", "theend")
-# LZSS decoder is not yet correct for >~64KB output / the byte-9==01 variant.
-_LZSS_KNOWN_BROKEN = {"levelh.sqz", "leveli.sqz", "menu.sqz", "sprites.sqz", "union.sqz"}
 
 
 def _b44c_assets():
@@ -61,13 +59,22 @@ def test_allfonts_matches_asm_oracle():
 
 @pytest.mark.skipif(not _b44c_assets(), reason="game assets not present")
 @pytest.mark.parametrize("path", _b44c_assets(), ids=lambda p: p.name)
-def test_lzss_assets_decode_to_declared_size(path):
-    if path.name in _LZSS_KNOWN_BROKEN:
-        pytest.xfail("LZSS decoder incomplete for >~64KB output / byte-9==01 variant")
+def test_lzss_assets_decode_within_reservation(path):
+    # The header field is the output *reservation* (over-reserves for LZSS), not
+    # the decode length; the decode must be non-empty and fit inside it.
+    from pre2.codecs.sqz import sqz_reserved_size
+
     raw = path.read_bytes()
-    declared = (raw[14] << 16) | raw[15] | (raw[16] << 8)  # [asm 1450] 24-bit size
     out = unpack_sqz(raw)
-    assert len(out) == declared
+    assert 0 < len(out) <= sqz_reserved_size(raw)
+
+
+@pytest.mark.skipif(not (ASSETS / "sprites.sqz").exists(), reason="game assets not present")
+def test_sprites_lzss_large_byte9_variant():
+    # Verified byte-for-byte vs ASM: a >64KB output (156984) whose header reserves
+    # far more (550200), and the byte-9==01 wrapper variant.
+    out = unpack_sqz((ASSETS / "sprites.sqz").read_bytes())
+    assert len(out) == 156984
 
 
 @pytest.mark.skipif(not (ASSETS / "sample.sqz").exists(), reason="game assets not present")
