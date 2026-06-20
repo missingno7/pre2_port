@@ -1,94 +1,82 @@
 # Prehistorik 2 DOS_RE Source-Port Workbench
 
-This fork is now aimed at **Prehistorik 2**.  The reusable `dos_re` real-mode VM is kept as the execution oracle, while game-specific work lives under `pre2/`.
+A faithful **recovered source port** of **Prehistorik 2**, grown from the original
+`PRE2.EXE` under a custom real-mode VM. The reusable `dos_re` VM is the execution
+**oracle**; all game-specific recovery lives under `pre2/`. Recovered code moves
+gradually upward into clean, VM-independent source-like modules — not a loose
+remake, and not a permanent forest of low-level hooks.
 
-The immediate goal is not a clean remake yet.  The goal is to boot the original packed `PRE2.EXE`, observe the real runtime, save snapshots, and then start replacing understood routines with verified source-level code.
+## Current state — recovery phase
 
-## Current state
+The bootstrap phase is done. The VM **runs PRE2 gameplay correctly**, and
+recovered native code is now part of the normal runtime:
 
-- `assets/pre2.exe` is the canonical executable.
-- The original Prehistorik 2 `.sqz` assets and `.trk` music files are kept under `assets/`.
-- The old legacy game package, legacy target docs, and stale legacy target artifacts were removed.
-- `dos_re.bootstrap_lzexe` now contains a target-neutral LZEXE 0.91 loop accelerator.
-- `pre2.runtime.create_pre2_runtime()` launches `pre2.exe` through the generic DOS VM and installs only bootstrap helpers, not gameplay hooks.
-- The VM now handles early PRE2 startup needs that were missing from the legacy target fork: BIOS `INT 10h AH=1Bh`, BIOS font function `INT 10h AH=11h`, `INT 1Ah` RTC calls, `INT 2Fh` XMS probing, `INS/OUTS`, `CMPSB/CMPSW`, and the small VGA/EGA register model needed by PRE2's compatibility checks.
-- PRE2 reaches real graphics and the original title/menu screen from the original executable and `.sqz` assets.  The intro/title path can use linear VGA mode 13h, while map/level screens use the VGA/EGA-compatible 320x200 16-colour planar path.
+- **The hybrid runtime is the default.** `pre2.runtime.create_pre2_runtime()`
+  installs native **replacement** hooks that run *in place of* the original ASM.
+  As coverage grows the game runs faster and more of it is clean source.
+- **First recovered-native island: SQZ asset decompression** (`pre2/codecs/sqz.py`)
+  — all three formats (LZSS, LZW, Huffman+RLE "other") recovered and verified
+  byte-for-byte against the ASM. The decompressor was the slow hot kernel on the
+  level-load path; the hybrid runtime now cold-boots into gameplay decoding every
+  asset natively.
+- **No silent fallbacks.** If the hybrid runtime reaches behaviour we have not
+  recovered, it **fails loud** with a precise gap report (`Pre2HybridGap`) instead
+  of secretly running the original ASM. Running the original ASM is allowed, but
+  only in an explicit, mode-controlled way (oracle / verify modes).
+
+See [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md) for
+the north-star architecture and [`docs/pre2/run_status.md`](docs/pre2/run_status.md)
+for the running log.
+
+## Execution modes
+
+| Mode | What runs | Use |
+|---|---|---|
+| **oracle / original** | pure original ASM (replacements removed) | reference & observation; capturing oracles |
+| **hybrid (default)** | recovered native replacements run directly, no per-step verification | normal play, recording demos/snapshots |
+| **verify** | ASM runs as oracle and each recovered result is diffed against it at contract boundaries | offline proof against recorded demos/snapshots |
+
+- `play.py --view` → hybrid runtime (the active runtime).
+- `play.py --view --verify-hooks` → verify mode (lockstep contract check vs ASM).
+- `create_pre2_runtime(..., native_replacements=False)` → pure oracle/ASM mode.
 
 ## Run
 
-Inspect the original files:
-
 ```bash
-python scripts/play.py --inventory
+python scripts/play.py --inventory                       # inspect original files
+python scripts/play.py --view                            # live viewer, hybrid runtime + OPL3 audio
+python scripts/play.py --view --verify-hooks             # play with the lockstep ASM oracle check
+python scripts/play.py --steps 1000000 --save-snapshot   # headless snapshot for study
+python scripts/render_frame.py artifacts/<snapshot> --out frame.png
 ```
 
-Run the VM for a bounded number of instructions:
+In the viewer: `F10` saves a screenshot, `F11` toggles input-demo recording, `F12`
+saves a VM snapshot. `--speed N` (default `120000`) sets the game+music tempo;
+`--fast-adlib` reaches graphics fastest but mutes music.
+
+Demos are the regression substrate — a start snapshot plus VM-visible input on a
+deterministic per-frame clock, replayable headlessly and through the verify mode:
 
 ```bash
-python scripts/play.py --steps 1000000 --trace-tail 40 --fast-adlib
+python scripts/play.py --view --record-demo run1
+python scripts/play.py --play-demo artifacts/demo_run1_<ts> --verify-hooks   # prove no drift vs ASM
 ```
 
-Open the live graphics viewer with sound-card (OPL3) audio.  PRE2 runs in pure
-original ASM here; the viewer renders BIOS text, linear VGA, and planar VGA/EGA
-screens and plays the original AdLib register stream.  Inside it, `F12` saves a snapshot and `F11`
-toggles input-demo recording:
-
-```bash
-python scripts/play.py --view
-```
-
-The viewer runs **unbounded** by default (it does not stop until you close the
-window).  What to expect on a cold start:
-
-- it boots through the LZEXE unpacker and lands on the **date/oldies text
-  screen**, which waits for a key **press-and-hold** — hold `Enter` (or `Space`)
-  to advance to the Titus/title VGA screens;
-- `--speed N` sets the target VM steps/sec, i.e. the game **and music tempo**
-  (default `120000`).  Lower it (`--speed 60000`) if the music is too fast; raise
-  it to reach the game faster;
-- `--fast-adlib` reaches the graphics fastest but **mutes the music** (it skips
-  the interpreted AdLib driver).
-
-Save a snapshot for later investigation:
-
-```bash
-python scripts/play.py --steps 1000000 --save-snapshot
-```
-
-Record and replay an input demo (deterministic; the substrate for regression
-testing recovered code against the original):
-
-```bash
-python scripts/play.py --view --record-demo menu_nav          # record from launch (F11 toggles)
-python scripts/play.py --play-demo artifacts/demo_menu_nav_<ts>          # replay headless
-python scripts/play.py --play-demo artifacts/demo_menu_nav_<ts> --view   # watch the replay
-```
-
-Render a saved graphics snapshot to PNG if needed; the tool chooses linear VGA
-or planar decoding from the snapshot metadata:
-
-```bash
-python scripts/render_frame.py artifacts/snapshot_pre2_YYYYMMDD_HHMMSS --out frame.png
-```
-
-Known proof snapshots from this milestone include `artifacts/pre2_mode13_present_loading` and `artifacts/after_sprites_04`.
-
-## Architecture rule
-
-`dos_re/` must stay game-independent.  Anything that knows Prehistorik 2 filenames, executable layout, bootstrap policy, or future gameplay addresses belongs under `pre2/`.
-
-The intended migration path is:
+## Architecture in one breath
 
 ```text
 original PRE2.EXE
-  -> dos_re VM
-  -> bootstrap/source snapshots
-  -> PRE2-specific views over original memory
-  -> verified hooks
-  -> semantic source-port systems
+  -> dos_re VM (oracle)
+  -> thin replacement adapters / checkpoints (pre2/replacements.py)
+  -> recovered VM-independent logic (pre2/codecs/ ... ; future pre2/recovered/)
+  -> memory views / dataclass bridge (future pre2/bridge/)
+  -> semantic state comparison -> source-port systems
 ```
 
-The packed executable and VM remain the oracle until a piece of behavior has been observed and verified.
-
-
-Current status: PRE2 boots to the original title/menu in the VM, input is delivered through the original INT 09h path, and the next blocker is the real SQZ level-loader/decompressor boundary.
+`dos_re/` must stay game-independent: anything that knows Prehistorik 2 filenames,
+addresses, or formats belongs under `pre2/`. The packed executable and VM remain
+the oracle until a piece of behaviour has been observed, recovered, and verified.
+Methodology lives in [`AGENTS.md`](AGENTS.md), [`ARCHITECTURE.md`](ARCHITECTURE.md),
+[`dos_re/AI_PORTING_CHARTER.md`](dos_re/AI_PORTING_CHARTER.md), and the
+[`docs/`](docs/) tree; the original-address ledger is
+[`docs/pre2/symbol_ledger.md`](docs/pre2/symbol_ledger.md).

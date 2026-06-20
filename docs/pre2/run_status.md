@@ -1,5 +1,35 @@
 # Prehistorik 2 run status
 
+> The dated entries below `2026-06-20` are historical bring-up notes. Where they
+> describe the project as pre-gameplay, list SQZ decompression as the "next
+> blocker", or say `play.py --view` runs pure ASM, they are **superseded** by the
+> entry below.
+
+## 2026-06-20 recovery phase — gameplay runs, hybrid runtime, SQZ island done
+
+The bootstrap phase is over. The VM **runs PRE2 gameplay correctly**, and recovered
+native code is now part of the normal runtime.
+
+- **Hybrid runtime is the default.** `create_pre2_runtime()` installs native
+  **replacement** hooks (`pre2/replacements.py`) that run in place of the original
+  ASM. `play.py --view` is the hybrid runtime, not pure ASM. The earlier
+  VM-correctness fixes (BIOS ROM write-protect, ADC/SBB + shift/rotate flags, CRTC
+  display-start reset, EGA read-mode-1 colour compare) made gameplay render correctly.
+- **First recovered-native island: SQZ asset decompression** (`pre2/codecs/sqz.py`).
+  All three formats — **LZSS** (`b4 4c` graphics, incl. >64KB outputs and the
+  `byte-9==01` variant), **LZW**, and the **Huffman+RLE "other"** format — are
+  recovered and verified byte-for-byte vs the ASM. The hybrid runtime cold-boots
+  into gameplay decoding every asset natively (the old "SQZ loader/decompressor
+  blocker" is resolved). This island merges into the future asset loader.
+- **Three explicit modes, no silent fallbacks.** oracle/original
+  (`native_replacements=False`), hybrid (default), verify (`--verify-hooks`,
+  lockstep contract diff vs ASM). Unrecovered behaviour in hybrid mode fails loud
+  (`Pre2HybridGap`).
+- **Next:** the first stateful islands — sprite/tile decode, masked blits,
+  tilemap/background draw — where the first memory-view ↔ dataclass bridge is
+  stood up. See [`recovery_architecture.md`](recovery_architecture.md) and
+  [`symbol_ledger.md`](symbol_ledger.md).
+
 ## 2026-06-19 VGA boot milestone
 
 The original `assets/pre2.exe` now cold-starts through the DOS_RE VM far enough to show real Prehistorik 2 graphics from the original executable and assets.

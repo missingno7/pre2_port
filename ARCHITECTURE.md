@@ -8,24 +8,65 @@ The guiding direction: **the VM should become an oracle/test harness, not the
 engine.** Higher (ASM-bound) layers may depend on lower (cleaner) layers; lower
 layers must never depend back up on the VM/CPU/segment world.
 
-> **Current state (bootstrap).** Today the repo is essentially layers 0–1 below:
-> the `dos_re` VM runs the original `pre2.exe` to the title/menu, with a thin
-> `pre2` bootstrap-helper layer. The layers above are the **target shape**, not
-> the present one. They are described here so new code lands in the right place,
-> not because they already exist.
+> **Current state (recovery phase).** Bootstrap is done: the `dos_re` VM runs
+> **PRE2 gameplay**, and recovered native code is now part of the normal runtime.
+> The first recovered island — **SQZ asset decompression** — exists as clean
+> VM-independent logic (`pre2/codecs/sqz.py`, the *pure* layer) behind a thin
+> *replacement adapter* (`pre2/replacements.py`, the *hook_boundary* layer), with
+> contract-level verification. The hybrid runtime is the default. The higher
+> layers below are now partly real, partly target shape; new code should land in
+> the layer it belongs to. The companion north-star doc is
+> [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md).
+
+## Execution modes
+
+Three explicit, mode-controlled paths — the original ASM only runs in oracle and
+verify modes, never as a silent fallback:
+
+| Mode | What runs | Use |
+|------|-----------|-----|
+| **oracle / original** | pure original ASM (`native_replacements=False`) | reference, observation, capturing oracles |
+| **hybrid (default)** | recovered native replacements, no per-step verification | normal play, demo/snapshot recording |
+| **verify** | ASM oracle + recovered logic, diffed at contract boundaries (`--verify-hooks`) | offline proof against recorded demos/snapshots |
+
+**No silent fallbacks.** If the hybrid runtime reaches unrecovered behaviour it
+**fails loud** with a precise gap report (`Pre2HybridGap`), turning the gap into
+the next task instead of hiding it.
 
 ## Packages
 
 ```text
 dos_re/      reusable, game-independent real-mode VM + verification engines
-pre2/        Prehistorik 2-specific layer (launch, bootstrap helpers, future
-             address maps, typed views, verified hooks, semantic systems)
+pre2/        Prehistorik 2-specific recovery layer (see structure below)
 nuked_opl3/  vendored optional OPL/AdLib backend (independent of dos_re and pre2)
 ```
 
 Hard boundary: `dos_re` must not import `pre2` or know any Prehistorik 2 address,
 asset name, or format. See
 [`docs/architecture/package_boundary.md`](docs/architecture/package_boundary.md).
+
+### `pre2/` structure (current + intended)
+
+So recovered islands land consistently as they are added. Each recovered island
+is *clean VM-independent logic* + a *thin adapter* + a *verifier*; the adapters
+and verifiers are scaffolding, the recovered logic and (later) dataclass state
+mirrors are the real source port.
+
+```text
+pre2/
+  runtime.py        launch/snapshot wiring; installs the hybrid replacements   [exists]
+  replacements.py   active replacement adapters (thin hooks) + verify wiring    [exists]
+  bootstrap_hooks.py bootstrap-only helpers (LZEXE/AdLib), never gameplay        [exists]
+  codecs/           recovered VM-independent asset codecs (sqz.py: LZSS/LZW/...) [exists]
+  recovered/        recovered VM-independent gameplay logic (player/object/...)  [for next islands]
+  bridge/           memory views: VM memory <-> recovered structs/dataclasses    [for first stateful island]
+  checkpoints/      verification contact points (verifiers/checkpoints)          [grows out of replacements.py]
+  probes/           temporary observation/diagnostic tools                       [as needed]
+```
+
+`codecs/` and `recovered/` are the **pure** layer (no `cpu`/`mem`/`dos_re`).
+`bridge/` is the one place VM memory meets recovered dataclasses. `replacements.py`
+and `checkpoints/` are the *hook_boundary* — thin, no game logic.
 
 ## Target layers (high = closest to ASM, low = closest to pure source)
 

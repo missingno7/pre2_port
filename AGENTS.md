@@ -34,33 +34,51 @@ boundary is proven. A faster wrong replacement is a regression.
 **Do not write high-level gameplay because it "looks right". Write high-level
 logic only when it can be tied back to original ASM behaviour and verified.**
 
-## Where the project is now (bootstrap phase)
+## Where the project is now (recovery phase)
 
-PRE2 boots through the VM to the original title/menu from the original executable
-and `.sqz` assets; input is delivered through the original `INT 09h` path. The
-immediate goal is still bring-up and observation, not gameplay recovery. Current
-priorities, in order:
+Bootstrap is done. The VM **runs PRE2 gameplay**, and recovered native code is now
+part of the normal **hybrid** runtime. The first recovered-native island — **SQZ
+asset decompression** (`pre2/codecs/sqz.py`) — is complete and verified
+byte-for-byte against the ASM (LZSS, LZW, Huffman+RLE "other"); the hybrid runtime
+cold-boots into gameplay decoding every asset natively.
 
-1. load and start the original executable correctly,
-2. implement missing 8086 instructions/flags as they are encountered,
-3. support the DOS/BIOS INT calls required for file loading,
-4. support PRE2's VGA DAC palette, linear VGA, and planar VGA/EGA framebuffer behaviour enough to display state,
-5. trace file I/O, memory writes, VGA writes, and control-flow boundaries,
-6. avoid speculative gameplay rewrites at this stage,
-7. add hooks only when they help execution or observation; keep them minimal.
+The work is now recovering more **verified, bounded, hot kernels** and moving them
+upward into clean source-like modules. Good next targets: LZW/SQZ variants (done),
+**sprite/tile decode, masked blits, tilemap/background draw**, then gameplay systems
+(player/object/level update). Each island is clean VM-independent logic behind a
+thin adapter, verified before it is trusted.
 
-**Next concrete boundary:** the real `.SQZ` level-loader/decompressor. Starting a
-level reaches PRE2's SQZ decoder and opens `LEVEL1.SQZ`/`UNION.SQZ`/`BACK0.SQZ`.
-The first good recovered-native target is that decompressor: a hot, deterministic
-kernel with clear inputs/outputs, verifiable byte-for-byte against the original
-ASM. See [`docs/pre2/run_status.md`](docs/pre2/run_status.md).
+### Three execution modes (no silent fallbacks)
+
+- **oracle / original** — pure original ASM (`create_pre2_runtime(..., native_replacements=False)`); reference and observation.
+- **hybrid (default)** — recovered native replacements run directly, no per-step verification; the active runtime (`play.py --view`).
+- **verify** — ASM oracle vs recovered logic, diffed at contract boundaries (`play.py --verify-hooks`); for offline proof against demos/snapshots.
+
+The original ASM runs **only** in oracle/verify modes. In hybrid mode, unrecovered
+behaviour **fails loud** (`Pre2HybridGap`) — never a silent fallback to ASM.
+
+### Hook/checkpoint roles (every contact point has one + a lifetime)
+
+- **probe** — observe the original ASM (tracing, capturing oracles);
+- **verifier / checkpoint** — compare a recovered island against the original;
+- **replacement adapter** — replace a known ASM path in the hybrid runtime;
+- **temporary gap detector** — fail loud on unrecovered behaviour.
+
+A hook is scaffolding, not the architecture, and never where game logic
+accumulates. See [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md)
+for the full posture and the memory-view ↔ dataclass bridge model.
 
 ## Sources of truth
 
-- [`docs/pre2/run_status.md`](docs/pre2/run_status.md): current milestone, recent
-  fixes, proof artifacts, and the active blocker.
+- [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md): the
+  north-star posture — hook roles/lifetimes, island merge targets, the
+  memory-view ↔ dataclass bridge, contract verification, the two/three modes.
+- [`docs/pre2/run_status.md`](docs/pre2/run_status.md): current phase, recent
+  fixes, proof artifacts.
 - [`docs/pre2/source_port_plan.md`](docs/pre2/source_port_plan.md): boundary
-  rules, milestones, and known facts about the executable.
+  rules, phase status, recovered-island roadmap.
+- [`docs/pre2/symbol_ledger.md`](docs/pre2/symbol_ledger.md): original addresses,
+  continuation points, allocator state, decode boundaries (candidate → verified).
 - [`dos_re/AI_PORTING_CHARTER.md`](dos_re/AI_PORTING_CHARTER.md): the full
   reusable porting method — proof spine, determinism trap, phased roadmap.
 - [`docs/dos_re/source_port_methodology.md`](docs/dos_re/source_port_methodology.md):
@@ -89,9 +107,15 @@ dos_re/                 reusable, game-independent DOS RE environment
   bootstrap_lzexe.py    target-neutral LZEXE 0.91 loop accelerator
   AI_PORTING_CHARTER.md the reusable porting charter
 
-pre2/                   Prehistorik 2-specific layer
-  runtime.py            PRE2 launch/snapshot wiring over the dos_re VM
-  bootstrap_hooks.py    bootstrap helpers only (BIOS/DOS bring-up), no gameplay
+pre2/                   Prehistorik 2-specific recovery layer
+  runtime.py            PRE2 launch/snapshot wiring; installs hybrid replacements
+  replacements.py       active replacement adapters (thin hooks) + verify wiring
+  bootstrap_hooks.py    bootstrap helpers only (LZEXE/AdLib), no gameplay
+  codecs/               recovered VM-independent asset codecs (sqz.py)
+  recovered/            recovered VM-independent gameplay logic   [for next islands]
+  bridge/               memory views: VM memory <-> recovered dataclasses [stateful]
+  checkpoints/          verification contact points               [grows from replacements]
+  probes/               temporary observation/diagnostic tools    [as needed]
   launch.py / cli.py    PRE2 entry points
   analysis.py           PRE2 inspection helpers
 
@@ -187,25 +211,24 @@ for larger paths.
 
 ## Standard commands
 
-PRE2 runs in pure original ASM (only the LZEXE bootstrap accelerator and optional
-helpers are installed, never gameplay hooks). Rendering covers BIOS text, linear
-VGA, and the VGA/EGA-compatible 320x200 16-colour planar path; audio is the
-vendored Nuked-OPL3 backend driven by the original AdLib register stream (no PC speaker).
+`play.py --view` runs the **hybrid runtime** (recovered native replacements run in
+place of the ASM). Add `--verify-hooks` for verify mode (lockstep ASM oracle
+check). Rendering covers BIOS text, linear VGA, and the 320x200 16-colour planar
+path; audio is the vendored Nuked-OPL3 backend driven by the original AdLib stream.
 
 ```bash
 python scripts/run_tests.py                                   # test suite
 python scripts/play.py --inventory                            # inspect original files
-python scripts/play.py --steps 1000000 --trace-tail 40 --fast-adlib
-python scripts/play.py --view                                 # live VGA viewer + OPL3 audio
+python scripts/play.py --view                                 # hybrid runtime + OPL3 audio
+python scripts/play.py --view --verify-hooks                  # verify mode (lockstep vs ASM)
 python scripts/play.py --steps 1000000 --save-snapshot        # headless snapshot for study
 python scripts/render_frame.py artifacts/<snapshot> --out frame.png   # VGA PNG dump
 ```
 
-`--view` runs **unbounded** (until the window closes). On a cold start PRE2 lands
-on the date/oldies **text** screen, which waits for a key **press-and-hold** —
-hold `Enter` to advance to the Titus/title VGA screens. `--speed N` (default
-120000 steps/sec) sets the game+music tempo; `--fast-adlib` reaches graphics
-fastest but mutes music.
+`--view` runs **unbounded** (until the window closes); `F10` screenshots, `F11`
+toggles demo recording, `F12` saves a snapshot. `--speed N` (default 120000
+steps/sec) sets the game+music tempo; `--fast-adlib` reaches graphics fastest but
+mutes music.
 
 Snapshots and demos (the evidence the source-port work is verified against):
 

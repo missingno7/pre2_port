@@ -6,25 +6,41 @@
 
 `pre2` is the game-specific layer.  It owns original PRE2 filenames, executable inventory, bootstrap helpers, future address maps, and later verified hooks.
 
-## First milestones
+## Phase status
 
-1. Boot the packed `assets/pre2.exe` through the VM.
-2. Treat LZEXE as bootstrap, not target game logic.
-3. Collect stable snapshots after unpack/startup.
-4. Identify file loads for `.sqz` and `.trk` assets.
-5. Add PRE2-specific typed views only after fields are observed.
-6. Replace routines only when the VM/original can verify their effects.
+**Bootstrap milestones — done.** Boot the packed `pre2.exe` through the VM; treat
+LZEXE as bootstrap (target-neutral accelerator); collect stable snapshots; trace
+`.sqz`/`.trk` loads; render the VGA/EGA screens. **The VM now runs gameplay.**
 
-## Current known facts
+**Recovery phase — in progress.** Replace understood routines with verified
+native code, running by default in the **hybrid** runtime, and move recovered code
+upward into clean VM-independent modules. Each island: find the ASM/data boundary,
+define the input/output contract, observe I/O, write clean native logic, verify
+against the ASM, then wire a thin adapter — and only then trust it.
 
-- `pre2.exe` is an MZ executable identified by `file` as LZEXE 0.91 compressed.
-- MZ entry in the packed file is `0CA6:000E`, loaded by our default PSP setup as `1CB6:000E`.
-- After accelerated bootstrap, execution reaches inner code around `1996:*` / `1C34:*` in the current VM layout.
-- The asset set includes dozens of `.sqz` files and `.trk` music files.
+### Recovered islands
 
-## Next technical work
+| Island | Module | Status |
+|---|---|---|
+| SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/replacements.py` | **done, verified vs ASM** |
+| sprite/tile decode | `pre2/recovered/` (planned) | next — first *stateful* island (stands up `pre2/bridge/`) |
+| masked blit / tilemap-background draw | `pre2/recovered/` (planned) | after sprite/tile |
+| gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | later; semantic-state verification |
 
-- Improve AdLib/status-port timing so PRE2's sound probe/delay loops do not waste huge instruction budgets.
-- Add a lightweight visual presenter boundary for early text/VGA setup.
-- Trace DOS file opens/reads to map which `.sqz` files are loaded first.
-- Start a `pre2/symbols.py` or JSON address ledger once stable code addresses are identified.
+## Recovery rules (kept short; full posture in `recovery_architecture.md`)
+
+- Three explicit modes; the original ASM runs only in **oracle**/**verify** modes,
+  never as a silent fallback. Hybrid mode fails loud on gaps (`Pre2HybridGap`).
+- Recovered logic is clean, VM-independent (no `cpu`/`mem`/`dos_re`); hooks are
+  thin adapters/verifiers with a declared role (probe / verifier / replacement /
+  gap-detector), not where logic accumulates.
+- Dataclasses reconstruct the original C-like structs; the bridge layer reads them
+  from VM memory and (when replacing) writes them back. Verification rises from
+  byte/buffer diffs to semantic state contracts over time.
+
+## Reference
+
+- Original addresses, continuation points, allocator state, and decode boundaries:
+  [`symbol_ledger.md`](symbol_ledger.md).
+- `pre2.exe` is LZEXE 0.91-packed MZ; the asset set is dozens of `.sqz` (recovered
+  decompressor) and `.trk` music files.
