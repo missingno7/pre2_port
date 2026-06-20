@@ -145,20 +145,29 @@ enough state to identify which recovered subsystem drifted.
 Workflow: play in hybrid → record demos → if something looks wrong or a subsystem
 needs validation, replay the demo in verify mode → diagnose the first divergence.
 
-## Current state (slice 1: asset decompression)
+## Slice 1 — asset decompression: complete
 
-`pre2/replacements.py` hosts the SQZ decompressor hook at `1030:1068`
-(role: *replacement adapter*; verifier at the decompressor RET sites; this island
-merges into the **asset loader**).
+The first recovered island. `pre2/replacements.py` hosts the SQZ decompressor
+hook at `1030:1068` (role: *replacement adapter*, with a *verifier* at the
+decompressor RET sites; this island merges into the **asset loader**).
 
-- Recovered & verified vs ASM: **LZW** (keyb/castle/present/titus) and the
-  **"other" Huffman+RLE** format (sample/theend) — `pre2/codecs/sqz.py`.
-- **LZSS** (`b4 4c` graphics): correct for small outputs (allfonts is byte-exact)
-  but **not yet correct for outputs >~64KB or the `byte-9==01` variant**
-  (sprites). A header **size contract** makes the hybrid *fail loud* on the 5
-  affected assets (levelh/leveli/menu/sprites/union) instead of emitting corrupt
-  data. So the decompressor island is **not complete** — this is the next task.
-- Verification (`--verify-hooks`): contract-level diff (output bytes + bump
-  allocator `[1A13:2871]` + `ax`) at the decompressor's own RET sites
-  (15EF/1328/11F0); caller-dead scratch registers are excluded. The strict
-  full-state `HookVerifier` is reserved for finer hooks.
+- **All three SQZ codecs recovered and verified byte-for-byte vs the ASM**
+  (`pre2/codecs/sqz.py`): **LZSS** (`b4 4c` graphics, incl. >64KB outputs and the
+  `byte-9==01` wrapper variant — sprites is byte-exact), **LZW**
+  (keyb/castle/present/titus), and the **Huffman+RLE "other"** format
+  (sample/theend). The hybrid runtime cold-boots into gameplay decoding every
+  asset natively, with zero gaps.
+- **Contract = output bytes + bump allocator `[1A13:2871]` + `ax`.** The bump
+  advances by the header's *reservation* field, not the decode length (LZSS
+  over-reserves) — `sqz_reserved_size()`. Caller-dead scratch registers are
+  excluded.
+- **Verification** (`--verify-hooks`): contract-level diff at the decompressor's
+  own RET sites (`15EF`/`1328`/`11F0`). The strict full-state `HookVerifier` is
+  reserved for finer hooks.
+- A cautionary note kept in the project memory: a hand-rolled "size == header"
+  invariant once *falsely* condemned the (correct) LZSS decoder. Heuristic
+  contracts can be wrong; the authoritative verifier is the lockstep against the
+  ASM, not a guessed invariant.
+
+Next island: the first **stateful** subsystem (sprite/tile decode → renderer),
+where the first memory-view ↔ dataclass bridge is stood up.
