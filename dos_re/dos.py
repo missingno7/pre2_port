@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from .cpu import CPU8086, HaltExecution, UnsupportedInstruction, CF, ZF
+from .memory import EGA_APERTURE, EGA_PLANE_STRIDE, EGA_PLANE_WINDOW
 
 
 def _dac8(v6: int) -> int:
@@ -210,12 +211,21 @@ class DOSMachine:
         if mode & 0x80:
             return
         mode &= 0x7F
+        if mode in (0x0D, 0x0E, 0x10, 0x12):
+            # EGA/VGA *planar* modes: the displayed pixels live in the four shadow
+            # planes (EGA_APERTURE), NOT in the legacy 0xA0000 aperture (which is
+            # only the CPU write window routed through the planar latches). A real
+            # BIOS mode-set clears the planar display memory, so we must zero the
+            # shadow planes — clearing 0xA0000 here was a no-op for planar pixels,
+            # which left the previous screen visible after a mode transition.
+            for plane in range(4):
+                base = EGA_APERTURE + plane * EGA_PLANE_STRIDE
+                cpu.mem.data[base:base + EGA_PLANE_WINDOW] = b"\x00" * EGA_PLANE_WINDOW
+            return
         if mode in (0x04, 0x05, 0x06):
             start, size = 0xB8000, 0x4000
         elif mode == 0x09:
             start, size = 0xB8000, 0x8000
-        elif mode == 0x0D:
-            start, size = 0xA0000, 0x8000
         elif mode in (0x13, 0x19):
             start, size = 0xA0000, 0x10000
         else:

@@ -282,3 +282,51 @@ def test_segment_override_applies_to_string_source():
     assert mem.rb(0x2000, 0x0200) == 0x22
     assert cpu.s.si == 0x0101
     assert cpu.s.di == 0x0201
+
+
+def _planes_any_nonzero(mem):
+    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE, EGA_PLANE_WINDOW
+    return [any(mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * p:
+                         EGA_APERTURE + EGA_PLANE_STRIDE * p + EGA_PLANE_WINDOW])
+            for p in range(4)]
+
+
+def test_mode_set_clears_planar_shadow_planes():
+    """A BIOS Set Video Mode to a planar EGA mode (0Dh) clears the four shadow
+    planes — where planar pixels actually live — not just the 0A000h aperture.
+
+    Regression: clearing only 0A000h was a no-op for planar pixels, so the previous
+    screen survived a mode transition (menu->map scrolled the old image in instead
+    of black). See dos.DOSMachine._clear_graphics_vram_for_mode.
+    """
+    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+
+    mem = Memory()
+    cpu = CPU8086(mem, CPUState(cs=0x1000, ds=0x1000, es=0x1000, ss=0x1000, sp=0xFFFE))
+    dos = DOSMachine(root=Path('.'))
+
+    # a stale "previous screen" in every shadow plane
+    for plane in range(4):
+        base = EGA_APERTURE + EGA_PLANE_STRIDE * plane
+        mem.data[base:base + 0x4000] = b"\xAB" * 0x4000
+    assert _planes_any_nonzero(mem) == [True, True, True, True]
+
+    cpu.s.ax = 0x000D                 # AH=00 Set Video Mode, AL=0Dh (planar, clear)
+    dos.int10(cpu)
+    assert _planes_any_nonzero(mem) == [False, False, False, False]
+
+
+def test_mode_set_no_clear_bit_preserves_planar_planes():
+    """AL bit 7 ('do not clear') must leave the shadow planes intact."""
+    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+
+    mem = Memory()
+    cpu = CPU8086(mem, CPUState(cs=0x1000, ds=0x1000, es=0x1000, ss=0x1000, sp=0xFFFE))
+    dos = DOSMachine(root=Path('.'))
+    for plane in range(4):
+        base = EGA_APERTURE + EGA_PLANE_STRIDE * plane
+        mem.data[base:base + 0x100] = b"\xAB" * 0x100
+
+    cpu.s.ax = 0x008D                 # AL=0Dh | 80h => no clear
+    dos.int10(cpu)
+    assert _planes_any_nonzero(mem) == [True, True, True, True]

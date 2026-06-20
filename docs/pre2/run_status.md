@@ -91,6 +91,17 @@ native code is now part of the normal runtime.
   high byte twice — so we over-reserved ~4× for assets with a non-zero high byte
   (sprites/union/menu/.trk), eventually pushing decodes into VRAM. Now
   `sqz_bump_advance()` matches the ASM exactly.
+- **VM video oracle fix — planar mode-set now clears the shadow planes.** A BIOS
+  Set-Video-Mode (`INT 10h AH=00`, AL bit7 clear) clears display memory; for the
+  planar EGA modes (`0Dh`…) PRE2's pixels live in the four shadow planes
+  (`EGA_APERTURE = 0x100000`), but the VM was zeroing only the legacy `0A000h`
+  aperture — a **no-op for planar pixels**, so the previous screen survived a mode
+  transition (the menu→map scrolled the old mode-select image in instead of black).
+  `dos._clear_graphics_vram_for_mode` now clears all four shadow planes for planar
+  modes. Generic VM/BIOS correctness (no PRE2-specific clear); regression-tested
+  (`tests/test_core.py::test_mode_set_clears_planar_shadow_planes`, and the bit7
+  "no clear" case). Confirmed by a cold-boot trace (the `0Dh` mode-set that left
+  stale planes now zeroes them).
 - **Next:** the moving-sprite / object-list **draw** path (`~3552`) — treated as a
   renderer island first (object draw-command stream → recovered `blit_sprite`), paired
   with a `pre2/bridge/objects.py` `ObjectDrawState`; the classifier `4213` it depends
