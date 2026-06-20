@@ -27,6 +27,14 @@ EGA_VISIBLE_PLANE_SIZE = 0x2000  # 320x200x4bpp visible bytes per plane
 EGA_SHADOW_SIZE = EGA_PLANE_STRIDE * 4
 MEM_SIZE = CPU_MEM_SIZE + EGA_SHADOW_SIZE
 
+# The system BIOS ROM lives at F000:0000..F000:FFFF (linear F0000h..FFFFFh) and is
+# read-only on real hardware (and in DOSBox).  CPU stores there must be silently
+# discarded: PRE2 (and other protected titles) XOR a ROM byte and check it is
+# unchanged as an anti-tamper / anti-emulation probe.  If the write "sticks" the
+# game miscomputes a self-patch and corrupts its own code.  Program loading uses
+# the *_phys/load paths which bypass this, so the image still initialises normally.
+BIOS_ROM_BASE = 0xF0000
+
 
 class Memory:
     def __init__(self, size: int = MEM_SIZE):
@@ -53,7 +61,23 @@ class Memory:
         # port work does not bake in a fake bypass.
         self.ega_data_rotate = 0
         self.ega_logical_op = 0
+        # Graphics Controller index 05h, bits 0..1: VGA/EGA write mode.  PRE2's
+        # level transition uses write mode 1 for VRAM-to-VRAM copies: a read from
+        # A000h loads the four hardware latches, then a write to another A000h
+        # offset copies those latched plane bytes.  Treating that write as normal
+        # CPU data corrupts colours and leaves old sprites/backgrounds behind.
+        self.ega_write_mode = 0
         self.ega_latches = [0, 0, 0, 0]
+        # Graphics Controller read path.  Read mode 0 returns the plane selected
+        # by Read Map Select (GC 04h).  Read mode 1 (GC 05h bit 3) returns a
+        # per-pixel "colour compare" bitmask: bit set where the pixel equals
+        # Color Compare (GC 02h) across the planes enabled by Color Don't Care
+        # (GC 07h).  PRE2 uses this to composite the parallax background through
+        # the foreground's transparent (index 0) pixels; without it the sky/
+        # background never reaches the visible page.
+        self.ega_read_mode = 0
+        self.ega_color_compare = 0
+        self.ega_color_dont_care = 0x0F
         # CRTC start address programmed through 03D4h/03D5h indexes 0Ch/0Dh.
         # Some EGA games use off-screen A000 pages during transitions; the
         # live renderer must display the hardware-selected start offset, not
@@ -120,6 +144,18 @@ class Memory:
                     self.data[base + EGA_PLANE_STRIDE * 2],
                     self.data[base + EGA_PLANE_STRIDE * 3],
                 ]
+                if self.ega_read_mode & 1:
+                    # Read mode 1: colour compare.  result bit = 1 where the pixel
+                    # equals Color Compare across the planes Color Don't Care cares
+                    # about.  Planes with the don't-care bit clear are ignored.
+                    result = 0xFF
+                    cc = self.ega_color_compare
+                    dc = self.ega_color_dont_care
+                    for p in range(4):
+                        if dc & (1 << p):
+                            pb = self.ega_latches[p]
+                            result &= pb if (cc >> p) & 1 else (~pb & 0xFF)
+                    return result
                 return self.ega_latches[self.ega_read_plane & 0x03]
         return self.data[a]
 
@@ -140,6 +176,8 @@ class Memory:
 
     def wb(self, seg: int, off: int, value: int) -> None:
         a = ((((seg & 0xFFFF) << 4) + (off & 0xFFFF)) & 0xFFFFF)
+        if a >= BIOS_ROM_BASE:
+            return  # BIOS ROM is read-only on real hardware; ignore the store.
         if self.ega_planar:
             po = a - EGA_CPU_APERTURE
             if 0 <= po < EGA_PLANE_WINDOW:
@@ -155,6 +193,8 @@ class Memory:
 
     def ww(self, seg: int, off: int, value: int) -> None:
         a = (((seg & 0xFFFF) << 4) + (off & 0xFFFF)) & 0xFFFFF
+        if a >= BIOS_ROM_BASE:
+            return  # BIOS ROM is read-only on real hardware; ignore the store.
         d = self.data
         if self.ega_planar:
             po = a - EGA_CPU_APERTURE
@@ -189,13 +229,25 @@ class Memory:
 
     def _ega_wb(self, plane_off: int, value: int) -> None:
         """Route one A000h byte into the shadow planes the map mask selects."""
+        m = self.ega_map_mask
+        d = self.data
+        base = EGA_APERTURE + plane_off
+
+        if (self.ega_write_mode & 0x03) == 1:
+            # EGA/VGA write mode 1: CPU data is ignored.  The bytes previously
+            # loaded into the VGA latches by a read are written back to the
+            # enabled planes.  This is the hardware block-copy primitive used by
+            # PRE2 for planar screens; without it the destination receives the
+            # dummy CPU byte instead of the source plane data.
+            for plane in range(4):
+                if m & (1 << plane):
+                    d[base + EGA_PLANE_STRIDE * plane] = self.ega_latches[plane] & 0xFF
+            return
+
         v = value & 0xFF
         rot = self.ega_data_rotate & 0x07
         if rot:
             v = ((v >> rot) | ((v << (8 - rot)) & 0xFF)) & 0xFF
-        m = self.ega_map_mask
-        d = self.data
-        base = EGA_APERTURE + plane_off
         op = self.ega_logical_op & 0x03
         for plane in range(4):
             if not (m & (1 << plane)):

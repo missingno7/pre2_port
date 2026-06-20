@@ -31,9 +31,9 @@ class SnapshotRuntime:
         self.program.exe.load_module = b""
         self.cpu = SimpleNamespace(
             instruction_count=321,
-            s=CPUState(cs=0x1010, ip=0xBC45, flags=0x0202),
+            s=CPUState(cs=0x1996, ip=0x07AC, flags=0x0202),
             hook_names={},
-            addr=lambda: (0x1010, 0xBC45),
+            addr=lambda: (0x1996, 0x07AC),
         )
         self.dos = SimpleNamespace(
             video_mode=2,
@@ -61,7 +61,7 @@ class SnapshotRuntime:
 
 
 def test_safe_artifact_part_normalizes_paths_and_addresses():
-    assert safe_artifact_part("crash tandy 1010:BC45/ValueError") == "crash_tandy_1010_BC45_ValueError"
+    assert safe_artifact_part("crash sqz 1996:07AC/ValueError") == "crash_sqz_1996_07AC_ValueError"
 
 
 def test_write_runtime_repro_snapshot_writes_loadable_snapshot_and_manifest(tmp_path):
@@ -69,18 +69,18 @@ def test_write_runtime_repro_snapshot_writes_loadable_snapshot_and_manifest(tmp_
     out = write_runtime_repro_snapshot(
         rt,
         root=tmp_path,
-        name="crash tandy ValueError",
+        name="crash sqz ValueError",
         status="unit-test crash",
         metadata={"exception_type": "ValueError", "replay_hint": "python scripts/play.py --snapshot <this-directory>"},
         timestamp=datetime(2026, 6, 16, 13, 9, 0),
     )
 
-    assert out.name == "crash_tandy_ValueError_20260616_130900"
+    assert out.name == "crash_sqz_ValueError_20260616_130900"
     assert (out / "memory_1mb.bin").exists()
     assert (out / "state.json").exists()
     manifest = json.loads((out / "repro.json").read_text(encoding="utf-8"))
     assert manifest["kind"] == "runtime_snapshot"
     assert manifest["snapshot"] == "."
-    assert manifest["cpu_addr"] == "1010:BC45"
+    assert manifest["cpu_addr"] == "1996:07AC"
     assert manifest["steps"] == 321
     assert manifest["metadata"]["exception_type"] == "ValueError"

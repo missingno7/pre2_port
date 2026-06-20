@@ -71,3 +71,53 @@ Current deeper blocker:
 - Starting the level reaches PRE2's real `.SQZ` loader/decompressor and opens `LEVEL1.SQZ`, `UNION.SQZ`, and `BACK0.SQZ`.
 - The next divergence is inside/after the SQZ streaming decoder. It eventually falls into invalid/error-path code bytes such as `D8`/`D9`, but that is almost certainly a symptom, not a request to emulate x87 FPU for gameplay.
 - The next productive cut is to isolate the SQZ decoder as an oracle routine: capture its input file stream, output segments, registers/flags, and stop condition, then lift just that codec under verification before touching gameplay.
+
+## 2026-06-19 cleanup: graphics viewer, OPL3 audio, run/snapshot/demo harness
+
+This pass made the runner match PRE2's actual hardware profile and gave us the
+observation harness the source-port work needs before any hooks exist.
+
+- **PRE2 graphics + text only.** CGA/Tandy target renderers were removed from
+  `scripts/play.py`, `scripts/sdl_view.py`, and `scripts/render_frame.py`. PRE2
+  uses BIOS text, linear VGA, and a VGA/EGA-compatible 320x200 16-colour planar
+  path for game screens; the live viewer renders those states and no legacy
+  target-specific modes.
+  `render_frame.py` dropped its `--video`/`--palette` flags and now chooses the
+  correct linear/planar decoder from snapshot metadata:
+  `python scripts/render_frame.py <snapshot> --out frame.png`.
+- **Sound-card audio, no PC speaker.** The dead `PcSpeakerAudio` path and the
+  unused threaded OVERKILL viewer (`run_sdl_ui`) were deleted. The viewer now
+  drives the vendored Nuked-OPL3 backend from the VM's forwarded AdLib/YM3812
+  register stream (`dos.set_adlib_callback`).  `--audio adlib` (default) / `off`.
+- **Run in pure ASM.** `play.py --view` runs the original executable with only
+  the LZEXE bootstrap accelerator (and optional `--fast-adlib`) installed — no
+  gameplay hooks — and is structured so hooks can be added later.
+- **Snapshots + demos.** `F12` saves a snapshot; `F11` toggles input-demo
+  recording (or `--record-demo NAME`). `--play-demo DIR` replays a demo
+  (headless by default, `--view` to watch). A demo is a start snapshot plus
+  VM-visible input keyed to a deterministic per-frame clock (fixed `chunk_steps`
+  per frame); `chunk_steps`/`timer_irq`/`fast_adlib` are stored in the manifest
+  and reapplied on replay. Verified: two headless replays of the same demo
+  produce byte-identical memory and identical CPU state.
+
+This is the harness for capturing the SQZ-decoder oracle: drive to the level
+load, record a demo, snapshot before/after, then lift and verify the codec.
+
+## 2026-06-19 fix: planar write-mode 1 for map/level screens
+
+The `demo_pre2_20260619_213102` recording exposed a real VM graphics bug after
+the main menu: the player sprite kept plausible colours, but the map/level
+background and old menu sprites appeared shifted and mostly monochrome.  The root
+cause was incomplete EGA/VGA planar write semantics.  PRE2 programs Graphics
+Controller register 05h to write mode 1 during VRAM-to-VRAM copies; in that mode
+the CPU byte is ignored and the previously-read VGA latch bytes are copied to the
+destination planes.  The VM was incorrectly writing the CPU byte as normal data.
+
+Fixes in this pass:
+
+- `Memory` now tracks `ega_write_mode` and implements write mode 1 latch copies.
+- `DOSMachine` tracks GC index 05h writes through ports 03CEh/03CFh.
+- Snapshots save and restore `ega_write_mode`.
+- `render_frame.py` again decodes planar snapshots using the saved CRTC display
+  start, so evidence captures match the live viewer path.
+- Regression tests cover write-mode 1 latch copies and map-mask behaviour.

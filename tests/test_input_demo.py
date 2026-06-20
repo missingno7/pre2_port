@@ -93,7 +93,7 @@ def test_input_demo_suffix_uses_playback_cursor_not_boundary_filter(tmp_path):
                 "version": 1,
                 "snapshot": "snapshot",
                 "end_boundary": 7,
-                "metadata": {"video": "tandy"},
+                "metadata": {"video": "vga"},
                 "events": [
                     {"boundary": 2, "seq": 0, "kind": "scan", "value": 0x4D},
                     {"boundary": 2, "seq": 1, "kind": "scan", "value": 0xCD},
@@ -174,7 +174,7 @@ def test_input_demo_write_suffix_writes_snapshot_and_rebased_manifest(tmp_path):
                 "version": 1,
                 "snapshot": "snapshot",
                 "end_boundary": 10,
-                "metadata": {"video": "tandy", "sound": "adlib"},
+                "metadata": {"video": "vga", "sound": "adlib"},
                 "events": [
                     {"boundary": 4, "seq": 0, "kind": "scan", "value": 0x4D},
                     {"boundary": 9, "seq": 1, "kind": "scan", "value": 0xCD},
@@ -198,7 +198,7 @@ def test_input_demo_write_suffix_writes_snapshot_and_rebased_manifest(tmp_path):
     manifest = json.loads((out / "input_demo.json").read_text(encoding="utf-8"))
     assert (out / "snapshot" / "state.json").exists()
     assert manifest["end_boundary"] == 6
-    assert manifest["metadata"]["video"] == "tandy"
+    assert manifest["metadata"]["video"] == "vga"
     assert manifest["metadata"]["reason"] == "unit-test"
     assert manifest["metadata"]["source_boundary"] == 4
     assert manifest["events"] == [

@@ -90,6 +90,7 @@ def write_snapshot(rt: Runtime, out_dir: str | Path, *, status: str, steps: int,
             "ega_read_plane": rt.program.memory.ega_read_plane,
             "ega_data_rotate": getattr(rt.program.memory, "ega_data_rotate", 0),
             "ega_logical_op": getattr(rt.program.memory, "ega_logical_op", 0),
+            "ega_write_mode": getattr(rt.program.memory, "ega_write_mode", 0),
             "ega_latches": list(getattr(rt.program.memory, "ega_latches", [0, 0, 0, 0])),
             "ega_display_start": rt.program.memory.ega_display_start,
             "next_alloc_segment": rt.dos.next_alloc_segment,
@@ -159,6 +160,7 @@ def load_snapshot(exe_path: str | Path, snapshot_dir: str | Path, *, game_root: 
     rt.program.memory.ega_read_plane = dos_meta.get("ega_read_plane", rt.program.memory.ega_read_plane)
     rt.program.memory.ega_data_rotate = dos_meta.get("ega_data_rotate", rt.program.memory.ega_data_rotate)
     rt.program.memory.ega_logical_op = dos_meta.get("ega_logical_op", rt.program.memory.ega_logical_op)
+    rt.program.memory.ega_write_mode = dos_meta.get("ega_write_mode", rt.program.memory.ega_write_mode)
     rt.program.memory.ega_latches = list(dos_meta.get("ega_latches", rt.program.memory.ega_latches))
     rt.program.memory.ega_display_start = dos_meta.get("ega_display_start", rt.program.memory.ega_display_start)
     rt.dos.next_alloc_segment = dos_meta.get("next_alloc_segment", rt.dos.next_alloc_segment)

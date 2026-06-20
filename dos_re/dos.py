@@ -8,6 +8,16 @@ from typing import Callable
 from .cpu import CPU8086, HaltExecution, UnsupportedInstruction, CF, ZF
 
 
+def _dac8(v6: int) -> int:
+    """Expand a 6-bit VGA DAC component to 8 bits the way real VGA does.
+
+    ``v << 2`` alone maxes out at 252 (slightly dark); replicating the high bits
+    with ``| (v >> 4)`` makes 63 -> 255 and matches hardware brightness.
+    """
+    v = v6 & 0x3F
+    return (v << 2) | (v >> 4)
+
+
 class ConsoleInputWouldBlock(Exception):
     """Raised when an interactive front-end wants DOS console input to wait."""
 
@@ -51,6 +61,14 @@ class DOSMachine:
     vga_status_reads: int = 0
     _seq_index: int = 0  # last EGA sequencer index latched via 03C4h
     _crtc_index: int = 0  # last colour CRTC index latched via 03D4h/03B4h
+    # VGA register files, stored so indexed data ports read back the written
+    # value.  PRE2's "100% compatible VGA" probe writes a register then reads it
+    # back; returning 0 (the old default) reads as "not real VGA".
+    _seq_regs: dict[int, int] = field(default_factory=dict)
+    _gc_index: int = 0
+    _gc_regs: dict[int, int] = field(default_factory=dict)
+    _crtc_regs: dict[int, int] = field(default_factory=dict)
+    _misc_output: int = 0xA3  # VGA Misc Output Register (03C2h write / 03CCh read)
     _pit_channel2_access: int = 3
     _pit_channel2_latch: int = 0
     _pit_channel2_write_low: bool = True
@@ -164,11 +182,10 @@ class DOSMachine:
     def _clear_graphics_vram_for_mode(self, cpu: CPU8086, mode: int) -> None:
         """Model BIOS mode-set screen clearing for common graphics modes.
 
-        The F9 boss-key path draws a BIOS text screen directly into B800h, then
-        restores the original game mode through INT 10h AH=00.  Real BIOS mode
-        sets clear display memory unless AL bit 7 requests "no clear"; without
-        this narrow clear, the live Tandy renderer can briefly reinterpret the
-        text cells as packed graphics after returning from the boss screen.
+        Real BIOS mode sets clear display memory unless AL bit 7 requests "no
+        clear".  The VM mirrors this for the common graphics modes so that stale
+        bytes left in video memory by a previous mode (e.g. text cells written to
+        B800h) are not reinterpreted by the next mode's frame decoder.
         """
         if mode & 0x80:
             return
@@ -188,10 +205,10 @@ class DOSMachine:
     def set_speaker_callback(self, callback: Callable[[bool, float], None] | None, *, emit_current: bool = False) -> None:
         """Install a PC-speaker observer, optionally emitting the current state.
 
-        Runtime snapshots can be taken while a tone is already active.  The live
-        SDL frontend attaches its callback after ``load_snapshot`` restores DOS
-        state, so it needs one immediate notification; otherwise the next port
-        write is the first audible event and an already-playing tone is lost.
+        Runtime snapshots can be taken while a tone is already active.  An
+        observer attached after ``load_snapshot`` restores DOS state needs one
+        immediate notification; otherwise the next port write is the first
+        audible event and an already-playing tone is lost.
         """
         self.speaker_callback = callback
         if emit_current and callback is not None:
@@ -302,6 +319,17 @@ class DOSMachine:
             # AdLib/YM3812 status port.  Only the timer status bits are needed
             # for startup detection; register reads are not used.
             return self.opl_status & 0xFF
+        # VGA indexed-register read-back: return the value last written to the
+        # currently latched index so PRE2's VGA-compatibility probe sees real
+        # register behaviour instead of zeros.
+        if port == 0x03C5 and bits == 8:  # sequencer data
+            return self._seq_regs.get(self._seq_index & 0xFF, 0) & 0xFF
+        if port == 0x03CF and bits == 8:  # graphics controller data
+            return self._gc_regs.get(self._gc_index & 0xFF, 0) & 0xFF
+        if port in (0x03D5, 0x03B5) and bits == 8:  # CRTC data
+            return self._crtc_regs.get(self._crtc_index & 0xFF, 0) & 0xFF
+        if port == 0x03CC and bits == 8:  # Misc Output read-back
+            return self._misc_output & 0xFF
         return 0
 
     def port_write(self, cpu: CPU8086, port: int, value: int, bits: int) -> None:
@@ -332,7 +360,7 @@ class DOSMachine:
             return
         if port != 0x03C9:
             return
-        self._dac_latch.append((value & 0x3F) << 2)
+        self._dac_latch.append(_dac8(value))
         self._dac_component += 1
         if self._dac_component >= 3:
             r, g, b = (self._dac_latch + [0, 0, 0])[:3]
@@ -419,6 +447,23 @@ class DOSMachine:
         freq = 1193182.0 / reload if enabled else 0.0
         self.speaker_callback(enabled, freq)
 
+    def _apply_gc_register(self, mem, index: int, data: int) -> None:
+        """Apply one Graphics Controller register write to the memory model."""
+        index &= 0xFF
+        data &= 0xFF
+        if index == 0x02:        # Color Compare
+            mem.ega_color_compare = data & 0x0F
+        elif index == 0x03:      # Data Rotate / Function Select
+            mem.ega_data_rotate = data & 0x07
+            mem.ega_logical_op = (data >> 3) & 0x03
+        elif index == 0x04:      # Read Map Select
+            mem.ega_read_plane = data & 0x03
+        elif index == 0x05:      # Graphics Mode (write mode 0-1, read mode bit 3)
+            mem.ega_write_mode = data & 0x03
+            mem.ega_read_mode = (data >> 3) & 0x01
+        elif index == 0x07:      # Color Don't Care
+            mem.ega_color_dont_care = data & 0x0F
+
     def _track_ega_ports(self, cpu: CPU8086, port: int, value: int, bits: int) -> None:
         # Track just enough EGA sequencer state to drive planar A000h writes (see
         # Memory.ega_planar).  The game programs the map-mask register at 03C4h
@@ -427,10 +472,15 @@ class DOSMachine:
         # are in EGA mode, so enable planar routing here.
         mem = cpu.mem
         planar_allowed = (self.video_mode & 0x7F) not in (0x13, 0x19)
-        if port == 0x3C4:
+        if port == 0x3C2:
+            # Miscellaneous Output Register (write side; read back at 03CCh).
+            self._misc_output = value & 0xFF
+        elif port == 0x3C4:
             if planar_allowed:
                 mem.ega_planar = True
             if bits == 16:
+                self._seq_index = value & 0xFF
+                self._seq_regs[value & 0xFF] = (value >> 8) & 0xFF
                 if (value & 0xFF) == 0x02:
                     mem.ega_map_mask = (value >> 8) & 0x0F
             else:
@@ -438,6 +488,7 @@ class DOSMachine:
         elif port == 0x3C5:
             if planar_allowed:
                 mem.ega_planar = True
+            self._seq_regs[self._seq_index & 0xFF] = value & 0xFF
             if getattr(self, "_seq_index", None) == 0x02:
                 mem.ega_map_mask = value & 0x0F
         elif port == 0x3CE:
@@ -446,29 +497,27 @@ class DOSMachine:
             if bits == 16:
                 index = value & 0xFF
                 data = (value >> 8) & 0xFF
-                if index == 0x03:
-                    mem.ega_data_rotate = data & 0x07
-                    mem.ega_logical_op = (data >> 3) & 0x03
-                elif index == 0x04:
-                    mem.ega_read_plane = data & 0x03
+                self._gc_index = index
+                self._gc_regs[index] = data
+                self._apply_gc_register(mem, index, data)
             else:
                 self._gc_index = value & 0xFF
         elif port == 0x3CF:
             if planar_allowed:
                 mem.ega_planar = True
-            if getattr(self, "_gc_index", None) == 0x03:
-                mem.ega_data_rotate = value & 0x07
-                mem.ega_logical_op = (value >> 3) & 0x03
-            elif getattr(self, "_gc_index", None) == 0x04:
-                mem.ega_read_plane = value & 0x03
+            self._gc_regs[self._gc_index & 0xFF] = value & 0xFF
+            self._apply_gc_register(mem, getattr(self, "_gc_index", 0), value & 0xFF)
         elif port in (0x3D4, 0x3B4):
             if bits == 16:
                 index = value & 0xFF
                 data = (value >> 8) & 0xFF
+                self._crtc_index = index
+                self._crtc_regs[index] = data
                 self._write_crtc_register(mem, index, data)
             else:
                 self._crtc_index = value & 0xFF
         elif port in (0x3D5, 0x3B5):
+            self._crtc_regs[self._crtc_index & 0xFF] = value & 0xFF
             self._write_crtc_register(mem, getattr(self, "_crtc_index", 0), value & 0xFF)
 
     def _write_crtc_register(self, mem, index: int, value: int) -> None:
@@ -734,7 +783,12 @@ class DOSMachine:
             self.text_mode_active = effective_mode in (0, 1, 2, 3, 7)
             if effective_mode in (0x13, 0x19):
                 cpu.mem.ega_planar = False
-                cpu.mem.ega_display_start = 0
+            # A BIOS Set Video Mode always reloads the CRTC start address to 0.
+            # We previously only did this for the linear modes (13h/19h); planar
+            # mode 0Dh kept a stale display-start from the prior screen, which
+            # shifted the level (the game relies on the BIOS reset and does not
+            # re-write the start-address low byte for the play screen).
+            cpu.mem.ega_display_start = 0
             self.cursor_row = 0
             self.cursor_col = 0
             if self.text_mode_active:
@@ -816,7 +870,42 @@ class DOSMachine:
             # font ROM model yet; accepting the call is enough to keep startup
             # moving while the game's own graphics/font assets are decoded.
             return
-        if ah in (0x01, 0x0B, 0x10, 0x12):
+        if ah == 0x10:
+            # Palette / DAC control.  PRE2 loads custom palettes (the "oldies"
+            # gold ramp, per-level palettes, ...) through these BIOS calls, so the
+            # block/register sets must reach the DAC instead of being ignored.
+            if len(self.vga_palette) < 256:
+                self.__post_init__()
+            if al == 0x12:  # set block of DAC registers from ES:DX (6-bit RGB triples)
+                start = cpu.s.bx & 0xFF
+                count = cpu.s.cx & 0xFFFF
+                addr = cpu.s.dx & 0xFFFF
+                for i in range(count):
+                    r = cpu.mem.rb(cpu.s.es, addr)
+                    g = cpu.mem.rb(cpu.s.es, (addr + 1) & 0xFFFF)
+                    b = cpu.mem.rb(cpu.s.es, (addr + 2) & 0xFFFF)
+                    self.vga_palette[(start + i) & 0xFF] = (_dac8(r), _dac8(g), _dac8(b))
+                    addr = (addr + 3) & 0xFFFF
+                return
+            if al == 0x10:  # set one DAC register: BX=index, DH=R, CH=G, CL=B (6-bit)
+                idx = cpu.s.bx & 0xFF
+                self.vga_palette[idx] = (_dac8(cpu.s.dx >> 8), _dac8(cpu.s.cx >> 8), _dac8(cpu.s.cx))
+                return
+            if al == 0x17:  # read block of DAC registers into ES:DX
+                start = cpu.s.bx & 0xFF
+                count = cpu.s.cx & 0xFFFF
+                addr = cpu.s.dx & 0xFFFF
+                for i in range(count):
+                    rgb = self.vga_palette[(start + i) & 0xFF]
+                    cpu.mem.wb(cpu.s.es, addr, (rgb[0] >> 2) & 0x3F)
+                    cpu.mem.wb(cpu.s.es, (addr + 1) & 0xFFFF, (rgb[1] >> 2) & 0x3F)
+                    cpu.mem.wb(cpu.s.es, (addr + 2) & 0xFFFF, (rgb[2] >> 2) & 0x3F)
+                    addr = (addr + 3) & 0xFFFF
+                return
+            # Attribute-palette sets (AL=00/02), blink toggle, etc.: accept as a
+            # no-op (the attribute palette is identity for this game's screens).
+            return
+        if ah in (0x01, 0x0B, 0x12):
             return
         raise UnsupportedInstruction(f"Unhandled BIOS INT 10h AH={ah:02X}h")
 

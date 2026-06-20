@@ -151,9 +151,9 @@ class CPU8086:
     # nested hook boundary.  This makes child addresses real oracle checkpoints
     # instead of shared black boxes inside a larger parent transaction.
     hook_verifier_verify_nested_calls: bool = True
-    # Optional real-time pacer invoked once per modelled timer tick (the 1010:0679
-    # wait).  Left None for headless/deterministic runs; an interactive front-end
-    # sets it to throttle the game to real time.
+    # Optional real-time pacer invoked once per modelled timer tick (the game's
+    # PIT/timer wait).  Left None for headless/deterministic runs; an interactive
+    # front-end sets it to throttle the game to real time.
     timer_pacer: Callable[[], None] | None = None
     timer_ticks_elapsed: int = 0
     max_rep_count: int = 1_000_000
@@ -195,7 +195,11 @@ class CPU8086:
             f |= PF
         self.s.flags = (f | 0x0002) & 0x0FFF
 
-    def set_add_flags(self, a: int, b: int, result: int, bits: int) -> None:
+    def set_add_flags(self, a: int, b: int, result: int, bits: int, carry: int = 0) -> None:
+        # ``a`` and ``b`` are the *original* operands; ``carry`` is the incoming
+        # carry for ADC (0 for plain ADD).  ``result`` is the full unmasked
+        # a+b+carry.  Folding carry into b before this call would destroy the
+        # nibble-carry (AF) and sign (OF) information, so it is kept separate.
         mask = (1 << bits) - 1
         sign = 1 << (bits - 1)
         r = result & mask
@@ -208,18 +212,22 @@ class CPU8086:
             f |= SF
         if _PARITY[r & 0xFF]:
             f |= PF
-        if (a ^ b ^ r) & 0x10:
+        if ((a & 0xF) + (b & 0xF) + carry) > 0xF:
             f |= AF
         if (~(a ^ b) & (a ^ r)) & sign:
             f |= OF
         self.s.flags = (f | 0x0002) & 0x0FFF
 
-    def set_sub_flags(self, a: int, b: int, result: int, bits: int) -> None:
+    def set_sub_flags(self, a: int, b: int, result: int, bits: int, carry: int = 0) -> None:
+        # ``a`` and ``b`` are the *original* operands; ``carry`` is the incoming
+        # borrow for SBB (0 for plain SUB/CMP).  ``result`` is the full signed
+        # a-b-carry (may be negative).  CF is the true borrow (result < 0); AF and
+        # OF use the original operands so the borrow does not corrupt them.
         mask = (1 << bits) - 1
         sign = 1 << (bits - 1)
         r = result & mask
         f = self.s.flags & ~0x08D5  # clear CF, PF, AF, ZF, SF, OF
-        if (a & mask) < (b & mask):
+        if result < 0:
             f |= CF
         if r == 0:
             f |= ZF
@@ -227,7 +235,7 @@ class CPU8086:
             f |= SF
         if _PARITY[r & 0xFF]:
             f |= PF
-        if (a ^ b ^ r) & 0x10:
+        if ((a & 0xF) - (b & 0xF) - carry) < 0:
             f |= AF
         if ((a ^ b) & (a ^ r)) & sign:
             f |= OF
@@ -821,9 +829,9 @@ class CPU8086:
         elif group == 1:
             res = a | b; self.set_logic_flags(res,bits)
         elif group == 2:
-            carry = 1 if self.get_flag(CF) else 0; res = a + b + carry; self.set_add_flags(a,b+carry,res,bits)
+            carry = 1 if self.get_flag(CF) else 0; res = a + b + carry; self.set_add_flags(a,b,res,bits,carry)
         elif group == 3:
-            carry = 1 if self.get_flag(CF) else 0; res = a - b - carry; self.set_sub_flags(a,b+carry,res,bits)
+            carry = 1 if self.get_flag(CF) else 0; res = a - b - carry; self.set_sub_flags(a,b,res,bits,carry)
         elif group == 4:
             res = a & b; self.set_logic_flags(res,bits)
         elif group == 5:
@@ -922,6 +930,7 @@ class CPU8086:
         res = val & mask
         if count == 0:
             return res
+        orig = res
         is_rotate = group in (0, 1, 2, 3)
         for _ in range(count):
             if group == 4:  # shl/sal
@@ -954,6 +963,23 @@ class CPU8086:
         # touching the normal arithmetic flags here corrupts compressed streams.
         if not is_rotate:
             self.set_flag(ZF, res == 0); self.set_flag(SF, bool(res & (1 << (bits-1)))); self.set_flag(PF, self.parity(res))
+        # OF is only architecturally defined for a 1-bit shift/rotate (undefined for
+        # other counts, so we leave it untouched there).  Drives JO/JG/JL/JGE/JLE.
+        if count == 1:
+            msb = (res >> (bits - 1)) & 1
+            if group == 4:      # shl/sal: OF = CF(orig msb) ^ new msb
+                of = ((orig >> (bits - 1)) & 1) ^ msb
+            elif group == 5:    # shr: OF = original msb
+                of = (orig >> (bits - 1)) & 1
+            elif group == 7:    # sar: OF always 0
+                of = 0
+            elif group == 0:    # rol: OF = msb ^ new lsb (= new CF)
+                of = msb ^ (res & 1)
+            elif group == 2:    # rcl: OF = msb ^ new CF
+                of = msb ^ (1 if self.get_flag(CF) else 0)
+            else:               # ror / rcr: OF = top two bits of result differ
+                of = msb ^ ((res >> (bits - 2)) & 1)
+            self.set_flag(OF, bool(of))
         return res & mask
 
     def last_ea_offset(self, mod: int, rm: int) -> int:

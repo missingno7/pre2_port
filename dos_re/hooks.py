@@ -51,7 +51,7 @@ class HookRegistry:
 
     def install(self, cpu: CPU8086) -> None:
         # Allow individual hooks to be disabled without code changes, e.g.
-        # DOS_RE_DISABLE_HOOKS=1010:1D1B,1010:1AEB.  Disabled addresses fall
+        # DOS_RE_DISABLE_HOOKS=<cs>:<ip>,<cs>:<ip>.  Disabled addresses fall
         # back to the interpreted original ASM, which is useful for A/B
         # performance checks and for bisecting a suspected-incorrect hook.
         disabled = _parse_disabled(os.environ.get("DOS_RE_DISABLE_HOOKS", ""))

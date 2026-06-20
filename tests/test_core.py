@@ -125,6 +125,54 @@ def test_ega_latch_rotate_or_write_mode_for_pre2_vga_probe():
     assert mem.rb(0xA000, 0x2000) == 0x51
 
 
+def test_ega_write_mode_1_copies_latches_to_destination_planes():
+    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+
+    mem = Memory()
+    cpu = CPU8086(mem, CPUState(cs=0x1000, ds=0x1000, es=0x1000, ss=0x1000, sp=0xFFFE))
+    dos = DOSMachine(root=Path('.'))
+    dos.video_mode = 0x0D
+
+    dos.port_write(cpu, 0x03C4, 0x0F02, 16)  # sequencer map-mask: all planes
+    source = 0x1234
+    dest = 0x2345
+    for plane, value in enumerate((0x11, 0x22, 0x44, 0x88)):
+        mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * plane + source] = value
+        mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * plane + dest] = 0x00
+
+    dos.port_write(cpu, 0x03CE, 0x0004, 16)  # read plane 0; read loads all latches
+    assert mem.rb(0xA000, source) == 0x11
+    dos.port_write(cpu, 0x03CE, 0x0105, 16)  # graphics-controller write mode 1
+    mem.wb(0xA000, dest, 0xFF)               # CPU byte is ignored in write mode 1
+
+    for plane, value in enumerate((0x11, 0x22, 0x44, 0x88)):
+        assert mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * plane + dest] == value
+
+
+def test_ega_write_mode_1_respects_map_mask():
+    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+
+    mem = Memory()
+    cpu = CPU8086(mem, CPUState(cs=0x1000, ds=0x1000, es=0x1000, ss=0x1000, sp=0xFFFE))
+    dos = DOSMachine(root=Path('.'))
+    dos.video_mode = 0x0D
+
+    source = 0x0100
+    dest = 0x0200
+    for plane, value in enumerate((0xA1, 0xB2, 0xC3, 0xD4)):
+        mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * plane + source] = value
+        mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * plane + dest] = 0xEE
+
+    dos.port_write(cpu, 0x03CE, 0x0004, 16)
+    mem.rb(0xA000, source)
+    dos.port_write(cpu, 0x03CE, 0x0105, 16)
+    dos.port_write(cpu, 0x03C4, 0x0A02, 16)  # planes 1 and 3 only
+    mem.wb(0xA000, dest, 0x00)
+
+    for plane, value in enumerate((0xEE, 0xB2, 0xEE, 0xD4)):
+        assert mem.data[EGA_APERTURE + EGA_PLANE_STRIDE * plane + dest] == value
+
+
 
 def test_cmpsw_compares_ds_si_with_es_di_and_advances():
     mem = Memory()

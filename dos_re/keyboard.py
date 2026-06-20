@@ -1,11 +1,10 @@
 """Frame-accurate translation of physical key events into scan-code delivery.
 
-Some DOS games poll their key-state table once per rendered frame (the old target did this at
-1010:017E).  A key therefore has to be *held down for at least one full frame* to
-be observed.  A quick tap can deliver its press and release between two frames; if
-both are applied before the frame runs, the key is set and cleared before the
-game ever polls it and the press is silently lost -- which is why a single tap on
-the menu's FIRE key did nothing.
+Some DOS games poll their key-state table once per rendered frame.  A key
+therefore has to be *held down for at least one full frame* to be observed.  A
+quick tap can deliver its press and release between two frames; if both are
+applied before the frame runs, the key is set and cleared before the game ever
+polls it and the press is silently lost.
 
 ``KeyDispatcher`` sits between the UI (which posts raw key up/down events from any
 thread) and the interpreter (which calls :meth:`pump` once per frame).  It
