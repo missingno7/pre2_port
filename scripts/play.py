@@ -52,16 +52,63 @@ def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
     """
     if not getattr(args, "verify_hooks", False):
         return
+    import re
+    from time import perf_counter
+
     from pre2.checkpoints import enable_pre2_hook_verification
 
-    def _on_result(name: str, ok: bool, detail) -> None:
-        if ok:
-            print(f"[verify-hooks] OK          {name}", flush=True)
-        else:
-            print(f"[verify-hooks] DIVERGENCE  {name}: {detail}", flush=True)
+    def _group(name: str) -> str:
+        # collapse the high-cardinality families so the summary stays one short line:
+        # per-asset SQZ decodes (MOTIF.SQZ, MAP.SQZ, ...) and per-type blits
+        # (sprite_blit_type0/1/11/...). Divergences still print the specific name.
+        if name.endswith(".SQZ"):
+            return "sqz"
+        m = re.match(r"(sprite_blit)_type\d+$", name)
+        return m.group(1) if m else name
 
+    # Hooks fire thousands of times per frame (the audio mixer especially), so do
+    # NOT print a line per OK. Default: print divergences the instant they happen,
+    # plus a compact one-line cumulative summary at most every ~1.5s. --verify-verbose
+    # restores the per-call OK stream.
+    verbose = getattr(args, "verify_verbose", False)
+    counts: dict[str, list[int]] = {}        # name -> [ok, diverged]
+    divergences = [0]
+    last = [perf_counter()]
+
+    def _summary(tag: str = "") -> None:
+        grouped: dict[str, list[int]] = {}
+        for name, c in counts.items():
+            g = grouped.setdefault(_group(name), [0, 0])
+            g[0] += c[0]
+            g[1] += c[1]
+        parts = " ".join(
+            f"{n}={c[0]}" + (f"✗{c[1]}" if c[1] else "")
+            for n, c in sorted(grouped.items(), key=lambda kv: -sum(kv[1]))
+        )
+        total = sum(c[0] + c[1] for c in counts.values())
+        flag = "OK" if divergences[0] == 0 else f"{divergences[0]} DIVERGENCE(S)"
+        print(f"[verify-hooks]{tag} {total} checks, {flag} | {parts}", flush=True)
+
+    def _on_result(name: str, ok: bool, detail) -> None:
+        c = counts.setdefault(name, [0, 0])
+        if ok:
+            c[0] += 1
+            if verbose:
+                print(f"[verify-hooks] OK          {name}", flush=True)
+        else:
+            c[1] += 1
+            divergences[0] += 1
+            print(f"[verify-hooks] DIVERGENCE  {name}: {detail}", flush=True)
+        if not verbose:
+            now = perf_counter()
+            if now - last[0] >= 1.5:
+                last[0] = now
+                _summary()
+
+    rt._verify_summary = _summary  # let the caller print a final summary on exit
     enable_pre2_hook_verification(rt, on_result=_on_result)
-    print("[verify-hooks] lockstep oracle active: native hooks diffed vs original ASM", flush=True)
+    mode = "per-call OK stream" if verbose else "divergences + periodic summary"
+    print(f"[verify-hooks] lockstep oracle active vs original ASM ({mode})", flush=True)
 
 
 def _make_runtime(args: argparse.Namespace, *, fast_adlib: bool | None = None):
@@ -381,6 +428,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             adlib.close()
         if sb_audio is not None:
             sb_audio.close()
+        if getattr(rt, "_verify_summary", None) is not None:
+            rt._verify_summary(" final:")
         pygame.quit()
 
     print(f"status: {status}")
@@ -430,6 +479,8 @@ def _run_replay_headless(rt, args: argparse.Namespace, playback: InputDemoPlayba
             break
         frame += 1
 
+    if getattr(rt, "_verify_summary", None) is not None:
+        rt._verify_summary(" final:")
     print(f"status: {status}")
     print(f"frames: {frame}  steps: {steps_done:,}  events_applied={playback.next_event_index}/{len(playback.events)}")
     print(f"cpu: {rt.cpu.s.snapshot()}")
@@ -481,7 +532,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
-    p.add_argument("--verify-hooks", action="store_true", help="install recovered-native verification checkpoints (e.g. SQZ decode): the original ASM still runs and stays the oracle; each result is compared to native and printed OK/DIVERGENCE")
+    p.add_argument("--verify-hooks", action="store_true", help="run the original ASM as the oracle and diff each recovered-native result against it; prints divergences immediately plus a compact periodic per-hook summary")
+    p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
     args = p.parse_args(argv)
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
@@ -524,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
         trace_tail=args.trace_tail,
     )
 
+    if getattr(rt, "_verify_summary", None) is not None:
+        rt._verify_summary(" final:")
     print(f"status: {status}")
     print(f"steps: {steps:,}")
     print(f"cpu: {rt.cpu.s.snapshot()}")
