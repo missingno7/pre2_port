@@ -31,12 +31,22 @@ is recovered.
 
 | Island | Module | Merge target | Status |
 |---|---|---|---|
-| SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/replacements.py` | asset loader | **done, verified vs ASM** |
+| SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/checkpoints/sqz.py` | asset loader | **done, verified vs ASM** |
 | sprite/tile decode | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` | sprite/asset pipeline | **done, verified vs ASM** (first stateful island; stood up `pre2/bridge/`) |
-| sprite blit + background restore + type dispatch | `pre2/recovered/renderer.py` + `pre2/replacements.py` | renderer | **done, verified vs ASM** (in-VM lockstep, hybrid renders level 1) |
+| sprite blit + background restore (`3B69`) | `pre2/recovered/renderer.py` + `pre2/checkpoints/blit.py` | renderer | **done, verified vs ASM** (in-VM lockstep) |
 | SoundBlaster audio (DSP + 8237 DMA + 8259 PIC) | `dos_re/sblaster.py` + `dos_re/pic.py` (generic hw) | DOS machine (not game layer) | **done** — game auto-detects + DMA-streams PCM; user-confirmed |
-| frame renderer — tile-row draw (346E) + grid redraw (3582) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, verified vs ASM** (in-VM lockstep: 346E 33 row-draws, 3582 2 redraws, 0-div; both compose the verified blit). Scroll-copy/compositor (`3A08`/`3B40`) + directional scroll remain (indirectly dispatched → collapse into one semantic frame/tick checkpoint) |
+| frame renderer — tile-row (346E), grid redraw (3582), scroll-copy (3A08), page-flip (3035) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, all four verified vs ASM** (in-VM lockstep, 0-div; each composes the verified blit). Compositor `3B40` is a static composition of these, documented but not wired (no demo reaches it → can't verify yet) |
+| moving-sprite / object-list draw (`~3552`) | `pre2/bridge/objects.py` + `pre2/recovered/object_draw.py` (planned) | frame renderer | **next** — renderer island; command-stream verified; composes recovered `blit_sprite` |
 | gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | object system / player update / physics | later; semantic-state verification |
+
+**Still ASM (the current coastline — not recovered):**
+- **classifier `4213`** — the ASM producer of the sprite type table (`[0x4DF4]`) + partial-sprite masks
+  (`[0x2DF4]`) that the recovered blit *consumes*. A pending island (needs a pure fn + `@oracle_link` +
+  manifest entry + verify before it counts as recovered).
+- **moving-sprite / object-list draw loop** (`~3552`) — the next island.
+- **directional-scroll decisions** above the recovered leaves (which way/when to scroll; `3344`/`338E`/…).
+- **level-load orchestration** (decides what to load and sets up the segment pointers; the per-asset codec is recovered).
+- **all gameplay update** — movement, AI, collision, physics, object/player state.
 
 ## Recovery rules (kept short; full posture in `recovery_architecture.md`)
 

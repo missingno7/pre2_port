@@ -3,8 +3,9 @@
 Recovered logic: ``pre2.recovered.renderer``; data model: ``pre2.bridge.sprites``.
 Merge target: the renderer.
 
-Renders one 16x16 sprite/tile from the planar VRAM cache, dispatching on the
-classifier's type. The original saves/restores its own EGA state (451F/452F), so
+Renders one 16x16 sprite/tile from the planar VRAM cache, dispatching on the type
+produced by the (still-ASM) classifier ``1030:4213`` — the recovered blit only
+consumes that type table + masks. The original saves/restores its own EGA state (451F/452F), so
 the native path leaves the sequencer/GC alone; the only register the caller reads
 back is di (advanced by 2 to the next column).
 """
