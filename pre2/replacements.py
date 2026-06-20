@@ -48,24 +48,30 @@ def _read_cstring(mem, seg: int, off: int) -> str:
     return mem.data[base:end].decode("latin1")
 
 
-def _decode_context(cpu):
-    """Return ``(name, out_seg, out_bytes)`` for a recovered ``.SQZ``, else None.
+class Pre2HybridGap(RuntimeError):
+    """The hybrid runtime reached something not yet recovered.
 
-    None means "defer to the original ASM" (asset not found, or a format we have
-    not recovered yet — e.g. sample/theend). Uses the DOS machine's own
-    case-insensitive path resolution so the hook sees the same file the ASM would.
+    Raised loudly instead of silently falling back to the original ASM — a silent
+    fallback would hide missing recovery work (see the "fail-fast over guessed
+    fallback" rule in docs/dos_re/source_port_methodology.md). The remaining
+    SQZ "other" format (Huffman+RLE, used by sample/theend) is such a gap today.
     """
-    mem = cpu.mem
+
+
+def _native_decode(cpu):
+    """Return ``(name, decompressed_bytes)`` or ``None`` if not natively recovered.
+
+    Uses the DOS machine's own case-insensitive path resolution so the hook sees
+    exactly the file the ASM would.
+    """
     dos = getattr(cpu, "pre2_dos", None)
     if dos is None:
         return None
-    name = _read_cstring(mem, _DATA_SEG, cpu.s.dx)
+    name = _read_cstring(cpu.mem, _DATA_SEG, cpu.s.dx)
     try:
-        raw = dos.resolve_game_path(name).read_bytes()
-        out = unpack_sqz(raw)
+        return name, unpack_sqz(dos.resolve_game_path(name).read_bytes())
     except (FileNotFoundError, NotImplementedError, IndexError, ValueError, OSError):
-        return None
-    return name, mem.rw(_DATA_SEG, _BUMP_PTR), out
+        return name, None
 
 
 def _expected_bump(out_seg: int, size: int) -> int:
@@ -87,16 +93,29 @@ def _commit_native(cpu, out_seg: int, out: bytes) -> None:
 def sqz_decompress(cpu) -> None:
     """Native replacement for the original .SQZ decompressor at 1030:1068.
 
-    Hybrid (default): decode natively and return. Verify mode: arm the expected
-    contract and let the original ASM run as the oracle (the return hook diffs).
-    Unrecognised formats always defer to the ASM.
+    Hybrid (default): decode natively and return. A not-yet-recovered format or
+    unreadable asset raises :class:`Pre2HybridGap` — the hybrid runtime never
+    silently falls back to the ASM. Verify mode is different: the original ASM is
+    the oracle, so the hook arms recovered decodes for the return-boundary diff
+    and lets the ASM execute everything (unrecovered formats are simply not
+    diffed yet, not hidden).
     """
-    ctx = _decode_context(cpu)
-    if ctx is None:
-        interpret_current_instruction_without_hook(cpu)
-        return
-    name, out_seg, out = ctx
-    if getattr(cpu, "pre2_verify_mode", False):
+    decoded = _native_decode(cpu)
+    name, out = decoded if decoded is not None else (None, None)
+    verify = getattr(cpu, "pre2_verify_mode", False)
+
+    if out is None:
+        if verify:
+            interpret_current_instruction_without_hook(cpu)  # ASM oracle decodes it
+            return
+        raise Pre2HybridGap(
+            f"hybrid SQZ decompress of {name!r} at 1030:1068 is not recovered "
+            "(remaining 'other' Huffman+RLE format, or unreadable asset). Recover "
+            "this path — the hybrid runtime must not silently fall back to ASM."
+        )
+
+    out_seg = cpu.mem.rw(_DATA_SEG, _BUMP_PTR)
+    if verify:
         cpu.pre2_verify_pending.append((name, out_seg, out))
         interpret_current_instruction_without_hook(cpu)
         return
