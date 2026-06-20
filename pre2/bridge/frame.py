@@ -42,6 +42,7 @@ VAR_DEST_PAGE_A = 0x2DD2  # double-buffer page offset (front/back; 0 or 0x2000)
 VAR_DEST_PAGE_B = 0x2DD4  # the other double-buffer page offset
 VAR_SHEET_SEG = 0x2DD6   # tilesheet segment used by the draw loops
 VAR_LEVEL_HEIGHT = 0x2CF1  # level height in tile rows
+VAR_BG_PTR = 0x2DF2      # background-restore source pointer (the blit's bg source base)
 VAR_DIRTY = 0x2DF0       # composite dirty flags (rebuild-grid / type seen); also the
                          # tile-type accumulator 346E ORs into ([0x2DF0])
 VAR_DIRTY_ROWS = 0x2DF1  # tile-rows scrolled this frame (reset after redraw)
@@ -135,6 +136,11 @@ class TileMap:
         """``count`` consecutive tile indices starting at (col, row) — one draw row."""
         start = row * self.stride + col
         return self.tiles[start:start + count]
+
+
+def read_bg_off(mem) -> int:
+    """The blit's background source offset: ``[0x2DF2] - 0x28 * [0x6BC0]``."""
+    return (_rw(mem, VAR_BG_PTR) - 0x28 * _rb(mem, VAR_FINE_SCROLL)) & 0xFFFF
 
 
 def read_row_flags(mem) -> tuple[int, int, int]:

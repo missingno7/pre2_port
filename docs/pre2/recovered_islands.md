@@ -13,3 +13,4 @@
 | `1030:3A08` | `recovered.frame_renderer.scroll_copy` | VERIFIED | frame renderer | A000 planar scroll-copy of the visible window (ring buffer -> display page) + all-plane clear of the leading strip; bx/di/si/ds/es preserved |
 | `1030:3B69` | `recovered.renderer.blit_sprite` | VERIFIED | renderer | A000 planar framebuffer (one 16x16 slot); di += 2 |
 | `1030:42F7` | `recovered.sprite_decode.decode_sprite_cache` | VERIFIED | sprite pipeline | planar sprite cache (0xA000:0x5E80) demuxed from the sheet + shared bank; also 1030:436A (shared codes >= 0x100) |
+| `1030:6544` | `recovered.object_draw.draw_object_sprite` | RECOVERED | frame renderer | cull one object sprite vs the camera window, compute its screen offset, and blit it; [0x6BB9]=1 if drawn; CF set if culled; regs preserved |

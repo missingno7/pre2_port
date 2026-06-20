@@ -76,7 +76,11 @@ The current sub-island is the **draw primitive layer**.
 
 The moving-sprite / object draw path (renderer-facing; NOT gameplay update yet).
 
-- **`1030:6544` — per-object sprite draw (the draw-command unit).** Input `di` = object
+- **`1030:6544` — per-object sprite draw (the draw-command unit). RECOVERED, PENDING VERIFICATION.**
+  Recovered as `pre2/recovered/object_draw.py:draw_object_sprite` (composes the verified `blit_sprite`),
+  bridge `pre2/bridge/objects.py`, verify probe `pre2/probes/verify_object.py`. **Not yet verified / not
+  wired:** demo 091827 never reaches 6544 (0 calls in 3000 frames — its objects don't appear), same
+  test-data gap as `3B40`. Needs a demo that actually draws objects. Input `di` = object
   tile position (`dh`=row, `dl`=col), sprite index in `al`. Culls against the camera window:
   `dl-[0x2DE0] >= 0x14` (20 cols) or `dh-[0x2DE2] >= 0xC` (12 rows) → not drawn (RET CF=set).
   Else computes the screen dest offset from the tile position (`row%12`·`0x50`·16 + `(col%20)<<bh`;
@@ -90,15 +94,20 @@ The moving-sprite / object draw path (renderer-facing; NOT gameplay update yet).
   bytes, read from seg `[0x2871]`), `[+8]` (2 bytes, TBD). A proximity pre-pass (`|key-dx|<=8` →
   mark `0xFFFE`, set `[0x6BE6]=7`) then draws each object as a `dl×dh` block of tiles (per cell:
   read/shift a tile from level seg `[0x2DD6]`, `call 6544`). Calls `6544` at `5463`/`548C`.
-- **`1030:5C9E`** — third `6544` caller (a separate object list; likely the moving player/enemy
-  sprites rather than these multi-tile structures). NOT yet disassembled.
+- **`1030:5C9E`** — NOT a clean draw list. It sits inside **object-update handler dispatch**
+  (`5C40`: `call [bx*2 + 0x7DA5]` — a per-object-type function-pointer table — with collision/position
+  probing on `[0x4F18/4F1A/4F1E]`). The helper at `5C8B` is "if the sprite type is opaque (type 0) draw
+  it via `6544`, else mark `[0x2DF0]=1` + `[0x2DDC]=0x55AA` so the grid redraw handles it." So the moving
+  **player/enemy sprites draw themselves inside their update handlers** = gameplay logic. **Deferred to the
+  object-update island** (do not recover here).
 - **Known unknowns:** the object-table *segment* (the `[si]` reads use entry `ds`); the `[+8]`
   field; whether `5C9E` is the player/enemy list; draw order across the lists.
-- **Plan (renderer-first):** confirm the table layout + `5C9E`; build `pre2/bridge/objects.py`
-  (factual `ObjectSlot`/`ObjectDrawState`/`ObjectSpriteCommand` — NOT Player/Enemy) owning the
-  `0x83EF` layout; recover `draw_object_sprites()` in `pre2/recovered/object_draw.py` composing the
-  recovered `blit_sprite`; **verify by draw-command stream** (slot→sprite idx, dest off, type/mask,
-  order) vs the ASM, not by re-proving pixels.
+- **Plan (renderer-first, refined after `5C9E`):** the renderer-facing object draw = the `6544`
+  primitive + the `0x83EF` structure loop; the player/enemy self-draw is entangled with update and is
+  deferred. Recover `6544` first (clean, shared draw-command unit) → `pre2/recovered/object_draw.py:
+  draw_object_sprite` composing the recovered `blit_sprite`, with a factual `pre2/bridge/objects.py`
+  (camera/mode inputs; later the `0x83EF` `ObjectSlot` table). Verify by draw-command/contract lockstep
+  vs the ASM, not by re-proving pixels (the blit is already verified).
 
 ### NOTE — missed frame-renderer leaf `1030:34ED` (tile-column fill)
 `34ED` is the **vertical tile-column fill** — the horizontal-scroll counterpart to `346E`'s
