@@ -269,7 +269,7 @@ def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_f
 @oracle_link("1030:3035",
              "A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, "
              "0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only)",
-             "RECOVERED", merge_target="frame renderer")
+             "VERIFIED", merge_target="frame renderer")
 def panel_copy(planes, src_page, dst_page):
     """Recover ``1030:3035`` — the double-buffer page-flip copy.
 
