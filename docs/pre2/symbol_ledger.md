@@ -31,11 +31,19 @@ The game software-mixes MOD + SFX to PCM and streams it via SB DMA.
 | ports `base+6/0xA/0xC/0xE` | SB DSP: reset / read-data / write-cmd+status / read-buffer-status+IRQ-ack | OBSERVED | (hw) | — | DSP command set the driver uses (0x14/0x1C/0x40/0x41/0xD1/0xF2…) — capture once detection passes |
 | 8237 DMA ch + page, PIC `0x20/0x21` | DMA channel for PCM + SB IRQ via PIC | GUESS | (hw) | — | which DMA channel; needs the playback capture |
 
-### Audio mixer — the software decode/mix island (characterized 2026-06-20; to recover)
+### Audio mixer — the software decode/mix island (Layer 4: RECOVERED + VERIFIED 2026-06-21)
 
 This is the **game-side** PCM mixer that fills the SB DMA buffer (distinct from the SB *hardware* above,
-which is done in `dos_re`). It is a clean DSP island, **exercised** (audio plays) so verifiable now by
-diffing the produced 168-byte block against `sb.pcm_out`. NOT gameplay logic.
+which is done in `dos_re`). A clean DSP island, NOT gameplay logic.
+
+**RECOVERED + VERIFIED 2026-06-21** → `pre2/recovered/mixer.py` (`mix_channel` = 216B, `mix_sfx`, `mix_block`)
++ `pre2/bridge/audio.py` (ChannelState/Instrument/Sfx). Verified byte-exact vs the ASM in-VM:
+`pre2/probes/verify_mixer.py` (216B per-channel: 200 mixes, 0 div) and `pre2/probes/verify_mixer_block.py`
+(full SFX + 4-channel block: 120 blocks, complete 168-byte PCM + channel/SFX state, 0 div); unit tests
+`tests/test_audio_mixer.py`. `OracleLink` (1030:216B, VERIFIED). NOTE the volume row is **`volume << 6`**
+(×64, six shifts — a truncated disasm earlier showed five). NOT wired live (Layer 5 / ASM-detach deferred);
+the ASM mixer still runs in hybrid, with the recovered mixer verified against it as the oracle. The tracker/
+sequencer `221A` (Layer 3) that sets up the channel state is the remaining piece.
 
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
 |---|---|---|---|---|---|
