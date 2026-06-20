@@ -204,19 +204,27 @@ def read_mask_region(mem) -> bytes:
     return bytes(mem.data[base:base + MASK_REGION_BYTES])
 
 
+TILEMAP_WINDOW = 0x10000   # read the whole level-segment window for tile data
+
+
 def read_tilemap(mem, rows: int | None = None) -> TileMap:
     """Read the level tile map + the per-tile attribute tables.
 
-    Tile indices come from the level segment [0x2DD6] (``rows*TILEMAP_STRIDE``
-    bytes from offset 0; ``rows`` defaults to level height [0x2CF1]). The three
-    attribute tables are read from the DATA segment 1A13 — 346E's xlatb carry an ES
-    override (es=1A13), so the tables are there, not in the level block.
+    Tile indices come from the level segment [0x2DD6]. We read the **full segment
+    window** (not just ``level_height`` rows): the draws can address any offset the
+    ASM does — when the camera reaches the level bottom the bottom-fill row is at
+    row ``[0x2CF1]`` (one past the last 0-indexed row), and the ASM simply reads the
+    segment memory there. Reading the window keeps ``tiles[si] == mem[level_seg:si]``
+    for every ``si`` (so the recovered draw never goes out of bounds). ``rows`` is the
+    level height (informational; the grid draws 12 visible rows). The three attribute
+    tables are read from the DATA segment 1A13 (346E's xlatb carry an ES override).
     """
     seg = _rw(mem, VAR_LEVEL_SEG)
     if rows is None:
         rows = _rb(mem, VAR_LEVEL_HEIGHT)
     flat = (seg << 4) & 0xFFFFF
     data = (DATA_SEG << 4) & 0xFFFFF
+    end = min(flat + TILEMAP_WINDOW, len(mem.data))
 
     def _tbl(off: int) -> bytes:
         return bytes(mem.data[data + off: data + off + 0x100])
@@ -225,7 +233,7 @@ def read_tilemap(mem, rows: int | None = None) -> TileMap:
         segment=seg,
         stride=TILEMAP_STRIDE,
         rows=rows,
-        tiles=bytes(mem.data[flat: flat + rows * TILEMAP_STRIDE]),
+        tiles=bytes(mem.data[flat:end]),
         plane_attr=_tbl(TBL_PLANE_ATTR),
         tile_flags=_tbl(TBL_TILE_FLAGS),
         tile_type=_tbl(TBL_TILE_TYPE),

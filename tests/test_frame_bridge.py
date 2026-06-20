@@ -79,14 +79,21 @@ def test_tilemap_row_major_indexing():
     witness = bytes.fromhex("21 44 6B 21 44 1D 1E 46 7E 7E 7E 7E 7E 7E 7E 7E 7E 7E DD 46".replace(" ", ""))
     mem.data[flat + 33 * F.TILEMAP_STRIDE: flat + 33 * F.TILEMAP_STRIDE + len(witness)] = witness
 
+    # plant a byte in the bottom-fill row (row == level_height, one past the last
+    # 0-indexed row) — the camera-at-bottom over-scroll case that crashed.
+    mem.data[flat + 49 * F.TILEMAP_STRIDE + 0x3F] = 0xC3
+
     tm = F.read_tilemap(mem)
     assert tm.segment == seg
     assert tm.stride == F.TILEMAP_STRIDE
-    assert tm.rows == 49 and len(tm.tiles) == 49 * F.TILEMAP_STRIDE
+    assert tm.rows == 49                              # level height (informational)
+    assert len(tm.tiles) >= (49 + 1) * F.TILEMAP_STRIDE  # window covers past the last row
     assert tm.row_slice(0, 33, 20) == witness
     assert tm.tile(0, 33) == 0x21
     assert tm.tile(2, 33) == 0x6B
     assert tm.tile(8, 33) == 0x7E  # sky/empty tile
+    # the over-scroll bottom-fill tile (si = 49*256 + 0x3F = 0x313F) is readable, not OOB
+    assert tm.tile(0x3F, 49) == 0xC3
 
 
 def test_moved_and_dirty_sentinel():
