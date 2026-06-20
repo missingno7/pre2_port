@@ -75,6 +75,23 @@ class DmaChannel:
     def physical(self) -> int:
         return ((self.page << 16) | self.cur_addr) & 0xFFFFF
 
+    def snapshot_state(self) -> dict:
+        return {
+            "page": self.page, "base_addr": self.base_addr, "base_count": self.base_count,
+            "cur_addr": self.cur_addr, "cur_count": self.cur_count, "mode": self.mode,
+            "masked": self.masked, "flipflop_high": self._flipflop_high,
+        }
+
+    def restore_state(self, d: dict) -> None:
+        self.page = d.get("page", 0)
+        self.base_addr = d.get("base_addr", 0)
+        self.base_count = d.get("base_count", 0)
+        self.cur_addr = d.get("cur_addr", 0)
+        self.cur_count = d.get("cur_count", 0)
+        self.mode = d.get("mode", 0)
+        self.masked = d.get("masked", True)
+        self._flipflop_high = d.get("flipflop_high", False)
+
 
 @dataclass
 class SoundBlaster:
@@ -236,3 +253,55 @@ class SoundBlaster:
         self.irq_line = True
         if self.raise_irq is not None:
             self.raise_irq(self.irq)
+
+    # ---- snapshot persistence ------------------------------------------------
+    # The DSP/DMA programming state is part of the machine state: a save taken
+    # mid-playback must restore it so the resumed game (already past detection,
+    # waiting on the next block-complete IRQ) keeps streaming. Wiring callbacks
+    # (raise_irq/read_mem/clock) and the output accumulators (pcm_out/log) are
+    # re-attached by the front-end and deliberately not persisted.
+    def snapshot_state(self) -> dict:
+        return {
+            "base": self.base, "irq": self.irq, "dma": self.dma,
+            "speaker_on": self.speaker_on, "time_constant": self.time_constant,
+            "sample_rate": self.sample_rate, "block_len": self.block_len,
+            "auto_init": self.auto_init, "dma_active": self.dma_active,
+            "irq_line": self.irq_line, "resetting": self._resetting,
+            "args_needed": self._args_needed, "cmd": self._cmd, "args": list(self._args),
+            "out": list(self._out), "block_pending": self._block_pending,
+            "channels": {str(c): ch.snapshot_state() for c, ch in self.channels.items()},
+        }
+
+    def restore_state(self, d: dict) -> None:
+        self.base = d.get("base", self.base)
+        self.irq = d.get("irq", self.irq)
+        self.dma = d.get("dma", self.dma)
+        self.speaker_on = d.get("speaker_on", False)
+        self.time_constant = d.get("time_constant", 0)
+        self.sample_rate = d.get("sample_rate", 0)
+        self.block_len = d.get("block_len", 0)
+        self.auto_init = d.get("auto_init", False)
+        self.dma_active = d.get("dma_active", False)
+        self.irq_line = d.get("irq_line", False)
+        self._resetting = d.get("resetting", False)
+        self._args_needed = d.get("args_needed", 0)
+        self._cmd = d.get("cmd", 0)
+        self._args = list(d.get("args", []))
+        self._out = list(d.get("out", []))
+        self._block_pending = d.get("block_pending", False)
+        for c, chd in d.get("channels", {}).items():
+            self.channels[int(c)].restore_state(chd)
+
+    def rearm_after_restore(self) -> None:
+        """Re-arm a block-complete IRQ if a restored snapshot was mid-stream.
+
+        The driver drives continuous playback by re-issuing single-cycle DMA on
+        each block IRQ; restoring the programmed state but no pending IRQ would
+        leave it waiting forever. Raise the IRQ line directly (the PIC holds it
+        until the CPU delivers it, in either inline or batch-boundary mode) so the
+        driver's refill ISR runs, re-issues DMA, and the stream self-sustains.
+        Clock-independent — works in both the live viewer and headless paths.
+        """
+        if self.dma_active:
+            self._block_pending = False
+            self._fire_irq()

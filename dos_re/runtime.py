@@ -95,4 +95,13 @@ def enable_sound_blaster(rt: Runtime, *, base: int = 0x220, irq: int = 7, dma: i
     )
     rt.dos.pic = pic
     rt.dos.sound_blaster = sb
+    # Resuming a snapshot taken mid-playback: restore the DSP/DMA programming and
+    # re-arm a block IRQ so the driver's refill ISR fires and streaming continues.
+    # (The PIC is left fresh — imr=0x00 is the proven cold-boot state and the game
+    # re-syncs its mask via port 0x21 at runtime.)
+    saved = getattr(rt.dos, "sound_blaster_snapshot", None)
+    if saved:
+        sb.restore_state(saved)
+        sb.rearm_after_restore()
+        rt.dos.sound_blaster_snapshot = None
     return sb

@@ -111,6 +111,12 @@ def write_snapshot(rt: Runtime, out_dir: str | Path, *, status: str, steps: int,
             f"{cs:04X}:{ip:04X}": name for (cs, ip), name in sorted(rt.cpu.hook_names.items())
         },
     }
+    # The emulated Sound Blaster / DMA programming is part of the machine state:
+    # persist it so a save taken mid-playback resumes streaming (the front-end
+    # re-attaches the SB and applies this via enable_sound_blaster).
+    sound_blaster = getattr(rt.dos, "sound_blaster", None)
+    if sound_blaster is not None:
+        meta["dos"]["sound_blaster"] = sound_blaster.snapshot_state()
     (out / "state.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
@@ -185,6 +191,10 @@ def load_snapshot(exe_path: str | Path, snapshot_dir: str | Path, *, game_root: 
         rt.dos.files[int(handle_text)] = fh
     if rt.dos.files:
         rt.dos.next_handle = max(rt.dos.files) + 1
+    # Stash any persisted Sound Blaster state for the front-end to apply when it
+    # attaches the SB (enable_sound_blaster); load_snapshot itself stays frontend-
+    # agnostic and does not create audio hardware.
+    rt.dos.sound_blaster_snapshot = dos_meta.get("sound_blaster")
     return rt
 
 
