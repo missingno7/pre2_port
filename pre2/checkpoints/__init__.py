@@ -72,6 +72,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.pre2_sprite_pending = []
     cpu.pre2_blit_pending = []
     cpu.pre2_frame_pending = []
+    cpu.pre2_frame_grid_pending = []
     stats = HookVerifyStats()
     sqz.register_verify(cpu, stats, on_result, raise_on_divergence)
     sprite_decode.register_verify(cpu, stats, on_result, raise_on_divergence)

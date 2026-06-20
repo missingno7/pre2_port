@@ -6,7 +6,9 @@ modulus. This validates the field semantics inferred from disassembly (see the
 "frame renderer / scroll engine" section of docs/pre2/symbol_ledger.md) BEFORE we
 commit a Camera/ScrollState/TileMap dataclass to pre2/bridge/.
 
-It does NOT replace any routine — it just observes. Run:
+It does NOT replace any routine — it just observes.
+Retire when: the Camera/TileMap bridge fields are stable (kept meanwhile as the
+witness-regeneration tool behind tests/test_frame_bridge.py). Run:
     python -m pre2.probes.capture_frame_state
 """
 from __future__ import annotations

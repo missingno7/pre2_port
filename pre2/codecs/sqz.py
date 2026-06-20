@@ -21,6 +21,8 @@ block back to the original offsets in segment 1030).
 
 from __future__ import annotations
 
+from pre2.islands import oracle_link
+
 __all__ = [
     "unpack_sqz_lzss",
     "unpack_sqz_lzw",
@@ -42,6 +44,9 @@ _LZSS_STREAM_OFFSET = 17
 _LZW_STREAM_OFFSET = 4
 
 
+@oracle_link("1030:1068",
+             "decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance",
+             "VERIFIED", merge_target="asset loader")
 def unpack_sqz(data: bytes) -> bytes:
     """Decompress a complete ``.SQZ`` file, dispatching on the header.
 

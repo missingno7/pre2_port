@@ -23,13 +23,19 @@ against the ASM, then wire a thin adapter — and only then trust it.
 Each island declares the larger subsystem it will **merge into** (the coastline must move upward
 over time — see `recovery_architecture.md`; hooks are scaffolding, not the final architecture).
 
+The authoritative island list is **generated from the code** — each recovered function carries its own
+`@oracle_link(boundary, contract, status, merge_target)` metadata (`pre2/islands.py`), auto-discovered into
+[`recovered_islands.md`](recovered_islands.md) (regenerate: `python scripts/gen_island_manifest.py`; a test
+fails on drift). The table below is the human-curated roadmap; the manifest is the source of truth for what
+is recovered.
+
 | Island | Module | Merge target | Status |
 |---|---|---|---|
 | SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/replacements.py` | asset loader | **done, verified vs ASM** |
 | sprite/tile decode | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` | sprite/asset pipeline | **done, verified vs ASM** (first stateful island; stood up `pre2/bridge/`) |
 | sprite blit + background restore + type dispatch | `pre2/recovered/renderer.py` + `pre2/replacements.py` | renderer | **done, verified vs ASM** (in-VM lockstep, hybrid renders level 1) |
 | SoundBlaster audio (DSP + 8237 DMA + 8259 PIC) | `dos_re/sblaster.py` + `dos_re/pic.py` (generic hw) | DOS machine (not game layer) | **done** — game auto-detects + DMA-streams PCM; user-confirmed |
-| frame renderer — tile-row draw (346E) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, verified vs ASM** (in-VM lockstep, 33 row-draws 0-div; composes the verified blit). Scroll-copy/compositor (`3A08`/`3582`/`3B40`) + directional scroll remain (indirectly dispatched → semantic frame/tick checkpoint) |
+| frame renderer — tile-row draw (346E) + grid redraw (3582) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, verified vs ASM** (in-VM lockstep: 346E 33 row-draws, 3582 2 redraws, 0-div; both compose the verified blit). Scroll-copy/compositor (`3A08`/`3B40`) + directional scroll remain (indirectly dispatched → collapse into one semantic frame/tick checkpoint) |
 | gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | object system / player update / physics | later; semantic-state verification |
 
 ## Recovery rules (kept short; full posture in `recovery_architecture.md`)

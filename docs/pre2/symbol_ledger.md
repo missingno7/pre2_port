@@ -119,6 +119,32 @@ unit-tested (`tests/test_frame_renderer.py`). Wired hybrid + verify in `pre2/che
 frame differs only by the expected speed/progress gap (native is faster), not correctness — removing the
 346E hook leaves hybrid behaviour unchanged.
 
+**`3582` RECOVERED + VERIFIED + WIRED 2026-06-20.** `pre2/recovered/frame_renderer.py:draw_grid` recovers
+the full 12×20 visible-grid redraw: a prev-camera/dirty early-exit guard (`[0x2DF1]` rows-scrolled, camera
+`[0x2DE0/2DE2]` vs prev `[0x2DDC/2DDE]`, `[0x2DF0]` dirty) then, on redraw, a 240-tile loop that accumulates
+`tile_flags`→`[0x2DEE]` over *all* tiles but blits only **type≥1** tiles (opaque type-0 background comes from
+the scroll buffer), setting `[0x2DF0]=1` if any drawn and resetting `[0x2DF1]=0`. Composes the verified blit
+directly. Contract = the four A000 planes + `[0x2DEE]/[0x2DF0]/[0x2DF1]` + prev camera `[0x2DDC]/[0x2DDE]`;
+`di`/regs preserved. The three attribute tables and the type/blit table are all in 1A13 (`0x805A`/`0x4DF4`).
+Verified byte-exact vs pure-ASM oracle by `pre2/probes/verify_grid.py` (2 redraws, 0 divergence) + unit tests
+for the decision branches (`tests/test_frame_renderer.py`); hybrid live path smoke-tested clean. Wired
+hybrid+verify in `pre2/checkpoints/frame.py` (6 replacements now). `OracleLink` (1030:3582, VERIFIED).
+
+**Task #5 plan — scroll-copy (3A08) + compositor (3B40) (characterized 2026-06-20).** The compositor
+`3B40` is a **static composition**: `call 3582` (grid redraw) → `call 3A08` (scroll-copy) → `call 3035`
+(panel). So per the AI-review "draw-command-stream" point, 3B40 needs no dynamic capture — once its three
+sub-routines are recovered it is trivially `draw_grid(); scroll_copy(); panel()`, checkable by the (static)
+call order. The real remaining work is the two **leaf pixel routines**, recovered + pixel-verified like the
+blit:
+- `3A08` **scroll-copy**: an EGA **write-mode-1 latched 4-plane block copy** (helper `452F` sets GC mode=1
+  `out 3CE,0105` + map-mask 0x0F `out 3C4,0F02`; `451F` restores mode 0). `ds=es=0xA000`; copies the
+  visible window from the scroll ring `si=[0x2DB6]` to the display page `di=[0x2DD4]`, each row split into
+  `dl=0x14-[0x2DE4]` + `dh=[0x2DE4]` byte segments (the column ring split, both doubled), over `bp` rows
+  computed from `0xC0 - [0x6BC0](fine) - [0x2DE6](row_ring)*16`, with a `si=0x3F40` wrap section for `bx`
+  rows; then a plane-clear (`out 3C4,0F02`, `rep stosw 0`) of `[0x3A06]>>1` words at `[0x2DD4]`. Recovers as
+  a 4-plane copy (cf. `renderer.restore_background`) + clear; verify pixel-level vs ASM.
+- `3035` **panel/HUD** copy (screen→screen via `[0x2DD2]/[0x2DD4]`) — second leaf, recover next.
+
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
 |---|---|---|---|---|---|
 | `1030:3B40` | **frame compositor** — `sti`; set dirty `[0x2DF0]=1`,`[0x2DDC]=0x55AA`; `call 3582` (redraw dirty grid) → `call 3A08` (scroll-copy window to A000) → `call 3035` (panel/HUD copy); ret. **Indirectly dispatched** (no direct CALL site) | OBSERVED | (frame entry) | — | who dispatches it (movement/tick table) |

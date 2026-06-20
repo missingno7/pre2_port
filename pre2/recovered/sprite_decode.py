@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pre2.islands import oracle_link
+
 __all__ = [
     "NUM_SLOTS",
     "PLANES",
@@ -126,6 +128,10 @@ class SpriteCache:
         return bytes(self.planes[plane][off: off + SLOT_BYTES])
 
 
+@oracle_link("1030:42F7",
+             "planar sprite cache (0xA000:0x5E80) demuxed from the sheet + shared bank; "
+             "also 1030:436A (shared codes >= 0x100)",
+             "VERIFIED", merge_target="sprite pipeline")
 def decode_sprite_cache(
     sheet: SpriteSheet,
     shared_bank: SharedSpriteBank | None = None,

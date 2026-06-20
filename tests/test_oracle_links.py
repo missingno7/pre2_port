@@ -10,8 +10,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from pre2.islands import STATUSES, OracleLink, oracle_link  # noqa: E402
 from pre2.recovered.frame_renderer import draw_tile_row  # noqa: E402
-from pre2.recovered.oracle import STATUSES, OracleLink, oracle_link  # noqa: E402
 from pre2.recovered.renderer import blit_sprite  # noqa: E402
 
 

@@ -7,8 +7,9 @@ the recovered ``blit_sprite``) on the snapshot, let the ASM run the routine to i
 RET, then diff: the four EGA planes, the exit ``di``, and the three OR-accumulated
 flag bytes ([0x6BB9]/[0x2DEE]/[0x2DF0]). Asserts zero divergence.
 
-This is the verification contract for ``pre2/recovered/frame_renderer.py``.
+This is the verification contract for ``pre2/recovered/frame_renderer.py`` (346E).
 
+Retire when: a headless 346E lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_frame
 """
 from __future__ import annotations
