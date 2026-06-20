@@ -19,7 +19,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge import frame as _frame
 from pre2.bridge import sprites as _spr
-from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row
+from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row, scroll_copy
 
 from .common import _DATA_SEG, report
 
@@ -27,6 +27,11 @@ _ROW_ENTRY = (0x1030, 0x346E)
 _ROW_EXIT = (0x1030, 0x34EC)   # the routine's near RET
 _GRID_ENTRY = (0x1030, 0x3582)
 _GRID_EXIT = (0x1030, 0x3645)  # the grid redraw's near RET
+_SCROLL_ENTRY = (0x1030, 0x3A08)
+_SCROLL_EXIT = (0x1030, 0x3AD2)  # the scroll-copy's near RET
+_VAR_DEST_PAGE = 0x2DD4
+_VAR_ROW_RING = 0x2DE6
+_VAR_ROW_FACTOR = 0x6BF4
 _VAR_PLANE_ATTR = 0x6BB9
 _VAR_TILE_FLAGS = 0x2DEE
 _VAR_TILE_TYPE = 0x2DF0
@@ -130,6 +135,35 @@ def frame_grid(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret; di and the other pushed regs are preserved
 
 
+def _scroll_inputs(cpu) -> dict:
+    mem = cpu.mem
+    return {
+        "scroll_src": mem.rw(_DATA_SEG, _VAR_SCROLL_SRC),
+        "dest": mem.rw(_DATA_SEG, _VAR_DEST_PAGE),
+        "col_ring": _rb(mem, _VAR_COL_RING),
+        "fine_scroll": _rb(mem, _VAR_FINE_SCROLL),
+        "row_ring": mem.rw(_DATA_SEG, _VAR_ROW_RING),
+        "row_factor": mem.rw(_DATA_SEG, _VAR_ROW_FACTOR),
+    }
+
+
+@registry.replace(*_SCROLL_ENTRY, "frame_scroll_copy")
+def frame_scroll_copy(cpu) -> None:
+    """Native replacement for the vertical-scroll screen copy at 1030:3A08."""
+    mem = cpu.mem
+    g = _scroll_inputs(cpu)
+
+    if getattr(cpu, "pre2_verify_mode", False):
+        snap = _spr.snapshot_planes(mem)
+        scroll_copy(snap, **g)
+        cpu.pre2_frame_scroll_pending.append(snap)
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    scroll_copy(_spr.plane_views(mem), **g)
+    cpu.s.ip = cpu.pop()  # near ret; bx/di/si/ds/es preserved
+
+
 @registry.replace(*_ROW_ENTRY, "frame_tile_row")
 def frame_tile_row(cpu) -> None:
     """Native replacement for the tile-row draw at 1030:346E."""
@@ -204,3 +238,19 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
 
     cpu.replacement_hooks[_GRID_EXIT] = _grid_verify_at_exit
     cpu.hook_names[_GRID_EXIT] = "frame_grid_verify"
+
+    def _scroll_verify_at_exit(c) -> None:
+        if c.pre2_frame_scroll_pending:
+            snap = c.pre2_frame_scroll_pending.pop()
+            mem = c.mem
+            reason = None
+            live = _spr.snapshot_planes(mem)
+            for p in range(4):
+                if bytes(live[p]) != bytes(snap[p]):
+                    reason = f"plane {p}"
+                    break
+            report(stats, on_result, raise_on_divergence, "frame_scroll_copy", reason)
+        interpret_current_instruction_without_hook(c)
+
+    cpu.replacement_hooks[_SCROLL_EXIT] = _scroll_verify_at_exit
+    cpu.hook_names[_SCROLL_EXIT] = "frame_scroll_copy_verify"

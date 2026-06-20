@@ -136,14 +136,18 @@ hybrid+verify in `pre2/checkpoints/frame.py` (6 replacements now). `OracleLink` 
 sub-routines are recovered it is trivially `draw_grid(); scroll_copy(); panel()`, checkable by the (static)
 call order. The real remaining work is the two **leaf pixel routines**, recovered + pixel-verified like the
 blit:
-- `3A08` **scroll-copy**: an EGA **write-mode-1 latched 4-plane block copy** (helper `452F` sets GC mode=1
-  `out 3CE,0105` + map-mask 0x0F `out 3C4,0F02`; `451F` restores mode 0). `ds=es=0xA000`; copies the
-  visible window from the scroll ring `si=[0x2DB6]` to the display page `di=[0x2DD4]`, each row split into
-  `dl=0x14-[0x2DE4]` + `dh=[0x2DE4]` byte segments (the column ring split, both doubled), over `bp` rows
-  computed from `0xC0 - [0x6BC0](fine) - [0x2DE6](row_ring)*16`, with a `si=0x3F40` wrap section for `bx`
-  rows; then a plane-clear (`out 3C4,0F02`, `rep stosw 0`) of `[0x3A06]>>1` words at `[0x2DD4]`. Recovers as
-  a 4-plane copy (cf. `renderer.restore_background`) + clear; verify pixel-level vs ASM.
+- `3A08` **scroll-copy** — **RECOVERED + VERIFIED + WIRED 2026-06-20.** EGA **write-mode-1 latched 4-plane
+  block copy** (helper `452F` sets GC mode=1 `out 3CE,0105` + map-mask 0x0F; `451F` restores mode 0).
+  `ds=es=0xA000`; copies the visible window from the scroll ring `si=[0x2DB6]` to the display page
+  `di=[0x2DD4]`, each row split into `dl=0x14-[0x2DE4]` + `dh=[0x2DE4]` byte segments (column ring, both
+  doubled), over `bp` rows from `0xC0 - [0x6BC0](fine) - [0x2DE6](row_ring)*16`, with a `si=0x3F40` wrap
+  section for `bx` rows; then an all-plane clear (`rep stosw 0`) of `[0x3A06]>>1` words at `[0x2DD4]`.
+  `pre2/recovered/frame_renderer.py:scroll_copy` (4-plane copy + clear, cf. `renderer.restore_background`).
+  Verified byte-exact vs pure-ASM oracle (`pre2/probes/verify_scroll.py`, 3 copies, 0 divergence); wired
+  hybrid+verify in `pre2/checkpoints/frame.py` (7 replacements now), hybrid smoke-tested clean.
+  `OracleLink` (1030:3A08, VERIFIED).
 - `3035` **panel/HUD** copy (screen→screen via `[0x2DD2]/[0x2DD4]`) — second leaf, recover next.
+- `3B40` **compositor** — then a trivial static composition: `draw_grid(); scroll_copy(); panel()`.
 
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
 |---|---|---|---|---|---|

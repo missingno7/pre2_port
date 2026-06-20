@@ -9,5 +9,6 @@
 | `1030:1068` | `codecs.sqz.unpack_sqz` | VERIFIED | asset loader | decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance |
 | `1030:346E` | `recovered.frame_renderer.draw_tile_row` | VERIFIED | frame renderer | A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BB9]/[0x2DEE]/[0x2DF0]; di preserved |
 | `1030:3582` | `recovered.frame_renderer.draw_grid` | VERIFIED | frame renderer | A000 framebuffer (visible-grid type>=1 tiles) + [0x2DEE]/[0x2DF0]/[0x2DF1] + prev camera [0x2DDC]/[0x2DDE]; di/regs preserved |
+| `1030:3A08` | `recovered.frame_renderer.scroll_copy` | VERIFIED | frame renderer | A000 planar scroll-copy of the visible window (ring buffer -> display page) + all-plane clear of the leading strip; bx/di/si/ds/es preserved |
 | `1030:3B69` | `recovered.renderer.blit_sprite` | VERIFIED | renderer | A000 planar framebuffer (one 16x16 slot); di += 2 |
 | `1030:42F7` | `recovered.sprite_decode.decode_sprite_cache` | VERIFIED | sprite pipeline | planar sprite cache (0xA000:0x5E80) demuxed from the sheet + shared bank; also 1030:436A (shared codes >= 0x100) |

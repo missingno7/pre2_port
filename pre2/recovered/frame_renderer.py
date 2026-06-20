@@ -32,8 +32,12 @@ from pre2.recovered.renderer import ROW_STRIDE, WRAP_AT, WRAP_SPAN, blit_sprite
 
 __all__ = [
     "RowFlags", "GridResult", "VISIBLE_COLS", "VISIBLE_ROWS", "RING_COLS",
-    "BG_PTR_BIAS", "draw_tile_row", "draw_grid",
+    "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy",
 ]
+
+SCROLL_WRAP_SRC = 0x3F40   # source offset of the ring-buffer wrap section (3A08)
+SCREEN_ROW = 0x28          # bytes per screen row (the per-row source back-step)
+SCROLL_HEIGHT = 0xB0       # visible scroll height the row split is measured against
 
 VISIBLE_COLS = 0x14      # tiles drawn per row (cx=0x14 in 346E/3582)
 VISIBLE_ROWS = 0x0C      # tile rows in the visible grid (ch=0x0C in 3582)
@@ -192,3 +196,71 @@ def draw_grid(planes, tilemap, camera_x, camera_y, prev_x, prev_y, dirty, dirty_
         si = (si + GRID_SI_ROW_ADVANCE) & 0xFFFF          # [asm 3634]
 
     return GridResult(True, new_prev_x, new_prev_y, new_dirty, 0, tile_flags_acc & 0xFF)
+
+
+def _copy_run(planes, si, di, n):
+    """Latched 4-plane copy of ``n`` bytes (es:di <- ds:si); returns (si, di)."""
+    for _ in range(n):
+        for p in range(4):
+            planes[p][di] = planes[p][si]
+        si = (si + 1) & 0xFFFF
+        di = (di + 1) & 0xFFFF
+    return si, di
+
+
+@oracle_link("1030:3A08",
+             "A000 planar scroll-copy of the visible window (ring buffer -> display page) "
+             "+ all-plane clear of the leading strip; bx/di/si/ds/es preserved",
+             "VERIFIED", merge_target="frame renderer")
+def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_factor):
+    """Recover ``1030:3A08`` — the vertical-scroll screen copy.
+
+    A write-mode-1 latched 4-plane block copy (helper 452F) of the visible window
+    from the scroll ring buffer (``[0x2DB6]``) to the display page (``[0x2DD4]``).
+    Each row is split into ``dl`` + ``dh`` byte segments around the column ring
+    (``[0x2DE4]``) with a one-row source back-step; the copy runs over ``bp`` main
+    rows then ``bx`` rows from the ring wrap (``0x3F40``). Finally the leading
+    ``S = 0x28*row_factor`` strip at ``dest`` is cleared on all planes. Operates on
+    the four EGA planes directly (cf. :func:`renderer.restore_background`).
+    """
+    s = (SCREEN_ROW * row_factor) & 0xFFFF          # [asm 3A12] S = 0x28 * [0x6BF4]
+    si = scroll_src & 0xFFFF                         # [asm 3A1C]
+    di = (dest + s) & 0xFFFF                          # [asm 3A20/3A35] di = [0x2DD4] + S
+    dh = (col_ring << 1) & 0xFF                       # [asm 3A26/3A2E]
+    dl = ((0x14 - col_ring) << 1) & 0xFF              # [asm 3A24/3A2A/3A2C] dl + dh == 0x28
+
+    # row-count split between the main copy and the ring-wrap copy [asm 3A3A-3A68]
+    bp = (0xC0 - fine_scroll - (row_ring << 4)) & 0xFFFF
+    if bp >= SCROLL_HEIGHT:                           # [asm 3A4A: cmp bp,0xB0 / jb]
+        bp = (SCROLL_HEIGHT - row_factor) & 0xFFFF
+        bx = 0
+    else:
+        bx = (SCROLL_HEIGHT - bp - row_factor) & 0xFFFF
+        if bx & 0x8000:                               # [asm 3A64: jns] negative -> fold into bp
+            bp = (bp + bx) & 0xFFFF
+            bx = 0
+
+    si = (si + SCREEN_ROW * fine_scroll) & 0xFFFF     # [asm 3A6A] si += 0x28 * fine
+    if bp == 0:                                       # [asm 3A7E-3A82] xchg bp,bx
+        bp, bx = bx, bp
+
+    for _ in range(bp):                               # [asm 3A84-3A91] main rows
+        si, di = _copy_run(planes, si, di, dl)
+        si = (si - SCREEN_ROW) & 0xFFFF
+        si, di = _copy_run(planes, si, di, dh)
+        si = (si + SCREEN_ROW) & 0xFFFF
+
+    if bx:                                            # [asm 3A93-3AAB] ring-wrap rows
+        si = (SCROLL_WRAP_SRC + dh) & 0xFFFF
+        for _ in range(bx):
+            si, di = _copy_run(planes, si, di, dl)
+            si = (si - SCREEN_ROW) & 0xFFFF
+            si, di = _copy_run(planes, si, di, dh)
+            si = (si + SCREEN_ROW) & 0xFFFF
+
+    # clear the leading strip on all four planes [asm 3AB2-3ACB]: S>>1 words at dest
+    words = s >> 1
+    for k in range(words * 2):
+        off = (dest + k) & 0xFFFF
+        for p in range(4):
+            planes[p][off] = 0
