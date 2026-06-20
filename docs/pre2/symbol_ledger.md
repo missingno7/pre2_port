@@ -31,6 +31,27 @@ The game software-mixes MOD + SFX to PCM and streams it via SB DMA.
 | ports `base+6/0xA/0xC/0xE` | SB DSP: reset / read-data / write-cmd+status / read-buffer-status+IRQ-ack | OBSERVED | (hw) | — | DSP command set the driver uses (0x14/0x1C/0x40/0x41/0xD1/0xF2…) — capture once detection passes |
 | 8237 DMA ch + page, PIC `0x20/0x21` | DMA channel for PCM + SB IRQ via PIC | GUESS | (hw) | — | which DMA channel; needs the playback capture |
 
+### Audio mixer — the software decode/mix island (characterized 2026-06-20; to recover)
+
+This is the **game-side** PCM mixer that fills the SB DMA buffer (distinct from the SB *hardware* above,
+which is done in `dos_re`). It is a clean DSP island, **exercised** (audio plays) so verifiable now by
+diffing the produced 168-byte block against `sb.pcm_out`. NOT gameplay logic.
+
+| Location | Name | Confidence | Role | Coverage | Known unknowns |
+|---|---|---|---|---|---|
+| `1030:2029` | **SB IRQ7 ISR / block service.** Acks IRQ (`in al, cs:[0x26C]`=base+0xE), `inc [0xB5B]` block counter, reads mode `cs:[0x1D49]`; then the play routine, then mixes the *next* buffer, then PIC EOI (`out 0x20,0x20`) | OBSERVED | (ISR) | cold-boot probe (594 playback blocks @8403) | the sequencer `221A` (mode-gated, `test cs:[3],0x40`) |
+| `1030:2048`–`209C` | **double-buffered DMA play** — swaps descriptors `[0x10BD/BF]`↔`[0x10C1/C3]`, programs 8237 ch1 (page `[bx]`, addr `[bx+1]`, count `0xA7`=167→168B), `write_dsp(0x14)`+len | OBSERVED | (output) | — | — |
+| `1030:1C71` | `write_dsp(al)` — wait `base+0xC` bit7 clear, `out base+0xC,al` | OBSERVED | (helper) | — | — |
+| `1030:20AB`–`20F3` | **SFX mix** — `rep movsw` copy active sample (`[0x1002]` src ptr / `[0x1004]` remaining len / seg `[0xB57]`) into buffer `[0x10C1]`, pad rest with silence (0); no SFX → whole block 0 | OBSERVED | (mix) | — | how `[0x1002/1004]` are armed (SFX trigger) |
+| `1030:216B` | **per-channel MOD mixer** (called 4× from `20FE`-`2119`, `bx=ch*2`). Resample+volume+additive: `lodsb` sample (es:si = instrument far ptr `[idx*16+0xBD8]` + pos) → `xlatb` volume table `0x12BD` → `add [di],al` into the 168B block; advance pos by fractional **period** `[+0xBA8]` via accumulator `[+0xBC8]`; loop/end via `[idx*16+0xBD4]` loop-start / `[+0xBD6]` loop-len | OBSERVED | (mix kernel) | — | exact period→step + volume-table layout |
+| per-channel state (ds=1A13, `ch*2`) | `[+0xB88]`=sample pos (`0xFFFF`=off), `[+0xB90]`=length/end, `[+0xB98]`=instrument idx, `[+0xBA8]`=period/step, `[+0xBC8]`=frac accumulator; instrument table `0xBD8` stride 16 (far ptr/loop start/loop len); volume tables `0x12BD` | OBSERVED | data | — | channel count = 4; sample-rate fixed 8403 |
+
+**Recover (renderer-of-audio):** `pre2/bridge/audio.py` (channel state / instrument table / SFX state /
+buffers) → `pre2/recovered/audio_mixer.py` (`mix_channel` = 216B, `mix_sfx`, `mix_block` = SFX + 4 channels)
+→ thin checkpoint at the ISR's mix section → **verify by 168-byte PCM-block diff vs the ASM**. The `.TRK`
+module SQZ decompression is already recovered (`unpack_sqz`); the sequencer `221A` (pattern/row advance) is
+the music-logic layer, recovered later.
+
 ## SQZ decompressor (first recovered island → merges into the asset loader)
 
 | Location | Name | Confidence | Role | Coverage | Known unknowns |
