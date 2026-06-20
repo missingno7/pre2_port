@@ -76,26 +76,15 @@ def test_all_lzw_assets_decode_cleanly(path):
     assert len(out) == expected
 
 
-@pytest.mark.skipif(not (ASSETS / "pre2.exe").exists(), reason="game assets not present")
-def test_sqz_checkpoint_matches_asm_in_vm():
-    """Integration: the in-VM checkpoint sees the recovered codec == ASM, live.
-
-    Cold-boots the real binary until the title screen decompresses ALLFONTS.SQZ
-    and asserts the checkpoint verified it against the original ASM with zero
-    divergence. Slow (runs the VM); skipped when assets are absent.
-    """
+def _cold_boot(rt, stats, *, max_frames=600):
     from dos_re.interrupts import deliver_interrupt, deliver_scancode
-    from pre2.codecs.sqz_hook import install_sqz_decode_checkpoint
-    from pre2.runtime import create_pre2_runtime
 
-    rt = create_pre2_runtime(str(ASSETS / "pre2.exe"), game_root=str(ASSETS), fast_adlib=True)
-    stats = install_sqz_decode_checkpoint(rt, raise_on_divergence=True)
     makes = {60: 0x1C}
     breaks = {110: 0x9C}
     for b in range(420, 3200, 120):
         makes[b] = 0x1C
         breaks[b + 50] = 0x9C
-    for frame in range(600):
+    for frame in range(max_frames):
         if frame in makes:
             deliver_scancode(rt, makes[frame], max_steps=2_000_000)
         if frame in breaks:
@@ -105,5 +94,22 @@ def test_sqz_checkpoint_matches_asm_in_vm():
         deliver_interrupt(rt, 0x08, max_steps=2_000_000)
         if stats.verified >= 1:
             break
+
+
+@pytest.mark.skipif(not (ASSETS / "pre2.exe").exists(), reason="game assets not present")
+def test_sqz_hook_verifies_against_asm_in_vm():
+    """Integration: --verify-hooks lockstep sees native == original ASM, live.
+
+    Cold-boots the real binary with the native replacement hooks flipped into
+    verify mode (the original ASM runs as oracle) and asserts the first .SQZ
+    decompression's contract was diffed against the ASM with zero divergence.
+    Slow (runs the VM); skipped when assets are absent.
+    """
+    from pre2.replacements import enable_pre2_hook_verification
+    from pre2.runtime import create_pre2_runtime
+
+    rt = create_pre2_runtime(str(ASSETS / "pre2.exe"), game_root=str(ASSETS), fast_adlib=True)
+    stats = enable_pre2_hook_verification(rt, raise_on_divergence=True)
+    _cold_boot(rt, stats)
     assert stats.verified >= 1
     assert stats.diverged == []

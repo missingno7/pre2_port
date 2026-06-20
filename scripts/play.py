@@ -43,24 +43,25 @@ def _default_snapshot_dir(root: Path) -> Path:
 
 
 def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
-    """Install recovered-native verification checkpoints when --verify-hooks is set.
+    """Flip native replacement hooks into lockstep oracle mode for --verify-hooks.
 
-    These are non-replacing: the original ASM still executes and remains the
-    oracle. Each recovered subsystem re-derives its result natively and the
-    checkpoint asserts it equals what the ASM wrote, printing OK/DIVERGENCE live.
+    Normally the replacement hooks *are* the runtime (hybrid). With this flag the
+    original ASM executes as the oracle instead, and each native result is diffed
+    against it over the game-visible contract, printing OK/DIVERGENCE. Intended
+    for offline replay of recorded demos/snapshots.
     """
     if not getattr(args, "verify_hooks", False):
         return
-    from pre2.codecs.sqz_hook import install_sqz_decode_checkpoint
+    from pre2.replacements import enable_pre2_hook_verification
 
-    def _on_sqz(name: str, ok: bool, detail) -> None:
+    def _on_result(name: str, ok: bool, detail) -> None:
         if ok:
-            print(f"[verify-hooks] sqz OK          {name}", flush=True)
+            print(f"[verify-hooks] OK          {name}", flush=True)
         else:
-            print(f"[verify-hooks] sqz DIVERGENCE  {name}: {detail}", flush=True)
+            print(f"[verify-hooks] DIVERGENCE  {name}: {detail}", flush=True)
 
-    install_sqz_decode_checkpoint(rt, on_result=_on_sqz)
-    print("[verify-hooks] installed: SQZ decode (native == original ASM, checked live)", flush=True)
+    enable_pre2_hook_verification(rt, on_result=_on_result)
+    print("[verify-hooks] lockstep oracle active: native hooks diffed vs original ASM", flush=True)
 
 
 def _make_runtime(args: argparse.Namespace, *, fast_adlib: bool | None = None):
