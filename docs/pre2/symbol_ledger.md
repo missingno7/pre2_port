@@ -72,7 +72,41 @@ The current sub-island is the **draw primitive layer**.
   [0x2DF4], bg buffer, GC/map-mask state)` → framebuffer delta (note the masked
   path's `xchg` also writes `[0x2DF4]`, a read/write contract).
 
-### Next island — frame renderer / scroll engine (boundary MAPPED 2026-06-20)
+### Object-list draw island (boundary mapping started 2026-06-20)
+
+The moving-sprite / object draw path (renderer-facing; NOT gameplay update yet).
+
+- **`1030:6544` — per-object sprite draw (the draw-command unit).** Input `di` = object
+  tile position (`dh`=row, `dl`=col), sprite index in `al`. Culls against the camera window:
+  `dl-[0x2DE0] >= 0x14` (20 cols) or `dh-[0x2DE2] >= 0xC` (12 rows) → not drawn (RET CF=set).
+  Else computes the screen dest offset from the tile position (`row%12`·`0x50`·16 + `(col%20)<<bh`;
+  the `0x50/2` vs `0x28/1` stride/shift pair is chosen by `cs:[1]` mode) and calls the blit
+  wrapper `3B58` (→ recovered blit). Sets `[0x6BB9]=1`. **This is the natural `ObjectSpriteCommand`
+  unit and composes the recovered `blit_sprite`.**
+- **`~1030:5406` — object-table draw loop (multi-tile structures).** Walks an object table at
+  offset **`0x83EF`, 15 slots × 10 bytes**. Per-slot record: `[+0]` word draw position (decremented
+  over time), `[+2]` byte `dl` (width, tiles), `[+3]` byte `dh` (height, tiles), `[+4]` word
+  id/proximity key (`0xFFFF`=empty slot, `0xFFFE`=triggered), `[+6]` word data pointer (sprite
+  bytes, read from seg `[0x2871]`), `[+8]` (2 bytes, TBD). A proximity pre-pass (`|key-dx|<=8` →
+  mark `0xFFFE`, set `[0x6BE6]=7`) then draws each object as a `dl×dh` block of tiles (per cell:
+  read/shift a tile from level seg `[0x2DD6]`, `call 6544`). Calls `6544` at `5463`/`548C`.
+- **`1030:5C9E`** — third `6544` caller (a separate object list; likely the moving player/enemy
+  sprites rather than these multi-tile structures). NOT yet disassembled.
+- **Known unknowns:** the object-table *segment* (the `[si]` reads use entry `ds`); the `[+8]`
+  field; whether `5C9E` is the player/enemy list; draw order across the lists.
+- **Plan (renderer-first):** confirm the table layout + `5C9E`; build `pre2/bridge/objects.py`
+  (factual `ObjectSlot`/`ObjectDrawState`/`ObjectSpriteCommand` — NOT Player/Enemy) owning the
+  `0x83EF` layout; recover `draw_object_sprites()` in `pre2/recovered/object_draw.py` composing the
+  recovered `blit_sprite`; **verify by draw-command stream** (slot→sprite idx, dest off, type/mask,
+  order) vs the ASM, not by re-proving pixels.
+
+### NOTE — missed frame-renderer leaf `1030:34ED` (tile-column fill)
+`34ED` is the **vertical tile-column fill** — the horizontal-scroll counterpart to `346E`'s
+20-tile row fill: same 3-table xlat + blit, but a 12-tile **column** (`cx=0xC`), `si += 0x100`/tile,
+`di += 0x27E`/tile, `[0x2DF2] += 0x40`/tile. It is a frame-renderer leaf we have NOT recovered yet
+(a quick sibling of the recovered `draw_tile_row`); recover it to complete the tile-fill pair.
+
+### Frame renderer / scroll engine (boundary MAPPED 2026-06-20)
 
 **Merge target:** these routines are one landmass = the **frame renderer + scroll engine**. They
 recover into a `pre2/recovered/frame_renderer.py` driven by a `Camera`/`ScrollState`/`TileMap` model in
