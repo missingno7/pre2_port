@@ -25,9 +25,18 @@ native code is now part of the normal runtime.
   (`native_replacements=False`), hybrid (default), verify (`--verify-hooks`,
   lockstep contract diff vs ASM). Unrecovered behaviour in hybrid mode fails loud
   (`Pre2HybridGap`).
-- **Next:** the first stateful islands — sprite/tile decode, masked blits,
-  tilemap/background draw — where the first memory-view ↔ dataclass bridge is
-  stood up. See [`recovery_architecture.md`](recovery_architecture.md) and
+- **Second recovered-native island: sprite-sheet decode** (`1030:42F7` local +
+  `1030:436A` shared) — the first **stateful** island and the first memory-view ↔
+  dataclass bridge (`pre2/bridge/sprites.py` ↔ `pre2/recovered/sprite_decode.py`).
+  The level-load demux of the decompressed sprite sheet into the planar VRAM cache
+  (`0xA000:0x5E80`) is recovered and **verified byte-for-byte vs the ASM** (a
+  load-time witness, since the mid-game snapshot's sheet RAM is freed and its cache
+  over-drawn). It runs **live in the hybrid runtime** (both adapters fire, hybrid
+  cache byte-exact across 211 slots) with verify-mode lockstep coverage. The
+  per-frame blit/scroll and the sprite classifier (`4213`, an EGA read-plane
+  question) remain to recover.
+- **Next:** masked blits / tilemap-background draw, and the sprite classifier.
+  See [`recovery_architecture.md`](recovery_architecture.md) and
   [`symbol_ledger.md`](symbol_ledger.md).
 - **Known gap (deferred):** gameplay audio is silent. The intro/title music is
   **AdLib FM** and plays (`0x388/0x389` → vendored `nuked_opl3`); but gameplay
