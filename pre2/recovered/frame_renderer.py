@@ -1,7 +1,7 @@
 """Prehistorik 2 frame renderer — recovered native logic.
 
-Status: recovered; verification targets ``pre2/probes/verify_frame.py`` (346E) and
-``pre2/probes/verify_grid.py`` (3582). Merge target: the frame renderer →
+Status: recovered; verification targets ``pre2/probes/verify_frame.py`` (348D) and
+``pre2/probes/verify_grid.py`` (35A1). Merge target: the frame renderer →
 eventually ``update_frame()``.
 
 Recovers two draws that paint the scrolling tile background by reading tile indices
@@ -9,16 +9,16 @@ from the level :class:`TileMap`, OR-accumulating attribute flags, and compositin
 through the **already-recovered, verified** blit
 (:func:`pre2.recovered.renderer.blit_sprite`):
 
-* :func:`draw_tile_row` (``1030:346E``) — one 20-tile row (the incremental
+* :func:`draw_tile_row` (``1030:348D``) — one 20-tile row (the incremental
   scroll-fill); draws every tile.
-* :func:`draw_grid` (``1030:3582``) — the full 12×20 visible grid redraw, guarded
+* :func:`draw_grid` (``1030:35A1``) — the full 12×20 visible grid redraw, guarded
   by a prev-camera/dirty check, drawing only the non-opaque (type≥1) tiles (the
   opaque type-0 background comes from the scrolled buffer).
 
 Per the island-composition rule, this calls ``blit_sprite`` directly rather than
 returning to ASM: the blit's verified contract (the A000 planar framebuffer plus a
-``di += 2`` advance) is exactly the side effect ``346E`` relies on from its
-``call 3B69``, so no contact point with the original ASM is needed here.
+``di += 2`` advance) is exactly the side effect ``348D`` relies on from its
+``call 3B88``, so no contact point with the original ASM is needed here.
 
 All state is plain data (planes as byte buffers, tables as ``bytes``); the VM↔memory
 translation lives in ``pre2/bridge/frame.py``.
@@ -35,27 +35,27 @@ __all__ = [
     "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy", "panel_copy",
 ]
 
-SCROLL_WRAP_SRC = 0x3F40   # source offset of the ring-buffer wrap section (3A08)
+SCROLL_WRAP_SRC = 0x3F40   # source offset of the ring-buffer wrap section (3A27)
 SCREEN_ROW = 0x28          # bytes per screen row (the per-row source back-step)
 SCROLL_HEIGHT = 0xB0       # visible scroll height the row split is measured against
 
-VISIBLE_COLS = 0x14      # tiles drawn per row (cx=0x14 in 346E/3582)
-VISIBLE_ROWS = 0x0C      # tile rows in the visible grid (ch=0x0C in 3582)
+VISIBLE_COLS = 0x14      # tiles drawn per row (cx=0x14 in 348D/35A1)
+VISIBLE_ROWS = 0x0C      # tile rows in the visible grid (ch=0x0C in 35A1)
 RING_COLS = 0x14         # column ring modulus; di wraps back one screen row at it
-BG_PTR_BIAS = 0x7E80     # [0x2DF2] = di + 0x7E80 (background-restore source base)
-# 3582 per-row advances after the 20-tile inner loop (continuous across the grid):
+BG_PTR_BIAS = 0x7E80     # [0x2DF6] = di + 0x7E80 (background-restore source base)
+# 35A1 per-row advances after the 20-tile inner loop (continuous across the grid):
 GRID_SI_ROW_ADVANCE = 0xEC    # si += 0xEC (+0x14 already consumed -> +0x100 stride)
 GRID_DI_ROW_ADVANCE = 0x280   # di += 0x280 to the next screen row
-GRID_BG_ROW_ADVANCE = 0x258   # [0x2DF2] += 0x258 (+0x28 already consumed -> +0x280)
+GRID_BG_ROW_ADVANCE = 0x258   # [0x2DF6] += 0x258 (+0x28 already consumed -> +0x280)
 
 
 @dataclass
 class RowFlags:
-    """The three attribute flags ``346E`` OR-accumulates across the tiles it draws.
+    """The three attribute flags ``348D`` OR-accumulates across the tiles it draws.
 
     These mirror the in-memory accumulators (which are *not* reset per row):
-    ``plane_attr`` ⇄ ``[0x6BB9]``, ``tile_flags`` ⇄ ``[0x2DEE]``,
-    ``tile_type`` ⇄ ``[0x2DF0]``. Seed them with the pre-call memory values so the
+    ``plane_attr`` ⇄ ``[0x6BBD]``, ``tile_flags`` ⇄ ``[0x2DF2]``,
+    ``tile_type`` ⇄ ``[0x2DF4]``. Seed them with the pre-call memory values so the
     result matches the original's running OR.
     """
 
@@ -64,15 +64,15 @@ class RowFlags:
     tile_type: int = 0
 
 
-@oracle_link("1030:346E",
-             "A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BB9]/[0x2DEE]/[0x2DF0]; di preserved",
+@oracle_link("1030:348D",
+             "A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BBD]/[0x2DF2]/[0x2DF4]; di preserved",
              "VERIFIED", merge_target="frame renderer")
 def draw_tile_row(planes, tilemap, tile_offset, di, scroll_src, col_ring,
                   fine_scroll, blit_type, mask_region, flags=None):
-    """Recover ``1030:346E`` — draw one 20-tile background row.
+    """Recover ``1030:348D`` — draw one 20-tile background row.
 
     Mutates ``planes`` (the four A000 EGA planes) and ``flags``; returns
-    ``(internal_di, flags)``. NOTE: ``346E`` push/pops ``di`` (3471/34E8), so it
+    ``(internal_di, flags)``. NOTE: ``348D`` push/pops ``di`` (3471/34E8), so it
     *preserves* the caller's ``di`` — the returned ``internal_di`` is the loop's
     scratch pointer (useful for tests), **not** a value the caller reads back. The
     caller-visible contract is: the framebuffer + the OR-accumulated ``flags``.
@@ -82,9 +82,9 @@ def draw_tile_row(planes, tilemap, tile_offset, di, scroll_src, col_ring,
     * ``di`` — screen destination offset for this row (the ASM's incoming ``di``).
     * ``scroll_src`` — ``[0x2DB6]`` added to ``di`` once at entry.
     * ``col_ring`` — ``[0x2DE4]`` column ring index (the ``dx`` start).
-    * ``fine_scroll`` — ``[0x6BC0]``; ``bg_off = bg_ptr - ROW_STRIDE * fine_scroll``.
-    * ``blit_type`` — 256-entry sprite-type table (``1A13:0x4DF4``) for the blit.
-    * ``mask_region`` — the transparency-mask bytes (``1A13:0x2DF4`` onward); the
+    * ``fine_scroll`` — ``[0x6BC4]``; ``bg_off = bg_ptr - ROW_STRIDE * fine_scroll``.
+    * ``blit_type`` — 256-entry sprite-type table (``1A0F:0x4DF8``) for the blit.
+    * ``mask_region`` — the transparency-mask bytes (``1A0F:0x2DF8`` onward); the
       mask for type ``t`` is ``mask_region[(t-2)*0x20 : (t-2)*0x20 + 0x20]``.
     """
     if flags is None:
@@ -99,19 +99,19 @@ def draw_tile_row(planes, tilemap, tile_offset, di, scroll_src, col_ring,
             di = (di - WRAP_SPAN) & 0xFFFF
         tile = tilemap.tiles[si]                   # [asm 34A0: lodsb]
         si = (si + 1) & 0xFFFF
-        flags.plane_attr |= tilemap.plane_attr[tile]  # [asm 34A3-34A8] -> [0x6BB9]
-        flags.tile_flags |= tilemap.tile_flags[tile]  # [asm 34AD-34B4] -> [0x2DEE]
-        flags.tile_type |= tilemap.tile_type[tile]    # [asm 34B9-34C0] -> [0x2DF0]
+        flags.plane_attr |= tilemap.plane_attr[tile]  # [asm 34A3-34A8] -> [0x6BBD]
+        flags.tile_flags |= tilemap.tile_flags[tile]  # [asm 34AD-34B4] -> [0x2DF2]
+        flags.tile_type |= tilemap.tile_type[tile]    # [asm 34B9-34C0] -> [0x2DF4]
 
-        typ = blit_type[tile]                      # blit reads 1A13:[0x4DF4+idx]
+        typ = blit_type[tile]                      # blit reads 1A0F:[0x4DF8+idx]
         mask = b""
         if typ >= 2:
             off = (typ - 2) * 0x20
             mask = mask_region[off:off + 0x20]
         bg_off = (bg_ptr - ROW_STRIDE * fine_scroll) & 0xFFFF
-        blit_sprite(planes, tile, di, typ, bg_off, mask)  # [asm 34CD: call 3B69]
+        blit_sprite(planes, tile, di, typ, bg_off, mask)  # [asm 34CD: call 3B88]
         di = (di + 2) & 0xFFFF                     # blit's di += 2 contract
-        bg_ptr = (bg_ptr + 2) & 0xFFFF             # [asm 34D1: add [0x2DF2],2]
+        bg_ptr = (bg_ptr + 2) & 0xFFFF             # [asm 34D1: add [0x2DF6],2]
 
         dx += 1                                    # [asm 34D7: inc dx]
         if dx >= RING_COLS:                        # [asm 34D8-34E0: ring column wrap]
@@ -122,23 +122,23 @@ def draw_tile_row(planes, tilemap, tile_offset, di, scroll_src, col_ring,
 
 @dataclass
 class GridResult:
-    """Outcome of :func:`draw_grid`, mirroring 3582's caller-visible side effects."""
+    """Outcome of :func:`draw_grid`, mirroring 35A1's caller-visible side effects."""
 
     redrew: bool          # whether the grid was actually redrawn (else early-exit)
-    prev_x: int           # new [0x2DDC] (prev camera X)
-    prev_y: int           # new [0x2DDE] (prev camera Y)
-    dirty: int            # new [0x2DF0]
-    dirty_rows: int       # new [0x2DF1]
-    tile_flags: int       # new [0x2DEE] (OR over all grid tiles, when redrawn)
+    prev_x: int           # new [0x2DE0] (prev camera X)
+    prev_y: int           # new [0x2DE2] (prev camera Y)
+    dirty: int            # new [0x2DF4]
+    dirty_rows: int       # new [0x2DF5]
+    tile_flags: int       # new [0x2DF2] (OR over all grid tiles, when redrawn)
 
 
-@oracle_link("1030:3582",
-             "A000 framebuffer (visible-grid type>=1 tiles) + [0x2DEE]/[0x2DF0]/[0x2DF1] + prev camera "
-             "[0x2DDC]/[0x2DDE]; di/regs preserved",
+@oracle_link("1030:35A1",
+             "A000 framebuffer (visible-grid type>=1 tiles) + [0x2DF2]/[0x2DF4]/[0x2DF5] + prev camera "
+             "[0x2DE0]/[0x2DE2]; di/regs preserved",
              "VERIFIED", merge_target="frame renderer")
 def draw_grid(planes, tilemap, camera_x, camera_y, prev_x, prev_y, dirty, dirty_rows,
               scroll_src, col_ring, fine_scroll, blit_type, mask_region):
-    """Recover ``1030:3582`` — the full 12x20 visible-grid redraw.
+    """Recover ``1030:35A1`` — the full 12x20 visible-grid redraw.
 
     Guarded by a prev-camera/dirty check (the early-exit path); on redraw, draws
     only the non-opaque (type>=1) tiles via the recovered blit, accumulates
@@ -165,20 +165,20 @@ def draw_grid(planes, tilemap, camera_x, camera_y, prev_x, prev_y, dirty, dirty_
         return GridResult(False, new_prev_x, new_prev_y, dirty, dirty_rows, 0)
 
     # --- redraw the 12x20 grid (mirrors 35C3-363A) ---
-    tile_flags_acc = 0                             # [asm 35CB] [0x2DEE] reset, then OR
-    new_dirty = 0                                  # [asm 35C5] [0x2DF0] reset, set 1 below
+    tile_flags_acc = 0                             # [asm 35CB] [0x2DF2] reset, then OR
+    new_dirty = 0                                  # [asm 35C5] [0x2DF4] reset, set 1 below
     si = (camera_y * 0x100 + camera_x) & 0xFFFF    # [asm 35CE-35D5] si = ah:al
     di = scroll_src & 0xFFFF                        # [asm 35DB] di = [0x2DB6]
-    bg_ptr = BG_PTR_BIAS                            # [asm 35DF] [0x2DF2] = 0x7E80
+    bg_ptr = BG_PTR_BIAS                            # [asm 35DF] [0x2DF6] = 0x7E80
 
     for _row in range(VISIBLE_ROWS):               # [asm 35E5] ch = 0x0C
         dx = col_ring                              # [asm 35E5] dx = [0x2DE4] (per row)
         for _col in range(VISIBLE_COLS):           # [asm 35E9] cl = 0x14
             tile = tilemap.tiles[si]               # [asm 35EB] bl = es:[si]
-            tile_flags_acc |= tilemap.tile_flags[tile]  # [asm 35EE-35F2] -> [0x2DEE]
-            typ = blit_type[tile]                  # [asm 35F6] [0x4DF4+bx]
+            tile_flags_acc |= tilemap.tile_flags[tile]  # [asm 35EE-35F2] -> [0x2DF2]
+            typ = blit_type[tile]                  # [asm 35F6] [0x4DF8+bx]
             if typ >= 1:                           # [asm 35FB] jb skips type 0
-                new_dirty = 1                      # [asm 35FD] [0x2DF0] = 1
+                new_dirty = 1                      # [asm 35FD] [0x2DF4] = 1
                 if di >= WRAP_AT:                  # [asm 3604-360A]
                     di = (di - WRAP_SPAN) & 0xFFFF
                 mask = mask_region[(typ - 2) * 0x20:(typ - 2) * 0x20 + 0x20] if typ >= 2 else b""
@@ -208,12 +208,12 @@ def _copy_run(planes, si, di, n):
     return si, di
 
 
-@oracle_link("1030:3A08",
+@oracle_link("1030:3A27",
              "A000 planar scroll-copy of the visible window (ring buffer -> display page) "
              "+ all-plane clear of the leading strip; bx/di/si/ds/es preserved",
              "VERIFIED", merge_target="frame renderer")
 def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_factor):
-    """Recover ``1030:3A08`` — the vertical-scroll screen copy.
+    """Recover ``1030:3A27`` — the vertical-scroll screen copy.
 
     A write-mode-1 latched 4-plane block copy (helper 452F) of the visible window
     from the scroll ring buffer (``[0x2DB6]``) to the display page (``[0x2DD4]``).
@@ -266,12 +266,12 @@ def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_f
             planes[p][off] = 0
 
 
-@oracle_link("1030:3035",
+@oracle_link("1030:3054",
              "A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, "
              "0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only)",
              "VERIFIED", merge_target="frame renderer")
 def panel_copy(planes, src_page, dst_page):
-    """Recover ``1030:3035`` — the double-buffer page-flip copy.
+    """Recover ``1030:3054`` — the double-buffer page-flip copy.
 
     Copies 2-byte-wide x 0xB0-row vertical strips (write-mode-1 latched 4-plane
     copy, screen stride 0x28) from the back page (``[0x2DD4]``) to the front page

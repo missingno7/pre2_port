@@ -1,9 +1,9 @@
 """TEMPORARY probe — capture a faithful per-blit witness.
 
 Replays into gameplay and, for the first blit call of each type (0 plain / 1 empty
-/ >=2 masked), transparently runs the original blit at 1030:3B69 to completion and
+/ >=2 masked), transparently runs the original blit at 1030:3B88 to completion and
 records the 4 EGA planes before+after plus all inputs (idx, di, es, type, the
-[0x2DF4] mask, the [0x2DF2]/[0x6BC0] bg-restore state). This is the verification
+[0x2DF8] mask, the [0x2DF6]/[0x6BC4] bg-restore state). This is the verification
 target for the recovered renderer (pre2/recovered/renderer.py).
 
 Run:  python -m pre2.probes.capture_blit
@@ -25,8 +25,8 @@ from pre2.runtime import load_pre2_snapshot
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
 OUT = ROOT / "artifacts" / "blit_witness"
 SEG = 0x1030
-DS = 0x1A13
-BLIT = (SEG, 0x3B69)
+DS = 0x1A0F
+BLIT = (SEG, 0x3B88)
 WIN = 0x10000  # full EGA plane (covers visible+offscreen+cache+bg source)
 
 
@@ -70,19 +70,19 @@ def main() -> int:
 
     def handler(c):
         idx = c.s.ax & 0xFF
-        typ = mem.data[(DS << 4) + 0x4DF4 + idx]
+        typ = mem.data[(DS << 4) + 0x4DF8 + idx]
         bucket = 0 if typ == 0 else (1 if typ == 1 else 2)
         counts[bucket] += 1
         # skip degenerate early calls before the scroll background is set up.
-        grab = bucket not in captured and mem.rw(DS, 0x2DF2) != 0
+        grab = bucket not in captured and mem.rw(DS, 0x2DF6) != 0
         info = None
         if grab:
             di = c.s.di & 0xFFFF
             info = {
                 "type": typ, "idx": idx, "di": di, "es": c.s.es & 0xFFFF,
-                "df2": mem.rw(DS, 0x2DF2), "bc0": mem.data[(DS << 4) + 0x6BC0],
-                "mask": bytes(mem.data[(DS << 4) + 0x2DF4 + (typ - 2) * 0x20:
-                                       (DS << 4) + 0x2DF4 + (typ - 2) * 0x20 + 0x20]) if typ >= 2 else b"",
+                "df2": mem.rw(DS, 0x2DF6), "bc0": mem.data[(DS << 4) + 0x6BC4],
+                "mask": bytes(mem.data[(DS << 4) + 0x2DF8 + (typ - 2) * 0x20:
+                                       (DS << 4) + 0x2DF8 + (typ - 2) * 0x20 + 0x20]) if typ >= 2 else b"",
                 "before": _planes(mem),
             }
         _run_to_return(c)

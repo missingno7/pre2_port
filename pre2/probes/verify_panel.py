@@ -1,11 +1,11 @@
-"""TEMPORARY probe — in-VM lockstep verify of the recovered page-flip copy (3035).
+"""TEMPORARY probe — in-VM lockstep verify of the recovered page-flip copy (3054).
 
-Pure-ASM oracle (hooks uninstalled). At each 3035 call: snapshot planes, run the
+Pure-ASM oracle (hooks uninstalled). At each 3054 call: snapshot planes, run the
 recovered ``panel_copy`` on the snapshot, let the ASM run to its RET, diff the four
 EGA planes (the only output; the vsync wait is timing-only and registers are
 preserved). Zero divergence.
 
-Retire when: a headless 3035 lockstep is folded into the test suite.
+Retire when: a headless 3054 lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_panel
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from pre2.recovered.frame_renderer import panel_copy
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
-PANEL = (0x1030, 0x3035)
+PANEL = (0x1030, 0x3054)
 LIMIT = 50
 
 

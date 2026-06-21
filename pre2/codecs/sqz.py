@@ -3,11 +3,11 @@
 Status: VERIFIED (byte-for-byte against the original ASM for the LZSS path).
 
 The original game decompresses ``.SQZ`` assets with one routine at
-``1030:1240-16E3`` that contains TWO codecs selected by the file header:
+``1030:1208-16E3`` that contains TWO codecs selected by the file header:
 
-* an **LZW** decoder (``1240-13F5``: clear=0x100, end=0x101, 9-12 bit codes) used
+* an **LZW** decoder (``1208-133B``: clear=0x100, end=0x101, 9-12 bit codes) used
   by ``keyb`` / ``castle`` / ``present`` / ``titus`` (header ``(hdr[1]&0xF0)==0x10``);
-* an **LZSS** decoder (``148F-16E3``) used by every ``b4 4c cd 21`` graphics asset
+* an **LZSS** decoder (``1414-16E3``) used by every ``b4 4c cd 21`` graphics asset
   (``back*`` / ``level*`` / ``sprites`` / ``menu*`` / ``motif`` / ``map`` / ``front`` /
   ``allfonts`` / ``union`` ...) — the hot path implemented here.
 
@@ -37,14 +37,14 @@ __all__ = [
 # (b4 4c cd 21 ... = mov ah,4Ch; int 21h; the 10th byte is a flag that varies
 # between assets — e.g. sprites.sqz has 01, not 00), a 7-byte header (compressed
 # length LE16 at +10), then the bit-stream at +17. The original dispatch
-# (1030:10B4) only matches word[0]==0x4cb4, i.e. just these two bytes.
+# (1030:10C7) only matches word[0]==0x4cb4, i.e. just these two bytes.
 SQZ_LZSS_MAGIC = b"\xb4\x4c"
 _LZSS_STREAM_OFFSET = 17
 # LZW assets carry a 4-byte header (magic+size); the code stream follows.
 _LZW_STREAM_OFFSET = 4
 
 
-@oracle_link("1030:1068",
+@oracle_link("1030:107B",
              "decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance",
              "VERIFIED", merge_target="asset loader")
 def unpack_sqz(data: bytes) -> bytes:
@@ -54,7 +54,7 @@ def unpack_sqz(data: bytes) -> bytes:
     hot path) and the LZW format (``keyb`` / ``castle`` / ``present`` / ``titus``,
     header ``(data[1] & 0xF0) == 0x10``).
     """
-    # Dispatch matches the original at 1030:10B4/10BC: word[0]==0x4cb4 -> LZSS,
+    # Dispatch matches the original at 1030:10C7/10CF: word[0]==0x4cb4 -> LZSS,
     # else data[1]==0x10 -> LZW, else the Huffman+RLE "other" format.
     if data[:2] == SQZ_LZSS_MAGIC:
         return unpack_sqz_lzss(data, _LZSS_STREAM_OFFSET)
@@ -79,18 +79,18 @@ def sqz_reserved_size(data: bytes) -> int:
 
 
 def sqz_bump_advance(data: bytes) -> int:
-    """Paragraphs the bump allocator at ``[1A13:2871]`` advances after this asset.
+    """Paragraphs the bump allocator at ``[1A0F:2871]`` advances after this asset.
 
     A faithful translation of the original's per-format size→paragraphs math, in
     16-bit arithmetic exactly as the ASM does it:
 
-    * **LZSS** (``1030:1450-1464``): ``dl = data[14]; ax = data[15] | data[16]<<8``;
+    * **LZSS** (``1030:1463-1477``): ``dl = data[14]; ax = data[15] | data[16]<<8``;
       then ``dl >>= 2`` (two ``shr dl`` whose carry is discarded); then four
       ``shr dl`` / ``rcr ax`` (a 4-bit right shift of the ``dl:ax`` pair); ``ax+1``.
       The two pre-shifts are why ``(reserved >> 4) + 1`` is **wrong** when the high
       byte ``data[14]`` is non-zero (sprites/union/menu/.trk): that naive form
       over-reserves ~4x, eventually pushing later decodes into VRAM.
-    * **LZW / "other"** (``1030:10C4`` / ``1240``): a clean ``(value >> 4) + 1``.
+    * **LZW / "other"** (``1030:10C4`` / ``1208``): a clean ``(value >> 4) + 1``.
 
     Returns a 16-bit paragraph count (the allocator segment is 16-bit).
     """
@@ -110,7 +110,7 @@ def sqz_bump_advance(data: bytes) -> int:
 def unpack_sqz_other(data: bytes) -> bytes:
     """Decompress the "other" SQZ format — Huffman + RLE (sample/theend).
 
-    Original codec at ``1030:10E6`` with the Huffman tree-walker at ``1030:11BD``.
+    Original codec at ``1030:10D7`` with the Huffman tree-walker at ``1030:11BD``.
     Header (6 bytes): decompressed size = ``word0<<16 | word1``, Huffman tree byte
     size = ``word2``. The tree (LE-word nodes) follows, then an MSB-first
     big-endian bit stream. Tree leaves are marked by bit 15; a leaf whose high
@@ -161,7 +161,7 @@ def unpack_sqz_other(data: bytes) -> bytes:
 
 
 def unpack_sqz_lzw(data: bytes, start: int = 4) -> bytes:
-    """Decompress an LZW ``.SQZ`` stream (original codec at ``1030:1240-13F5``).
+    """Decompress an LZW ``.SQZ`` stream (original codec at ``1030:1208-133B``).
 
     Classic variable-width LZW: 9-12 bit codes read MSB-first from a big-endian
     bit stream; ``CLEAR=0x100`` resets the dictionary, ``END=0x101`` terminates,

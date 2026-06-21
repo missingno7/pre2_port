@@ -1,13 +1,13 @@
-"""TEMPORARY probe — in-VM lockstep verify of the recovered grid redraw (3582).
+"""TEMPORARY probe — in-VM lockstep verify of the recovered grid redraw (35A1).
 
-Replays gameplay with all hybrid hooks UNINSTALLED (pure ASM oracle: its own 3582
-body + 3B69 blit). At each 3582 call we snapshot the planes + inputs, run the
+Replays gameplay with all hybrid hooks UNINSTALLED (pure ASM oracle: its own 35A1
+body + 3B88 blit). At each 35A1 call we snapshot the planes + inputs, run the
 recovered ``draw_grid`` on the snapshot, let the ASM run to its RET, then diff: the
-four EGA planes and the caller-visible memory side effects — [0x2DEE] tile flags,
-[0x2DF0] dirty, [0x2DF1] dirty-rows, and prev camera [0x2DDC]/[0x2DDE] — plus that
+four EGA planes and the caller-visible memory side effects — [0x2DF2] tile flags,
+[0x2DF4] dirty, [0x2DF5] dirty-rows, and prev camera [0x2DE0]/[0x2DE2] — plus that
 ``di`` is preserved. Covers both the early-exit and redraw paths. Zero divergence.
 
-Retire when: a headless 3582 lockstep is folded into the test suite.
+Retire when: a headless 35A1 lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_grid
 """
 from __future__ import annotations
@@ -29,12 +29,12 @@ from pre2.recovered.frame_renderer import draw_grid
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
-GRID = (0x1030, 0x3582)
+GRID = (0x1030, 0x35A1)
 LIMIT = 200
 
-V = {"cam_x": 0x2DE0, "cam_y": 0x2DE2, "prev_x": 0x2DDC, "prev_y": 0x2DDE,
-     "col_ring": 0x2DE4, "scroll_src": 0x2DB6, "fine": 0x6BC0,
-     "tile_flags": 0x2DEE, "dirty": 0x2DF0, "dirty_rows": 0x2DF1}
+V = {"cam_x": 0x2DE0, "cam_y": 0x2DE2, "prev_x": 0x2DE0, "prev_y": 0x2DE2,
+     "col_ring": 0x2DE4, "scroll_src": 0x2DB6, "fine": 0x6BC4,
+     "tile_flags": 0x2DF2, "dirty": 0x2DF4, "dirty_rows": 0x2DF5}
 
 
 def _rb(mem, off):
@@ -107,11 +107,11 @@ def main() -> int:
                 if bytes(spr.snapshot_planes(mem)[p]) != bytes(snap[p]):
                     reason = f"plane {p}"
                     break
-        byte_checks = (("[0x2DEE]", V["tile_flags"], exp_dee & 0xFF),
-                       ("[0x2DF0]", V["dirty"], exp_df0 & 0xFF),
-                       ("[0x2DF1]", V["dirty_rows"], exp_df1 & 0xFF))
-        word_checks = (("[0x2DDC]", V["prev_x"], res.prev_x & 0xFFFF),
-                       ("[0x2DDE]", V["prev_y"], res.prev_y & 0xFFFF))
+        byte_checks = (("[0x2DF2]", V["tile_flags"], exp_dee & 0xFF),
+                       ("[0x2DF4]", V["dirty"], exp_df0 & 0xFF),
+                       ("[0x2DF5]", V["dirty_rows"], exp_df1 & 0xFF))
+        word_checks = (("[0x2DE0]", V["prev_x"], res.prev_x & 0xFFFF),
+                       ("[0x2DE2]", V["prev_y"], res.prev_y & 0xFFFF))
         if reason is None:
             for name, off, val in byte_checks:
                 if _rb(mem, off) != val:

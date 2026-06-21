@@ -1,11 +1,11 @@
-"""TEMPORARY probe — in-VM lockstep verify of the recovered scroll-copy (3A08).
+"""TEMPORARY probe — in-VM lockstep verify of the recovered scroll-copy (3A27).
 
-Replays gameplay with all hybrid hooks UNINSTALLED (pure ASM oracle). At each 3A08
+Replays gameplay with all hybrid hooks UNINSTALLED (pure ASM oracle). At each 3A27
 call we snapshot the planes + inputs, run the recovered ``scroll_copy`` on the
 snapshot, let the ASM run the routine to its RET, then diff the four EGA planes
 (the only caller-visible output; bx/di/si/ds/es are preserved). Zero divergence.
 
-Retire when: a headless 3A08 lockstep is folded into the test suite.
+Retire when: a headless 3A27 lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_scroll
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from pre2.recovered.frame_renderer import scroll_copy
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
-SCROLL = (0x1030, 0x3A08)
+SCROLL = (0x1030, 0x3A27)
 LIMIT = 50
 
 
@@ -72,7 +72,7 @@ def main() -> int:
         mem = c.mem
         args = dict(
             scroll_src=_rw(mem, 0x2DB6), dest=_rw(mem, 0x2DD4), col_ring=_rb(mem, 0x2DE4),
-            fine_scroll=_rb(mem, 0x6BC0), row_ring=_rw(mem, 0x2DE6), row_factor=_rw(mem, 0x6BF4),
+            fine_scroll=_rb(mem, 0x6BC4), row_ring=_rw(mem, 0x2DE6), row_factor=_rw(mem, 0x6BF4),
         )
         snap = spr.snapshot_planes(mem)
         try:

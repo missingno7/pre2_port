@@ -38,7 +38,7 @@ _ISLAND_PACKAGES = ("pre2.codecs", "pre2.recovered")
 
 @dataclass(frozen=True)
 class OracleLink:
-    boundary: str            # original ASM CS:IP replaced, e.g. "1030:346E"
+    boundary: str            # original ASM CS:IP replaced, e.g. "1030:348D"
     contract: str            # caller-visible side effects this function reproduces
     status: str = "RECOVERED"
     merge_target: str = ""   # the larger recovered subsystem this island merges into

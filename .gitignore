@@ -26,6 +26,8 @@ artifacts/drive_menu_frames2/
 artifacts/headless_ega_frames/
 artifacts/headless_ega_press/
 artifacts/snapshot_play_*/
+artifacts/snapshot_pre2_*/
+artifacts/demo_pre2_*/
 artifacts/verify_*/
 # Generated artifact families; promote only selected evidence/test oracles.
 artifacts/tmp_*/

@@ -25,37 +25,37 @@ native code is now part of the normal runtime.
   (`native_replacements=False`), hybrid (default), verify (`--verify-hooks`,
   lockstep contract diff vs ASM). Unrecovered behaviour in hybrid mode fails loud
   (`Pre2HybridGap`).
-- **Second recovered-native island: sprite-sheet decode** (`1030:42F7` local +
-  `1030:436A` shared) — the first **stateful** island and the first memory-view ↔
+- **Second recovered-native island: sprite-sheet decode** (`1030:4316` local +
+  `1030:4389` shared) — the first **stateful** island and the first memory-view ↔
   dataclass bridge (`pre2/bridge/sprites.py` ↔ `pre2/recovered/sprite_decode.py`).
   The level-load demux of the decompressed sprite sheet into the planar VRAM cache
   (`0xA000:0x5E80`) is recovered and **verified byte-for-byte vs the ASM** (a
   load-time witness, since the mid-game snapshot's sheet RAM is freed and its cache
   over-drawn). It runs **live in the hybrid runtime** (both adapters fire, hybrid
   cache byte-exact across 211 slots) with verify-mode lockstep coverage. The
-  per-frame blit/scroll and the sprite classifier (`4213`, an EGA read-plane
+  per-frame blit/scroll and the sprite classifier (`4232`, an EGA read-plane
   question) remain to recover.
-- **Third recovered-native island: the sprite blit** (`1030:3B69` dispatcher +
+- **Third recovered-native island: the sprite blit** (`1030:3B88` dispatcher +
   plain/empty/masked paths + `3D65` bg-restore). The blit renders each sprite from
   the planar cache by class — opaque copy, background restore, or masked composite
   `screen=(screen AND mask) OR sprite`. Recovered to a pure planar `renderer` module
   and **verified byte-for-byte vs the ASM** (per-blit witness + in-VM lockstep: 1002
   blits across all paths, 0 divergence). Runs **live in the hybrid runtime**.
-  **The classifier `4213` is NOT recovered** — it still runs as ASM and produces the
+  **The classifier `4232` is NOT recovered** — it still runs as ASM and produces the
   per-sprite type table (`[0x4DF4]`) + transparency masks the recovered blit
   *consumes*; recovering it (an EGA read-mode-1 colour-compare over the cache) is a
   pending island.
 - **Fourth island — the frame renderer (the background draw), recovered + verified +
-  live.** `pre2/recovered/frame_renderer.py` recovers the tile-row fill (`346E`), the
-  full visible-grid redraw (`3582`), the vertical scroll-copy (`3A08`), and the
-  double-buffer page-flip (`3035`) — each composing the verified blit *directly*
+  live.** `pre2/recovered/frame_renderer.py` recovers the tile-row fill (`348D`), the
+  full visible-grid redraw (`35A1`), the vertical scroll-copy (`3A27`), and the
+  double-buffer page-flip (`3054`) — each composing the verified blit *directly*
   (recovered → recovered, no ASM contact point inside the draw), driven by the
   `Camera`/`ScrollState`/`TileMap` bridge (`pre2/bridge/frame.py`). All four are
   verified byte-for-byte vs a pure-ASM oracle (in-VM lockstep) and run live (8 native
   replacements). The compositor `3B40` is a static composition of these three and is
   documented but not wired (no available demo reaches it, so it can't be verified).
   **Still ASM:** the moving-sprite / object-list draw loop (`~3552`), the classifier
-  `4213`, the directional-scroll camera logic, and all gameplay update.
+  `4232`, the directional-scroll camera logic, and all gameplay update.
 - **Self-describing islands.** Each recovered function carries `@oracle_link(boundary,
   contract, status, merge_target)` (`pre2/islands.py`); the registry is auto-discovered
   into the generated [`recovered_islands.md`](recovered_islands.md) (regen:
@@ -82,8 +82,8 @@ native code is now part of the normal runtime.
   vectors. A residual audio-pacing nicety (occasional buffer pressure) remains.
   **Layering (be precise):** this is *generic SB/DMA/PIC hardware in `dos_re`* + the
   *original PRE2 audio driver running as ASM*. It is **NOT recovered PRE2 audio
-  source** — the game's software mixer (`1030:216B` per-channel + SFX, the DMA-refill
-  ISR `2029`) and the audio asset models are still ASM. "Audio works through the
+  source** — the game's software mixer (`1030:218F` per-channel + SFX, the DMA-refill
+  ISR `20AB`) and the audio asset models are still ASM. "Audio works through the
   emulated SB + original driver" ≠ "audio decode/mixer recovered." `dos_re` holds no
   PRE2-specific audio/asset knowledge.
 - **Bug fixed (also fixed a graphics-corruption regression):** the SQZ **LZSS bump
@@ -104,7 +104,7 @@ native code is now part of the normal runtime.
   stale planes now zeroes them).
 - **Next:** the moving-sprite / object-list **draw** path (`~3552`) — treated as a
   renderer island first (object draw-command stream → recovered `blit_sprite`), paired
-  with a `pre2/bridge/objects.py` `ObjectDrawState`; the classifier `4213` it depends
+  with a `pre2/bridge/objects.py` `ObjectDrawState`; the classifier `4232` it depends
   on; then object/player **update** (movement/physics/collision). See
   [`recovery_architecture.md`](recovery_architecture.md) and
   [`symbol_ledger.md`](symbol_ledger.md); recovered-island truth is

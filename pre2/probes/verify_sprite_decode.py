@@ -1,7 +1,7 @@
 """TEMPORARY probe — in-VM lockstep verify of the sprite-decode replacements.
 
 Replays the menu->level demo with the hooks flipped into verify mode: the original
-ASM runs as the oracle and each native sprite-decode result (42F7 local + 436A
+ASM runs as the oracle and each native sprite-decode result (4316 local + 4389
 shared) is diffed against the ASM at the routine's RET. Asserts zero divergence.
 
 Run:  python -m pre2.probes.verify_sprite_decode

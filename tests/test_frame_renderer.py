@@ -81,8 +81,8 @@ def test_opaque_blit_copies_cache_to_screen():
 def _grid_tilemap(rows=24, type_map=None, flags_map=None):
     """A TileMap whose tile index == its type/flags (tile i -> type_map[i])."""
     tiles = bytes((r * 7 + c) % 4 for r in range(rows) for c in range(TILEMAP_STRIDE))
-    tt = bytes(type_map or [i & 0x03 for i in range(256)])      # type table (1A13:0x4DF4)
-    tf = bytes(flags_map or [(i * 3) & 0xFF for i in range(256)])  # tile-flags (1A13:0x805A)
+    tt = bytes(type_map or [i & 0x03 for i in range(256)])      # type table (1A0F:0x4DF8)
+    tf = bytes(flags_map or [(i * 3) & 0xFF for i in range(256)])  # tile-flags (1A0F:0x805E)
     return TileMap(segment=0x1000, stride=TILEMAP_STRIDE, rows=rows, tiles=tiles,
                    plane_attr=bytes(256), tile_flags=tf, tile_type=tt)
 

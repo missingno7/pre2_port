@@ -6,7 +6,7 @@ cache live in PRE2 memory. Gameplay decisions live in
 
 Layout (see ``docs/pre2/symbol_ledger.md``):
 
-* data segment ``1A13`` holds the source-segment selector words and the index
+* data segment ``1A0F`` holds the source-segment selector words and the index
   table copy;
 * the sprite sheet is a decompressed ``.SQZ`` asset at a computed segment;
 * the planar VRAM cache is the four EGA shadow planes at offset ``0x5E80``.
@@ -28,16 +28,16 @@ from pre2.recovered.sprite_decode import (
     demux_sprite,
 )
 
-DATA_SEG = 0x1A13
-CACHE_OFF = 0x5E80                 # planar cache base within each EGA plane
+DATA_SEG = 0x1A0F                  # GOG build
+CACHE_OFF = 0x5E80                 # planar cache base within each EGA plane (EGA, not DGROUP — unchanged)
 CACHE_PLANE_BYTES = NUM_SLOTS * SLOT_BYTES  # 0x2000 per plane
 
-# data-segment word/byte variables used by the decode setup (1030:42F7)
-VAR_LOCAL_BASE = 0x2DD6            # [0x2DD6] sheet base segment seed
-VAR_BANK_SELECT = 0x2D86          # [0x2D86] index into the paragraph table
-VAR_BANK_TABLE = 0x2D2C           # [bank_select + 0x2D2C] paragraph multiplier
-VAR_SHARED_BASE = 0x2DD8          # [0x2DD8] shared/union bank base segment
-VAR_INDEX_COPY = 0x25CA           # copy of the 256-entry index table
+# data-segment word/byte variables used by the decode setup (1030:4316); GOG = old + 4
+VAR_LOCAL_BASE = 0x2DDA            # sheet base segment seed
+VAR_BANK_SELECT = 0x2D8A          # index into the paragraph table
+VAR_BANK_TABLE = 0x2D30           # [bank_select + 0x2D30] paragraph multiplier
+VAR_SHARED_BASE = 0x2DE0          # shared/union bank base segment
+VAR_INDEX_COPY = 0x25CE           # copy of the 256-entry index table
 
 
 def _rb(mem, seg: int, off: int) -> int:
@@ -50,9 +50,9 @@ def _rw(mem, seg: int, off: int) -> int:
 
 
 def sprite_sheet_segment(mem) -> int:
-    """Compute the local sprite-sheet segment as ``42F7`` does.
+    """Compute the local sprite-sheet segment as ``4316`` does.
 
-    ``src = [0x2DD6] + ([ [0x2D86] + 0x2D2C ] << 4)``  (``[asm 42F7-430C]``).
+    ``src = [0x2DD6] + ([ [0x2D86] + 0x2D2C ] << 4)``  (``[asm 4316-430C]``).
     """
     base = _rw(mem, DATA_SEG, VAR_LOCAL_BASE)
     select = _rb(mem, DATA_SEG, VAR_BANK_SELECT)
@@ -96,7 +96,7 @@ def write_sprite_cache(mem, cache: SpriteCache) -> None:
         mem.data[b:b + CACHE_PLANE_BYTES] = cache.planes[p]
 
 
-# ---- live per-slot decode (the replacement path for 42F7 / 436A) -------------
+# ---- live per-slot decode (the replacement path for 4316 / 4389) -------------
 # Returns ``{slot: [4 planes]}`` maps so the adapter can either write them (hybrid)
 # or diff them against the ASM result (verify) without touching VRAM twice.
 
@@ -113,7 +113,7 @@ def shared_index_codes(mem) -> list[int]:
 
 
 def compute_local_slots(mem, src_seg: int) -> dict[int, list[bytes]]:
-    """Slots the local pass (``42F7``) writes: ``code < 0x100`` from the sheet."""
+    """Slots the local pass (``4316``) writes: ``code < 0x100`` from the sheet."""
     sheet = read_sprite_sheet(mem, src_seg)
     out: dict[int, list[bytes]] = {}
     for slot, code in enumerate(sheet.index_table):
@@ -128,7 +128,7 @@ def _shared_sprite_segment(base: int, code: int) -> int:
 
 
 def compute_shared_slots(mem, shared_base: int) -> dict[int, list[bytes]]:
-    """Slots the shared pass (``436A``) writes: ``code >= 0x100``.
+    """Slots the shared pass (``4389``) writes: ``code >= 0x100``.
 
     The source is addressed by the original's segment arithmetic and read straight
     from VM memory, so out-of-bank / sentinel codes reproduce the same wrapped

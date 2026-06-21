@@ -24,7 +24,7 @@ def test_islands_are_discovered():
     islands = collect_islands()
     boundaries = {link.boundary for _m, _n, link in islands}
     # the currently recovered+annotated islands
-    assert {"1030:1068", "1030:346E", "1030:3582", "1030:3B69", "1030:42F7"} <= boundaries
+    assert {"1030:107B", "1030:348D", "1030:35A1", "1030:3B88", "1030:4316"} <= boundaries
 
 
 def test_every_island_metadata_is_well_formed():

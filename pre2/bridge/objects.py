@@ -6,7 +6,7 @@ logic lives in ``pre2/recovered/object_draw.py``; this module only translates la
 Factual naming only (no Player/Enemy yet — promote to archetypes only when field
 usage + ASM evidence support it). See docs/pre2/symbol_ledger.md ("Object-list draw").
 
-Currently models the inputs the per-object draw primitive (``1030:6544``) consumes;
+Currently models the inputs the per-object draw primitive (``1030:653D``) consumes;
 the multi-tile structure table at ``0x83EF`` (15 slots × 10 bytes) is characterized in
 the ledger and will be modelled here (``ObjectSlot``) as that loop is recovered.
 """

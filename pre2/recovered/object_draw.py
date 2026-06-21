@@ -3,7 +3,7 @@
 Status: recovered; verification target ``pre2/probes/verify_object.py``.
 Merge target: the frame renderer.
 
-Recovers the per-object sprite draw at ``1030:6544`` — the shared draw-command unit
+Recovers the per-object sprite draw at ``1030:653D`` — the shared draw-command unit
 that every object draw goes through. Given an object's tile position and sprite
 index it culls against the visible camera window, computes the screen destination
 offset, and composites the sprite via the **already-recovered, verified** blit
@@ -26,13 +26,13 @@ _RING_ROWS = 12       # screen row = (obj_row % 12) ...
 _RING_COLS = 20       # screen col = (obj_col % 20) ...
 
 
-@oracle_link("1030:6544",
+@oracle_link("1030:653D",
              "cull one object sprite vs the camera window, compute its screen offset, "
-             "and blit it; [0x6BB9]=1 if drawn; CF set if culled; regs preserved",
+             "and blit it; [0x6BBD]=1 if drawn; CF set if culled; regs preserved",
              "RECOVERED", merge_target="frame renderer")
 def draw_object_sprite(planes, obj_pos, camera_x, camera_y, mode, sprite_index,
                        blit_type, bg_off, mask_region):
-    """Recover ``1030:6544`` — draw one object's sprite (or cull it).
+    """Recover ``1030:653D`` — draw one object's sprite (or cull it).
 
     Returns ``True`` if drawn, ``False`` if culled (the ASM's CF=clear/set). Mutates
     ``planes`` only when drawn.

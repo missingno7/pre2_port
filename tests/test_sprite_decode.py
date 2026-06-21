@@ -134,10 +134,10 @@ class _FakeCPU:
 def test_local_adapter_writes_cache_and_contract():
     mem = _FakeMem()
     src = 0x4000
-    # selector -> multiplier 0 so sprite_sheet_segment == [0x2DD6] == src.
-    mem.ww(DATA_SEG, 0x2DD6, src)
-    mem.data[(DATA_SEG << 4) + 0x2D86] = 0
-    mem.data[(DATA_SEG << 4) + 0x2D2C + 0] = 0
+    # selector -> multiplier 0 so sprite_sheet_segment == [0x2DDA] == src.
+    mem.ww(DATA_SEG, 0x2DDA, src)
+    mem.data[(DATA_SEG << 4) + 0x2D8A] = 0
+    mem.data[(DATA_SEG << 4) + 0x2D30 + 0] = 0
     # index table: slot 0 -> code 0 (local), slot 2 -> code 3 (local), rest sentinel.
     codes = [0xFFFF] * 256
     codes[0], codes[2] = 0, 3
@@ -156,9 +156,9 @@ def test_local_adapter_writes_cache_and_contract():
         for plane in range(4):
             assert read_slot(mem, slot)[plane] == bytes([0x10 + code]) * 32
     # data side effects.
-    assert mem.data[(DATA_SEG << 4) + 0x2CF1] == 0           # multiplier
-    assert mem.rw(DATA_SEG, 0x2871) == src                   # bump/source seg
-    idx = bytes(mem.data[(DATA_SEG << 4) + 0x25CA:(DATA_SEG << 4) + 0x25CA + PIXEL_BASE])
+    assert mem.data[(DATA_SEG << 4) + 0x2CF5] == 0           # multiplier
+    assert mem.rw(DATA_SEG, 0x2875) == src                   # bump/source seg
+    idx = bytes(mem.data[(DATA_SEG << 4) + 0x25CE:(DATA_SEG << 4) + 0x25CE + PIXEL_BASE])
     assert idx == bytes(mem.data[(src << 4):(src << 4) + PIXEL_BASE])  # index-table copy
     # register exit contract: si = 0x200 + 0x80*nlocal (2 local sprites), ds = src.
     assert cpu.s.si == PIXEL_BASE + 0x80 * 2

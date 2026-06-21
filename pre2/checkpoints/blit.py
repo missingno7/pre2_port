@@ -1,10 +1,10 @@
-"""Checkpoint for the per-frame sprite blit (1030:3B69).
+"""Checkpoint for the per-frame sprite blit (1030:3B88).
 
 Recovered logic: ``pre2.recovered.renderer``; data model: ``pre2.bridge.sprites``.
 Merge target: the renderer.
 
 Renders one 16x16 sprite/tile from the planar VRAM cache, dispatching on the type
-produced by the (still-ASM) classifier ``1030:4213`` — the recovered blit only
+produced by the (still-ASM) classifier ``1030:4232`` — the recovered blit only
 consumes that type table + masks. The original saves/restores its own EGA state (451F/452F), so
 the native path leaves the sequencer/GC alone; the only register the caller reads
 back is di (advanced by 2 to the next column).
@@ -17,15 +17,17 @@ from dos_re.hooks import registry
 from pre2.bridge import sprites as _spr
 from pre2.recovered.renderer import blit_sprite, dest_rows
 
-from .common import _DATA_SEG, Pre2HybridGap, report
+from .common import Pre2HybridGap, report
 
-_BLIT_ENTRY = (0x1030, 0x3B69)
+# GOG build: data seg 1A0F, video code region old+0x1F, ds offsets old+4.
+_DATA_SEG = 0x1A0F
+_BLIT_ENTRY = (0x1030, 0x3B88)
 # the three dispatch RET sites: plain (type 0), empty (type 1), masked (type >=2).
-_BLIT_EXITS = ((0x1030, 0x3BD6), (0x1030, 0x3BE6), (0x1030, 0x3D64))
-_TYPE_TABLE = 0x4DF4       # [0x4DF4+idx] sprite type
-_MASK_BASE = 0x2DF4        # [0x2DF4+(id-2)*0x20] transparency mask for partial sprites
-_VAR_BG_PTR = 0x2DF2       # [0x2DF2] background source pointer
-_VAR_BG_ROW = 0x6BC0       # [0x6BC0] scroll row (bg_off = [0x2DF2] - 0x28*[0x6BC0])
+_BLIT_EXITS = ((0x1030, 0x3BF5), (0x1030, 0x3C05), (0x1030, 0x3D83))
+_TYPE_TABLE = 0x4DF8       # [0x4DF8+idx] sprite type
+_MASK_BASE = 0x2DF8        # [0x2DF8+(id-2)*0x20] transparency mask for partial sprites
+_VAR_BG_PTR = 0x2DF6       # [0x2DF6] background source pointer
+_VAR_BG_ROW = 0x6BC4       # [0x6BC4] scroll row (bg_off = [0x2DF6] - 0x28*[0x6BC4])
 
 
 def _blit_inputs(mem, cpu):
@@ -47,11 +49,11 @@ def _blit_slot(planes, di):
 
 @registry.replace(*_BLIT_ENTRY, "sprite_blit")
 def sprite_blit(cpu) -> None:
-    """Native replacement for the per-sprite blit dispatcher at 1030:3B69."""
+    """Native replacement for the per-sprite blit dispatcher at 1030:3B88."""
     mem = cpu.mem
     if (cpu.s.es & 0xFFFF) != 0xA000:
         raise Pre2HybridGap(
-            f"sprite blit with es={cpu.s.es & 0xFFFF:04X} (not A000) at 1030:3B69 "
+            f"sprite blit with es={cpu.s.es & 0xFFFF:04X} (not A000) at 1030:3B88 "
             "is not recovered — the renderer only targets the A000 planar planes."
         )
     idx, typ, di, bg_off, mask = _blit_inputs(mem, cpu)

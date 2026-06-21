@@ -1,4 +1,4 @@
-"""Checkpoint for the software audio mixer (1030:216B per-channel mix).
+"""Checkpoint for the software audio mixer (1030:218F per-channel mix).
 
 Thin VM contact point only: it reads the channel/instrument/volume state through the
 bridge (``pre2.bridge.audio``), runs the recovered ``mix_channel`` on the live DMA
@@ -20,8 +20,9 @@ from pre2.recovered.mixer import BLOCK_LEN, CHANNEL_OFF, mix_channel
 
 from .common import report
 
-_MIX_ENTRY = (0x1030, 0x216B)
-_MIX_EXIT = (0x1030, 0x2219)   # 216B's near RET
+# GOG build: the per-channel mixer is at 218F (entry) / 227B (near RET).
+_MIX_ENTRY = (0x1030, 0x218F)
+_MIX_EXIT = (0x1030, 0x227B)
 
 
 def _read_inputs(cpu):
@@ -33,7 +34,7 @@ def _read_inputs(cpu):
 
 @registry.replace(*_MIX_ENTRY, "audio_mix_channel")
 def audio_mix_channel(cpu) -> None:
-    """Native replacement for the per-channel MOD mixer at 1030:216B."""
+    """Native replacement for the per-channel MOD mixer at 1030:218F."""
     mem = cpu.mem
     ch, cs = _read_inputs(cpu)
 
@@ -49,18 +50,18 @@ def audio_mix_channel(cpu) -> None:
         interpret_current_instruction_without_hook(cpu)
         return
 
-    if cs.pos != CHANNEL_OFF:                       # off channel: 216B writes nothing
+    if cs.pos != CHANNEL_OFF:                       # off channel: 218F writes nothing
         instr = _audio.read_instrument(mem, cs.instrument, cs.end)
         buf_flat = _audio.fill_buffer_flat(mem)
         buf = bytearray(mem.data[buf_flat:buf_flat + BLOCK_LEN])
         new_cs = mix_channel(buf, cs, instr, _audio.read_volume_table(mem))
         mem.data[buf_flat:buf_flat + BLOCK_LEN] = buf
         _audio.write_channel(mem, ch, new_cs)
-    cpu.s.ip = cpu.pop()  # near ret (216B clobbers regs the caller reloads; sp is its own scratch)
+    cpu.s.ip = cpu.pop()  # near ret (218F clobbers regs the caller reloads; sp is its own scratch)
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
-    """Install the lockstep verify-exit hook at 216B's RET."""
+    """Install the lockstep verify-exit hook at 218F's RET."""
 
     def _verify_at_exit(c) -> None:
         if c.pre2_audio_pending:

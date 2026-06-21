@@ -33,14 +33,14 @@ is recovered.
 |---|---|---|---|
 | SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/checkpoints/sqz.py` | asset loader | **done, verified vs ASM** |
 | sprite/tile decode | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` | sprite/asset pipeline | **done, verified vs ASM** (first stateful island; stood up `pre2/bridge/`) |
-| sprite blit + background restore (`3B69`) | `pre2/recovered/renderer.py` + `pre2/checkpoints/blit.py` | renderer | **done, verified vs ASM** (in-VM lockstep) |
+| sprite blit + background restore (`3B88`) | `pre2/recovered/renderer.py` + `pre2/checkpoints/blit.py` | renderer | **done, verified vs ASM** (in-VM lockstep) |
 | SoundBlaster audio (DSP + 8237 DMA + 8259 PIC) | `dos_re/sblaster.py` + `dos_re/pic.py` (generic hw) | DOS machine (not game layer) | **done** — game auto-detects + DMA-streams PCM; user-confirmed |
-| frame renderer — tile-row (346E), grid redraw (3582), scroll-copy (3A08), page-flip (3035) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, all four verified vs ASM** (in-VM lockstep, 0-div; each composes the verified blit). Compositor `3B40` is a static composition of these, documented but not wired (no demo reaches it → can't verify yet) |
+| frame renderer — tile-row (348D), grid redraw (35A1), scroll-copy (3A27), page-flip (3054) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, all four verified vs ASM** (in-VM lockstep, 0-div; each composes the verified blit). Compositor `3B40` is a static composition of these, documented but not wired (no demo reaches it → can't verify yet) |
 | moving-sprite / object-list draw (`~3552`) | `pre2/bridge/objects.py` + `pre2/recovered/object_draw.py` (planned) | frame renderer | **next** — renderer island; command-stream verified; composes recovered `blit_sprite` |
 | gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | object system / player update / physics | later; semantic-state verification |
 
 **Still ASM (the current coastline — not recovered):**
-- **classifier `4213`** — the ASM producer of the sprite type table (`[0x4DF4]`) + partial-sprite masks
+- **classifier `4232`** — the ASM producer of the sprite type table (`[0x4DF4]`) + partial-sprite masks
   (`[0x2DF4]`) that the recovered blit *consumes*. A pending island (needs a pure fn + `@oracle_link` +
   manifest entry + verify before it counts as recovered).
 - **moving-sprite / object-list draw loop** (`~3552`) — the next island.
@@ -60,8 +60,8 @@ verification rising from bytes → state → PCM:
    60768-byte 8-bit PCM SFX bank. (SQZ decode itself was already recovered.)
 2. **Data model** — `SampleBank`/`Module`/`Pattern`/`Instrument`/`ChannelState`/… (`ModModule`/`ModSample`
    exist); raw layout → `pre2/bridge/audio.py`.
-3. **Tracker/playback** — sequencer `1030:221A` → `pre2/recovered/tracker.py` (only effects PRE2 uses).
-4. **Mixer** — per-channel `1030:216B` + SFX `20AB-20F3` + DMA-refill ISR `2029` → `pre2/recovered/mixer.py`;
+3. **Tracker/playback** — sequencer `1030:227C` → `pre2/recovered/tracker.py` (only effects PRE2 uses).
+4. **Mixer** — per-channel `1030:218F` + SFX `20AB-20F3` + DMA-refill ISR `20AB` → `pre2/recovered/mixer.py`;
    verify same state+SFX+timing → same PCM block vs `sb.pcm_out`.
 5. **Integration** — detach hybrid play from the ASM audio path (recovered `AudioSystem.tick → mixer →
    backend`); ASM/SB stay oracle-only.

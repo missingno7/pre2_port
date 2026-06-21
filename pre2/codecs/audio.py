@@ -12,7 +12,7 @@ formats — this module models the *decoded* payloads:
   is left to a later (gameplay-adjacent) island; here we model the bank as raw PCM.
 
 Scope: this is the asset **format model only**. The game's software tracker
-player / mixer (``1030:216B`` + sequencer ``221A``) and the DMA-refill ISR stay ASM
+player / mixer (``1030:218F`` + sequencer ``227C``) and the DMA-refill ISR stay ASM
 for now (see docs/pre2/symbol_ledger.md "Audio mixer"). No ``@oracle_link`` — these
 are standard-format parsers, not a recovery of a specific PRE2 ASM routine.
 """
