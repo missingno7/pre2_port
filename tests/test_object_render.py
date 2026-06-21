@@ -59,7 +59,7 @@ def test_object_render_clipped_flip_byte_exact():
     draw = SpriteDraw(
         sprite_id=0, src_seg=it["src_seg"], src_off=it["src_off"], dest_off=it["dest"],
         byte_width=it["bw"], rows=it["rows"], shift=it["shift"], flipped=True,
-        mode=it["mode"], new_life=0, clipped=True, src_bw=it["src_bw"],
+        mode=it["mode"], clipped=True, src_bw=it["src_bw"],
         left_skip=it["ls"], right_skip=it["rs"], right_clipped=it["rclip"],
         full_rows=it.get("full_rows", it["rows"]),
     )

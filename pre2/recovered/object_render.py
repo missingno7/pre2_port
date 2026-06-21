@@ -90,7 +90,6 @@ class SpriteDraw:
     shift: int          # sub-byte pixel shift = screen_x & 7
     flipped: bool       # H-flip
     mode: int           # blit mode (MODE_*)
-    new_life: int       # post-decrement life counter [si+0x11] (record mutation)
     clipped: bool       # left/right edge clip -> the [asm 2CEA] partial-edge blit variant
     src_bw: int         # source row width (= byte_width + left_skip + right_skip)
     left_skip: int      # [26ED] source bytes skipped at the left edge per row
@@ -122,10 +121,13 @@ def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None
         return None
     flipped = bool(spr.sprite_id & 0x8000)             # [asm 2739 shl / 273B rcl cs:[26e2]] H-flip = id bit15
 
-    # --- blink/anim mode + life decrement [asm 2740..2761] ---
-    new_life = (spr.life - 1) & 0xFF if spr.life else 0   # [asm 2742 sub/2746 adc] saturating dec
+    # --- blink/anim mode [asm 2740..2761] ---
+    # The decremented life is a *local* used only for the blink/mode decision below; the
+    # actual [si+0x11] write-back is the checkpoint's record-mutation contract, not a
+    # field of the draw command.
+    life_after = (spr.life - 1) & 0xFF if spr.life else 0   # [asm 2742 sub/2746 adc] saturating dec
     bit14 = bool(spr.sprite_id & 0x4000)               # [asm 2757 test bh,0x80] -> id bit14
-    if new_life == 0 or (cam.frame & 3) == 0:          # expired, or blink "on" 1/4 frames
+    if life_after == 0 or (cam.frame & 3) == 0:        # expired, or blink "on" 1/4 frames
         mode = MODE_OPAQUE if bit14 else MODE_NORMAL
     else:                                              # [asm 2753] blink off
         mode = MODE_ERASE
@@ -191,7 +193,7 @@ def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None
         return None
     return SpriteDraw(sprite_id=spr.sprite_id, src_seg=attr.src_seg, src_off=src_off,
                       dest_off=dest_off, byte_width=byte_width, rows=rows,
-                      shift=shift, flipped=flipped, mode=mode, new_life=new_life,
+                      shift=shift, flipped=flipped, mode=mode,
                       clipped=clipped, src_bw=src_bw, left_skip=left_skip,
                       right_skip=right_skip, right_clipped=right_clipped, full_rows=full_rows)
 
@@ -200,7 +202,7 @@ def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None
              "render the active-sprite list to A000 planar VRAM (cull/animate/position/clip "
              "+ shifted-masked planar blit, incl H-flip); mutates object-record flags + life "
              "+ frame counter",
-             "VERIFIED", merge_target="renderer")
+             "VERIFIED", merge_target="frame renderer")
 def plan_frame(sprites, attrs, cam: Camera):
     """Walk the active list top->down and emit a draw command per visible sprite.
 

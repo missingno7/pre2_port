@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dos_re.hooks import registry
 
-from . import audio, blit, frame, object_render, sprite_decode, sqz, tracker  # noqa: F401 — import to register @registry.replace hooks
+from . import audio, blit, frame, object_render, sprite_classify, sprite_decode, sqz, tracker  # noqa: F401 — import to register @registry.replace hooks
 from .blit import _BLIT_ENTRY, _BLIT_EXITS  # noqa: F401 — re-exported for probes
 from .common import HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
 from .sprite_decode import sprite_decode_local, sprite_decode_shared  # noqa: F401 — re-exported
@@ -80,6 +80,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.pre2_audio_pending = []
     cpu.pre2_tracker_pending = []
     cpu.pre2_object_pending = []
+    cpu.pre2_classify_pending = []
     stats = HookVerifyStats()
     sqz.register_verify(cpu, stats, on_result, raise_on_divergence)
     sprite_decode.register_verify(cpu, stats, on_result, raise_on_divergence)
@@ -88,4 +89,5 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     audio.register_verify(cpu, stats, on_result, raise_on_divergence)
     tracker.register_verify(cpu, stats, on_result, raise_on_divergence)
     object_render.register_verify(cpu, stats, on_result, raise_on_divergence)
+    sprite_classify.register_verify(cpu, stats, on_result, raise_on_divergence)
     return stats

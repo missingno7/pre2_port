@@ -113,6 +113,9 @@ def main() -> int:
                                       ("ax", "bx", "cx", "dx", "si", "di", "bp", "ds", "es")}
             elif addr == 0x42AE and "type_table" not in cap:
                 cap["type_table"] = bytes(mem.data[(DS << 4) + 0x4DF8:(DS << 4) + 0x4DF8 + 256])
+                # the classifier's partial transparency masks (compacted, mask for type
+                # t at (t-2)*0x20) — the second half of its output, consumed by the blit.
+                cap["mask_region"] = bytes(mem.data[(DS << 4) + 0x2DF8:(DS << 4) + 0x2DF8 + 0x2000])
                 cap["classify_cache"] = _cache_planes(mem)
             interpret_current_instruction_without_hook(c)
         return handler
@@ -165,6 +168,7 @@ def main() -> int:
             (OUT / f"local_cache_plane{p}.bin").write_bytes(cap["local_out"][p])
         if "type_table" in cap:
             (OUT / "type_table.bin").write_bytes(cap["type_table"])
+            (OUT / "mask_region.bin").write_bytes(cap["mask_region"])
             for p in range(4):
                 (OUT / f"classify_cache_plane{p}.bin").write_bytes(cap["classify_cache"][p])
         if "shared_in" in cap:

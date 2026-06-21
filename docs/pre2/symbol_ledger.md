@@ -121,10 +121,15 @@ The current sub-island is the **draw primitive layer**.
 **Island scope (as shipped):**
 - **RECOVERED + VERIFIED:** the blit primitive `3B88` + its paths (`3B7C` plain /
   `3BD7` masked / solid) + `3D65` bg-restore → `pre2/recovered/renderer.py:blit_sprite`.
-- **DEFERRED (still ASM):** the classifier `4232` — the **ASM producer** of the
-  blit's `[0x4DF4]` type table + `[0x2DF4]` compacted-mask buffer. The recovered blit
-  *consumes* its output; the classifier itself was not recovered (no pure fn /
-  `@oracle_link` / manifest entry / verify). A pending island (`classify_sprites(cache)`).
+- **RECOVERED + ASM_MATCHED:** the classifier `4232` — the producer of the blit's
+  `[0x4DF8]` type table + `[0x2DF8]` compacted-mask buffer →
+  `pre2/recovered/sprite_classify.py:classify_sprites`. Byte-exact vs the load-time
+  ASM witness (type table 256/256: opaque 168 / empty 1 / partial 87) +
+  mask cross-check vs the blit witness (`tests/test_sprite_classify.py`). Verify-mode
+  lockstep wired (`pre2/checkpoints/sprite_classify.py`); NOT yet a live hybrid
+  replacement / VERIFIED — that needs a menu→level-load demo to pin the EGA read-mode-1
+  register exit contract (the gameplay demos start past `4232`). With this, the
+  renderer's sprite pipeline is recovered end to end: **decode → classify → blit**.
 - **UPPER boundary (OUT — the NEXT island):** the tilemap / sprite-list **draw
   loops** (`34A0`, `3552`, callers of `3B58` at `65A0`/`8BFF`) that iterate game
   state (tilemap layout, object list, scroll position), build per-entry flags via
@@ -340,7 +345,7 @@ blit:
 | `1030:4316` | **sprite decode (local bank)** — demux 256 slots into planar cache `0x5E80`; `code<0x100` → 4 planes×32B from `sheet[0x200+code*128]` via map-mask. Side effects: `[0x2CF1]=mult`, `[0x2871]=src_seg`, copy index table → `[0x25CA]`. Exit contract: `si=0x200+0x80*nlocal`, `ds=src_seg`. RET `4369` | **VERIFIED** | replacement | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` + `pre2/replacements.py`; `tests/test_sprite_decode.py`; in-VM lockstep `pre2/probes/verify_sprite_decode.py` (native==ASM, hybrid cache byte-exact 211 slots) | src-seg `[0x2DD6]+([[0x2D86]+0x2D2C]<<4)` confirmed |
 | `1030:4389` | **sprite decode (shared/union bank)** — same demux for **all** `code>=0x100` (no upper bound), source seg `((code-0x100)*8 + [0x2DD8]) & 0xFFFF` (segment arith, wraps); index from `[0x25CA]` copy. `code==0xFFFF` = unused-slot sentinel → wrapped garbage (never blitted). RET `43B2` | **VERIFIED** | replacement | same test/probe (182 in-bank shared slots byte-exact; sentinel reproduced live from VM mem) | `[0x2DD8]` bank loaded by `1030:047A` |
 | `1030:3F00` | **sprite-load parent** — calls `107B`(decompress sheet→`[0x2DD6]`) → `4316` → `047A`(load shared bank→`[0x2DD8]`, decompresses UNION) → `4389`; manages `[0x2871]` save/restore around the pair | OBSERVED | (caller) | — | `[0x2871]` reused as both SQZ bump and sprite src-seg scratch |
-| `1030:4232` | **sprite classifier** — **ASM producer of the sprite type/mask tables consumed by the recovered blit primitive; NOT recovered.** Reads each 32B cache slot in **EGA read mode 1 (color compare, cmp=0, don't-care=0x0F → mask byte = `~(p0\|p1\|p2\|p3)`, bit=1 where pixel==color 0)**, set via `out 3CE,0x0805`. `dh=OR`, `dl=AND` over 0x20 mask bytes → type `[0x4DF4+idx]`: `dh==0` (no transparent px) = **0 opaque** (plain blit); `dl==0xFF` (all transparent) = **1 empty** (draw nothing); else = **id** `++[0x2DEF]` (counter starts at 1, first partial=2). Partial sprites' mask bytes saved compacted at `[0x2DF4+(id-2)*0x20]` (blit's mask source) | **ASM (understood)** | (producer) | logic reproduced offline from the load-time witness (256 slots: 168 opaque / 1 empty / 87 partial), but NOT a recovered island — no pure fn / `@oracle_link` / manifest entry / live verify yet | recover as a pending island |
+| `1030:4232` | **sprite classifier** — **ASM producer of the sprite type/mask tables consumed by the recovered blit primitive; NOT recovered.** Reads each 32B cache slot in **EGA read mode 1 (color compare, cmp=0, don't-care=0x0F → mask byte = `~(p0\|p1\|p2\|p3)`, bit=1 where pixel==color 0)**, set via `out 3CE,0x0805`. `dh=OR`, `dl=AND` over 0x20 mask bytes → type `[0x4DF4+idx]`: `dh==0` (no transparent px) = **0 opaque** (plain blit); `dl==0xFF` (all transparent) = **1 empty** (draw nothing); else = **id** `++[0x2DEF]` (counter starts at 1, first partial=2). Partial sprites' mask bytes saved compacted at `[0x2DF4+(id-2)*0x20]` (blit's mask source) | **ASM_MATCHED** | (producer) | recovered → `sprite_classify.classify_sprites`; byte-exact vs the load-time witness (256 slots: 168 opaque / 1 empty / 87 partial) + mask x-check; verify-mode lockstep wired; live-replacement + VERIFIED pending a menu→level-load demo | sprite pipeline |
 | asset `[0x000..0x200]` | sprite **index table** — 256× u16 `code` per slot | OBSERVED | data | — | — |
 | asset `[0x200..]` | sprite **pixel data** — 128B/sprite = 4 planes × 32B (16×16, 1bpp/plane) | OBSERVED | data | — | — |
 | `0xA000:0x5E80` | **VRAM sprite cache** — 256 slots × 32B, planar (4 planes overlaid via map mask) | OBSERVED | data | — | total slot count beyond 256? |

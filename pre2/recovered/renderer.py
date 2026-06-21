@@ -6,8 +6,10 @@ The per-frame draw renders each sprite/tile from the planar VRAM cache
 (``0xA000:0x5E80``, filled by ``pre2.recovered.sprite_decode``) onto the screen,
 dispatching on the sprite's transparency class. That class — the type table
 ``[0x4DF8]`` and the partial-sprite masks ``[0x2DF8]`` — is produced by the
-classifier at ``1030:4232``, which is **still ASM** (not recovered): this recovered
-blit only *consumes* its output.
+classifier at ``1030:4232``, now recovered in
+``pre2.recovered.sprite_classify.classify_sprites`` (byte-exact vs the load-time
+ASM witness): the renderer's sprite pipeline is recovered end to end
+(decode → classify → blit). This blit *consumes* that class/mask output.
 
 * **type 0 — opaque:** plain 4-plane copy of the 16×16 sprite to the screen
   (``1030:3B9B``).

@@ -1,8 +1,8 @@
 """Prehistorik 2 frame renderer — recovered native logic.
 
-Status: recovered; verification targets ``pre2/probes/verify_frame.py`` (348D) and
-``pre2/probes/verify_grid.py`` (35A1). Merge target: the frame renderer →
-eventually ``update_frame()``.
+Status: VERIFIED (byte-exact vs the original ASM under in-VM lockstep); verification
+targets ``pre2/probes/verify_{frame,grid,scroll,panel}.py`` (348D / 35A1 / 3A27 /
+3054). Merge target: the frame renderer → eventually ``update_frame()``.
 
 Recovers two draws that paint the scrolling tile background by reading tile indices
 from the level :class:`TileMap`, OR-accumulating attribute flags, and compositing
