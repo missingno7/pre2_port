@@ -1,0 +1,76 @@
+# Renderer island — scope, border, and completion status
+
+The goal: **completely exhaust the renderer island** — recover everything that belongs
+to it into clean VM-independent source, and draw a precise border so we know what does
+*not* belong. Addresses are the GOG build (segment `1030`), confirmed by capstone disasm
+unless marked otherwise.
+
+## What the renderer island *is*
+
+The renderer is **`game state → pixels/palette`**: it consumes `Camera`/`ScrollState`/
+`TileMap`, sprite & object *positions*, and palette/fade *state*, and writes A000 planar
+VRAM + the VGA DAC. It does **not** update game state and does **not** own the object/
+level data model. The merge target for the whole landmass is a single `update_frame()`.
+
+**Border test:** a routine is in the renderer iff it only *reads* state and *writes*
+VRAM/DAC, with no gameplay decision and no ownership of the object/level data model.
+
+## Recovered (in the island)
+
+| Routine | Module | Status |
+|---|---|---|
+| `4316`/`4389` sprite decode | `recovered/sprite_decode.py` | VERIFIED + live |
+| `4232` sprite classify | `recovered/sprite_classify.py` | ASM_MATCHED (verify wired) |
+| `3B88` blit_sprite (type 0/1/≥2) | `recovered/renderer.py` | VERIFIED + live |
+| `348D` tile-row, `35A1` grid, `3A27` scroll-copy, `3054` panel | `recovered/frame_renderer.py` | VERIFIED + live |
+| `26FA` object_render (moving sprites) | `recovered/object_render.py` | VERIFIED + live |
+
+## Gaps — renderer, still ASM (to recover)
+
+1. **End-level scale/zoom transition.** Entry `31D0` (sets `[0x2DD0]`=0xE6 scale,
+   `[0x2DC0]`=4 step), main loop `31F4–32DD` (rebuilds a 0x40-entry scaled-column table
+   `[0x6B14]`/`[0x6A88]`, draws scaled spans, `sub [0x2DD0],[0x2DC0]; jg` until 0). Core
+   primitives: **span-clear `32DE`** (EGA edge-mask + `rep stosb` 0) and **scaled 4-plane
+   copy `4700`**. Calls `26FA` (recovered) + panel. **Reproducible headless (snapshot
+   002633).** Big, but the highest-value gap.
+
+2. **Palette fade `6772`.** Linear interpolation of 16 colours×3 (48 6-bit DAC
+   components) from a source palette (`[0x2D00 + [0x2D8A]*2]` ptr) toward the target
+   `[0xACB7]`, stepping by `[0x6C03]` (incremented per call) until all arrive, then clears
+   `[0x6C01]`/`[0x6C02]`. Direction flag `[0x6C02]` swaps src/target. Writes DAC via
+   3C8/3C9. **Needs a mid-fade snapshot** — it stays inactive in the 002633 forward-run.
+
+3. **Scroll engine helpers.** `3569` (compute scroll source `[0x2DB6]` from the camera)
+   and `34ED` (vertical tile-column fill — the horizontal-scroll counterpart to the
+   recovered row-fill `348D`). NOTE: the ledger's "directional scroll `3344/338E/33F5`"
+   does **not** match GOG disasm (that range is the scale transition above), so the
+   scroll-engine map must be **re-verified on GOG**. The camera *advance* itself is on the
+   border (game loop); only the fill/calc are renderer. **Needs a horizontal-scroll
+   snapshot.**
+
+4. **Frame compositor `3B40`.** Static glue `draw_grid() → scroll_copy() → panel()`;
+   characterized, unwired (no available scenario reaches it). Becomes the renderer's
+   `update_frame()` once all its leaves are recovered.
+
+## Border — NOT in the renderer island
+
+- **Object-list iteration + object-draw dispatch** (`34A0`/`3552`/`65A0`/`8BFF`): own the
+  `ObjectSlot` data model; they only *call* the blit → **object system**.
+- **Object/player update** (movement, AI, physics, collision) → gameplay.
+- **Frame conductor / tick dispatch** (decides *when* to call the compositor/transition) →
+  game loop. (`update_frame()` is the renderer's top; *who calls it* is outside.)
+- **Camera advance** (the directional-scroll deciding *where* to scroll) → game loop/input;
+  the scroll *render* (fill exposed row/col) is the renderer.
+- **Tally/score logic**, **asset load (SQZ)**, **audio** → separate systems. (Tally screen
+  *drawing* is renderer; the *scoring* is not.)
+
+## Completion plan / repro needs
+
+1. Scale transition (002633, headless) — recover next.
+2. Scroll engine — re-map `3569`/`34ED` on GOG; needs a horizontal-scroll snapshot.
+3. Palette fade `6772` — needs a snapshot captured mid-fade (`[0x6C01]|[0x6C02] != 0`).
+4. Wire `3B40 → update_frame()` once its leaves are all recovered; the per-hook coastline
+   then collapses to one frame entry.
+
+Each gap follows the standard island workflow (faithful witness → pure module + bridge →
+byte-exact verify → thin hook). This file is the checklist; tick items as they land.
