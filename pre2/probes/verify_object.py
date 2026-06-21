@@ -1,12 +1,12 @@
-"""TEMPORARY probe — in-VM lockstep verify of the recovered per-object draw (6544).
+"""TEMPORARY probe — in-VM lockstep verify of the recovered per-object draw (653D).
 
-Pure-ASM oracle (hooks uninstalled). At each 6544 call: capture inputs (object pos
+Pure-ASM oracle (hooks uninstalled). At each 653D call: capture inputs (object pos
 di, sprite index al, camera, draw mode, blit type/mask/bg), run the recovered
 ``draw_object_sprite`` on a plane snapshot, let the ASM run to its RET, then diff
 the four EGA planes and the drawn/culled decision (the ASM's CF: clear=drawn,
-set=culled) + the [0x6BB9]=1 drawn flag. Zero divergence.
+set=culled) + the [0x6BBD]=1 drawn flag. Zero divergence.
 
-Retire when: a headless 6544 lockstep is folded into the test suite.
+Retire when: a headless 653D lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_object
 """
 from __future__ import annotations
@@ -29,8 +29,8 @@ from pre2.recovered.object_draw import draw_object_sprite
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
-OBJDRAW = (0x1030, 0x6544)
-VAR_PLANE_ATTR = 0x6BB9
+OBJDRAW = (0x1030, 0x653D)
+VAR_PLANE_ATTR = 0x6BBD
 LIMIT = 80
 
 
@@ -91,7 +91,7 @@ def main() -> int:
 
         _run_to_return(c)
 
-        asm_culled = bool(c.s.flags & CF)            # 6544: stc=culled, clc=drawn
+        asm_culled = bool(c.s.flags & CF)            # 653D: stc=culled, clc=drawn
         reason = None
         if drawn == asm_culled:                       # decision must be opposite of CF
             reason = f"decision: recovered drawn={drawn}, asm culled={asm_culled}"
@@ -102,10 +102,10 @@ def main() -> int:
                     reason = f"plane {p}"
                     break
             if reason is None and _rb(mem, VAR_PLANE_ATTR) != 1:
-                reason = f"[0x6BB9] drawn flag = {_rb(mem, VAR_PLANE_ATTR)} (want 1)"
+                reason = f"[0x6BBD] drawn flag = {_rb(mem, VAR_PLANE_ATTR)} (want 1)"
         elif reason is None and not drawn:
             if _rb(mem, VAR_PLANE_ATTR) != attr_before:
-                reason = "[0x6BB9] changed on a culled object"
+                reason = "[0x6BBD] changed on a culled object"
 
         if drawn:
             state["drawn"] += 1

@@ -1,15 +1,15 @@
-"""TEMPORARY probe — in-VM lockstep verify of the recovered tile-row draw (346E).
+"""TEMPORARY probe — in-VM lockstep verify of the recovered tile-row draw (348D).
 
 Replays gameplay with all hybrid hooks UNINSTALLED, so the original ASM is a pure
-independent oracle (its own 346E body + its own 3B69 blit). At each 346E call we
+independent oracle (its own 348D body + its own 3B88 blit). At each 348D call we
 snapshot the planes + inputs, run the recovered ``draw_tile_row`` (which composes
 the recovered ``blit_sprite``) on the snapshot, let the ASM run the routine to its
 RET, then diff: the four EGA planes, the exit ``di``, and the three OR-accumulated
-flag bytes ([0x6BB9]/[0x2DEE]/[0x2DF0]). Asserts zero divergence.
+flag bytes ([0x6BBD]/[0x2DF2]/[0x2DF4]). Asserts zero divergence.
 
-This is the verification contract for ``pre2/recovered/frame_renderer.py`` (346E).
+This is the verification contract for ``pre2/recovered/frame_renderer.py`` (348D).
 
-Retire when: a headless 346E lockstep is folded into the test suite.
+Retire when: a headless 348D lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_frame
 """
 from __future__ import annotations
@@ -31,12 +31,12 @@ from pre2.recovered.frame_renderer import RowFlags, draw_tile_row
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
-ROW_DRAW = (0x1030, 0x346E)
-LIMIT = 200  # cap on verified row-draws (346E fires several times per scroll step)
+ROW_DRAW = (0x1030, 0x348D)
+LIMIT = 200  # cap on verified row-draws (348D fires several times per scroll step)
 
-VAR_PLANE_ATTR = 0x6BB9
-VAR_TILE_FLAGS = 0x2DEE
-VAR_TILE_TYPE = 0x2DF0
+VAR_PLANE_ATTR = 0x6BBD
+VAR_TILE_FLAGS = 0x2DF2
+VAR_TILE_TYPE = 0x2DF4
 
 
 def _rb(mem, off):
@@ -80,12 +80,12 @@ def main() -> int:
 
     def handler(c):
         mem = c.mem
-        # --- capture inputs (346E has not executed yet) ---
+        # --- capture inputs (348D has not executed yet) ---
         tile_offset = c.s.ax & 0xFFFF
         di = c.s.di & 0xFFFF
         scroll_src = _rw(mem, 0x2DB6)
         col_ring = _rb(mem, 0x2DE4)
-        fine_scroll = _rb(mem, 0x6BC0)
+        fine_scroll = _rb(mem, 0x6BC4)
         tilemap = read_tilemap(mem)
         blit_type = read_blit_type_table(mem)
         mask_region = read_mask_region(mem)
@@ -116,7 +116,7 @@ def main() -> int:
                 i = next(k for k in range(len(a)) if a[k] != b[k])
                 reason = f"plane {p} @ {i:#06x}: asm={a[i]:02X} rec={b[i]:02X}"
                 break
-        # 346E pushes/pops di (3471/34E8): the caller's di is preserved; the
+        # 348D pushes/pops di (3471/34E8): the caller's di is preserved; the
         # internal pred_di is scratch (not part of the contract).
         if reason is None and (c.s.di & 0xFFFF) != di:
             reason = f"di not preserved: entry={di:04X} asm_exit={c.s.di & 0xFFFF:04X}"

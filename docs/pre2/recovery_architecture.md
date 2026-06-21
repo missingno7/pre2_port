@@ -148,7 +148,7 @@ needs validation, replay the demo in verify mode → diagnose the first divergen
 ## Slice 1 — asset decompression: complete
 
 The first recovered island. `pre2/replacements.py` hosts the SQZ decompressor
-hook at `1030:1068` (role: *replacement adapter*, with a *verifier* at the
+hook at `1030:107B` (role: *replacement adapter*, with a *verifier* at the
 decompressor RET sites; this island merges into the **asset loader**).
 
 - **All three SQZ codecs recovered and verified byte-for-byte vs the ASM**
@@ -157,7 +157,7 @@ decompressor RET sites; this island merges into the **asset loader**).
   (keyb/castle/present/titus), and the **Huffman+RLE "other"** format
   (sample/theend). The hybrid runtime cold-boots into gameplay decoding every
   asset natively, with zero gaps.
-- **Contract = output bytes + bump allocator `[1A13:2871]` + `ax`.** The bump
+- **Contract = output bytes + bump allocator `[1A0F:2875]` + `ax`.** The bump
   advances by the header's *reservation* field, not the decode length (LZSS
   over-reserves) — `sqz_reserved_size()`. Caller-dead scratch registers are
   excluded.

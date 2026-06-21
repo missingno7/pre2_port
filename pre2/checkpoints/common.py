@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Original PRE2 data segment + bump-allocator pointer, shared by several islands.
-_DATA_SEG = 0x1A13
-_BUMP_PTR = 0x2871
+# GOG data segment + load pointer (used by sprite_decode; sqz/blit carry their own).
+_DATA_SEG = 0x1A0F
+_BUMP_PTR = 0x2875
 
 
 def _read_cstring(mem, seg: int, off: int) -> str:

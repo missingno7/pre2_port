@@ -1,6 +1,6 @@
 """TEMPORARY probe — witness the frame-renderer camera/scroll state.
 
-Records the scroll-engine state block (ds=1A13) every frame of a demo replay and
+Records the scroll-engine state block (ds=1A0F) every frame of a demo replay and
 summarises how each field moves: the range it spans, whether it wraps, and at what
 modulus. This validates the field semantics inferred from disassembly (see the
 "frame renderer / scroll engine" section of docs/pre2/symbol_ledger.md) BEFORE we
@@ -24,25 +24,25 @@ from dos_re.interrupts import deliver_scancode
 from pre2.runtime import load_pre2_snapshot
 
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
-DS = 0x1A13
+DS = 0x1A0F
 
 # (name, offset, width)  — the inferred Camera/ScrollState/TileMap fields.
 FIELDS = [
     ("camera_x",      0x2DE0, 2),   # camera column (tiles)
     ("camera_y",      0x2DE2, 2),   # camera row (tiles)
-    ("prev_camera_x", 0x2DDC, 2),   # dirty-compare previous camera
-    ("prev_camera_y", 0x2DDE, 2),
+    ("prev_camera_x", 0x2DE0, 2),   # dirty-compare previous camera
+    ("prev_camera_y", 0x2DE2, 2),
     ("col_ring_idx",  0x2DE4, 1),   # column ring index (0..0x13)
     ("row_ring_idx",  0x2DE6, 1),   # row ring index (0..0xB / 0xC)
-    ("fine_scroll",   0x6BC0, 1),   # sub-tile pixel scroll (0..0x10)
-    ("row_factor",    0x6BF4, 1),   # row-stride factor used by 3A08/3582
+    ("fine_scroll",   0x6BC4, 1),   # sub-tile pixel scroll (0..0x10)
+    ("row_factor",    0x6BF4, 1),   # row-stride factor used by 3A27/35A1
     ("scroll_src",    0x2DB6, 2),   # scroll source offset (computed by 3569)
     ("dest_a",        0x2DD2, 2),
     ("dest_b",        0x2DD4, 2),
     ("sheet_seg",     0x2DD6, 2),
     ("level_height",  0x2CF1, 1),   # level height in rows
-    ("dirty0",        0x2DF0, 1),
-    ("dirty1",        0x2DF1, 1),
+    ("dirty0",        0x2DF4, 1),
+    ("dirty1",        0x2DF5, 1),
 ]
 
 

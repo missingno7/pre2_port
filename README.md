@@ -25,7 +25,7 @@ recovered native code is now part of the normal runtime:
   islands (with status + ASM boundary + contract + merge target) is
   [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md).
 - **Still ASM (not yet recovered):** the moving-sprite / object-list draw loop, the
-  sprite classifier (`4213`, which produces the type/mask data the recovered blit
+  sprite classifier (`4232`, which produces the type/mask data the recovered blit
   consumes), and all gameplay update (movement, physics, collision, objects/player).
 - **No silent fallbacks.** If the hybrid runtime reaches behaviour we have not
   recovered, it **fails loud** with a precise gap report (`Pre2HybridGap`) instead
@@ -47,6 +47,21 @@ for the running log.
 - `play.py --view` → hybrid runtime (the active runtime).
 - `play.py --view --verify-hooks` → verify mode (lockstep contract check vs ASM).
 - `create_pre2_runtime(..., native_replacements=False)` → pure oracle/ASM mode.
+
+## The game executable — bring your own legal copy
+
+This is a reverse-engineering / source-port **workbench**, not a redistribution of
+the game. It operates on the original `PRE2.EXE` and the Prehistorik 2 data files,
+which are **not** included in this repository — you must supply them from a copy of
+the game **you legally own**.
+
+- This project targets the **GOG.com DRM-free release** of Prehistorik 2. Buy it
+  there (or use another copy you legally own) and copy `PRE2.EXE` plus the game data
+  files into [`assets/`](assets/).
+- Addresses, offsets, and the recovered logic in this tree are all derived against
+  that GOG `PRE2.EXE`; a different build will have a different memory layout and the
+  hooks will not line up.
+- Do not commit the game binary or assets. They stay local to your checkout.
 
 ## Run
 

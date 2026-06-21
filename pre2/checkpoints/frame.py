@@ -1,4 +1,4 @@
-"""Checkpoints for the frame renderer (1030:346E / 3582 / 3A08 / 3035).
+"""Checkpoints for the frame renderer (1030:348D / 35A1 / 3A27 / 3054).
 
 Thin VM contact points only: each adapter reads the original VM state **through the
 bridge** (``pre2.bridge.frame`` Camera/ScrollState/TileMap dataclasses + readers —
@@ -18,17 +18,19 @@ from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row, pa
 
 from .common import report
 
-_ROW_ENTRY = (0x1030, 0x346E)
-_ROW_EXIT = (0x1030, 0x34EC)     # tile-row draw near RET
-_GRID_ENTRY = (0x1030, 0x3582)
-_GRID_EXIT = (0x1030, 0x3645)    # grid redraw near RET
-_SCROLL_ENTRY = (0x1030, 0x3A08)
-_SCROLL_EXIT = (0x1030, 0x3AD2)  # scroll-copy near RET
-_PANEL_ENTRY = (0x1030, 0x3035)
-_PANEL_EXIT = (0x1030, 0x307B)   # page-flip copy near RET
+# GOG build: the video code region is the old offset + 0x1F (the compositor at
+# ~3B60 calls grid 35A1 / scroll 3A27 / panel 3054 = old 35A1/3A27/3054 + 0x1F).
+_ROW_ENTRY = (0x1030, 0x348D)
+_ROW_EXIT = (0x1030, 0x350B)     # tile-row draw near RET
+_GRID_ENTRY = (0x1030, 0x35A1)
+_GRID_EXIT = (0x1030, 0x3664)    # grid redraw near RET
+_SCROLL_ENTRY = (0x1030, 0x3A27)
+_SCROLL_EXIT = (0x1030, 0x3AF1)  # scroll-copy near RET
+_PANEL_ENTRY = (0x1030, 0x3054)
+_PANEL_EXIT = (0x1030, 0x309A)   # page-flip copy near RET
 
 
-# ---- tile-row draw (346E) ---------------------------------------------------
+# ---- tile-row draw (348D) ---------------------------------------------------
 def _run_row(cpu, planes):
     mem = cpu.mem
     st = _frame.read_scroll_state(mem)
@@ -43,7 +45,7 @@ def _run_row(cpu, planes):
 
 @registry.replace(*_ROW_ENTRY, "frame_tile_row")
 def frame_tile_row(cpu) -> None:
-    """Native replacement for the tile-row draw at 1030:346E."""
+    """Native replacement for the tile-row draw at 1030:348D."""
     mem = cpu.mem
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
@@ -56,7 +58,7 @@ def frame_tile_row(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret; di and the other pushed regs are preserved
 
 
-# ---- grid redraw (3582) -----------------------------------------------------
+# ---- grid redraw (35A1) -----------------------------------------------------
 def _run_grid(cpu, planes):
     mem = cpu.mem
     st = _frame.read_scroll_state(mem)
@@ -70,7 +72,7 @@ def _run_grid(cpu, planes):
 
 @registry.replace(*_GRID_ENTRY, "frame_grid")
 def frame_grid(cpu) -> None:
-    """Native replacement for the visible-grid redraw at 1030:3582."""
+    """Native replacement for the visible-grid redraw at 1030:35A1."""
     mem = cpu.mem
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
@@ -88,7 +90,7 @@ def frame_grid(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret; di/regs preserved
 
 
-# ---- scroll-copy (3A08) -----------------------------------------------------
+# ---- scroll-copy (3A27) -----------------------------------------------------
 def _run_scroll(cpu, planes):
     st = _frame.read_scroll_state(cpu.mem)
     c = st.camera
@@ -98,7 +100,7 @@ def _run_scroll(cpu, planes):
 
 @registry.replace(*_SCROLL_ENTRY, "frame_scroll_copy")
 def frame_scroll_copy(cpu) -> None:
-    """Native replacement for the vertical-scroll screen copy at 1030:3A08."""
+    """Native replacement for the vertical-scroll screen copy at 1030:3A27."""
     mem = cpu.mem
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
@@ -110,7 +112,7 @@ def frame_scroll_copy(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret; bx/di/si/ds/es preserved
 
 
-# ---- page-flip copy (3035) --------------------------------------------------
+# ---- page-flip copy (3054) --------------------------------------------------
 def _run_panel(cpu, planes):
     st = _frame.read_scroll_state(cpu.mem)
     panel_copy(planes, st.dest_page_b, st.dest_page_a)
@@ -118,7 +120,7 @@ def _run_panel(cpu, planes):
 
 @registry.replace(*_PANEL_ENTRY, "frame_panel_copy")
 def frame_panel_copy(cpu) -> None:
-    """Native replacement for the double-buffer page-flip copy at 1030:3035."""
+    """Native replacement for the double-buffer page-flip copy at 1030:3054."""
     mem = cpu.mem
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
@@ -130,13 +132,13 @@ def frame_panel_copy(cpu) -> None:
     cpu.s.ip = cpu.pop()  # near ret; regs preserved (vsync wait omitted, timing-only)
 
 
-# NOTE on 1030:3B40 (the frame compositor): it is a static composition —
-# sti; [0x2DF0]=1; [0x2DDC]=0x55AA; call 3582; call 3A08; call 3035; pop es; pop ds;
+# NOTE on 1030:3B5F (the frame compositor): it is a static composition —
+# sti; [0x2DF4]=1; [0x2DE0]=0x55AA; call 35A1; call 3A27; call 3054; pop es; pop ds;
 # ret — i.e. draw_grid -> scroll_copy -> panel_copy over the now-native leaves. We do
-# NOT wire it as a native replacement: no available demo reaches 3B40 (its leaves are
-# exercised via their other callers: 0237 / 01E2 / 023A), so a native 3B40 cannot be
+# NOT wire it as a native replacement: no available demo reaches 3B5F (its leaves are
+# exercised via their other callers: 0237 / 01E2 / 023A), so a native 3B5F cannot be
 # verified yet. The hybrid runtime already runs the three leaves natively when the ASM
-# 3B40 calls them; wire a native compositor only once a scenario exercises 3B40 so it
+# 3B5F calls them; wire a native compositor only once a scenario exercises 3B5F so it
 # can be lockstep-verified (the call order itself is static: 3B4C/3B4F/3B52).
 
 
@@ -161,7 +163,7 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
             if reason is None:
                 if _frame.read_row_flags(mem) != (flags.plane_attr & 0xFF, flags.tile_flags & 0xFF,
                                                   flags.tile_type & 0xFF):
-                    reason = "row flags [0x6BB9]/[0x2DEE]/[0x2DF0]"
+                    reason = "row flags [0x6BBD]/[0x2DF2]/[0x2DF4]"
             report(stats, on_result, raise_on_divergence, "frame_tile_row", reason)
         interpret_current_instruction_without_hook(c)
 
@@ -173,11 +175,11 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
             cam = _frame.read_camera(mem)
             pa, tf, tt = _frame.read_row_flags(mem)
             if reason is None and (cam.prev_x, cam.prev_y) != (res.prev_x & 0xFFFF, res.prev_y & 0xFFFF):
-                reason = "prev camera [0x2DDC]/[0x2DDE]"
+                reason = "prev camera [0x2DE0]/[0x2DE2]"
             if reason is None and res.redrew:
                 st = _frame.read_scroll_state(mem)
                 if tf != (res.tile_flags & 0xFF) or tt != (res.dirty & 0xFF) or st.dirty_rows != (res.dirty_rows & 0xFF):
-                    reason = "dirty flags [0x2DEE]/[0x2DF0]/[0x2DF1]"
+                    reason = "dirty flags [0x2DF2]/[0x2DF4]/[0x2DF5]"
             report(stats, on_result, raise_on_divergence, "frame_grid", reason)
         interpret_current_instruction_without_hook(c)
 

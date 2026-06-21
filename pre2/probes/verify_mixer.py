@@ -1,12 +1,12 @@
-"""TEMPORARY probe — in-VM lockstep verify of the recovered per-channel mixer (216B).
+"""TEMPORARY probe — in-VM lockstep verify of the recovered per-channel mixer (218F).
 
 Cold-boots with the emulated SB so the original driver streams audio; at each
-``1030:216B`` call (per MOD channel, in the block-refill ISR) it captures the
+``1030:218F`` call (per MOD channel, in the block-refill ISR) it captures the
 channel/instrument/volume state + the partially-mixed block, runs the recovered
 ``mix_channel`` on a copy, lets the ASM run to its RET, then diffs the 168-byte
 block and the updated channel state (pos/end/frac). Zero divergence.
 
-Retire when: a headless 216B lockstep is folded into the test suite.
+Retire when: a headless 218F lockstep is folded into the test suite.
 Run:  python -m pre2.probes.verify_mixer
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pre2.bridge import audio as A
 from pre2.recovered.mixer import mix_channel
 from pre2.runtime import create_pre2_runtime
 
-MIX = (0x1030, 0x216B)
+MIX = (0x1030, 0x218F)
 LIMIT = 200
 
 
@@ -40,7 +40,7 @@ def main() -> int:
     diverged: list[str] = []
 
     def _run_to_return(c):
-        # 216B abuses SP as a scratch register (sp = sample end pointer), so an
+        # 218F abuses SP as a scratch register (sp = sample end pointer), so an
         # sp-based return check fires mid-loop. Detect the return by the pushed
         # return address instead (read it before the routine clobbers sp).
         entry_cs = c.s.cs & 0xFFFF

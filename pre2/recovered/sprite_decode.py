@@ -11,10 +11,10 @@ translation lives in ``pre2/bridge/sprites.py`` and the adapter in
 
 Original routines (segment ``1030``; see ``docs/pre2/symbol_ledger.md``):
 
-* ``42F7`` — local bank: for each of 256 slots, read a ``u16`` ``code`` from the
+* ``4316`` — local bank: for each of 256 slots, read a ``u16`` ``code`` from the
   sheet's index table; if ``code < 0x100`` copy the sprite's 4 planes (32 B each)
   into the cache slot via the Sequencer map mask; otherwise leave the slot blank.
-* ``436A`` — shared/union bank: same demux for ``0x100 <= code < 0x200`` from a
+* ``4389`` — shared/union bank: same demux for ``0x100 <= code < 0x200`` from a
   second sprite bank.
 
 A sprite is 16×16 pixels at 1 bit/plane = 4 planes × 32 bytes = 128 bytes. In the
@@ -85,7 +85,7 @@ class SpriteSheet:
 
 @dataclass(frozen=True)
 class SharedSpriteBank:
-    """The shared/union sprite bank (``436A``); sprite ``code`` at ``(code-0x100)*128``.
+    """The shared/union sprite bank (``4389``); sprite ``code`` at ``(code-0x100)*128``.
 
     The original addresses this bank by *segment arithmetic*
     (``[asm 4389: shl ax,3; add ax,[0x2DD8]]`` -> ``((code-0x100)*8 + base) & 0xFFFF``),
@@ -128,9 +128,9 @@ class SpriteCache:
         return bytes(self.planes[plane][off: off + SLOT_BYTES])
 
 
-@oracle_link("1030:42F7",
+@oracle_link("1030:4316",
              "planar sprite cache (0xA000:0x5E80) demuxed from the sheet + shared bank; "
-             "also 1030:436A (shared codes >= 0x100)",
+             "also 1030:4389 (shared codes >= 0x100)",
              "VERIFIED", merge_target="sprite pipeline")
 def decode_sprite_cache(
     sheet: SpriteSheet,
@@ -139,7 +139,7 @@ def decode_sprite_cache(
 ) -> SpriteCache:
     """Demux a sprite sheet (+ shared bank) into the planar cache.
 
-    Faithful translation of ``42F7`` (local: ``code < 0x100``) followed by ``436A``
+    Faithful translation of ``4316`` (local: ``code < 0x100``) followed by ``4389``
     (shared: ``code >= 0x100``). Sentinel/out-of-bank codes select no real sprite
     and are left untouched here — the original copies wrapped garbage into them,
     but those slots are unused (never blitted) so they carry no game-meaningful

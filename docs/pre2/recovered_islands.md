@@ -6,12 +6,14 @@
 
 | ASM boundary | Function | Status | Merge target | Contract |
 |---|---|---|---|---|
-| `1030:1068` | `codecs.sqz.unpack_sqz` | VERIFIED | asset loader | decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance |
-| `1030:216B` | `recovered.mixer.mix_channel` | VERIFIED | audio mixer | additively mix one resampled, volume-scaled MOD channel into the 168-byte PCM block and advance its sample position/loop (pos/end/frac updated) |
-| `1030:3035` | `recovered.frame_renderer.panel_copy` | VERIFIED | frame renderer | A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, 0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only) |
-| `1030:346E` | `recovered.frame_renderer.draw_tile_row` | VERIFIED | frame renderer | A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BB9]/[0x2DEE]/[0x2DF0]; di preserved |
-| `1030:3582` | `recovered.frame_renderer.draw_grid` | VERIFIED | frame renderer | A000 framebuffer (visible-grid type>=1 tiles) + [0x2DEE]/[0x2DF0]/[0x2DF1] + prev camera [0x2DDC]/[0x2DDE]; di/regs preserved |
-| `1030:3A08` | `recovered.frame_renderer.scroll_copy` | VERIFIED | frame renderer | A000 planar scroll-copy of the visible window (ring buffer -> display page) + all-plane clear of the leading strip; bx/di/si/ds/es preserved |
-| `1030:3B69` | `recovered.renderer.blit_sprite` | VERIFIED | renderer | A000 planar framebuffer (one 16x16 slot); di += 2 |
-| `1030:42F7` | `recovered.sprite_decode.decode_sprite_cache` | VERIFIED | sprite pipeline | planar sprite cache (0xA000:0x5E80) demuxed from the sheet + shared bank; also 1030:436A (shared codes >= 0x100) |
-| `1030:6544` | `recovered.object_draw.draw_object_sprite` | RECOVERED | frame renderer | cull one object sprite vs the camera window, compute its screen offset, and blit it; [0x6BB9]=1 if drawn; CF set if culled; regs preserved |
+| `1030:107B` | `codecs.sqz.unpack_sqz` | VERIFIED | asset loader | decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance |
+| `1030:218F` | `recovered.mixer.mix_channel` | VERIFIED | audio mixer | additively mix one resampled, volume-scaled MOD channel into the 168-byte PCM block and advance its sample position/loop (pos/end/frac updated) |
+| `1030:227C` | `recovered.tracker.tracker_tick` | VERIFIED | audio tracker | advance the MOD song one sequencer tick: apply per-channel volume slides, and every `speed` ticks process the current pattern row (4 channels -> note triggers, period/effect) and advance row/order — updating playback + per-voice state |
+| `1030:26FA` | `recovered.object_render.plan_frame` | VERIFIED | renderer | render the active-sprite list to A000 planar VRAM (cull/animate/position/clip + shifted-masked planar blit, incl H-flip); mutates object-record flags + life + frame counter |
+| `1030:3054` | `recovered.frame_renderer.panel_copy` | VERIFIED | frame renderer | A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, 0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only) |
+| `1030:348D` | `recovered.frame_renderer.draw_tile_row` | VERIFIED | frame renderer | A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BBD]/[0x2DF2]/[0x2DF4]; di preserved |
+| `1030:35A1` | `recovered.frame_renderer.draw_grid` | VERIFIED | frame renderer | A000 framebuffer (visible-grid type>=1 tiles) + [0x2DF2]/[0x2DF4]/[0x2DF5] + prev camera [0x2DE0]/[0x2DE2]; di/regs preserved |
+| `1030:3A27` | `recovered.frame_renderer.scroll_copy` | VERIFIED | frame renderer | A000 planar scroll-copy of the visible window (ring buffer -> display page) + all-plane clear of the leading strip; bx/di/si/ds/es preserved |
+| `1030:3B88` | `recovered.renderer.blit_sprite` | VERIFIED | renderer | A000 planar framebuffer (one 16x16 slot); di += 2 |
+| `1030:4316` | `recovered.sprite_decode.decode_sprite_cache` | VERIFIED | sprite pipeline | planar sprite cache (0xA000:0x5E80) demuxed from the sheet + shared bank; also 1030:4389 (shared codes >= 0x100) |
+| `1030:653D` | `recovered.object_draw.draw_object_sprite` | RECOVERED | frame renderer | cull one object sprite vs the camera window, compute its screen offset, and blit it; [0x6BBD]=1 if drawn; CF set if culled; regs preserved |

@@ -1,12 +1,12 @@
-"""Checkpoint for the .SQZ asset decompressor (1030:1068).
+"""Checkpoint for the .SQZ asset decompressor (1030:107B).
 
 Recovered logic: ``pre2.codecs.sqz``. Merge target: the asset loader.
 
 Original-binary contract (verified vs PRE2.EXE): entry opens the file named at
-1A13:DX, takes the output segment from the bump allocator [1A13:2871], decodes,
-returns ax = out_seg to the caller at 1030:00EF, advancing the allocator by the
-per-format paragraph count. The caller push/pops ds/es around the call and only
-reads ax, so ds/es and decode scratch are caller-dead (not part of the contract).
+1A0F:DX, takes the output segment from [1A0F:2875], decodes the asset into it, and
+returns ax = out_seg to the caller. The caller push/pops ds/es around the call and
+sets [1A0F:2875]/[1A0F:003D] = ax itself, so ds/es, the load pointer and the decode
+scratch are caller-managed (not part of this routine's contract).
 """
 
 from __future__ import annotations
@@ -15,15 +15,17 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.codecs.sqz import sqz_bump_advance, unpack_sqz
 
-from .common import _BUMP_PTR, _DATA_SEG, Pre2HybridGap, _read_cstring, report
+from .common import Pre2HybridGap, _read_cstring, report
 
-_SQZ_SEG = 0x1030
-_VAR_OUT_SEG = 0x11F3
-_DECOMP_ENTRY = (0x1030, 0x1068)
-# The decompressor's own RET sites (ax=out_seg, [2871] bumped, output written) —
-# a robust verify boundary that pairs each decode with its completion regardless
-# of which caller invoked it. LZSS exits at 15EF, LZW at 1328, "other" at 11F0.
-_DECOMP_EXITS = ((0x1030, 0x15EF), (0x1030, 0x1328), (0x1030, 0x11F0))
+# GOG data segment + the asset load pointer the caller sets before this routine and
+# reads back after (where the decoded asset lands): [1A0F:2875].
+_DATA_SEG = 0x1A0F
+_LOAD_PTR = 0x2875
+_DECOMP_ENTRY = (0x1030, 0x107B)
+# The decompressor's own RET sites (ax=out_seg, output written) — a robust verify
+# boundary that pairs each decode with its completion regardless of which caller
+# invoked it. LZSS exits at 1602, LZW at 133B.  ("other"/uncompressed TBD.)
+_DECOMP_EXITS = ((0x1030, 0x1602), (0x1030, 0x133B))
 
 
 def _native_decode(cpu):
@@ -47,24 +49,23 @@ def _native_decode(cpu):
         return name, None, 0
 
 
-def _expected_bump(out_seg: int, advance: int) -> int:
-    return (out_seg + advance) & 0xFFFF
+def _commit_native(cpu, out_seg: int, out: bytes) -> None:
+    """Write the contract the original would have produced, then near-ret.
 
-
-def _commit_native(cpu, out_seg: int, out: bytes, advance: int) -> None:
-    """Write the contract the original would have produced, then near-ret."""
+    The decoded asset lands at ``out_seg`` (the load pointer the caller set in
+    [1A0F:2875]); the routine returns ``ax = out_seg`` and the caller stores it
+    back into the load pointer, so this routine does not touch [2875] itself.
+    """
     mem = cpu.mem
     base = (out_seg << 4) & 0xFFFFF
     mem.data[base : base + len(out)] = out
-    mem.ww(_DATA_SEG, _BUMP_PTR, _expected_bump(out_seg, advance))
-    mem.ww(_SQZ_SEG, _VAR_OUT_SEG, out_seg)
     cpu.s.ax = out_seg & 0xFFFF
-    cpu.s.ip = cpu.pop()  # near ret to caller (1030:00EF)
+    cpu.s.ip = cpu.pop()  # near ret to caller
 
 
-@registry.replace(_SQZ_SEG, 0x1068, "sqz_decompress")
+@registry.replace(*_DECOMP_ENTRY, "sqz_decompress")
 def sqz_decompress(cpu) -> None:
-    """Native replacement for the original .SQZ decompressor at 1030:1068.
+    """Native replacement for the original .SQZ decompressor at 1030:107B.
 
     Hybrid (default): decode natively and return. A not-yet-recovered format or
     unreadable asset raises :class:`Pre2HybridGap` — the hybrid runtime never
@@ -81,17 +82,17 @@ def sqz_decompress(cpu) -> None:
             interpret_current_instruction_without_hook(cpu)  # ASM oracle decodes it
             return
         raise Pre2HybridGap(
-            f"hybrid SQZ decompress of {name!r} at 1030:1068 is not recovered "
+            f"hybrid SQZ decompress of {name!r} at 1030:107B is not recovered "
             "(unrecognised format or unreadable asset). Recover this path — the "
             "hybrid runtime must not silently fall back to ASM."
         )
 
-    out_seg = cpu.mem.rw(_DATA_SEG, _BUMP_PTR)
+    out_seg = cpu.mem.rw(_DATA_SEG, _LOAD_PTR)
     if verify:
         cpu.pre2_verify_pending.append((name, out_seg, out, advance))
         interpret_current_instruction_without_hook(cpu)
         return
-    _commit_native(cpu, out_seg, out, advance)
+    _commit_native(cpu, out_seg, out)
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
@@ -101,7 +102,7 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
         # Reached the original decompressor's RET (verify mode let the ASM run).
         # Diff the just-completed decode's contract, then perform the RET.
         if c.pre2_verify_pending:
-            name, out_seg, native, advance = c.pre2_verify_pending.pop()
+            name, out_seg, native, _advance = c.pre2_verify_pending.pop()
             mem = c.mem
             base = (out_seg << 4) & 0xFFFFF
             asm_out = bytes(mem.data[base : base + len(native)])
@@ -109,9 +110,6 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
                 reason = "output bytes"
             elif (c.s.ax & 0xFFFF) != (out_seg & 0xFFFF):
                 reason = f"return ax {c.s.ax:04X}!={out_seg:04X}"
-            elif mem.rw(_DATA_SEG, _BUMP_PTR) != _expected_bump(out_seg, advance):
-                act = (mem.rw(_DATA_SEG, _BUMP_PTR) - out_seg) & 0xFFFF
-                reason = f"bump advance act={act} exp={advance} (out={out_seg:04X} dec={len(native)})"
             else:
                 reason = None
             report(stats, on_result, raise_on_divergence, name, reason)

@@ -34,7 +34,7 @@ def test_invalid_status_rejected():
 
 
 def test_recovered_functions_carry_verified_links():
-    for fn, boundary in ((blit_sprite, "1030:3B69"), (draw_tile_row, "1030:346E")):
+    for fn, boundary in ((blit_sprite, "1030:3B88"), (draw_tile_row, "1030:348D")):
         link = fn.oracle_link
         assert link.boundary == boundary
         assert link.status in STATUSES
@@ -43,6 +43,6 @@ def test_recovered_functions_carry_verified_links():
 
 
 def test_composition_matches_asm_callgraph():
-    # draw_tile_row (346E) composes blit_sprite (3B69); the ASM 346E calls 3B69.
-    assert draw_tile_row.oracle_link.boundary == "1030:346E"
-    assert blit_sprite.oracle_link.boundary == "1030:3B69"
+    # draw_tile_row (348D) composes blit_sprite (3B88); the ASM 348D calls 3B88.
+    assert draw_tile_row.oracle_link.boundary == "1030:348D"
+    assert blit_sprite.oracle_link.boundary == "1030:3B88"

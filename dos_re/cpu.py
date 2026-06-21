@@ -617,10 +617,9 @@ class CPU8086:
                 return f"les {REG16[reg]},{operand.text} -> {seg:04X}:{off:04X}"
             s.ds = seg
             return f"lds {REG16[reg]},{operand.text} -> {seg:04X}:{off:04X}"
-        if op == 0x8F:  # POP r/m16 (group 1 /0)
+        if op == 0x8F:  # POP r/m16.  The 8086 ignores the reg field (it is not a
+            # real opcode group); some code emits non-zero reg bits and still pops.
             _, mod, reg, rm = self.peek_modrm()
-            if reg != 0:
-                raise UnsupportedInstruction(f"group 8F /{reg} at {s.cs:04X}:{(s.ip-2)&0xffff:04X}")
             operand = self.decode_rm_operand(mod, rm, 16, seg_override)
             operand.write(self.pop())
             return f"pop {operand.text}"

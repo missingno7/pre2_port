@@ -5,16 +5,16 @@ Status: VERIFIED (byte-for-byte against the original ASM, per-blit witness).
 The per-frame draw renders each sprite/tile from the planar VRAM cache
 (``0xA000:0x5E80``, filled by ``pre2.recovered.sprite_decode``) onto the screen,
 dispatching on the sprite's transparency class. That class — the type table
-``[0x4DF4]`` and the partial-sprite masks ``[0x2DF4]`` — is produced by the
-classifier at ``1030:4213``, which is **still ASM** (not recovered): this recovered
+``[0x4DF8]`` and the partial-sprite masks ``[0x2DF8]`` — is produced by the
+classifier at ``1030:4232``, which is **still ASM** (not recovered): this recovered
 blit only *consumes* its output.
 
 * **type 0 — opaque:** plain 4-plane copy of the 16×16 sprite to the screen
-  (``1030:3B7C``).
+  (``1030:3B9B``).
 * **type 1 — empty:** draw nothing; just restore the background into the slot
-  (``1030:3D65``).
+  (``1030:3D84``).
 * **type ≥2 — partial:** restore the background, then composite the sprite with
-  transparency — ``screen = (screen AND mask) OR sprite`` (``1030:3BD7``: GC
+  transparency — ``screen = (screen AND mask) OR sprite`` (``1030:3BF6``: GC
   func=AND phase then plane-by-plane OR phase).
 
 All three operate on the four EGA bit planes as parallel byte buffers; the VM↔plane
@@ -71,7 +71,7 @@ def blit_opaque(planes: list[bytearray], idx: int, di: int) -> None:
 
 def restore_background(planes: list[bytearray], di: int, bg_off: int) -> None:
     """Type 1 (and the first phase of type ≥2): copy the scrolled background into
-    the slot (``1030:3D65``). The source advances linearly; the dest wraps."""
+    the slot (``1030:3D84``). The source advances linearly; the dest wraps."""
     for r, d in dest_rows(di):
         s = (bg_off + r * ROW_STRIDE) & 0xFFFF
         for p in range(4):
@@ -95,11 +95,11 @@ def blit_masked(planes: list[bytearray], idx: int, di: int, bg_off: int, mask: b
                 planes[p][d + c] = ((mask[k] & planes[p][d + c]) | planes[p][src + k]) & 0xFF
 
 
-@oracle_link("1030:3B69", "A000 planar framebuffer (one 16x16 slot); di += 2", "VERIFIED",
+@oracle_link("1030:3B88", "A000 planar framebuffer (one 16x16 slot); di += 2", "VERIFIED",
              merge_target="renderer")
 def blit_sprite(planes: list[bytearray], idx: int, di: int, sprite_type: int,
                 bg_off: int, mask: bytes = b"") -> None:
-    """Dispatch one sprite blit on its transparency class (``1030:3B69``)."""
+    """Dispatch one sprite blit on its transparency class (``1030:3B88``)."""
     if sprite_type == 0:
         blit_opaque(planes, idx, di)
     elif sprite_type == 1:

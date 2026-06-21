@@ -219,7 +219,7 @@ def test_ega_crtc_display_start_tracks_indexed_port_writes():
     assert mem.ega_display_start == 0x2034
 
 
-def test_pre2_runtime_bootstraps_past_lzexe_stub():
+def test_pre2_runtime_bootstraps_to_game_code():
     from pre2.runtime import create_pre2_runtime
 
     root = Path(__file__).resolve().parents[1]
@@ -227,9 +227,9 @@ def test_pre2_runtime_bootstraps_past_lzexe_stub():
     rt.cpu.trace_enabled = False
     rt.cpu.run(2_000)
 
-    # The original MZ entry is the LZEXE stub at 1CB6:000E.  Reaching 1996/1C34
-    # means the packed executable has materialized real PRE2 program code.
-    assert rt.cpu.s.cs in {0x1996, 0x1C34}
+    # The MZ entry self-unpacks; reaching segment 1030 means the real PRE2 program
+    # code has materialized and is executing.
+    assert (rt.cpu.s.cs & 0xFFFF) == 0x1030
 
 
 def test_int67_ems_probe_reports_driver_absent():

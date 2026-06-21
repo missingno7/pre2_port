@@ -1,7 +1,7 @@
 """TEMPORARY probe — in-VM lockstep verify of the sprite-blit replacement.
 
 Replays into gameplay with hooks in verify mode: the original ASM draws (oracle)
-and each native blit (1030:3B69, all three dispatch paths) is diffed against the
+and each native blit (1030:3B88, all three dispatch paths) is diffed against the
 ASM framebuffer + exit di at the routine's RET. Caps the number of verified blits
 (the blit fires ~700x/frame) and asserts zero divergence.
 

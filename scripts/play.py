@@ -28,13 +28,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from dos_re.cpu import IF
 from dos_re.input_demo import InputDemoPlayback, InputDemoRecorder, bios_key_value_from_scancode
 from dos_re.interrupts import deliver_interrupt, deliver_scancode
 from dos_re.keyboard import KeyDispatcher
 from dos_re.snapshot import parse_addr, run_until, write_snapshot
 from pre2.analysis import describe_exe, inventory_assets
 from pre2.launch import build_command_tail
-from pre2.runtime import create_pre2_runtime, load_pre2_snapshot
+from dos_re.dosbox_savestate import is_dosbox_savestate
+from pre2.runtime import create_pre2_runtime, load_dosbox_savestate, load_pre2_snapshot
 
 
 def _default_snapshot_dir(root: Path) -> Path:
@@ -117,9 +119,20 @@ def _make_runtime(args: argparse.Namespace, *, fast_adlib: bool | None = None):
     command_tail = build_command_tail(args.dos_args)
     if fast_adlib is None:
         fast_adlib = bool(getattr(args, "fast_adlib", False))
+    # The recovered/hybrid hooks + bridges are keyed to a specific build's memory
+    # layout (code offsets + data segment). On a build they weren't derived against
+    # (e.g. a different release), they fire on the wrong instructions and corrupt
+    # execution — run the pure VM oracle instead with --no-replacements.
+    native = not bool(getattr(args, "no_replacements", False))
     if args.snapshot:
-        return load_pre2_snapshot(exe, args.snapshot, game_root=game_root, fast_adlib=fast_adlib)
-    return create_pre2_runtime(exe, game_root=game_root, command_tail=command_tail, fast_adlib=fast_adlib)
+        if is_dosbox_savestate(args.snapshot):
+            # A DOSBox-X .sav: load its memory + CPU state (runs pure ASM — the
+            # recovered hooks are keyed to our load segment, not DOSBox's).
+            return load_dosbox_savestate(exe, args.snapshot, game_root=game_root, fast_adlib=fast_adlib)
+        return load_pre2_snapshot(exe, args.snapshot, game_root=game_root,
+                                  fast_adlib=fast_adlib, native_replacements=native)
+    return create_pre2_runtime(exe, game_root=game_root, command_tail=command_tail,
+                               fast_adlib=fast_adlib, native_replacements=native)
 
 
 def _pygame_scan_map(pygame) -> dict[int, tuple[int, int]]:
@@ -174,6 +187,59 @@ def _present_surface(pygame, np, screen, rgb):
     pygame.display.flip()
 
 
+def _pump_and_step(rt, *, now, pic, sound_blaster, timer_irq, input_irq_steps, tick_state, n_steps):
+    """One sub-batch: raise due PIT/SB IRQs against the clock value ``now``, deliver
+    pending IRQs (IF-gated), then run ``n_steps`` CPU instructions.
+
+    Shared by live play (``now`` = wall clock) and the demo record/replay path
+    (``now`` = the deterministic emulated clock).  Driving the timer from ``now``
+    rather than a fixed one-tick-per-frame is what makes a demo run at the game's
+    real PIT rate (and lets the Sound Blaster stream) instead of in slow motion.
+    """
+    if timer_irq:
+        tick_period = 1.0 / max(1.0, rt.dos.pit_channel0_hz())
+        while now >= tick_state["next"]:
+            if pic is not None:
+                pic.raise_irq(0)
+            elif rt.cpu.get_flag(IF):
+                deliver_interrupt(rt, 0x08, max_steps=input_irq_steps)
+            tick_state["next"] += tick_period
+            if tick_state["next"] < now - 0.25:          # fell far behind: resync
+                tick_state["next"] = now + tick_period
+    if sound_blaster is not None:
+        sound_blaster.service()
+    if pic is not None:                                  # deliver pending IRQs (IF-gated)
+        guard = 0
+        while rt.cpu.get_flag(IF) and guard < 64:
+            n = pic.acknowledge()
+            if n is None:
+                break
+            deliver_interrupt(rt, (0x08 + n) if n < 8 else (0x70 + n - 8), max_steps=input_irq_steps)
+            guard += 1
+    for _ in range(n_steps):
+        rt.cpu.step()
+
+
+def _advance_demo_frame(rt, *, chunk_steps, sub_batch, clock, pic,
+                        sound_blaster, timer_irq, input_irq_steps, tick_state):
+    """Advance exactly one demo frame on the deterministic emulated clock.
+
+    ``clock`` is the emulated time source — a function of ``cpu.instruction_count``
+    (so it advances every *instruction*, including inside tight loops). That makes
+    the whole frame -> VM-state mapping a pure function of the instruction stream (a
+    recorded demo replays identically) yet lets the PIT, Sound Blaster AND port-based
+    busy-waits (e.g. the VGA 0x3DA vertical-retrace poll) all see time advance — a
+    per-frame or per-sub-batch clock freezes those polls and the game hangs.
+    """
+    remaining = chunk_steps
+    while remaining > 0:
+        n = min(sub_batch, remaining)
+        _pump_and_step(rt, now=clock(), pic=pic, sound_blaster=sound_blaster,
+                       timer_irq=timer_irq, input_irq_steps=input_irq_steps,
+                       tick_state=tick_state, n_steps=n)
+        remaining -= n
+
+
 def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | None = None) -> int:
     """Live VGA/text viewer for PRE2 bring-up, with OPL3 audio and demo record/replay.
 
@@ -186,7 +252,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     """
     import pygame
     import numpy as np
-    from time import perf_counter
+    from time import perf_counter, sleep
     from sdl_view import NukedAdlibAudio, SoundBlasterAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
@@ -209,8 +275,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # timer/vsync waits set the speed — no per-game constants.  Demo record/replay
     # keep the deterministic fixed-chunk clock so recordings stay reproducible.
     present_period = 1.0 / max(1, int(args.present_hz))
-    next_tick = perf_counter()
-    realtime_batch = 2000  # VM steps between wall-clock checks (keeps ticks on time)
+    realtime_batch = 2000  # VM steps per IRQ-service sub-batch (keeps ticks on time)
     status = "replaying" if replaying else "running"
     rt.cpu.trace_enabled = False
     rt.dos.console_input_fallback = None
@@ -224,15 +289,35 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rt.dos.set_adlib_callback(lambda reg, value: adlib.write(reg, value), emit_current=True)
 
     # Gameplay digital audio: enable the emulated Sound Blaster so the original
-    # driver detects it and DMA-streams its PCM (MOD music + PCM SFX).  Live play
-    # only — record/replay keep the deterministic clock with no SB.  IRQ0/IRQ7 are
-    # then delivered inline by the CPU via the PIC.
+    # driver detects it and DMA-streams its PCM (MOD music + PCM SFX).  Enabled for
+    # live play AND demo record/replay — the demo path drives the SB block IRQ from
+    # the deterministic emulated clock (below) so demos sound and run like live play
+    # while staying reproducible.  IRQ0/IRQ7 are delivered at batch boundaries.
     sb_audio = None
     sound_blaster = None
-    if not replaying and getattr(args, "audio", "adlib") != "off":
+    if getattr(args, "audio", "adlib") != "off":
         sound_blaster = enable_sound_blaster(rt)
-        sound_blaster.clock = perf_counter  # pace block-complete IRQs to real time
         sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
+
+    # The deterministic demo clock: advanced a fixed present_period each frame so the
+    # PIT/SB/retrace cadence is a pure function of the frame index (reproducible).
+    # The clock source (this vs. perf_counter) is chosen per frame from `realtime`.
+    # The deterministic demo clock advances with cpu.instruction_count (so it ticks
+    # every instruction, even inside tight port-poll loops); `base` re-anchors it
+    # when the source switches so it stays continuous.
+    det_speed = max(1, int(args.chunk_steps) * max(1, int(args.present_hz)))
+    vclock = {"base": perf_counter()}
+    tick_state = {"next": perf_counter()}
+    prev_realtime = None
+    det_now = lambda: vclock["base"] + rt.cpu.instruction_count / det_speed  # noqa: E731
+    # Demo (deterministic) presentation pacing: each game-frame is a fixed slice of
+    # *game* time (present_period), so we pace game-frames to the wall clock for
+    # real-time speed, and DECOUPLE the (expensive) screen render — drawing only at
+    # ~present_hz and skipping it when behind so the VM/audio keep real-time instead
+    # of the whole loop collapsing to the render rate.  (Replay stays bit-identical:
+    # this only changes when we *draw*, never the VM advance.)
+    sim_deadline = perf_counter()
+    last_render = 0.0
 
     demo: dict[str, InputDemoRecorder | None] = {"rec": None}
     fast_adlib = bool(getattr(args, "fast_adlib", False))
@@ -352,48 +437,42 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 flush_dos_keys()
 
             # Live play self-paces on the wall clock via the emulated PIT/retrace;
-            # record/replay keep the deterministic fixed-chunk clock.
+            # demo record/replay use the deterministic emulated clock (same PIT/SB
+            # servicing path, but a reproducible time source).
             realtime = not replaying and demo["rec"] is None
-            rt.dos.time_source = perf_counter if realtime else None
+            if realtime != prev_realtime:
+                # Re-anchor both clocks when the source switches (e.g. F11 starts a
+                # recording) so the SB block timer and tick accumulator stay
+                # continuous — otherwise the next block would stall or burst.
+                now0 = perf_counter()
+                vclock["base"] = now0 - rt.cpu.instruction_count / det_speed  # det_now()==now0
+                tick_state["next"] = det_now() if not realtime else now0
+                if sound_blaster is not None:
+                    sound_blaster.clock = perf_counter if realtime else det_now
+                    sound_blaster.resync_clock(det_now() if not realtime else now0)
+                sim_deadline = now0          # restart demo pacing from now
+                last_render = 0.0            # force a render on the first demo frame
+                prev_realtime = realtime
+            rt.dos.time_source = perf_counter if realtime else det_now
+            pic = rt.dos.pic
             try:
                 if realtime:
-                    # Hardware IRQs (timer IRQ0, Sound Blaster IRQ7) are raised on
-                    # the wall clock and delivered at *batch boundaries* (not mid-
-                    # instruction) so an ISR never interrupts a stateful EGA render
-                    # sequence.  The SB's block IRQ is paced by its own clock.
+                    # IRQs are raised on the wall clock and delivered at *batch
+                    # boundaries* (not mid-instruction) so an ISR never interrupts a
+                    # stateful EGA render sequence.
                     deadline = perf_counter() + present_period
-                    pic = rt.dos.pic
                     while running and perf_counter() < deadline:
-                        now = perf_counter()
-                        tick_period = 1.0 / max(1.0, rt.dos.pit_channel0_hz())
-                        if args.timer_irq:
-                            while now >= next_tick:
-                                if pic is not None:
-                                    pic.raise_irq(0)               # via PIC (with SB)
-                                elif rt.cpu.get_flag(IF):
-                                    deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
-                                next_tick += tick_period
-                                if next_tick < now - 0.25:         # fell far behind: resync
-                                    next_tick = now + tick_period
-                        if sound_blaster is not None:
-                            sound_blaster.service()
-                        if pic is not None:                        # deliver pending IRQs at this
-                            while rt.cpu.get_flag(IF):             # batch boundary, IF-gated
-                                n = pic.acknowledge()
-                                if n is None:
-                                    break
-                                deliver_interrupt(rt, (0x08 + n) if n < 8 else (0x70 + n - 8),
-                                                  max_steps=args.input_irq_steps)
-                        for _ in range(realtime_batch):
-                            rt.cpu.step()
+                        _pump_and_step(rt, now=perf_counter(), pic=pic, sound_blaster=sound_blaster,
+                                       timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
+                                       tick_state=tick_state, n_steps=realtime_batch)
                         steps_done += realtime_batch
                 else:
                     chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
-                    for _ in range(chunk):
-                        rt.cpu.step()
+                    _advance_demo_frame(rt, chunk_steps=chunk, sub_batch=realtime_batch,
+                                        clock=det_now, pic=pic, sound_blaster=sound_blaster,
+                                        timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
+                                        tick_state=tick_state)
                     steps_done += chunk
-                    if args.timer_irq:
-                        deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
             except ConsoleInputWouldBlock:
                 status = "waiting for DOS key"
             except HaltExecution:
@@ -406,21 +485,39 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 status = f"exception: {type(exc).__name__}: {exc}"
                 running = False
 
+            # Audio is drained every game-frame (cheap, and pcm_out must not pile up).
             if adlib is not None:
                 adlib.pump()
             if sb_audio is not None:
                 sb_audio.pump()
-            render_current()
-            caption_extra = audio_status.get("text", "")
-            pygame.display.set_caption(
-                f"PRE2 VM | {status} | frame={frame} steps={steps_done:,} | "
-                f"CS:IP={rt.cpu.s.cs:04X}:{rt.cpu.s.ip:04X} | mode={rt.dos.video_mode & 0xFF:02X}h"
-                + (f" | {caption_extra}" if caption_extra else "")
-                + (" | REC" if demo["rec"] is not None else "")
-            )
+
+            now = perf_counter()
+            # Live play renders every frame (it is already wall-clock paced). The demo
+            # path renders at most ~present_hz, and when it falls behind real time it
+            # renders far less often (down to ~4 Hz) so the VM/audio get the wall-clock
+            # time instead of the whole loop collapsing to the render rate.
+            render_gap = present_period if (sim_deadline - now) > -present_period else 0.25
+            do_render = realtime or (now - last_render) >= render_gap
+            if do_render:
+                render_current()
+                caption_extra = audio_status.get("text", "")
+                pygame.display.set_caption(
+                    f"PRE2 VM | {status} | frame={frame} steps={steps_done:,} | "
+                    f"CS:IP={rt.cpu.s.cs:04X}:{rt.cpu.s.ip:04X} | mode={rt.dos.video_mode & 0xFF:02X}h"
+                    + (f" | {caption_extra}" if caption_extra else "")
+                    + (" | REC" if demo["rec"] is not None else "")
+                )
+                last_render = now
             frame += 1
             if not realtime:
-                clock.tick(max(1, int(args.present_hz)))
+                # Pace game-frames to real time (each is present_period of game time):
+                # sleep when ahead; if we fell far behind, resync so it never spirals.
+                sim_deadline += present_period
+                slack = sim_deadline - perf_counter()
+                if slack > 0:
+                    sleep(slack)
+                elif slack < -0.5:
+                    sim_deadline = perf_counter()
     finally:
         if not replaying:
             stop_recording()
@@ -446,15 +543,29 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
 def _run_replay_headless(rt, args: argparse.Namespace, playback: InputDemoPlayback) -> int:
     """Replay a recorded demo with no UI: deterministic, fast, for testing.
 
-    Mirrors the viewer loop exactly (same per-frame input point, fixed step
-    budget, optional timer IRQ) minus presentation, so the resulting VM state
-    matches what the viewer would reach.
+    Mirrors the viewer's demo path exactly (same per-frame input point, fixed step
+    budget, same deterministic emulated clock driving the PIT + Sound Blaster) minus
+    presentation, so the resulting VM state matches what the viewer would reach.
     """
     from dos_re.cpu import HaltExecution, UnsupportedInstruction
+    from dos_re.runtime import enable_sound_blaster
 
     steps_done = 0
     frame = 0
     status = "demo replay complete"
+
+    realtime_batch = 2000
+    # Enable the SB so the instruction stream matches a recording made with sound;
+    # there is no audio sink here, so we drop the accumulated PCM each frame.
+    det_speed = max(1, int(args.chunk_steps) * max(1, int(args.present_hz)))
+    tick_state = {"next": 0.0}
+    det_now = lambda: rt.cpu.instruction_count / det_speed  # noqa: E731 — per-instruction clock
+    sound_blaster = None
+    if getattr(args, "audio", "adlib") != "off":
+        sound_blaster = enable_sound_blaster(rt)
+        sound_blaster.clock = det_now
+    rt.dos.time_source = det_now
+    pic = rt.dos.pic
 
     def replay_deliver(runtime, scancode: int) -> None:
         deliver_scancode(runtime, scancode, max_steps=args.input_irq_steps)
@@ -463,11 +574,13 @@ def _run_replay_headless(rt, args: argparse.Namespace, playback: InputDemoPlayba
         playback.apply_to_runtime(frame, rt, deliver=replay_deliver)
         chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
         try:
-            for _ in range(chunk):
-                rt.cpu.step()
+            _advance_demo_frame(rt, chunk_steps=chunk, sub_batch=realtime_batch,
+                                clock=det_now, pic=pic, sound_blaster=sound_blaster,
+                                timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
+                                tick_state=tick_state)
             steps_done += chunk
-            if args.timer_irq:
-                deliver_interrupt(rt, 0x08, max_steps=args.input_irq_steps)
+            if sound_blaster is not None and sound_blaster.pcm_out:
+                sound_blaster.pcm_out.clear()
         except HaltExecution:
             status = "program halted"
             break
@@ -499,6 +612,14 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
     # recorded with, or the deterministic frame clock drifts.
     if "chunk_steps" in meta:
         args.chunk_steps = int(meta["chunk_steps"])
+        # Demos recorded before the faithful multi-tick clock baked in a small
+        # chunk (calibrated for the old 1-tick-per-frame timing).  Replayed under
+        # the current clock the game gets far too few instructions/frame and runs
+        # in slow motion — warn so it isn't mistaken for a performance problem.
+        if args.chunk_steps < 8000:
+            print(f"WARNING: this demo was recorded with chunk_steps={args.chunk_steps} "
+                  "(old timing); under the current clock the game will run in slow "
+                  "motion. Re-record the demo for correct speed.")
     if "timer_irq" in meta:
         args.timer_irq = bool(meta["timer_irq"])
     if "input_irq_steps" in meta:
@@ -514,9 +635,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--exe", default=str(ROOT / "assets" / "pre2.exe"), help="path to original PRE2.EXE")
     p.add_argument("--game-root", default=str(ROOT / "assets"), help="directory containing PRE2 assets")
     p.add_argument("--dos-args", default="", help="raw DOS command tail to pass to PRE2.EXE")
-    p.add_argument("--snapshot", help="continue from an existing snapshot directory")
+    p.add_argument("--snapshot", help="continue from an existing snapshot directory, or a DOSBox-X .sav save state")
     p.add_argument("--steps", type=int, default=None, help="max VM instructions to execute (default: unbounded in --view, 1,000,000 headless)")
-    p.add_argument("--stop-at", type=parse_addr, help="stop before executing CS:IP, e.g. 1996:0100")
+    p.add_argument("--stop-at", type=parse_addr, help="stop before executing CS:IP, e.g. 1030:0100")
     p.add_argument("--trace-tail", type=int, default=40, help="number of recent trace lines to keep/print")
     p.add_argument("--save-snapshot", nargs="?", const="auto", help="save a VM snapshot; optional directory path")
     p.add_argument("--inventory", action="store_true", help="print PRE2 executable/asset inventory and exit")
@@ -526,12 +647,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--demo-dir", default=str(ROOT / "artifacts"), help="directory to write recorded demos into")
     p.add_argument("--audio", default="adlib", choices=("adlib", "off"), help="viewer sound-card (OPL3) audio")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
-    p.add_argument("--speed", type=int, default=120_000, help="VM steps/sec for record/replay's deterministic clock; live --view ignores this and self-paces on the emulated PIT/retrace at native speed")
+    p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=30, help="live presents per second (also paces the VM to real time)")
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
+    p.add_argument("--no-replacements", action="store_true", help="run the pure VM oracle with NO recovered/hybrid hooks (their fixed code/data offsets are bound to one build's layout; use this on a build they weren't derived against)")
     p.add_argument("--verify-hooks", action="store_true", help="run the original ASM as the oracle and diff each recovered-native result against it; prints divergences immediately plus a compact periodic per-hook summary")
     p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
     args = p.parse_args(argv)

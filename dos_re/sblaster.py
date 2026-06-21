@@ -249,6 +249,19 @@ class SoundBlaster:
             self._block_pending = False
             self._fire_irq()
 
+    def resync_clock(self, now: float) -> None:
+        """Re-base a pending block-complete IRQ onto a new clock origin.
+
+        The front-end may switch the time source (e.g. wall clock <-> the
+        deterministic demo clock); ``_block_due`` was computed against the old
+        origin, so without this the next block would either stall forever or fire
+        a catch-up burst.  Re-arm it one block-period from ``now`` on the new clock.
+        """
+        if self._block_pending:
+            rate = self.sample_rate or 8000
+            length = self.block_len or 168
+            self._block_due = now + length / rate
+
     def _fire_irq(self) -> None:
         self.irq_line = True
         if self.raise_irq is not None:

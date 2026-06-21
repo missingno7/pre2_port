@@ -46,16 +46,22 @@ def test_mix_channel_silent_channel_is_untouched():
     assert list(buf) == [5, 5, 5, 5] and out.pos == CHANNEL_OFF
 
 
-def test_mix_channel_loops_when_loop_len_big_enough():
-    instr = Instrument(loop_start=4, loop_len=0x20, sample=bytes(range(40)))
-    out = mix_channel(bytearray(8), _ch(pos=0, end=8, period=0), instr, _VOL_IDENTITY, 8)
-    # ran to the end (8) then loops: pos -> loop_start, end -> loop_start+loop_len
-    assert out.pos == 4 and out.end == 4 + 0x20
+def test_mix_channel_loops_and_keeps_filling_the_block():
+    # loop region [0,4); loop_len=4 (>2) loops. When si passes end mid-block the asm
+    # wraps to loop_start and KEEPS filling the rest of the block (it does not stop),
+    # so the block is fully written and pos lands wherever filling ended (not loop_start).
+    instr = Instrument(loop_start=0, loop_len=4, sample=bytes(range(40)), ptr_off=0)
+    out = mix_channel(buf := bytearray(8), _ch(pos=0, end=4, period=0), instr, _VOL_IDENTITY, 8)
+    assert list(buf) == [0, 1, 2, 3, 4, 0, 1, 2]   # filled past the wrap, not early-returned
+    assert out.pos != CHANNEL_OFF and out.end == 4
 
 
-def test_mix_channel_stops_when_loop_too_short():
-    instr = Instrument(loop_start=0, loop_len=4, sample=bytes(range(40)))  # 4 < 0x0C
-    out = mix_channel(bytearray(8), _ch(pos=0, end=4, period=0), instr, _VOL_IDENTITY, 8)
+def test_mix_channel_fades_and_stops_when_no_loop():
+    # loop_len <= 2 == "no loop": one-shot. When the sample ends mid-block the asm
+    # applies a linear release fade over the rest of the block, then silences the channel.
+    instr = Instrument(loop_start=0, loop_len=2, sample=bytes(range(40)), ptr_off=0)
+    out = mix_channel(buf := bytearray(8), _ch(pos=0, end=4, period=0), instr, _VOL_IDENTITY, 8)
+    assert list(buf) == [0, 1, 2, 3, 4, 4, 3, 2]   # base samples then decaying release tail
     assert out.pos == CHANNEL_OFF
 
 

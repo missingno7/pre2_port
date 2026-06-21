@@ -7,9 +7,9 @@ classify boundaries, dumping {asset bytes, resulting 4-plane VRAM cache, type
 table} so the recovered transform can be verified byte-exact against the ASM.
 
 Boundaries (seg 1030, see docs/pre2/symbol_ledger.md):
-  42F7 local sprite decode (entry)   / 4369 ret
-  436A shared sprite decode (entry)  / 43B2 ret
-  4213 classifier (entry)            / 428F ret
+  4316 local sprite decode (entry)   / 4388 ret
+  4389 shared sprite decode (entry)  / 43D1 ret
+  4232 classifier (entry)            / 42AE ret
 
 Run:  python -m pre2.probes.capture_sprite_decode
 """
@@ -29,7 +29,7 @@ from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.runtime import load_pre2_snapshot
 
 SEG = 0x1030
-DS = 0x1A13
+DS = 0x1A0F
 CACHE_OFF = 0x5E80
 CACHE_BYTES = 256 * 0x20  # 256 slots x 32 bytes per plane
 DEMO = ROOT / "artifacts" / "demo_pre2_20260620_091827"
@@ -46,7 +46,7 @@ def _rb(mem, seg, off):
 
 
 def _src_seg_local(mem):
-    # 42F7: src = [0x2DD6] + ([ [0x2D86] + 0x2D2C ] << 4)
+    # 4316: src = [0x2DD6] + ([ [0x2D86] + 0x2D2C ] << 4)
     dd6 = _rw(mem, DS, 0x2DD6)
     d86 = _rb(mem, DS, 0x2D86)
     mult = _rb(mem, DS, 0x2D2C + d86)
@@ -76,7 +76,7 @@ def main() -> int:
     mem = cpu.mem
     cpu.trace_enabled = False
 
-    hits = {a: 0 for a in (0x42F7, 0x4369, 0x436A, 0x43B2, 0x4213, 0x428F)}
+    hits = {a: 0 for a in (0x4316, 0x4388, 0x4389, 0x43D1, 0x4232, 0x42AE)}
     order = []
     cap = {}
 
@@ -85,7 +85,7 @@ def main() -> int:
             hits[addr] += 1
             if len(order) < 40:
                 order.append((addr, c.instruction_count))
-            if addr == 0x42F7 and "local_in" not in cap:
+            if addr == 0x4316 and "local_in" not in cap:
                 src, dd6, d86, mult = _src_seg_local(mem)
                 cap["local_in"] = {
                     "src_seg": src, "dd6": dd6, "d86": d86, "mult": mult,
@@ -93,12 +93,12 @@ def main() -> int:
                     "asset": bytes(mem.data[(src << 4):(src << 4) + 0x200 + 256 * 128]),
                     "index_table": bytes(mem.data[(src << 4):(src << 4) + 0x200]),
                 }
-            elif addr == 0x4369 and "local_in" in cap and "local_out" not in cap:
+            elif addr == 0x4388 and "local_in" in cap and "local_out" not in cap:
                 cap["local_out"] = _cache_planes(mem)
                 s = c.s
                 cap["local_regs"] = {r: getattr(s, r) & 0xFFFF for r in
                                      ("ax", "bx", "cx", "dx", "si", "di", "bp", "ds", "es")}
-            elif addr == 0x436A and "shared_in" not in cap:
+            elif addr == 0x4389 and "shared_in" not in cap:
                 base = _rw(mem, DS, 0x2DD8)
                 cap["shared_in"] = {
                     "shared_base": base,
@@ -106,13 +106,13 @@ def main() -> int:
                     # generous: bank spans beyond 64K (max in-bank code ~0x315 => ~68K).
                     "asset": bytes(mem.data[(base << 4):(base << 4) + 0x18000]),
                 }
-            elif addr == 0x43B2 and "shared_in" in cap and "shared_out" not in cap:
+            elif addr == 0x43D1 and "shared_in" in cap and "shared_out" not in cap:
                 cap["shared_out"] = _cache_planes(mem)
                 s = c.s
                 cap["shared_regs"] = {r: getattr(s, r) & 0xFFFF for r in
                                       ("ax", "bx", "cx", "dx", "si", "di", "bp", "ds", "es")}
-            elif addr == 0x428F and "type_table" not in cap:
-                cap["type_table"] = bytes(mem.data[(DS << 4) + 0x4DF4:(DS << 4) + 0x4DF4 + 256])
+            elif addr == 0x42AE and "type_table" not in cap:
+                cap["type_table"] = bytes(mem.data[(DS << 4) + 0x4DF8:(DS << 4) + 0x4DF8 + 256])
                 cap["classify_cache"] = _cache_planes(mem)
             interpret_current_instruction_without_hook(c)
         return handler
@@ -143,9 +143,9 @@ def main() -> int:
 
     print("hit counts:", {f"{a:04X}": n for a, n in hits.items()})
     if "local_regs" in cap:
-        print("42F7 exit regs:", {k: f"{v:04X}" for k, v in cap["local_regs"].items()})
+        print("4316 exit regs:", {k: f"{v:04X}" for k, v in cap["local_regs"].items()})
     if "shared_regs" in cap:
-        print("436A exit regs:", {k: f"{v:04X}" for k, v in cap["shared_regs"].items()})
+        print("4389 exit regs:", {k: f"{v:04X}" for k, v in cap["shared_regs"].items()})
     if "shared_in" in cap:
         print(f"shared_base={cap['shared_in']['shared_base']:04X} bank_bytes={len(cap['shared_in']['asset'])}")
     print("captured keys:", sorted(cap.keys()))
