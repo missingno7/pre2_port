@@ -36,7 +36,7 @@ CACHE_PLANE_BYTES = NUM_SLOTS * SLOT_BYTES  # 0x2000 per plane
 VAR_LOCAL_BASE = 0x2DDA            # sheet base segment seed
 VAR_BANK_SELECT = 0x2D8A          # index into the paragraph table
 VAR_BANK_TABLE = 0x2D30           # [bank_select + 0x2D30] paragraph multiplier
-VAR_SHARED_BASE = 0x2DE0          # shared/union bank base segment
+VAR_SHARED_BASE = 0x2DDC          # shared/union bank base segment [asm 43AC: add ax,[0x2DDC]]
 VAR_INDEX_COPY = 0x25CE           # copy of the 256-entry index table
 
 

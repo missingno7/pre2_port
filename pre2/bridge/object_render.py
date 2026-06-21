@@ -91,10 +91,15 @@ def read_sprite(mem, off: int) -> Sprite:
 
 
 def read_attr(mem, sprite_id: int) -> SpriteAttr:
-    # The id word [si+4] carries flags in its high byte: bit 0x2000 = "drawn"
-    # (set at 28B6, cleared at 2732 each frame) and bit 0x8000 = H-flip. The table
-    # index is the id with those cleared, <<1 [asm 2732 and 0xDF / 2739 shl / 275A and bh,0x7F].
-    bx = ((sprite_id & 0x5FFF) << 1) & 0xFFFF
+    # The id word [si+4] carries flags in its high 3 bits: 0x2000 = "drawn" (set at
+    # 28B6, cleared at 2732 each frame), 0x4000 = opaque/flash, 0x8000 = H-flip. The
+    # attribute-table index is the id with ALL three cleared, <<1. In the ASM that's
+    # 2732 `and [si+5],0xDF` (clears 0x2000), then 2739 `shl bx,1` (the 0x8000 flip bit
+    # falls out as the carry into cs:[26e2]), then 275E `and bh,0x7F` (clears the shifted
+    # 0x4000 bit). Net: index = (id & 0x1FFF) << 1. (Earlier this used 0x5FFF, which kept
+    # 0x4000 — harmless for normal sprites but wrong for opaque/flash ones (bit14 set),
+    # which then read garbage attributes from far past the table.)
+    bx = ((sprite_id & 0x1FFF) << 1) & 0xFFFF
     wh = _rw(mem, DATA_SEG, TBL_WIDTH_HEIGHT + bx)
     return SpriteAttr(
         width=wh & 0xFF,

@@ -33,8 +33,8 @@ def _planes_view(mem):
             for p in range(4)]
 
 
-def _render(mem, planes, *, mutate: bool) -> None:
-    cam = _obj.read_camera(mem, frame_pre_inc=False)     # [6bd5] already incremented by caller
+def _render(mem, planes, *, mutate: bool, frame_pre_inc: bool) -> None:
+    cam = _obj.read_camera(mem, frame_pre_inc=frame_pre_inc)
     for off, spr in _obj.read_active_list(mem):
         if spr.sprite_id == 0xFFFF:                      # [asm 2713] empty slot
             continue
@@ -59,20 +59,26 @@ def _render(mem, planes, *, mutate: bool) -> None:
 def object_render(cpu) -> None:
     """Native replacement for the moving-sprite renderer at 1030:26FA."""
     mem = cpu.mem
-    fl = ((_DATA_SEG << 4) + _FRAME) & 0xFFFFF           # [asm 2708] inc word [6bd5]
-    v = ((mem.data[fl] | (mem.data[fl + 1] << 8)) + 1) & 0xFFFF
-    mem.data[fl] = v & 0xFF
-    mem.data[fl + 1] = (v >> 8) & 0xFF
 
     if getattr(cpu, "pre2_verify_mode", False):
-        # paint the recovered planes onto a copy (no record mutation), diff at the RET.
+        # The ASM oracle runs (interpret below) and increments the frame counter [6bd5]
+        # itself at 2708, so we must NOT pre-increment it here — doing both double-counts
+        # and shifts the blink phase (frame & 3) by one, which silently corrupts every
+        # *blinking* sprite (hit-flash / invincibility) in verify mode only. Instead read
+        # the value the ASM will use (orig + 1) logically, without touching memory. Paint
+        # onto a copy (no record mutation); diff at the RET.
         snap = [bytearray(p) for p in _planes_view(mem)]
-        _render(mem, snap, mutate=False)
+        _render(mem, snap, mutate=False, frame_pre_inc=True)
         cpu.pre2_object_pending.append(snap)
         interpret_current_instruction_without_hook(cpu)
         return
 
-    _render(mem, _planes_view(mem), mutate=True)
+    # Hybrid: the ASM does NOT run, so apply its [6bd5] increment ourselves [asm 2708].
+    fl = ((_DATA_SEG << 4) + _FRAME) & 0xFFFFF
+    v = ((mem.data[fl] | (mem.data[fl + 1] << 8)) + 1) & 0xFFFF
+    mem.data[fl] = v & 0xFF
+    mem.data[fl + 1] = (v >> 8) & 0xFF
+    _render(mem, _planes_view(mem), mutate=True, frame_pre_inc=False)
     cpu.s.ip = cpu.pop()  # near ret (caller's regs are preserved across the routine)
 
 
