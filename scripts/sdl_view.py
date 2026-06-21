@@ -279,7 +279,8 @@ class SoundBlasterAudio:
     channel so it mixes with the OPL (AdLib) output.
     """
 
-    def __init__(self, pygame, sound_blaster, status: dict | None = None, *, chunk_ms: float = 46.0) -> None:
+    def __init__(self, pygame, sound_blaster, status: dict | None = None, *,
+                 chunk_ms: float = 46.0) -> None:
         self._pygame = pygame
         self._sb = sound_blaster
         self._status = status
@@ -288,7 +289,8 @@ class SoundBlasterAudio:
         self._rate = 44100
         self._channels = 1
         self._buf = np.zeros(0, dtype=np.int16)
-        self._dc = 0.0
+        self._in = np.zeros(0, dtype=np.float64)  # carried resampler input tail
+        self._phase = 0.0                         # carried fractional read position
         if not pygame.mixer.get_init():
             pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
         init = pygame.mixer.get_init()
@@ -333,25 +335,43 @@ class SoundBlasterAudio:
         raw = bytes(sb.pcm_out)
         sb.pcm_out.clear()
         src_rate = sb.sample_rate or 8000
-        # SB 8-bit DMA is *unsigned* (silence = 0x80); reading it as signed would
-        # flip every mid-scale crossing into a full-scale jump (broadband noise).
-        sig = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128) * 256
-        # Remove residual DC (a one-pole high-pass with state carried across drains)
-        # so any offset in the stream doesn't sit the waveform off-centre.
-        sig = self._dc_block(sig)
-        n_out = max(1, len(sig) * self._rate // src_rate)  # nearest-neighbour resample
-        idx = np.minimum(np.arange(n_out) * src_rate // self._rate, len(sig) - 1)
-        self._buf = np.concatenate([self._buf, sig[idx]])
+        # SB 8-bit DMA is *unsigned*; map it to signed and play it straight through, just
+        # like the real card's DAC -- this matches DOSBox (incl. the game's own low DC
+        # rest level near byte 0x40 and its asymmetric upward peaks, which are how the game
+        # actually sounds).  We deliberately do NOT remove the DC offset: it is inaudible
+        # (real hardware output is AC-coupled), and subtracting it re-centres the very
+        # asymmetric waveform so its positive peaks overshoot +full-scale and hard-clip.
+        # `(byte-128)*256` always fits int16 by construction, so played as-is it never clips.
+        sig = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64) - 128) * 256
+        # Phase-continuous LINEAR resample to the mixer rate.  Carrying the fractional
+        # read position (`_phase`) and the unconsumed input tail (`_in`) across drains
+        # avoids the per-block phase reset and sample-and-hold steps of a
+        # nearest-neighbour resample, which otherwise click at every ~20 ms DMA-block
+        # boundary and sound gritty.  (Upsample => ratio < 1, so we always keep >=1
+        # input sample of tail for the next interpolation.)
+        self._in = np.concatenate([self._in, sig])
+        ratio = src_rate / self._rate                      # input samples per output
+        avail = len(self._in)
+        if avail >= 2:
+            k = int((avail - 1 - self._phase) / ratio) + 1
+            pos = self._phase + np.arange(max(0, k)) * ratio
+            pos = pos[pos <= avail - 1]
+            if len(pos):
+                i0 = np.floor(pos).astype(np.int64)
+                frac = pos - i0
+                i1 = np.minimum(i0 + 1, avail - 1)
+                out = self._in[i0] * (1.0 - frac) + self._in[i1] * frac
+                self._buf = np.concatenate(
+                    [self._buf, np.clip(out, -32768, 32767).astype(np.int16)])
+                adv = self._phase + len(pos) * ratio
+                consumed = int(adv)
+                self._in = self._in[consumed:]
+                self._phase = adv - consumed
         cap = self._rate                                   # cap buffered latency at ~1s
         if len(self._buf) > cap:
             self._buf = self._buf[-cap:]
-
-    def _dc_block(self, x):
-        # Slowly track the DC level across drains and subtract it (dependency-free
-        # high-pass).  The estimate moves gradually so there is no per-drain jump.
-        if len(x):
-            self._dc += 0.06 * (float(x.mean()) - self._dc)
-        return np.clip(x - self._dc, -32768, 32767).astype(np.int16)
+        if len(self._in) > cap:                            # safety: never let tail grow
+            self._in = self._in[-cap:]
 
     def _next_chunk(self):
         # Emit up to one chunk of whatever is buffered (callers gate on having a

@@ -125,8 +125,15 @@ class SoundBlaster:
     # in a tight loop).  ``clock`` returns seconds (wall-clock in the live viewer);
     # if None, the IRQ fires immediately (detection-only / headless use).
     clock: Callable[[], float] | None = None
+    # Anchor the block cadence to a fixed grid (live play, for drift-free audio).
+    # Left False for the deterministic demo clock so recordings stay byte-reproducible.
+    anchor_cadence: bool = False
     _block_due: float = 0.0
     _block_pending: bool = False
+    # If the front-end falls more than this far behind the block grid (a long render
+    # or GC stall), drop the accumulated lateness and re-anchor instead of firing a
+    # catch-up storm.  Bare assignment => class attribute, not a dataclass field.
+    MAX_BLOCK_CATCHUP = 0.5
 
     # ---- port interface ------------------------------------------------------
     def owns_port(self, port: int) -> bool:
@@ -240,7 +247,23 @@ class SoundBlaster:
             self._fire_irq()
         else:
             rate = self.sample_rate or 8000
-            self._block_due = self.clock() + length / rate
+            now = self.clock()
+            # Anchor the block-complete cadence to a fixed grid (previous block's due +
+            # one block period) rather than `now + period`.  `now` includes the time the
+            # ISR took to refill+replay the block (IRQ-servicing lag + the recovered
+            # mixer), so the relative form folds that delay into *every* interval and the
+            # stream drifts a few % below real time -> the live jitter buffer slowly
+            # drains and periodically underruns.  Anchoring keeps the long-run rate
+            # exactly `rate`.  A fresh start (no prior due) or a fall too far behind
+            # (> MAX_BLOCK_CATCHUP, e.g. a render/GC stall) re-anchors to `now` so the
+            # IRQ can't spiral into a catch-up storm.
+            if self.anchor_cadence:
+                ideal = self._block_due + length / rate
+                if not self._block_due or (now - ideal) > self.MAX_BLOCK_CATCHUP:
+                    ideal = now + length / rate
+            else:
+                ideal = now + length / rate
+            self._block_due = ideal
             self._block_pending = True
 
     def service(self) -> None:

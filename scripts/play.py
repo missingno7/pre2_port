@@ -275,7 +275,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # timer/vsync waits set the speed — no per-game constants.  Demo record/replay
     # keep the deterministic fixed-chunk clock so recordings stay reproducible.
     present_period = 1.0 / max(1, int(args.present_hz))
-    realtime_batch = 2000  # VM steps per IRQ-service sub-batch (keeps ticks on time)
+    realtime_batch = 2000  # demo sub_batch: IRQ-delivery boundary (fixed for replay determinism)
+    # Live play services the emulated Sound Blaster's block IRQ only at batch
+    # boundaries, so a large batch delivers IRQ7 late and stretches each ~20 ms DMA
+    # block -> the live audio underruns (measured: 2000 steps => only 84% of the PCM
+    # rate produced).  A small batch checks the SB clock often enough to keep blocks
+    # on time (~97%) with no measurable cost to the game frame-rate.  Demo replay is
+    # unaffected: it keeps `realtime_batch` above so recordings stay reproducible.
+    live_irq_batch = 256
     status = "replaying" if replaying else "running"
     rt.cpu.trace_enabled = False
     rt.dos.console_input_fallback = None
@@ -318,6 +325,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # this only changes when we *draw*, never the VM advance.)
     sim_deadline = perf_counter()
     last_render = 0.0
+    last_audio = 0.0   # throttle for in-loop audio pumping (live play)
 
     demo: dict[str, InputDemoRecorder | None] = {"rec": None}
     fast_adlib = bool(getattr(args, "fast_adlib", False))
@@ -449,6 +457,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 tick_state["next"] = det_now() if not realtime else now0
                 if sound_blaster is not None:
                     sound_blaster.clock = perf_counter if realtime else det_now
+                    # Anchored cadence only on the wall clock; the det clock stays on the
+                    # relative form so recordings remain byte-reproducible.
+                    sound_blaster.anchor_cadence = realtime
                     sound_blaster.resync_clock(det_now() if not realtime else now0)
                 sim_deadline = now0          # restart demo pacing from now
                 last_render = 0.0            # force a render on the first demo frame
@@ -464,8 +475,19 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     while running and perf_counter() < deadline:
                         _pump_and_step(rt, now=perf_counter(), pic=pic, sound_blaster=sound_blaster,
                                        timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
-                                       tick_state=tick_state, n_steps=realtime_batch)
-                        steps_done += realtime_batch
+                                       tick_state=tick_state, n_steps=live_irq_batch)
+                        steps_done += live_irq_batch
+                        # Feed the audio device *continuously* (throttled), not just once
+                        # per rendered frame below: the render can stretch a frame past
+                        # the mixer channel's buffered depth, leaving its queue slot empty
+                        # and underrunning.  Pumping every few ms keeps the slot filled.
+                        nowp = perf_counter()
+                        if nowp - last_audio >= 0.004:
+                            if adlib is not None:
+                                adlib.pump()
+                            if sb_audio is not None:
+                                sb_audio.pump()
+                            last_audio = nowp
                 else:
                     chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
                     _advance_demo_frame(rt, chunk_steps=chunk, sub_batch=realtime_batch,
