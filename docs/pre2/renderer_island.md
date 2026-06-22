@@ -69,8 +69,21 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
 
 ## Border — NOT in the renderer island
 
+The per-frame main loop `1030:0214-0270` is now fully classified. The renderer leaves are
+`animgrid(3668)@0241 → grid(35A1)@0244 → scroll(3A27)@0247 → objs(26FA)@024d → fade(6772)@0267`
+(all recovered). Everything else it calls is border:
+
 - **Object-list iteration + object-draw dispatch** (`34A0`/`3552`/`65A0`/`8BFF`): own the
   `ObjectSlot` data model; they only *call* the blit → **object system**.
+- **Particle/effect system** (`4b8e`@024a): owns a 20-entry particle list (`0x7DE6`, 6 bytes
+  each: X/Y/type/speed), integrates each particle's velocity (the `0x6F90`/`0x7090` trig
+  tables), plots a single pixel via GC write-mode-3 set/reset, and consumes it. Owns + mutates
+  its own model + physics → border (self-contained subsystem). Empty (`[0x7DE6]==-1`) in all
+  available snapshots — **NEEDS REPRO** (a frame with active particles) if it's ever recovered.
+- **Auto-scroll script** (`3922`@0256): advances `[0x2DBE]`/`[0x6BF6]` from a script table at
+  `[0x2DBC]` — the camera-advance / level scroll path → game loop.
+- **Tile-flag trigger** (`3721`@0250): reads the renderer's `[0x2DF2]` tile-flag accumulator +
+  a global to fire an event → game logic.
 - **Object/player update** (movement, AI, physics, collision) → gameplay.
 - **Frame conductor / tick dispatch** (decides *when* to call the compositor/transition) →
   game loop. (`render_frame()` is the renderer's top; *who calls it* — the main loop

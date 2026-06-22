@@ -110,15 +110,23 @@ in `render_frame`, but it is DAC-only so the order is pixel-equivalent.) The com
   proof the docstrings point to), not throwaway; this session's captures were all inline.
 - Remaining (lower priority, non-blocking): coastline shortening, merge-target taxonomy.
 
-## NEEDS REPRO (for the user)
-- **Palette fade**: ~~F12 mid-fade~~ — **DONE** (snapshot 021225 supplied; fade recovered + verified).
-- **Horizontal scroll**: F12 while moving left/right across a wide level (to witness the
-  vertical column-fill `34ED` + the directional scroll).
-- **Cold-start screen transitions**: from a fresh launch, press a key to dismiss the
-  "oldies"/title screen — the user noted these expose extra transitions worth snapshotting.
+## NEEDS REPRO (for the user) — only optional border subsystems remain
+- **Palette fade**: ~~mid-fade~~ — **DONE** (021225).
+- **Horizontal scroll**: ~~needed~~ — **DONE** (reached via injected movement on 185902;
+  `calc_scroll_source` + animated-grid `3668` recovered).
+- **Particle/effect system** (`4b8e`, border): a snapshot with active particles
+  (`[0x7DE6] != -1` — explosion / hit-spark / collectible sparkle frame) would let the small
+  particle subsystem be recovered. Empty in every available snapshot.
+- **Special HUD sprite `0x135`** (object_render's no-camera path `2784`, border): a frame where
+  an `id & 0x5FFF == 0x135` sprite is in the active list (absent in current snapshots).
+- **Cold-start screen transitions**: dismiss the "oldies"/title screen from a fresh launch.
 
-## Border (confirmed by the gameplay profile)
-The object system (update + object-draw loops) is the dominant non-idle ASM in gameplay
-and is **out** of the renderer — exactly the border drawn in `renderer_island.md`. The
-renderer's remaining work is the **effects** (scale transition, palette fade), the small
-**scroll helpers** (`3588`, `34ED`), and the **object-draw boundary** (`653D`/shared blit).
+## Border (confirmed — full per-frame main-loop classification)
+The per-frame main loop `1030:0214-0270` is fully classified (see `renderer_island.md`):
+the renderer leaves are `animgrid(3668) → grid(35A1) → scroll(3A27) → objs(26FA) → fade(6772)`
+(all recovered, composed by `render_frame`); everything else is **border** — the object
+system (`65A0`/`8BFF`, dominant gameplay ASM), the particle/effect system (`4b8e`), the
+auto-scroll script (`3922`), the tile-flag trigger (`3721`), and the other game systems
+(`6822`/`6210`/`60fe`/`4907`/`5850`/…). The renderer island is exhausted: every exercised
+renderer routine is recovered; the only un-recovered draws (`4b8e` particles, `0x135` HUD
+sprite) are border subsystems with empty/absent data in all available snapshots.
