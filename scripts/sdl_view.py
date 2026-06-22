@@ -395,7 +395,10 @@ class SdlEnhancedAudio:
                 enh_songs=str(self.start_songs), enh_song_repeat=str(self.song_repeat),
                 enh_song_unrooted=str(self.song_unrooted), enh_sfx=str(self.sfx_played),
                 enh_sfx_missed=str(self.sfx_missed), enh_errors=str(self.errors),
-                enh_clock="SDL", enh_underruns="0(SDL)")
+                enh_clock="SDL", enh_underruns="0(SDL)",
+                text=(f"enh SDL-clock | songs={self.start_songs} repeat={self.song_repeat} "
+                      f"unrooted={self.song_unrooted} | sfx={self.sfx_played} miss={self.sfx_missed} "
+                      f"err={self.errors} | underruns=0(SDL) tick=SDL"))
 
     def close(self) -> None:
         try:
