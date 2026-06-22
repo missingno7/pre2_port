@@ -58,7 +58,7 @@ def render(snap_dir: Path, seconds: float, out: Path, backend: str) -> int:
         if ev is None:
             print("could not identify the loaded song among the .TRK assets")
             return 2
-        eb = EnhancedBackend()
+        eb = EnhancedBackend(free_run=True)   # offline: tick at the song's own tempo
         eb.handle(ev)
         y = eb.render(int(seconds * OUT_RATE))                 # (n, 2) stereo float
         out_i16 = np.clip(y * 32767.0, -32768, 32767).astype(np.int16)

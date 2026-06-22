@@ -97,12 +97,30 @@ def test_mod_player_plays_standard_module():
 
 
 def test_enhanced_backend_plays_song_and_sfx():
-    be = EnhancedBackend(out_rate=22050)
+    be = EnhancedBackend(out_rate=22050, free_run=True)   # offline: own tempo clock
     be.handle(StartSong(module=_std_module(), name="test"))
     be.handle(PlaySfx(sfx_id=0, pcm=bytes(range(64))))
     y = be.render(22050)
     assert y.shape == (22050, 2) and not np.isnan(y).any()
     assert np.max(np.abs(y)) > 0.0
+
+
+def test_enhanced_sequencer_gated_by_game_ticks():
+    """Live mode: the sequencer advances only on supplied game-audio ticks; voices
+    render continuously regardless (slow game = later notes, never broken notes)."""
+    be = EnhancedBackend(out_rate=22050)                  # free_run=False (live)
+    be.handle(StartSong(module=_std_module()))
+    # No ticks supplied yet -> the row is never processed -> music is silent (held),
+    # but the render must not crash or gap.
+    assert float(np.max(np.abs(be.render(4096)))) == 0.0
+    # Supply game audio time -> the note triggers and plays.
+    be.advance_ticks(8)
+    assert float(np.max(np.abs(be.render(8192)))) > 0.0
+    # SFX is pure audio time, NOT gated by ticks: it plays with no ticks supplied.
+    be2 = EnhancedBackend(out_rate=22050)
+    be2.handle(StartSong(module=_std_module()))
+    be2.handle(PlaySfx(sfx_id=0, pcm=bytes(range(64))))
+    assert float(np.max(np.abs(be2.render(2048)))) > 0.0
 
 
 def test_faithful_backend_plays_pre2_module():

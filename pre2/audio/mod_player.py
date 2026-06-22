@@ -115,7 +115,7 @@ class ModPlayer:
             self._samples.append((a.astype(np.float32)) / 128.0)
         self.channels = [_Chan(pan=_PAN[c]) for c in range(NUM_CHANNELS)]
         self.speed = DEFAULT_SPEED
-        self.tick = 0
+        self.tick_count = 0
         self.row = 0
         self.order_pos = 0
         self._tick_samples_left = 0.0
@@ -195,32 +195,51 @@ class ModPlayer:
                 self.order_pos = len(self.mod.order) - 1
                 self._ended = True
 
-    def _do_tick(self) -> None:
+    # -- the two clocks, separated ---------------------------------------------
+    @property
+    def samples_per_tick(self) -> float:
+        """Nominal samples between sequencer ticks at the PRE2 tracker rate."""
+        return self.out_rate / PRE2_TICK_HZ
+
+    def tick(self) -> None:
+        """Advance the sequencer ONE tick (process the row/effects, (re)trigger voices).
+
+        This is *game audio time* / musical intent. Rendering is separate, so an external
+        clock can decide when ticks happen (slow game -> ticks farther apart -> notes held
+        longer), while already-active voices keep playing cleanly via :meth:`render_voices`."""
         if not self.mod.order:
             return
-        if self.tick == 0:
+        if self.tick_count == 0:
             self._process_row()
         else:
             self._tick_effects()
-        self.tick += 1
-        if self.tick >= self.speed:
-            self.tick = 0
+        self.tick_count += 1
+        if self.tick_count >= self.speed:
+            self.tick_count = 0
             self._advance_row()
+
+    def render_voices(self, n_frames: int) -> np.ndarray:
+        """Render ``n_frames`` of the currently-active voices, advancing them by *audio
+        time* only. Does NOT advance the sequencer: held notes sustain, never gap."""
+        out = np.zeros((n_frames, 2), np.float32)
+        for c in self.channels:
+            c.render_into(out[:, 0], out[:, 1])
+        return out
 
     # -- output ---------------------------------------------------------------
     def render(self, n_frames: int) -> np.ndarray:
-        """Render ``n_frames`` of float32 **stereo** audio, shape ``(n, 2)``."""
+        """Free-running render (own tempo clock): tick at ``samples_per_tick`` and render.
+
+        For offline/standalone use; the live enhanced path drives :meth:`tick` from the
+        game's audio clock and calls :meth:`render_voices` on the audio thread instead."""
         out = np.zeros((n_frames, 2), np.float32)
         i = 0
         while i < n_frames:
             if self._tick_samples_left <= 0.0:
-                self._do_tick()
-                self._tick_samples_left += self.out_rate / PRE2_TICK_HZ
+                self.tick()
+                self._tick_samples_left += self.samples_per_tick
             chunk = min(n_frames - i, max(1, int(self._tick_samples_left)))
-            left = out[i:i + chunk, 0]
-            right = out[i:i + chunk, 1]
-            for c in self.channels:
-                c.render_into(left, right)
+            out[i:i + chunk] += self.render_voices(chunk)
             self._tick_samples_left -= chunk
             i += chunk
         out *= self.channel_gain

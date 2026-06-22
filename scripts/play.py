@@ -314,8 +314,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             from pre2.audio.enhanced_backend import EnhancedBackend
             from pre2.bridge.audio_commands import install_command_observers
             _enh = EnhancedBackend()
-            audio_poll = install_command_observers(rt.cpu, _enh.handle, args.game_root)
+            # EnhancedAudio owns the backend + a dedicated audio thread; events from the VM
+            # are injected through its thread-safe handle (audio runs on its own clock).
             sb_audio = EnhancedAudio(pygame, _enh, sound_blaster, audio_status)
+            audio_poll = install_command_observers(rt.cpu, sb_audio.handle, args.game_root)
         else:
             sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
 

@@ -285,30 +285,36 @@ class SoundBlasterAudio:
             self._channel.stop()
 
 
-class EnhancedAudio:
-    """Play the enhanced backend's float32 stereo mix (event-driven, modern path).
+_SB_BLOCK = 168   # PRE2 SB DMA block size (= one tracker tick); see pre2.recovered.mixer
 
-    Unlike :class:`SoundBlasterAudio`, this does not consume the SB PCM at all — it
-    pulls from an :class:`pre2.audio.enhanced_backend.EnhancedBackend` that renders the
-    standard ``.TRK`` song + SFX at the mixer rate. Generation is paced by pygame's own
-    playback: each queued chunk is rendered on demand, so the song advances at real time
-    regardless of VM speed (no DMA underrun clicks). The (ignored) SB capture is cleared
-    so it never accumulates.
+
+class EnhancedAudio:
+    """Play the enhanced backend's float32 stereo mix on a dedicated AUDIO thread.
+
+    The enhanced audio is a continuous, clock-independent subsystem: SDL plays the
+    queued PCM chunks on its own audio clock, and a background thread keeps the channel
+    fed by pulling :meth:`EnhancedBackend.render` (continuous voice playback). The VM
+    injects semantic events via :meth:`handle`, and game audio time advances the
+    sequencer via :meth:`advance_ticks` (fed from SB block production in :meth:`pump` --
+    1 block == 1 tracker tick). So a slow/jittery video frame only delays *new ticks*;
+    already-active voices keep playing cleanly on the audio thread (never starve/gap).
+
+    A lock guards the backend (render on the audio thread vs. handle/advance_ticks from
+    the VM/main thread).
     """
 
     def __init__(self, pygame, backend, sound_blaster=None, status: dict | None = None, *,
                  chunk_ms: float = 46.0) -> None:
-        from time import perf_counter
-        self._now = perf_counter
+        import threading
         self._pygame = pygame
         self._backend = backend
         self._sb = sound_blaster
         self._status = status
         self._available = False
         self._channel = None
-        self._started = False
+        self._thread = None
         if not pygame.mixer.get_init():
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
         init = pygame.mixer.get_init()
         if init is None:
             return
@@ -316,58 +322,66 @@ class EnhancedAudio:
         self._out_channels = int(init[2])
         backend.out_rate = self._rate                 # render at the device rate
         self._chunk = max(256, int(round(self._rate * max(10.0, float(chunk_ms)) / 1000.0)))
-        self._lead = int(self._rate * 0.10)           # ~100 ms jitter buffer
-        self._buf = np.zeros((0, self._out_channels), dtype=np.int16)
-        self._last = None
         if pygame.mixer.get_num_channels() < 3:
             pygame.mixer.set_num_channels(4)
         self._channel = pygame.mixer.Channel(2)
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
         self._available = True
+        self._thread = threading.Thread(target=self._run, name="enhanced-audio", daemon=True)
+        self._thread.start()
+
+    def handle(self, event) -> None:
+        """Inject a semantic audio event (called from the VM/main thread)."""
+        with self._lock:
+            self._backend.handle(event)
+
+    def advance_ticks(self, k: int) -> None:
+        """Supply game-audio-time ticks to the mixer's sequencer (thread-safe)."""
+        with self._lock:
+            self._backend.advance_ticks(k)
+
+    def _make_chunk(self):
+        with self._lock:
+            stereo = self._backend.render(self._chunk)   # (chunk, 2) float32 in [-1, 1]
+        block = stereo.mean(axis=1, keepdims=True) if self._out_channels == 1 else stereo
+        data = np.clip(block * 32767, -32768, 32767).astype(np.int16)
+        return self._pygame.mixer.Sound(buffer=np.ascontiguousarray(data).tobytes())
+
+    def _run(self) -> None:
+        # Audio clock: SDL plays queued chunks continuously; we just keep one queued
+        # ahead.  Checking a few times per chunk keeps the channel fed even if the main
+        # (renderer) thread stalls -- audio never underruns because of a slow frame.
+        period = max(0.003, self._chunk / self._rate / 3.0)
+        while not self._stop.is_set():
+            try:
+                ch = self._channel
+                if not ch.get_busy():
+                    ch.play(self._make_chunk())
+                    ch.queue(self._make_chunk())
+                elif ch.get_queue() is None:
+                    ch.queue(self._make_chunk())
+            except Exception:
+                pass
+            self._stop.wait(period)
 
     def pump(self) -> None:
-        if not self._available or self._channel is None:
+        # Game audio clock (NOT a render driver): the SB streams one 168-byte DMA block
+        # per tracker tick, so the blocks produced since the last pump == ticks of game
+        # audio time.  Feed those to the sequencer; the audio thread renders voices
+        # continuously and independently.  (The SB PCM bytes themselves are unused.)
+        sb = self._sb
+        if sb is None or not sb.pcm_out:
             return
-        if self._sb is not None and self._sb.pcm_out:
-            self._sb.pcm_out.clear()                  # the SB PCM is unused on this path
-        # Wall-clock paced generation: render exactly the audio for the real time elapsed,
-        # so the song advances at real time (correct tempo) regardless of pygame's chunk
-        # timing.  Everything generated is buffered and played in order -- nothing is
-        # discarded (which is what made the queue-on-demand approach skip ahead).
-        now = self._now()
-        if self._last is None:
-            self._last = now
-        need = min(int((now - self._last) * self._rate), self._rate)   # cap catch-up at 1 s
-        self._last = now
-        if need > 0:
-            stereo = self._backend.render(need)       # (need, 2) float32 in [-1, 1]
-            block = stereo.mean(axis=1, keepdims=True) if self._out_channels == 1 else stereo
-            self._buf = np.concatenate(
-                [self._buf, np.clip(block * 32767, -32768, 32767).astype(np.int16)])
-        cap = self._rate                              # never buffer more than ~1 s
-        if len(self._buf) > cap:
-            self._buf = self._buf[-cap:]
-        self._feed()
-
-    def _next(self):
-        n = min(self._chunk, len(self._buf)) or 1
-        chunk, self._buf = self._buf[:n], self._buf[n:]
-        return self._pygame.mixer.Sound(buffer=np.ascontiguousarray(chunk).tobytes())
-
-    def _feed(self) -> None:
-        if not self._started:
-            if len(self._buf) >= self._lead:          # build the lead before starting
-                self._channel.play(self._next())
-                if len(self._buf) >= self._chunk:
-                    self._channel.queue(self._next())
-                self._started = True
-            return
-        if not self._channel.get_busy():              # underran -> rebuild the lead
-            self._started = False
-            return
-        if self._channel.get_queue() is None and len(self._buf) >= self._chunk:
-            self._channel.queue(self._next())
+        blocks = len(sb.pcm_out) // _SB_BLOCK
+        if blocks:
+            self.advance_ticks(blocks)
+            del sb.pcm_out[:blocks * _SB_BLOCK]
 
     def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.5)
         if self._channel is not None:
             self._channel.stop()
 
