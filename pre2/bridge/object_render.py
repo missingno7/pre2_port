@@ -111,6 +111,14 @@ def read_attr(mem, sprite_id: int) -> SpriteAttr:
     )
 
 
+def write_record(mem, off: int, update) -> None:
+    """Write back the per-frame active-record mutation (1030:26FA): flags byte [+5] and
+    life byte [+0x11]. ``update`` is a recovered ``SpriteRecordUpdate``."""
+    base = (DATA_SEG << 4) & 0xFFFFF
+    mem.data[base + off + 5] = update.new_flags & 0xFF
+    mem.data[base + off + 0x11] = update.new_life & 0xFF
+
+
 def read_object_render_inputs(mem, *, frame_pre_inc: bool = True):
     """Bundle the moving-sprite pass (26FA) inputs for ``render_frame``: the object
     camera, the active-sprite list, the per-id attributes, and the sprite-pixel source

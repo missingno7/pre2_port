@@ -83,10 +83,17 @@ renderer (exactly the border in `renderer_island.md`). So `render_frame` produce
 renderer's contribution (bg + scroll + palette); the moving-sprite *list* pass `26FA` layers
 via the recovered `object_render`; the object system layers gameplay sprites separately.
 
-**Remaining for a full-screen standalone proof:** fold `26FA` into `render_frame` from
-`RendererState` (it currently reads its list via its own bridge), and collapse the 5 live
-leaf hooks into one `render_frame` entry hook (the coastline's final step). The compositor
-`3B40`/`3B5F` (draw_grid→scroll→panel) static path is still unreached in any snapshot.
+**Single-hook collapse — why it's a post-VM step (verified):** the main loop is one
+conductor at `1030:0214-0270` that calls the renderer leaves **individually and interleaved
+with game logic** — `…game systems… → animgrid(3668)@0241 → grid(35A1)@0244 →
+scroll(3A27)@0247 → 4b8e → objs(26FA)@024d → 3721/54ab/3922/4c69 → 45af/44fb →
+fade(6772)@0267 → … → jmp 0214`. There is **no single ASM function** that runs only the
+render block, so the 5 leaf hooks **cannot** be collapsed into one live hook in the hybrid
+(doing so would skip the interleaved game logic). The collapse happens **post-VM**: a native
+renderer replaces the main loop's render calls with one `render_frame(read_renderer_state())`.
+`render_frame` is exactly that drop-in seam. (Fade is called last in the loop, not first as
+in `render_frame`, but it is DAC-only so the order is pixel-equivalent.) The compositor
+`3B40`/`3B5F` static path remains unreached in any snapshot.
 
 ## Phase 3 — cleanup status
 - **`read_active_list` "off-by-one": NOT a bug — do not change.** Verified vs ASM: 1030:270C
@@ -94,9 +101,14 @@ leaf hooks into one `render_frame` entry hook (the coastline's final step). The 
   genuine processable slot (empty today → handled by the per-record `sprite_id == 0xFFFF`
   skip). Starting at `LIST_TOP - RECORD_BYTES` would drop a sprite whenever the top slot is
   occupied. Code comment added. (The review's hypothesis was wrong — the lockstep is the authority.)
-- Remaining (lower priority): object_render record-mutation split (SpritePlan/SpriteRecordUpdate),
-  coastline shortening, merge-target taxonomy, prune `pre2/probes/`. None block the renderer's
-  completeness; they tidy the recovered layer.
+- **object_render record-mutation split: DONE.** `plan_record_update` (recovered) +
+  `write_record` (bridge) make the per-frame record mutation (life dec + drawn bit) explicit;
+  the checkpoint applies it instead of re-deriving inline, and **verify mode now diffs the
+  record (flags/life) against the ASM** — 0 divergence on all 5 protected snapshots. The
+  recovered mutation is byte-exact vs the ASM.
+- `pre2/probes/` kept: the `verify_*.py` are the documented in-VM lockstep harnesses (the
+  proof the docstrings point to), not throwaway; this session's captures were all inline.
+- Remaining (lower priority, non-blocking): coastline shortening, merge-target taxonomy.
 
 ## NEEDS REPRO (for the user)
 - **Palette fade**: ~~F12 mid-fade~~ — **DONE** (snapshot 021225 supplied; fade recovered + verified).

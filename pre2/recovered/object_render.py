@@ -26,7 +26,8 @@ from pre2.islands import oracle_link
 
 __all__ = [
     "RECORD_BYTES", "LIST_TOP", "LIST_BASE", "SCREEN_W", "SCREEN_H",
-    "Sprite", "SpriteAttr", "Camera", "SpriteDraw", "plan_sprite", "plan_frame",
+    "Sprite", "SpriteAttr", "Camera", "SpriteDraw", "SpriteRecordUpdate",
+    "plan_sprite", "plan_frame", "plan_record_update",
 ]
 
 RECORD_BYTES = 0x12      # 18 bytes per active-sprite record [asm 2DE4: sub si,0x12]
@@ -97,6 +98,30 @@ class SpriteDraw:
     right_clipped: bool # right edge clipped (sets the [26F0] final-carry mask)
     full_rows: int      # original (pre top/bottom-clip) height — the source plane-block stride
                         # is full_rows*src_bw (the source holds full-height sprites)
+
+
+@dataclass(frozen=True)
+class SpriteRecordUpdate:
+    """The per-frame mutation 26FA applies to an active-sprite record (the side effect
+    distinct from the pixels): the saturating-decremented life [+0x11] and the new flags
+    byte [+5] (drawn bit cleared each frame, then set iff the sprite was actually drawn)."""
+    new_life: int       # [+0x11] = (life-1) saturating  [asm 2742..2746]
+    new_flags: int      # [+5]    drawn bit (0x20) cleared [2732] then set+0xBF [28B6/28BA]
+
+
+def plan_record_update(spr: "Sprite", drawn: bool) -> SpriteRecordUpdate:
+    """The record mutation for one processed (non-empty) sprite. [asm 2732/2742/28B6]
+
+    Applied to *every* non-empty record the list walk reaches: the drawn bit (0x20) is
+    cleared and life is decremented (saturating) regardless; the drawn bit is then set
+    (and bit6 cleared) only when the sprite produced a blit. Equivalent to the ASM's
+    split pre-plan/post-plan writes, collapsed to the final record state (nothing reads
+    the record between them)."""
+    new_life = (spr.life - 1) & 0xFF if spr.life else 0       # [asm 2742] saturating dec
+    flags = spr.flags & 0xDF                                   # [asm 2732] clear drawn bit
+    if drawn:
+        flags = (flags | 0x20) & 0xBF                          # [asm 28B6 or 0x20 / 28BA and 0xBF]
+    return SpriteRecordUpdate(new_life=new_life, new_flags=flags)
 
 
 def _s16(v: int) -> int:
