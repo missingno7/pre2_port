@@ -176,15 +176,29 @@ def song_load_fingerprint(mem) -> int | None:
     speed = _a.read_playback(mem).speed
     if speed <= 0:
         return None
-    # Hash exactly what the recovered tracker + enhanced renderer READ: the order, every
-    # pattern (notes = instrument + note_period + effect), and the period table (note -> pitch
-    # step). NOT the in-memory sample PCM -- the game reuses that RAM as it streams the level
-    # so it never settles, and the enhanced path plays the full-res .TRK samples from disk
-    # anyway. Capturing before all patterns/periods settle is what gave missing channels +
-    # garbage (ultrasonic) note periods on cold start.
-    pats = tuple(hash(_a.read_current_pattern(mem, op)) for op in range(song_length + 1))
-    return hash((bytes(order[:song_length + 1]), song_length, speed, pats,
-                 hash(tuple(_a.read_period_table(mem)))))
+    pats = [_a.read_current_pattern(mem, op) for op in range(song_length + 1)]
+    # READINESS by VALIDITY, not just stability: while the loader is still decoding the patterns
+    # in-place (which can stay momentarily constant, and a snapshot can freeze it), the note
+    # cells hold uninitialised note-period values that are *large* (e.g. 22016) and index
+    # unloaded period_table slots -> step 0/garbage -> missing channels + ultrasonic notes. A
+    # real note period is a small index (the meaningful period_table range is the low end). Wait
+    # until almost no cell carries a garbage period.
+    total = garbage = 0
+    for pat in pats:
+        for i in range(0, len(pat) - 3, 4):
+            period = (pat[i] | (pat[i + 1] << 8)) & 0x7FFF
+            if period:
+                total += 1
+                if period > 1024:
+                    garbage += 1
+    if total and garbage > total * 0.02:
+        return None
+    # Hash exactly what the recovered tracker + enhanced renderer READ: order, every pattern,
+    # and the period table (note -> pitch step). NOT the in-memory sample PCM -- the game reuses
+    # that RAM streaming the level so it never settles, and the enhanced path plays the full-res
+    # .TRK samples from disk anyway.
+    return hash((bytes(order[:song_length + 1]), song_length, speed,
+                 tuple(hash(p) for p in pats), hash(tuple(_a.read_period_table(mem)))))
 
 
 def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
