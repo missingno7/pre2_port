@@ -157,6 +157,26 @@ def identify_song(mem, assets_dir) -> tuple[str, ModModule] | None:
     return None
 
 
+def song_load_fingerprint(mem) -> tuple | None:
+    """A cheap signature of the loaded song's *static* data (order + speed + instrument
+    lengths + the first pattern).
+
+    The song loader fills the order, then the patterns/samples, then the playback state over
+    several frames; capturing mid-load snapshots a half-built (silent) song. This fingerprint
+    changes every frame while the loader is running and goes constant once it finishes, so a
+    caller can wait for two equal readings before capturing. ``None`` when no song is loaded.
+    It fingerprints the *static* song (not the live row/tick), so it is also stable during
+    normal playback."""
+    order = _a.read_order_table(mem)
+    song_length = _a.read_song_length(mem)
+    if not song_length or not any(order[:song_length + 1]):
+        return None
+    speed = _a.read_playback(mem).speed
+    instr = _a.read_tracker_instruments(mem, 16)
+    pat0 = _a.read_current_pattern(mem, 0)
+    return (bytes(order), song_length, speed, tuple(i.length for i in instr), hash(pat0))
+
+
 def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
     """Build a :class:`StartSong` for the song just loaded into VM memory, or ``None`` if
     no song is loaded.
@@ -168,6 +188,8 @@ def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
     order = _a.read_order_table(mem)
     song_length = _a.read_song_length(mem)
     if not song_length or not any(order[:song_length + 1]):
+        return None
+    if _a.read_playback(mem).speed <= 0:
         return None
     recovered = capture_module(mem)
     found = identify_song(mem, assets_dir)
@@ -220,9 +242,16 @@ def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
                 emit(SetMusicEnabled(on))
             sig = (bytes(_a.read_order_table(m)), _a.read_song_length(m))
             if sig != seen["order"]:
-                seen["order"] = sig
-                ev = make_start_song(m, assets_dir)
+                # Wait for the loader to FINISH: capture only when the song's static data has
+                # stopped changing (this frame's fingerprint == last frame's). Capturing mid-
+                # load snapshots a half-built song that plays silent. The recovered audio ISR
+                # is stubbed, so once loaded the fingerprint stays constant.
+                fp = song_load_fingerprint(m)
+                stable = fp is not None and fp == seen.get("load_fp")
+                seen["load_fp"] = fp
+                ev = make_start_song(m, assets_dir) if stable else None
                 if ev is not None:
+                    seen["order"] = sig
                     seen["starts"] = seen.get("starts", 0) + 1
                     # The rooted path always has the recovered module; the .TRK name is just a
                     # label ("[recovered]" when we couldn't match a standard .TRK).

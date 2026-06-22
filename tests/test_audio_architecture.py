@@ -76,6 +76,23 @@ def test_resolve_sfx_reads_descriptor_from_table():
     assert isinstance(ev, PlaySfx) and ev.sfx_id == 2 and ev.pcm == payload
 
 
+def test_song_load_fingerprint_stable_and_empty():
+    """The load fingerprint is None with no song and constant when memory is unchanged
+    (the signal the observer waits on before capturing a half-loaded, silent song)."""
+    mem = _FakeMem()
+    assert AC.song_load_fingerprint(mem) is None       # no song loaded
+    DS = AC.DATA_SEG
+    order = [6, 2, 0, 1, 3, 5, 4, 10, 9, 7, 8, 12, 11]
+    base = (DS << 4) + 0xDC7
+    mem.data[base:base + len(order)] = bytes(order)
+    mem.data[(DS << 4) + 0xDC2] = len(order)            # song_length
+    mem.data[(DS << 4) + 0xB82] = 6                     # playback speed (initialised)
+    fp1 = AC.song_load_fingerprint(mem)
+    assert fp1 is not None and AC.song_load_fingerprint(mem) == fp1   # stable when unchanged
+    mem.data[base] = 99                                 # loader still mutating -> changes
+    assert AC.song_load_fingerprint(mem) != fp1
+
+
 def test_identify_song_matches_real_trk():
     """The loaded order table fingerprints the .TRK (MINES = the 185902 song)."""
     mem = _FakeMem()
