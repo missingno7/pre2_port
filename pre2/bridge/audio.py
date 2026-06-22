@@ -170,9 +170,17 @@ def read_song_length(mem) -> int:
 
 
 def read_period_table(mem) -> list[int]:
-    base = ((DATA_SEG << 4) + PERIOD_TABLE) & 0xFFFFF
-    raw = mem.data[base:base + PERIOD_TABLE_WORDS * 2]
-    return [raw[k] | (raw[k + 1] << 8) for k in range(0, len(raw), 2)]
+    """The note-period -> resample-step table, indexable by ANY 15-bit period.
+
+    The ASM reads it as ``[bx + 0xEBB]`` with ``bx = period*2`` (period & 0x7FFF), so the
+    effective offset wraps at 0xFFFF (real-mode 16-bit addressing). We build the full
+    0x8000-entry table from the whole DGROUP segment with that wrap, so the recovered
+    tracker never goes out of range and matches the ASM for high periods too (the old
+    fixed 0x1000-word window crashed on songs whose periods exceed it, e.g. the title music)."""
+    base = (DATA_SEG << 4) & 0xFFFFF
+    seg = mem.data[base:base + 0x10000]
+    return [seg[(PERIOD_TABLE + 2 * p) & 0xFFFF] | (seg[(PERIOD_TABLE + 2 * p + 1) & 0xFFFF] << 8)
+            for p in range(0x8000)]
 
 
 def read_tracker_instruments(mem, count: int = 64) -> list[TrackerInstrument]:
