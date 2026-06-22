@@ -31,6 +31,8 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
 | `6772` palette fade (DAC interpolation) | `recovered/transition.py` | VERIFIED + live |
 | `3588` calc_scroll_source | `recovered/frame_renderer.py` | ASM_MATCHED (15 calls/0 div) |
 | `3668` redraw_animated_grid (animated bg tiles) | `recovered/frame_renderer.py` | ASM_MATCHED (7 frames/0 div) |
+| `2784` boss-meter/HUD sprite (no-camera path) | `recovered/object_render.py` (plan_sprite branch) | RECOVERED (verify-pending: boss snapshot) |
+| `9886` draw_string (text/font renderer) | `recovered/text.py` | RECOVERED (verify-pending: mid-draw snapshot) |
 
 ## Gaps — renderer, still ASM (to recover)
 

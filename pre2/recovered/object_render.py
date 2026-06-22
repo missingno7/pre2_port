@@ -161,18 +161,27 @@ def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None
     x_off = attr.x_off
     if flipped:                                          # [asm 2775: al = width - x_off]
         x_off = width - x_off
-    # --- screen X (px) [asm 277A..27B5] ---
-    screen_x = _s16(spr.x - x_off - cam.cam_x * TILE_PX)
-    if screen_x >= SCREEN_W:                             # [asm 27A6] off right
-        return None
-    if _s16(screen_x + width) < 0:                       # [asm 27AE..27B3] off left
-        return None
-    # --- screen Y: ``screen_y`` is the sprite's BASELINE (bottom); the top row is
-    # ``screen_y - height`` [asm 27B8..27F5; 27EB sub al,dh]. ---
-    screen_y = _s16(spr.y + _s8(attr.y_off) + cam.row_factor
-                    - (cam.cam_y * TILE_PX + cam.fine_scroll))
-    if screen_y <= 0:                                    # [asm 27D9: jg] baseline must be on-screen
-        return None
+    if (spr.sprite_id & 0x1FFF) == 0x135:               # [asm 277E: cmp bx,0x26A] HUD/boss-meter
+        # The fixed-screen HUD sprite (id 0x135, e.g. a boss health-bar segment): drawn at
+        # a FIXED position with NO camera offset, and it SKIPS the off-screen-X culls and
+        # the screen_y<=0 cull (it jmps straight to the shared clip/blit at 27DE). It keeps
+        # only the top_row>=SCREEN_H cull below. [asm 2784-2790 jmp 27DE]
+        # RECOVERED from disassembly; VERIFY PENDING (NEEDS REPRO: a boss-fight snapshot).
+        screen_x = _s16(spr.x - x_off)                  # [asm 2784: no camera X]
+        screen_y = _s16(spr.y + _s8(attr.y_off))        # [asm 2788-278D: no row_factor/camera]
+    else:
+        # --- screen X (px) [asm 277A..27B5] ---
+        screen_x = _s16(spr.x - x_off - cam.cam_x * TILE_PX)
+        if screen_x >= SCREEN_W:                         # [asm 27A6] off right
+            return None
+        if _s16(screen_x + width) < 0:                   # [asm 27AE..27B3] off left
+            return None
+        # --- screen Y: ``screen_y`` is the sprite's BASELINE (bottom); the top row is
+        # ``screen_y - height`` [asm 27B8..27F5; 27EB sub al,dh]. ---
+        screen_y = _s16(spr.y + _s8(attr.y_off) + cam.row_factor
+                        - (cam.cam_y * TILE_PX + cam.fine_scroll))
+        if screen_y <= 0:                                # [asm 27D9: jg] baseline must be on-screen
+            return None
     top_row = _s16(screen_y - height)                   # [asm 27EB] dest's top row
     if top_row >= SCREEN_H:                             # [asm 27F0: cmp ax,0xB0] entirely below
         return None

@@ -51,6 +51,24 @@ def test_object_render_byte_exact_vs_asm():
                 )
 
 
+def test_hud_boss_meter_no_camera_0x135():
+    """The fixed-screen HUD / boss-meter sprite (id 0x135, 1030:2784) is positioned with NO
+    camera offset and skips the off-screen-X / screen_y<=0 culls, unlike a normal sprite.
+    RECOVERED from disassembly; pixel fidelity verify-pending on a boss-fight snapshot."""
+    cam = Camera(cam_x=100, cam_y=20, fine_scroll=0, row_factor=0, dest_page=0x2000,
+                 row_stride=0x28, global_shift=0, frame=1)
+    attr = SpriteAttr(width=8, height=12, x_off=4, y_off=0, src_seg=0x650A, src_off=0x0BC7)
+    # world_x=50 with cam_x=100: a NORMAL sprite is far off-left -> culled.
+    normal = plan_sprite(Sprite(x=50, y=120, sprite_id=0x100, flags=0, life=10), attr, cam)
+    assert normal is None, "control: a normal sprite here is off-camera and culled"
+    # the HUD sprite (0x135) is drawn at the fixed screen position world_x - x_off (no camera).
+    draw = plan_sprite(Sprite(x=50, y=120, sprite_id=0x135, flags=0, life=10), attr, cam)
+    assert draw is not None, "HUD/boss-meter sprite must NOT be culled off-camera"
+    assert draw.shift == (50 - 4) & 7, "HUD screen_x must be world_x - x_off (no camera)"
+    # the flag bits (drawn/flash) don't change the special-case selection.
+    assert plan_sprite(Sprite(x=50, y=120, sprite_id=0x2135, flags=0, life=10), attr, cam) is not None
+
+
 def test_object_render_clipped_flip_byte_exact():
     """The clipped + H-flipped (1030:2AA1) variant — captured from a flipped player
     pushed against a screen edge. Reads the source row right-to-left from the full

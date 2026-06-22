@@ -117,13 +117,17 @@ in `render_frame`, but it is DAC-only so the order is pixel-equivalent.) The com
 - **Particle/effect system** (`4b8e`, border): a snapshot with active particles
   (`[0x7DE6] != -1` — explosion / hit-spark / collectible sparkle frame) would let the small
   particle subsystem be recovered. Empty in every available snapshot.
-- **Special HUD sprite `0x135`** (object_render's no-camera path `2784`, border): a frame where
-  an `id 0x135` (`bx==0x26A`) sprite is in the active list (absent in current snapshots). It's an
-  **8×12 sprite drawn at a FIXED screen position** (the `2784` path skips the camera-X subtract):
-  effectively a small **green capsule/pill** (fill = colour `A`, frame = colour `6`; attr
-  `[0x7190]`=8×12, src `650A:0BC7`) — **almost certainly a boss health-bar segment** (per the
-  user; repeated fixed-position pills). The id is computed (no literal `0x135` in the code), so
-  it must be witnessed live (a boss fight), not traced statically.
+- **Boss-meter / HUD sprite `0x135`** — **RECOVERED** from the ASM (`plan_sprite`'s no-camera
+  branch, `1030:2784`): drawn at a FIXED screen position `screen_x = world_x - x_off`,
+  `screen_y = world_y + y_off` (no camera / row_factor / fine_scroll), skipping the off-screen-X
+  and `screen_y<=0` culls (keeps `top_row>=0xB0`). It's an 8×12 green capsule/pill (boss
+  health-bar segment). **VERIFY PENDING** — needs a boss-fight snapshot (`id 0x135` in the
+  active list) to lockstep-confirm the pixels; the planner branch is committed + live (no-op
+  until such a sprite appears, so 0 regression).
+- **Text/font renderer `9886`** — **RECOVERED** from the ASM (`pre2/recovered/text.py:draw_string`):
+  the menu/title/score/tally text drawer. **VERIFY PENDING** — every snapshot is captured
+  *after* the draw (the font segment `[0x2875]` + shade base + VGA state are gone), so there's
+  no oracle; needs a snapshot taken *during* a text-screen draw. Not wired live.
 - **Cold-start screen transitions**: dismiss the "oldies"/title screen from a fresh launch.
 
 ## Border (confirmed — full per-frame main-loop classification)

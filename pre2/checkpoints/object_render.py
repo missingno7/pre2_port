@@ -18,7 +18,7 @@ from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge import object_render as _obj
 from pre2.recovered.object_render import paint_sprite, plan_record_update, plan_sprite
 
-from .common import Pre2HybridGap, report
+from .common import report
 
 _ENTRY = (0x1030, 0x26FA)
 _EXIT = (0x1030, 0x2DF9)
@@ -38,8 +38,8 @@ def _render(mem, planes, *, mutate: bool, frame_pre_inc: bool, updates=None) -> 
     for off, spr in _obj.read_active_list(mem):
         if spr.sprite_id == 0xFFFF:                      # [asm 2713] empty slot
             continue
-        if (spr.sprite_id & 0x5FFF) == 0x135:            # [asm 277E] fixed-screen HUD sprite
-            raise Pre2HybridGap("special HUD sprite id 0x135 (1030:2784, no-camera path) is not recovered")
+        # id 0x135 (the fixed-screen HUD / boss-meter sprite, 1030:2784) is now handled by
+        # plan_sprite's no-camera branch (RECOVERED; verify-pending on a boss-fight snapshot).
         draw = plan_sprite(spr, _obj.read_attr(mem, spr.sprite_id), cam)
         upd = plan_record_update(spr, draw is not None)  # record mutation contract [asm 2732/2742/28B6]
         if updates is not None:
