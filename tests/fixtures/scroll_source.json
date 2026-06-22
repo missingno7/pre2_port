@@ -1,0 +1,45 @@
+{
+ "note": "calc_scroll_source (1030:3588) golden from ASM under VM scrolling (185902). case = [camera_col(ax), camera_row([0x2DEA])] -> [0x2DBA].",
+ "cases": [
+  {
+   "camera_col": 12,
+   "camera_row": 2,
+   "out": 17496
+  },
+  {
+   "camera_col": 13,
+   "camera_row": 2,
+   "out": 17498
+  },
+  {
+   "camera_col": 14,
+   "camera_row": 2,
+   "out": 17500
+  },
+  {
+   "camera_col": 15,
+   "camera_row": 2,
+   "out": 17502
+  },
+  {
+   "camera_col": 16,
+   "camera_row": 2,
+   "out": 17504
+  },
+  {
+   "camera_col": 17,
+   "camera_row": 2,
+   "out": 17506
+  },
+  {
+   "camera_col": 18,
+   "camera_row": 2,
+   "out": 17508
+  },
+  {
+   "camera_col": 19,
+   "camera_row": 2,
+   "out": 17510
+  }
+ ]
+}

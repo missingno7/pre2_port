@@ -33,8 +33,8 @@ re-disassembled the scroll/grid region on GOG. Findings:
 | Gap | GOG addr | Reproducible? | Status |
 |---|---|---|---|
 | Scale/zoom transition | `31D0` loop = build `31F4-3249` + draw `324B-32AE` + span-clear `32DE` | **YES** (002633, 173821) | **RECOVERED + ASM_MATCHED** — all three pixel/geometry pieces: `clear_span` (32DE, 1073 spans/0 div), `build_scaled_columns` (31F4, 40 frames/0 div), `draw_scale_frame` (324B, 15 frames/0 div byte-exact VRAM). Committed tests. Remaining outer-loop bits (`452B` GC-reset, `4509` page-flip, `44CD` vsync, scale-decrement) are presentation plumbing → fold into render_frame in Phase 4. **There is no separate "scaled image copy" — the effect is shrink-via-border-clear; `4700` is unrelated.** |
-| calc-scroll-source | `3588` | yes (gameplay) | decoded; small island |
-| vertical tile-column fill | `34ED`? | needs horizontal-scroll scene | confirm GOG addr |
+| calc-scroll-source | `3588` | **YES** (185902 + injected movement) | **RECOVERED + ASM_MATCHED** (`frame_renderer.py:calc_scroll_source`, `[0x2DBA]=2*col+0x280*row+0x3F40`; 15 calls / 0 div, committed golden test) |
+| vertical tile-column fill | `34ED` (loop tail; routine entry earlier) | **YES** now — horizontal scroll reachable via injected movement (right/left arrow 0x4D/0x4B) | in progress — locate routine entry + recover |
 | Palette fade | `6772` | **YES** (021225, user-captured mid-fade) | **RECOVERED + VERIFIED + live** (`recovered/transition.py:fade_palette`, `bridge/palette.py`, `checkpoints/palette.py`): 56 fade steps / 0 divergence in-VM lockstep + exact done-correspondence; committed golden test |
 | object-draw render | `653D` (recovered, dormant) | needs object system to drive it | renderer↔object boundary |
 | frame compositor → update_frame | `3B40` | not reached in any snapshot | wire once leaves recovered; verify offline |

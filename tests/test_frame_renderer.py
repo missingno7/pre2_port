@@ -11,11 +11,30 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
 from pre2.bridge.frame import TILEMAP_STRIDE, TileMap  # noqa: E402
-from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row  # noqa: E402
+from pre2.recovered.frame_renderer import (  # noqa: E402
+    RowFlags, calc_scroll_source, draw_grid, draw_tile_row,
+)
 from pre2.recovered.renderer import CACHE_BASE, SLOT_BYTES  # noqa: E402
 
 PLANE = 0x10000
+
+
+def test_calc_scroll_source_byte_exact_vs_asm():
+    """`calc_scroll_source` (1030:3588) — the scroll-copy source pointer. Golden captured
+    from the ASM under the VM while scrolling (185902, movement injected). In-VM lockstep
+    confirmed 0 divergence; this is the fast committed check."""
+    data = json.loads((Path(__file__).parent / "fixtures" / "scroll_source.json").read_text())
+    assert data["cases"], "empty scroll_source fixture"
+    for cse in data["cases"]:
+        got = calc_scroll_source(cse["camera_col"], cse["camera_row"])
+        assert got == cse["out"], (
+            f"col={cse['camera_col']:#x} row={cse['camera_row']:#x}: "
+            f"got {got:#06x} want {cse['out']:#06x}"
+        )
 
 
 def _planes():

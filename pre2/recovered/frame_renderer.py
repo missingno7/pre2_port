@@ -33,6 +33,7 @@ from pre2.recovered.renderer import ROW_STRIDE, WRAP_AT, WRAP_SPAN, blit_sprite
 __all__ = [
     "RowFlags", "GridResult", "VISIBLE_COLS", "VISIBLE_ROWS", "RING_COLS",
     "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy", "panel_copy",
+    "calc_scroll_source",
 ]
 
 SCROLL_WRAP_SRC = 0x3F40   # source offset of the ring-buffer wrap section (3A27)
@@ -291,3 +292,21 @@ def panel_copy(planes, src_page, dst_page):
                         planes[p][(di + c) & 0xFFFF] = planes[p][(si + c) & 0xFFFF]
                 si = (si + SCREEN_ROW) & 0xFFFF
                 di = (di + SCREEN_ROW) & 0xFFFF
+
+
+@oracle_link("1030:3588",
+             "compute the scroll-copy source offset into the tile ring buffer: "
+             "[0x2DBA] = 2*camera_col + 0x280*camera_row + 0x3F40 (16-bit)",
+             "ASM_MATCHED", merge_target="frame renderer")
+def calc_scroll_source(camera_col, camera_row):
+    """Recover ``1030:3588-359A`` — the scroll-copy source pointer.
+
+    Returns the offset stored in ``[0x2DBA]``: ``2*camera_col + 0x280*camera_row +
+    0x3F40`` (mod 0x10000). ``camera_row`` is the byte ``[0x2DEA]``; the ASM builds the
+    ``0x280*row`` term as ``(row<<9) + (row<<7)`` via the dx/bx shifts.
+    """
+    ax = (camera_col << 1) & 0xFFFF                   # [asm 3588: shl ax,1]
+    dx = (camera_row << 8) & 0xFFFF                   # [asm 358A-358E: dh=[2DEA], dl=0]
+    bx = (dx << 1) & 0xFFFF                           # [asm 3592: shl bx,1]  (row<<9)
+    dx = (dx >> 1) & 0xFFFF                           # [asm 3594: shr dx,1]  (row<<7)
+    return (ax + dx + bx + SCROLL_WRAP_SRC) & 0xFFFF  # [asm 3596-359A: +0x3F40]

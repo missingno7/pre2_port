@@ -28,6 +28,7 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
 | `31F4` build_scaled_columns (scale geometry) | `recovered/transition.py` | ASM_MATCHED (40 frames/0 div) |
 | `324B` draw_scale_frame (border-clear pass) | `recovered/transition.py` | ASM_MATCHED (15 frames/0 div VRAM) |
 | `6772` palette fade (DAC interpolation) | `recovered/transition.py` | VERIFIED + live |
+| `3588` calc_scroll_source | `recovered/frame_renderer.py` | ASM_MATCHED (15 calls/0 div) |
 
 ## Gaps — renderer, still ASM (to recover)
 
