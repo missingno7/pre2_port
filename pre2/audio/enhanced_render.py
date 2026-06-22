@@ -38,17 +38,24 @@ TICK_HZ = SOURCE_RATE / 168.0
 _MAX_TICK_BUDGET = 16          # ~320 ms; absorbs jitter, caps catch-up after a stall
 
 
-def _to_float(pcm: bytes) -> np.ndarray:
-    """PRE2 8-bit PCM -> DC-free float32.
+def _to_float(pcm: bytes, *, signed: bool) -> np.ndarray:
+    """8-bit PCM -> DC-free float32 in ~[-1, 1).
 
-    The recovered volume table is linear (``out = sample * volume / 64``) and the faithful
-    mixer sums several such channels onto a 0-based buffer, so the audible (AC) content of one
-    channel is ``(sample - mean) * volume / 64`` -- the per-sample DC is just an offset that
-    appears as the buffer's centre and is inaudible. PRE2 samples are *not* a fixed-centre
-    format (their rest byte is 0 on some instruments, 0x20 on others), so the only correct,
-    universal centring is to remove each sample's own DC. (Treating them as unsigned centred
-    at 0x80 -- the old bug -- shoved the whole waveform to a huge negative offset.)"""
-    a = np.frombuffer(pcm, dtype=np.uint8).astype(np.float32)
+    PRE2 has TWO sample conventions and they must not be confused:
+
+    * the **in-memory** music samples (``signed=False``) are an offset-binary magnitude the
+      recovered volume table reads directly (``out = sample*vol/64``, summed on a 0-based
+      buffer); the audible content is ``(sample - mean)*vol/64``, so we remove the per-sample
+      DC. Their rest byte varies (0 on some instruments, 0x20 on others) -- only mean removal
+      centres them all.
+    * the **standard ``.TRK``/SFX** samples (``signed=True``) are two's-complement signed
+      8-bit (byte 0xFF = -1). They MUST be read as int8 -- reading them as unsigned turned the
+      negative half (0x80..0xFF) into large positive spikes, i.e. broadband high-frequency
+      noise (the "weird noise").
+
+    A residual-DC removal is applied either way so a note never carries a static offset."""
+    dt = np.int8 if signed else np.uint8
+    a = np.frombuffer(pcm, dtype=dt).astype(np.float32)
     if a.size:
         a = a - a.mean()
     return a / 128.0
@@ -72,19 +79,19 @@ class _Voice:
         self.loop_end = 0.0
         self.length = 0
 
-    def trigger(self, instr) -> None:
-        """(Re)start this voice on a recovered :class:`Instrument` (sample bytes + loop)."""
-        if instr is None or not instr.sample:
+    def trigger(self, data: np.ndarray, loop_start: int, loop_len: int) -> None:
+        """(Re)start this voice on a prepared float sample (+ loop, in sample units)."""
+        if data is None or data.size <= 1:
             self.active = False
             return
-        self.data = _to_float(instr.sample)
-        self.length = len(self.data)
+        self.data = data
+        self.length = len(data)
         self.pos = 0.0
-        self.active = self.length > 1
-        self.looping = instr.loop_len >= 3
+        self.active = True
+        self.looping = loop_len >= 3
         if self.looping:
-            self.loop_start = float((instr.loop_start - instr.ptr_off) & 0xFFFF)
-            self.loop_end = self.loop_start + float(instr.loop_len)
+            self.loop_start = float(loop_start & 0xFFFF)
+            self.loop_end = self.loop_start + float(loop_len)
         else:
             self.loop_start = 0.0
             self.loop_end = float(self.length)
@@ -119,6 +126,11 @@ class _Voice:
         i1 = np.minimum(i0 + 1, self.length - 1)
         frac = (raw - i0).astype(np.float32)
         seg = self.data[i0] * (1.0 - frac) + self.data[i1] * frac
+        if not self.active and len(seg):
+            # One-shot just ended: a short linear release to zero so a sample that stops on a
+            # non-zero value doesn't click (the original mixer does the same release fade).
+            k = min(len(seg), 48)
+            seg[len(seg) - k:] *= np.linspace(1.0, 0.0, k, dtype=np.float32)
         out[: len(seg)] += seg * gain
 
 
@@ -128,7 +140,7 @@ class _SfxVoice:
     __slots__ = ("data", "pos", "advance", "gain", "active")
 
     def __init__(self, ev: PlaySfx, out_rate: int) -> None:
-        self.data = _to_float(ev.pcm)
+        self.data = _to_float(ev.pcm, signed=True)      # SFX bank is signed 8-bit
         self.pos = 0.0
         self.advance = (ev.source_rate or SFX_SAMPLE_RATE) / out_rate
         self.gain = min(ev.volume, VOL_MAX) / VOL_MAX
@@ -165,12 +177,15 @@ class EnhancedRenderer:
         self.out_rate = out_rate
         self._free_run = free_run
         self._voices = [_Voice() for _ in range(NUM_VOICES)]
+        self._prepared: dict[int, tuple] = {}     # instrument idx -> (float data, loop_start, loop_len)
+        self._hq: dict | None = None              # full-res .TRK samples (set by the backend)
+        self._prepared_song_id = -1               # which RecoveredAudioSystem.song_id is prepared
         self._sfx: list[_SfxVoice] = []
         # Headroom: each DC-free channel peaks near +-0.25 (the vol_table's 1/4-of-range scale),
         # so 4 channels sum to about unity; a master near 1 keeps a full mix just under the
         # limiter knee instead of slamming it.
-        self._music_gain = 1.3
-        self._sfx_gain = 0.6
+        self._music_gain = 2.2
+        self._sfx_gain = 0.8
         # Light stereo image (Amiga-style: channels 0,3 left / 1,2 right, softened to 70/30 so
         # it stays mono-compatible). The faithful path is mono; this is an enhanced-only nicety.
         self._pan_left = (0.70, 0.30, 0.30, 0.70)
@@ -189,12 +204,49 @@ class EnhancedRenderer:
         if not self._free_run and k > 0:
             self._tick_budget = min(self._tick_budget + k, _MAX_TICK_BUDGET)
 
+    def set_hq(self, hq_samples: dict | None) -> None:
+        """Supply full-resolution ``.TRK`` samples for the current song (re-prepared lazily)."""
+        self._hq = hq_samples
+        self._prepared_song_id = -1
+
+    def prepare_song(self, hq_samples: dict | None = None) -> None:
+        """Precompute the per-instrument float samples for the current song.
+
+        ``hq_samples`` (instrument idx -> ``(pcm, loop_start, loop_len)``) supplies the
+        full-resolution source samples (the game's own ``.TRK`` asset). The DOS build keeps
+        only a 6-bit (sample/4, centred 0x20) copy in RAM so four channels sum into one 8-bit
+        DMA byte -- a hardware constraint the float renderer doesn't share, so the enhanced
+        path uses the full-resolution source when available and falls back to the recovered
+        in-memory sample otherwise. Pitch/length are identical (only the amplitude resolution
+        differs), so the recovered tracker's note/period still drive playback unchanged."""
+        self._prepared = {}
+        st = self.sys.state
+        if st is None:
+            return
+        for idx, instr in enumerate(st.mixer_instruments):
+            if hq_samples and idx in hq_samples:
+                pcm, ls, ll = hq_samples[idx]
+                if pcm:
+                    # Full-res source is signed +-1.0; the in-memory copy is sample/4 (+-0.25),
+                    # and the gain staging assumes that 1/4-of-range scale (4 channels -> unity),
+                    # so bring the HQ sample to the same amplitude. The extra bits stay ->
+                    # smoother, not louder.
+                    self._prepared[idx] = (_to_float(pcm, signed=True) * 0.25, ls, ll)
+                    continue
+            if instr.sample:
+                ls = (instr.loop_start - instr.ptr_off) & 0xFFFF
+                self._prepared[idx] = (_to_float(instr.sample, signed=False), ls, instr.loop_len)
+
     def _sequencer_tick(self) -> None:
         """One shared sequencer tick: advance the recovered system + react to retriggers."""
         triggered = self.sys.advance_tick()
         self.ticks_rendered += 1
         for i in triggered:
-            self._voices[i].trigger(self.sys.mixer_instrument(self.sys.voices[i].instrument))
+            prepared = self._prepared.get(self.sys.voices[i].instrument)
+            if prepared is not None:
+                self._voices[i].trigger(*prepared)
+            else:
+                self._voices[i].active = False
 
     def tick_cadence_hz(self) -> float:
         """The realised sequencer rate per rendered audio time (should track ``TICK_HZ``)."""
@@ -215,6 +267,9 @@ class EnhancedRenderer:
         """Render ``n_frames`` of float32 stereo ``(n, 2)``, driven by audio time."""
         out = np.zeros((n_frames, 2), np.float32)
         self.frames_rendered += n_frames
+        if self.sys.song_id != self._prepared_song_id:     # new song -> (re)prepare samples
+            self.prepare_song(self._hq)
+            self._prepared_song_id = self.sys.song_id
         # SFX: spawn float one-shots from the recovered command queue (pure audio time).
         for ev in self.sys.drain_sfx():
             self._sfx.append(_SfxVoice(ev, self.out_rate))

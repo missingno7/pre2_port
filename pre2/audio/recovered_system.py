@@ -83,6 +83,7 @@ class RecoveredAudioSystem:
         self._module: Module | None = None
         self._music_on = True
         self.tick_count = 0
+        self.song_id = 0                          # bumped each start_song (lets a renderer notice)
         self._sfx_events: list[PlaySfx] = []     # enhanced SFX queue (drained by the renderer)
 
     # -- recovered command layer ---------------------------------------------------
@@ -91,6 +92,7 @@ class RecoveredAudioSystem:
         self._module = module
         self._sys = AudioSystem(audio_state_from_module(module, music_on=self._music_on))
         self.tick_count = 0
+        self.song_id += 1
 
     def stop_song(self) -> None:
         self._module = None

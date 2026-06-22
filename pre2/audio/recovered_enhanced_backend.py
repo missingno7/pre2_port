@@ -23,6 +23,21 @@ from pre2.audio.recovered_system import RecoveredAudioSystem
 __all__ = ["RecoveredEnhancedBackend"]
 
 
+def _hq_samples_from_trk(trk) -> dict | None:
+    """Per-instrument full-resolution PCM from the identified standard ``.TRK`` module:
+    ``{instrument_idx: (signed_pcm_bytes, loop_start, loop_len)}``. ``None`` if no ``.TRK``
+    was matched (the renderer then falls back to the recovered in-memory samples)."""
+    if trk is None:
+        return None
+    hq: dict[int, tuple] = {}
+    off = 0
+    for i, s in enumerate(trk.samples):          # ModSample lengths/loops are in bytes
+        if s.length:
+            hq[i] = (trk.sample_data[off:off + s.length], s.loop_start, s.loop_len)
+        off += s.length
+    return hq or None
+
+
 class RecoveredEnhancedBackend:
     """Recovered command events -> RecoveredAudioSystem -> EnhancedRenderer (float32 stereo).
 
@@ -35,6 +50,7 @@ class RecoveredEnhancedBackend:
         self._free_run = free_run
         self._out_rate = out_rate
         self._renderer = EnhancedRenderer(self.system, out_rate=out_rate, free_run=free_run)
+        self._hq: dict | None = None
         # Diagnostics (the user's red-flag list): a song should StartSong once per real change;
         # a re-StartSong of the SAME order is suspicious (the bug behind restarts/"tempo" jumps).
         self.start_songs = 0
@@ -55,6 +71,7 @@ class RecoveredEnhancedBackend:
         self._out_rate = int(rate)
         self._renderer = EnhancedRenderer(self.system, out_rate=self._out_rate,
                                           free_run=self._free_run)
+        self._renderer.set_hq(self._hq)             # keep the HQ samples across a rate change
 
     # -- event sink (VM/main thread) ------------------------------------------
     def handle(self, event: GameAudioEvent) -> None:
@@ -68,6 +85,10 @@ class RecoveredEnhancedBackend:
             self._last_order = order
             self.start_songs += 1
             self.system.start_song(event.recovered_module)
+            # Render with the full-resolution .TRK samples (the game's own source asset) when
+            # the song was identified; the recovered tracker still drives the sequencing.
+            self._hq = _hq_samples_from_trk(event.module)
+            self._renderer.set_hq(self._hq)
         elif isinstance(event, PlaySfx):
             if event.pcm:
                 self.sfx_played += 1
