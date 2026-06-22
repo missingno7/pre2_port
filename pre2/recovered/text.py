@@ -5,15 +5,18 @@ non-gameplay scenes (title / "oldies" / score / tally text). It walks a string, 
 character to a glyph, and blits a fixed 24x12-pixel cell per character into **VGA planes 2
 and 3 only** (a 2-bits-per-pixel font), advancing the pen by a per-call width.
 
-Confidence: **RECOVERED, not yet VERIFIED.** The control flow below is read directly and
-unambiguously from the disassembly. The exact glyph *byte layout* (the ``+6`` header skip
-and the two 36-byte plane blocks) is taken from the blit's `[asm]` mechanics but is **not
-byte-confirmed**: every available snapshot is captured *after* the text was drawn, when the
-font segment (``[0x2875]``) and the per-shade font base (``[0xB1AC]``) no longer point at
-the loaded glyphs and the VGA state is gone — so there is no faithful oracle. **VERIFY
-PENDING — NEEDS REPRO:** a snapshot taken *during* a text-screen draw (title/score/tally
-rendering) so ``draw_string`` can be lockstep-diffed against the ASM. Until then this is not
-wired live.
+Confidence: **RECOVERED — fully confirmed by static disassembly** (every instruction
+``1030:9886``..``98FF`` traced; see the per-line ``[asm]`` notes). The control flow AND the
+glyph blit layout match this code exactly: the clear loop (12 rows × 3 bytes into planes 2|3
+via seq map-mask ``0x0C``, stride ``0x28``, ``di &= 0x1FFF``) and the draw loop (plane 2 from
+``src+0``, plane 3 from ``src+0x30``, 36 bytes each, ``di`` reset per plane, the per-char
+``add ax,6`` header skip). **Runtime byte-diff still pending a witness** (a snapshot captured
+*during* a text-screen draw — title/score/tally; every snapshot we have is *after* the draw,
+when the font segment ``[0x2875]`` + VGA state are gone — and ``draw_string`` fires only on
+menu/score/tally redraws, not on cold-boot attract or steady gameplay). The lockstep would
+only re-confirm the disassembly, so the recovered logic is trusted; it is still **not wired
+live** pending that runtime oracle (the project's verify-before-replace discipline).
+Harness: ``pre2/probes/capture_text_draw.py``.
 
 Char mapping (`[asm 988F-989F]`): ``' '`` (0x20) -> glyph 0x2B; ``'0'..'9'`` -> 0..9;
 ``'A'..'Z'`` -> 0x0A.. (``ch - 0x37``). **Any other byte ends the string** (terminator):

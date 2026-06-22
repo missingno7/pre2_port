@@ -12,20 +12,27 @@ transition timing) is the BORDER, exactly like the object system is for gameplay
 
     scene logic / state machine        (border)
         -> SceneState                   (this contract)
-        -> render_scene(state, planes, dac)   (faithful leaves: image, text, cursor, palette)
-        -> planar VRAM + 16-colour DAC  (faithful)   |   own buffer (enhanced/native)
+        -> render_scene(state, target)  (faithful leaves: image, text, cursor, palette)
+        -> RenderTarget                 (faithful: VGA planes/linear + DAC | enhanced: own buffer)
+
+PRE2 uses two video modes for scenes, so the seam handles both:
+  * **mode 0Dh** — planar 16-colour (menu / map / score / tally): four EGA bitplanes; text via
+    ``draw_string`` (planes 2|3).
+  * **mode 13h** — linear 256-colour (intro / title artwork): a 320x200 indexed image.
 
 Faithful ``render_scene`` reproduces the original pixels/palette for verification against the
-VM/VGA oracle. A future native renderer reimplements it against the *same* ``SceneState``,
-free of planar VRAM / CRTC / page flips / the 16-colour DAC.
+VM/VGA oracle. A future native renderer supplies its own ``RenderTarget`` (e.g. a true-colour
+buffer) and reimplements the leaves against the *same* ``SceneState`` — free of planar VRAM /
+linear VGA / CRTC / page flips / the 6-bit DAC.
 
 Leaf status (see ``docs/pre2/scene_island.md``):
-  * text     = :func:`pre2.recovered.text.draw_string` (``1030:9886``) — RECOVERED.
+  * text     = :func:`pre2.recovered.text.draw_string` (``1030:9886``) — RECOVERED (disasm-complete).
   * palette  = :func:`pre2.recovered.transition.fade_palette` (``6772``) — RECOVERED.
-  * image    = :func:`present_image` — PROVISIONAL (exact ASM present not yet recovered).
+  * image    = :func:`present_image` — provisional (the exact ASM present is not yet recovered;
+    the linear-13h copy is straightforward, the planar-0Dh present needs confirming).
   * cursor   = :func:`draw_cursor` — TBD (needs a menu witness).
 
-Pure: no ``cpu``/``mem``/``dos_re`` imports. The VM<->memory translation lives in
+Pure: no ``cpu``/``mem``/``dos_re`` imports. VM<->memory translation lives in
 ``pre2/bridge/scene_state.py``.
 """
 from __future__ import annotations
@@ -37,33 +44,53 @@ from pre2.recovered.text import draw_string
 from pre2.recovered.transition import fade_palette
 
 __all__ = [
-    "SceneImage", "TextRun", "MenuHighlight", "SceneState", "FadeStep",
+    "RenderTarget", "SceneImage", "TextRun", "MenuHighlight", "SceneState", "FadeStep",
     "present_image", "draw_cursor", "render_scene",
+    "MODE_PLANAR", "MODE_LINEAR",
     "SCENE_UNKNOWN", "SCENE_INTRO", "SCENE_TITLE", "SCENE_MENU",
     "SCENE_MAP", "SCENE_LOADING", "SCENE_TALLY",
 ]
 
+MODE_PLANAR = 0x0D     # EGA 320x200x16 planar (menu / map / score / tally)
+MODE_LINEAR = 0x13     # VGA 320x200x256 linear (intro / title artwork)
+
 # Scene phase ids — context for the enhanced renderer + diagnostics (the scene state machine,
 # once recovered, owns the transitions between these).
 SCENE_UNKNOWN = 0
-SCENE_INTRO = 1      # oldies / "Titus presents" / studio screens
+SCENE_INTRO = 1        # oldies / "Titus presents" / studio screens
 SCENE_TITLE = 2
-SCENE_MENU = 3       # main menu / mode select
-SCENE_MAP = 4        # world map / level select
+SCENE_MENU = 3         # main menu / mode select
+SCENE_MAP = 4          # world map / level select
 SCENE_LOADING = 5
-SCENE_TALLY = 6      # level-end score / "bravo"
+SCENE_TALLY = 6        # level-end score / "bravo"
 
-_PLANE_BYTES = 0x2000          # one EGA page is 0x2000 bytes/plane (320x200 / 8)
+
+@dataclass
+class RenderTarget:
+    """Where :func:`render_scene` draws. The FAITHFUL target mirrors VGA memory:
+
+    * mode 0Dh: ``planes`` = four EGA bitplane buffers;
+    * mode 13h: ``linear`` = one 320x200 256-colour buffer.
+
+    ``dac`` is the palette (a list of ``[r, g, b]``). The ENHANCED/native renderer supplies its
+    own ``RenderTarget`` (e.g. a true-colour framebuffer) and reimplements the leaves against
+    the same ``SceneState`` — nothing in ``SceneState`` assumes VGA."""
+    planes: list | None = None
+    linear: bytearray | None = None
+    dac: list | None = None
 
 
 @dataclass(frozen=True)
 class SceneImage:
-    """A full-screen background as four EGA bitplanes (one byte = 8 px, ``_PLANE_BYTES`` each).
+    """A full-screen background, in whichever encoding the scene's video mode uses:
 
-    The decoded picture asset (the SQZ codec is recovered; the *present* path is not yet).
-    The enhanced renderer may instead carry a true-colour image — ``SceneState`` describes the
-    intent, not the planar encoding."""
-    planes: tuple              # (bytes, bytes, bytes, bytes)
+    * ``pixels`` — linear 320x200 256-colour indices (mode 13h, intro/title);
+    * ``planes`` — four EGA bitplanes (mode 0Dh, menu/map).
+
+    The decoded picture asset (the SQZ codec is recovered; the *present* path is not yet). The
+    enhanced renderer may instead carry a true-colour image — ``SceneState`` describes intent."""
+    pixels: bytes | None = None
+    planes: tuple | None = None       # (bytes, bytes, bytes, bytes)
     width: int = 320
     height: int = 200
 
@@ -71,7 +98,7 @@ class SceneImage:
 @dataclass(frozen=True)
 class TextRun:
     """One string drawn by ``draw_string`` (``1030:9886``): the bytes + the per-run pen/shade/
-    page. ``font`` glyph bytes are shared at the :class:`SceneState` level."""
+    page. ``font`` glyph bytes are shared at the :class:`SceneState` level. (Planar 0Dh only.)"""
     text: bytes
     font_base: int             # [0xB1AC] per-shade glyph base into the font segment
     pen: int                   # [0xB1A6] starting byte X (the pen advances per char)
@@ -95,10 +122,11 @@ class SceneState:
     Plain data only (no ``mem``); reconstructed by ``pre2.bridge.scene_state``."""
     scene_id: int = SCENE_UNKNOWN
     phase: str = ""
+    video_mode: int = MODE_PLANAR
     background: SceneImage | None = None
     font: bytes = b""
-    text_runs: tuple = ()                 # tuple[TextRun, ...]
-    palette: tuple | None = None          # 16x [r, g, b] 6-bit static palette, or None
+    text_runs: tuple = ()                 # tuple[TextRun, ...]  (planar 0Dh only)
+    palette: tuple | None = None          # N x [r, g, b] 6-bit static palette (16 or 256), or None
     fade: FadeStep | None = None          # a palette-fade step (overrides `palette` when set)
     cursor: MenuHighlight | None = None
     # Faithful page-flip bookkeeping (the enhanced renderer ignores these — it owns its buffer).
@@ -108,55 +136,66 @@ class SceneState:
 
 # --- leaves -----------------------------------------------------------------------
 
-def present_image(planes, image: SceneImage, page: int = 0) -> None:
-    """Lay a full-screen background into the four EGA planes at ``page``.
+def present_image(target: RenderTarget, image: SceneImage, page: int = 0) -> None:
+    """Lay a full-screen background into the target.
 
-    PROVISIONAL faithful leaf: a straight planar copy of the picture's four bitplanes. The
-    exact original present routine (video mode, masking, whether it copies a page or draws
-    direct) is **not yet recovered** — this is the contract the recovered leaf will replace."""
-    for p in range(4):
-        src = image.planes[p]
-        planes[p][page:page + len(src)] = src
+    Provisional faithful leaf. Linear (mode 13h) is a straight copy of the 256-colour image;
+    planar (mode 0Dh) copies the four bitplanes at ``page``. The exact original present routine
+    (whether it copies a page or draws direct, masking) is not yet recovered — this is the
+    contract the recovered leaf will replace."""
+    if image.pixels is not None and target.linear is not None:           # mode 13h
+        n = min(len(image.pixels), len(target.linear))
+        target.linear[:n] = image.pixels[:n]
+    elif image.planes is not None and target.planes is not None:         # mode 0Dh
+        for p in range(4):
+            src = image.planes[p]
+            target.planes[p][page:page + len(src)] = src
 
 
-def draw_cursor(planes, cursor: MenuHighlight) -> None:
+def draw_cursor(target: RenderTarget, cursor: MenuHighlight) -> None:
     """Draw the menu highlight. TBD: no recovered routine yet (the menu state machine + its
     highlight mechanism need a witness). A no-op until recovered, so the seam is complete and
     the call site is already in place to merge into."""
     return None
 
 
-def render_scene(state: SceneState, planes, dac=None):
-    """Render one non-gameplay scene into ``planes`` (and ``dac``).
+def _apply_palette(state: SceneState, dac) -> None:
+    """Resolve the scene's palette into ``dac`` (a fade step overrides a static palette)."""
+    if dac is None:
+        return
+    if state.fade is not None:
+        out, _done = fade_palette(state.fade.a, state.fade.b, state.fade.amount)
+        for i in range(16):
+            dac[i] = [out[3 * i] & 0x3F, out[3 * i + 1] & 0x3F, out[3 * i + 2] & 0x3F]
+    elif state.palette is not None:
+        for i in range(min(len(dac), len(state.palette))):
+            dac[i] = list(state.palette[i])
 
-    ``planes`` is the four EGA plane buffers (faithful VGA target); ``dac``, if given, is the
-    16-entry list of ``[r, g, b]`` 6-bit colours. Composes the leaves in z-order: background ->
-    text -> cursor, with the palette/fade applied to the DAC. Returns nothing (writes in place).
+
+def render_scene(state: SceneState, target: RenderTarget):
+    """Render one non-gameplay scene into ``target``.
+
+    Composes the leaves in z-order. Dispatches on ``state.video_mode``: a linear 256-colour
+    scene (mode 13h) is a full-screen image + palette; a planar 16-colour scene (mode 0Dh) is a
+    background + text runs + cursor + palette/fade. Writes ``target`` in place.
 
     The enhanced/native renderer is a separate reimplementation against the same ``SceneState``;
     this is the faithful, verification-oriented composition.
     """
     s = state
 
-    # 1) background image (provisional leaf)
+    # 1) background image (provisional leaf) — linear or planar per the scene's mode
     if s.background is not None:
-        present_image(planes, s.background, s.page_draw)
+        present_image(target, s.background, s.page_draw)
 
-    # 2) text runs — draw_string (1030:9886), RECOVERED
-    for run in s.text_runs:
-        draw_string(planes, run.text, s.font, run.font_base, run.pen, run.advance,
-                    run.page_draw, run.page_clear)
+    # 2) text runs — draw_string (1030:9886), RECOVERED. Planar 0Dh only (it writes planes 2|3).
+    if s.video_mode == MODE_PLANAR and target.planes is not None:
+        for run in s.text_runs:
+            draw_string(target.planes, run.text, s.font, run.font_base, run.pen, run.advance,
+                        run.page_draw, run.page_clear)
+        # 3) menu cursor / highlight (TBD leaf)
+        if s.cursor is not None:
+            draw_cursor(target, s.cursor)
 
-    # 3) menu cursor / highlight (TBD leaf)
-    if s.cursor is not None:
-        draw_cursor(planes, s.cursor)
-
-    # 4) palette / fade -> DAC (fade_palette 6772, RECOVERED). Fade overrides a static palette.
-    if dac is not None:
-        if s.fade is not None:
-            out, _done = fade_palette(s.fade.a, s.fade.b, s.fade.amount)
-            for i in range(16):
-                dac[i] = [out[3 * i] & 0x3F, out[3 * i + 1] & 0x3F, out[3 * i + 2] & 0x3F]
-        elif s.palette is not None:
-            for i in range(min(16, len(s.palette))):
-                dac[i] = list(s.palette[i])
+    # 4) palette / fade -> DAC (fade_palette 6772, RECOVERED)
+    _apply_palette(s, target.dac)

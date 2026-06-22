@@ -8,9 +8,22 @@ so we recover their *visual intent*, not a pile of isolated VGA hooks:
 scene logic / state machine        (BORDER — owns "which screen", input, transitions)
    -> SceneState                    (this contract: a plain-data description of the screen)
    -> render_scene(state, target)   (FAITHFUL leaves: image, text, cursor, palette)
-   -> planar VRAM + 16-colour DAC   (faithful, verified vs the VM/VGA oracle)
-        |  enhanced: same SceneState -> native renderer (own buffer, no VGA/CRTC/page flip)
+   -> RenderTarget                  (faithful VGA: planes 0Dh | linear 13h + DAC)
+        |  enhanced: same SceneState -> own RenderTarget (true-colour buffer, no VGA/CRTC/flip)
 ```
+
+## Two video modes (confirmed by extracting real snapshots)
+
+PRE2 draws scenes in two modes, so `RenderTarget` + `SceneImage` carry both:
+
+* **mode 0Dh** — planar 16-colour (menu / map / score / tally): four EGA bitplanes; text via
+  `draw_string` (planes 2|3). `SceneImage.planes`, `RenderTarget.planes`.
+* **mode 13h** — linear 256-colour (intro / title artwork): a 320x200 indexed image at
+  A000:0000. `SceneImage.pixels`, `RenderTarget.linear`. (Verified: snapshot 163804 is a real
+  227-colour full-screen image; 233517/190338 are 16-colour screens.)
+
+`render_scene` dispatches on `state.video_mode`. The text path runs only in 0Dh (`draw_string`
+is planar planes 2|3); the 13h path is image + 256-colour palette.
 
 This mirrors gameplay exactly: there, *game logic* produces `RendererState` and `render_frame`
 only draws it; the object system (which owns gameplay state) is the border. Here, the *scene
@@ -100,8 +113,16 @@ gives witnesses for the image present, the palette install, and the menu cursor.
 
 ## Status
 
-* `SceneState` + `render_scene(state, planes, dac)` seam — **drafted** (`pre2/recovered/scene.py`),
-  composing the recovered `draw_string` (text) + `fade_palette` (palette); `present_image` +
-  `draw_cursor` are provisional contracts.
-* Text leaf — recovered, plugged into the seam; **verification pending** a mid-draw witness.
-* Everything else — contracts only, to be recovered in the order above.
+* `SceneState` + `render_scene(state, target)` seam — **drafted** (`pre2/recovered/scene.py`),
+  with a `RenderTarget` abstraction handling both video modes; composes the recovered
+  `draw_string` (text) + `fade_palette` (palette) + `present_image` (linear/planar). Tests in
+  `tests/test_scene_render.py`.
+* **Text leaf `draw_string` — disasm-COMPLETE.** Every instruction `1030:9886`..`98FF` traced
+  and matches `pre2/recovered/text.py` byte-for-byte (clear loop, draw loop plane2 `src+0` /
+  plane3 `src+0x30`, glyph `= font_base + gi*0x60 + 6`). Runtime byte-diff still pending a
+  witness, but the lockstep would only re-confirm the disassembly. Not wired live yet (the
+  verify-before-replace discipline) — `pre2/probes/capture_text_draw.py` is the ready harness;
+  `draw_string` fires only on menu/score/tally redraws (none of the paused snapshots trigger it).
+* **Image present** — `SceneImage` (linear-13h + planar-0Dh) + `present_image` defined and
+  validated on real extracted images; the exact ASM present routine still to be pinned.
+* Menu cursor + scene state machine — contracts only, to be recovered in the order above.
