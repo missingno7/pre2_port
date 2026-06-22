@@ -5,18 +5,18 @@ non-gameplay scenes (title / "oldies" / score / tally text). It walks a string, 
 character to a glyph, and blits a fixed 24x12-pixel cell per character into **VGA planes 2
 and 3 only** (a 2-bits-per-pixel font), advancing the pen by a per-call width.
 
-Confidence: **RECOVERED — fully confirmed by static disassembly** (every instruction
-``1030:9886``..``98FF`` traced; see the per-line ``[asm]`` notes). The control flow AND the
-glyph blit layout match this code exactly: the clear loop (12 rows × 3 bytes into planes 2|3
-via seq map-mask ``0x0C``, stride ``0x28``, ``di &= 0x1FFF``) and the draw loop (plane 2 from
-``src+0``, plane 3 from ``src+0x30``, 36 bytes each, ``di`` reset per plane, the per-char
-``add ax,6`` header skip). **Runtime byte-diff still pending a witness** (a snapshot captured
-*during* a text-screen draw — title/score/tally; every snapshot we have is *after* the draw,
-when the font segment ``[0x2875]`` + VGA state are gone — and ``draw_string`` fires only on
-menu/score/tally redraws, not on cold-boot attract or steady gameplay). The lockstep would
-only re-confirm the disassembly, so the recovered logic is trusted; it is still **not wired
-live** pending that runtime oracle (the project's verify-before-replace discipline).
-Harness: ``pre2/probes/capture_text_draw.py``.
+Confidence: **VERIFIED.** Confirmed two ways: (1) every instruction ``1030:9886``..``98FF``
+traced statically (see the per-line ``[asm]`` notes — clear loop 12×3 into planes 2|3 via seq
+map-mask ``0x0C`` stride ``0x28`` ``di &= 0x1FFF``; draw loop plane 2 ``src+0`` / plane 3
+``src+0x30`` 36 bytes each, ``di`` reset per plane, the ``add ax,6`` header skip); (2) **runtime
+lockstep — 24/24 menu text draws byte-exact, 0 divergence** ("MODE", "BEGINNER", …) by replaying
+``demo_pre2_20260622_192206`` (which navigates the menu) and diffing planes 2|3 vs the ASM
+(``pre2/probes/capture_text_draw.py``). The witness had to be reached by demo replay because
+``draw_string`` fires only on menu/score/tally **redraws**, never on cold boot or steady
+gameplay. Menu observations: each item is drawn to **both display pages** (page ``0x0`` and
+``0x1FFF``, double-buffered); the **cursor highlight is a shade swap** — the selected item is
+re-drawn with a different ``font_base`` (``0x4200`` vs ``0x0``), not a separate marker. Not yet
+wired live (no menu in the live gameplay path), but trusted for the scene seam.
 
 Char mapping (`[asm 988F-989F]`): ``' '`` (0x20) -> glyph 0x2B; ``'0'..'9'`` -> 0..9;
 ``'A'..'Z'`` -> 0x0A.. (``ch - 0x37``). **Any other byte ends the string** (terminator):

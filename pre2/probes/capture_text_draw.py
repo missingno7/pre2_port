@@ -1,15 +1,17 @@
 """Witness + lockstep probe for the text leaf ``draw_string`` (``1030:9886``).
 
-The scene island's first leaf needs a *mid-draw* witness: every snapshot we have is captured
-*after* the text was drawn (font segment + VGA state gone), so there is no oracle. This drives
-a cold boot to the text screens (oldies / title), hooks ``draw_string`` at entry, captures its
-inputs + the VGA planes *before* the call, lets the real ASM run to its RET, captures the planes
-*after*, then runs the recovered :func:`pre2.recovered.text.draw_string` on the before-image and
-diffs planes 2|3 vs the ASM — the byte-exact verification ``text.py`` is pending.
+The scene island's first leaf needs a *mid-draw* witness: every snapshot is captured *after*
+the text was drawn (font segment + VGA state gone), and ``draw_string`` fires only on menu /
+score / tally **redraws**, not on cold boot or steady gameplay. The reliable way to reach it is
+to **replay a demo that navigates the menus** — its real input drives the menu, where the mode-
+select items are drawn.
 
-It also dumps the first call's inputs + the ASM's actual write footprint, so the recovered
-field layout (string ptr, font base/segment, pen/advance/pages, the page-wrap math) can be
-confirmed or corrected against real data.
+This replays ``demo_pre2_20260622_192206`` (near-cold-start to level 1), hooks ``draw_string``,
+and for each call captures its inputs + the VGA planes before, runs the real ASM to its RET,
+captures the planes after, then runs the recovered :func:`pre2.recovered.text.draw_string` on
+the before-image and diffs planes 2|3 vs the ASM — the byte-exact lockstep.
+
+Result (2026-06-23): 24/24 menu draws byte-exact, 0 divergence ("MODE", "BEGINNER", ...).
 
 Run:  python -m pre2.probes.capture_text_draw
 """
@@ -22,22 +24,23 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
+from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from dos_re.runtime import enable_sound_blaster
 from pre2.recovered.text import draw_string
-from pre2.runtime import create_pre2_runtime
+from pre2.runtime import load_pre2_snapshot
 
 CS = 0x1030
 DRAW_STRING = 0x9886
 DS = 0x1A0F                      # DGROUP — the text state block lives here
-# inferred state-block offsets (DGROUP), from pre2/recovered/text.py
-FONT_SEG = 0x2875               # word: font glyph segment
-FONT_BASE = 0xB1AC             # word: per-shade glyph base (offset into the font segment)
-PEN = 0xB1A6                   # word: starting byte X
-ADVANCE = 0xB1AB               # byte: per-char width
-PAGE_DRAW = 0xB1A1             # word: draw page offset
-PAGE_CLEAR = 0xB1A3            # word: clear page offset
+DEMO = ROOT / "artifacts" / "demo_pre2_20260622_192206"
+# inferred state-block offsets (DGROUP), from pre2/recovered/text.py — all CONFIRMED below
+FONT_SEG = 0x2875              # word: font glyph segment
+FONT_BASE = 0xB1AC            # word: per-shade glyph base (offset into the font segment)
+PEN = 0xB1A6                  # word: starting byte X
+ADVANCE = 0xB1AB              # byte: per-char width
+PAGE_DRAW = 0xB1A1            # word: draw page offset
+PAGE_CLEAR = 0xB1A3           # word: clear page offset
 
 
 def _rw(mem, seg, off):
@@ -51,23 +54,20 @@ def _read_planes(mem):
 
 
 def main() -> int:
-    rt = create_pre2_runtime(str(ROOT / "assets" / "pre2.exe"),
-                             game_root=str(ROOT / "assets"), fast_adlib=True)
+    pb = InputDemoPlayback.load(DEMO)
+    meta = pb.manifest.get("metadata", {})
+    chunk = int(meta.get("chunk_steps", 4000))
+    rt = load_pre2_snapshot(ROOT / "assets" / "pre2.exe", pb.snapshot_path(),
+                            game_root=ROOT / "assets", fast_adlib=bool(meta.get("fast_adlib", False)))
     cpu = rt.cpu
     cpu.trace_enabled = False
-    pic = enable_sound_blaster(rt) and rt.dos.pic
-    cpu.pending_irq = lambda: rt.dos.pic.acknowledge()
 
-    results = {"calls": 0, "verified": 0, "diverged": 0, "incomplete": 0}
+    res = {"calls": 0, "verified": 0, "diverged": 0, "incomplete": 0}
     samples = []
 
     def on_draw_string(c):
-        mem = c.mem
-        s = c.s
-        # --- capture inputs at entry ---
-        ds = s.ds
-        text_ptr = (ds, s.bx)
-        raw = bytes(mem.data[((ds << 4) + s.bx) & 0xFFFFF:((ds << 4) + s.bx + 64) & 0xFFFFF])
+        mem, s = c.mem, c.s
+        raw = bytes(mem.data[((s.ds << 4) + s.bx) & 0xFFFFF:((s.ds << 4) + s.bx + 48) & 0xFFFFF])
         font_seg = _rw(mem, DS, FONT_SEG)
         font = bytes(mem.data[(font_seg << 4) & 0xFFFFF:(font_seg << 4) + 0x10000])
         font_base = _rw(mem, DS, FONT_BASE)
@@ -77,7 +77,6 @@ def main() -> int:
         page_clear = _rw(mem, DS, PAGE_CLEAR)
         before = _read_planes(mem)
 
-        # --- run the real ASM draw_string to its near-RET ---
         entry_sp = s.sp
         ret_ip = mem.rw(s.ss, entry_sp)
         ret_sp = (entry_sp + 2) & 0xFFFF
@@ -86,56 +85,41 @@ def main() -> int:
             interpret_current_instruction_without_hook(c)
             steps += 1
             if steps > 2_000_000:
-                results["incomplete"] += 1
+                res["incomplete"] += 1
                 return
         after = _read_planes(mem)
 
-        results["calls"] += 1
-        # --- run the recovered draw_string on the before-image, diff planes 2|3 ---
+        res["calls"] += 1
         rec = [bytearray(p) for p in before]
         draw_string(rec, raw, font, font_base, pen, advance, page_draw, page_clear)
         ok = all(rec[p] == after[p] for p in (2, 3))
-        results["verified" if ok else "diverged"] += 1
-
-        if len(samples) < 4:
-            changed = {p: [i for i in range(EGA_PLANE_STRIDE) if before[p][i] != after[p][i]]
-                       for p in range(4)}
-            foot = {p: (len(changed[p]), changed[p][:1] and hex(changed[p][0]))
-                    for p in range(4) if changed[p]}
-            samples.append(dict(ptr=text_ptr, text=raw.split(b"\x00")[0][:24],
-                                font_seg=hex(font_seg), font_base=hex(font_base), pen=pen,
-                                advance=advance, pg=(hex(page_draw), hex(page_clear)),
-                                asm_writes=foot, recovered_ok=ok))
+        res["verified" if ok else "diverged"] += 1
+        if len(samples) < 6:
+            samples.append(dict(text=raw.split(b"\x00")[0][:20], font_base=hex(font_base),
+                                pen=pen, advance=advance, pg=(hex(page_draw), hex(page_clear)),
+                                ok=ok))
 
     cpu.replacement_hooks[(CS, DRAW_STRING)] = on_draw_string
     cpu.hook_names[(CS, DRAW_STRING)] = "probe:draw_string"
 
-    held = False
-    for f in range(700):
+    for f in range(int(meta.get("frames", 2000)) or 2000):
         try:
-            rt.dos.pic.raise_irq(0)
-            for _ in range(4000):
+            pb.apply_to_runtime(f, rt, deliver=lambda r, sc: deliver_scancode(r, sc, max_steps=2000))
+            for _ in range(chunk):
                 cpu.step()
-            if f > 30:                                  # press/release Enter to advance screens
-                want = (f % 90) < 40
-                if want and not held:
-                    deliver_scancode(rt, 0x1C, max_steps=100000); held = True
-                elif not want and held:
-                    deliver_scancode(rt, 0x9C, max_steps=100000); held = False
         except Exception as exc:  # noqa: BLE001
             print(f"stopped at frame {f}: {type(exc).__name__}: {exc}")
             break
-        if results["calls"] >= 8:
+        if res["calls"] >= 24:
             break
 
-    print(f"draw_string calls={results['calls']} verified={results['verified']} "
-          f"diverged={results['diverged']} incomplete={results['incomplete']}")
+    print(f"draw_string calls={res['calls']} verified={res['verified']} "
+          f"diverged={res['diverged']} incomplete={res['incomplete']}")
     for i, s in enumerate(samples):
         print(f"  [{i}] {s}")
-    if results["calls"] == 0:
-        print("  (no draw_string call reached on cold boot — needs input to reach a text screen,"
-              " or a user snapshot captured DURING a title/menu/score draw)")
-    return 0
+    verdict = "PASS" if res["calls"] and not res["diverged"] and not res["incomplete"] else "CHECK"
+    print(f"DRAW_STRING LOCKSTEP: {verdict}")
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":

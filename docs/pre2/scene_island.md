@@ -117,12 +117,16 @@ gives witnesses for the image present, the palette install, and the menu cursor.
   with a `RenderTarget` abstraction handling both video modes; composes the recovered
   `draw_string` (text) + `fade_palette` (palette) + `present_image` (linear/planar). Tests in
   `tests/test_scene_render.py`.
-* **Text leaf `draw_string` — disasm-COMPLETE.** Every instruction `1030:9886`..`98FF` traced
-  and matches `pre2/recovered/text.py` byte-for-byte (clear loop, draw loop plane2 `src+0` /
-  plane3 `src+0x30`, glyph `= font_base + gi*0x60 + 6`). Runtime byte-diff still pending a
-  witness, but the lockstep would only re-confirm the disassembly. Not wired live yet (the
-  verify-before-replace discipline) — `pre2/probes/capture_text_draw.py` is the ready harness;
-  `draw_string` fires only on menu/score/tally redraws (none of the paused snapshots trigger it).
+* **Text leaf `draw_string` — VERIFIED.** Confirmed (1) by full disassembly `1030:9886`..`98FF`
+  and (2) by **runtime lockstep — 24/24 menu text draws byte-exact, 0 divergence** ("MODE",
+  "BEGINNER", …), reached by replaying `demo_pre2_20260622_192206` (which navigates the menu) and
+  diffing planes 2|3 vs the ASM (`pre2/probes/capture_text_draw.py`). The witness needed a demo
+  replay because `draw_string` only fires on menu/score/tally **redraws**, never on cold boot or
+  steady gameplay. **Menu findings:** the menu is mode 0Dh; each item is drawn to **both display
+  pages** (`0x0`/`0x1FFF`, double-buffered); the **cursor highlight is a shade swap** — the
+  selected item is re-drawn with `font_base 0x4200` (vs `0x0`), no separate cursor sprite. So the
+  faithful highlight is just a `TextRun` with the highlight shade; `draw_cursor` is reserved for
+  the enhanced renderer's own style. Not yet wired live (no menu in the live gameplay path).
 * **Image present** — `SceneImage` (linear-13h + planar-0Dh) + `present_image` defined and
   validated on real extracted images; the exact ASM present routine still to be pinned.
 * Menu cursor + scene state machine — contracts only, to be recovered in the order above.

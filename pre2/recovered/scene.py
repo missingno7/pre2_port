@@ -109,10 +109,17 @@ class TextRun:
 
 @dataclass(frozen=True)
 class MenuHighlight:
-    """The selected menu item (cursor). PROVISIONAL: how the original highlights it (palette
-    cycle vs. a drawn marker vs. inverted text) is not yet recovered — needs a menu witness."""
+    """The selected menu item (the cursor) — the SEMANTIC selection.
+
+    RECOVERED mechanism (menu witness via demo replay): the original has no separate cursor
+    sprite — it **re-draws the selected item's text in a different shade** (``font_base``
+    ``0x4200`` vs the normal ``0x0``). So the faithful path expresses the highlight by giving
+    the selected item's :class:`TextRun` the highlight ``font_base`` (no extra draw); this field
+    just carries the intent so the enhanced renderer can highlight however it likes (box, glow,
+    …) from ``selection``."""
     selection: int
     item_count: int = 0
+    highlight_font_base: int = 0x4200    # the shade the original re-draws the selected item in
 
 
 @dataclass(frozen=True)
@@ -153,9 +160,13 @@ def present_image(target: RenderTarget, image: SceneImage, page: int = 0) -> Non
 
 
 def draw_cursor(target: RenderTarget, cursor: MenuHighlight) -> None:
-    """Draw the menu highlight. TBD: no recovered routine yet (the menu state machine + its
-    highlight mechanism need a witness). A no-op until recovered, so the seam is complete and
-    the call site is already in place to merge into."""
+    """Draw the menu highlight.
+
+    The original needs no separate draw here — it highlights by re-drawing the selected item's
+    text in :attr:`MenuHighlight.highlight_font_base` (a shade swap), which the faithful path
+    already does as a :class:`TextRun`. This hook is reserved for the ENHANCED renderer to draw
+    its own highlight (box/glow/animation) from ``cursor.selection``; a no-op for the faithful
+    path. The call site stays so the enhanced renderer has a place to plug in."""
     return None
 
 
