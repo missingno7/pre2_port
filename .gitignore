@@ -65,3 +65,6 @@ nuked_opl3/*.lib
 
 # JetBrains IDE config
 .idea/
+
+# generated audio renders
+artifacts/*.wav
