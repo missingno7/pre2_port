@@ -53,7 +53,7 @@ def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
     against it over the game-visible contract, printing OK/DIVERGENCE. Intended
     for offline replay of recorded demos/snapshots.
     """
-    if not getattr(args, "verify_hooks", False):
+    if not (getattr(args, "verify_hooks", False) or getattr(args, "full_verify", False)):
         return
     import re
     from time import perf_counter
@@ -109,9 +109,18 @@ def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
                 _summary()
 
     rt._verify_summary = _summary  # let the caller print a final summary on exit
-    enable_pre2_hook_verification(rt, on_result=_on_result)
     mode = "per-call OK stream" if verbose else "divergences + periodic summary"
-    print(f"[verify-hooks] lockstep oracle active vs original ASM ({mode})", flush=True)
+    if getattr(args, "full_verify", False):
+        # Foolproof whole-memory audit: diffs the COMPLETE machine state after each
+        # recovered routine vs the ASM (no hand-picked contract -> nothing leaks).
+        # ~10x slower than --verify-hooks (re-runs the ASM routine + a full-memory
+        # copy per call), so it is an offline snapshot/demo audit, not a live mode.
+        from pre2.checkpoints.full_verify import enable_pre2_full_state_verify
+        enable_pre2_full_state_verify(rt, on_result=_on_result)
+        print(f"[verify-hooks] FULL-STATE oracle active (whole-memory diff; {mode})", flush=True)
+    else:
+        enable_pre2_hook_verification(rt, on_result=_on_result)
+        print(f"[verify-hooks] lockstep oracle active vs original ASM (contract; {mode})", flush=True)
 
 
 def _make_runtime(args: argparse.Namespace, *, fast_adlib: bool | None = None):
@@ -710,6 +719,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-replacements", action="store_true", help="run the pure VM oracle with NO recovered/hybrid hooks (their fixed code/data offsets are bound to one build's layout; use this on a build they weren't derived against)")
     p.add_argument("--verify-hooks", action="store_true", help="run the original ASM as the oracle and diff each recovered-native result against it; prints divergences immediately plus a compact periodic per-hook summary")
     p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
+    p.add_argument("--full-verify", action="store_true", help="foolproof variant of --verify-hooks: diff the WHOLE machine state (all memory + return cs:ip:sp) after each recovered routine vs the ASM, so nothing can leak outside a hand-picked contract. ~10x slower; for offline snapshot/demo audits, not live play")
     args = p.parse_args(argv)
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
