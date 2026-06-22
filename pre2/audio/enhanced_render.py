@@ -39,8 +39,19 @@ _MAX_TICK_BUDGET = 16          # ~320 ms; absorbs jitter, caps catch-up after a 
 
 
 def _to_float(pcm: bytes) -> np.ndarray:
-    """8-bit *unsigned* PCM (centre 0x80) -> float32 in [-1, 1) (the recovered convention)."""
-    return (np.frombuffer(pcm, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    """PRE2 8-bit PCM -> DC-free float32.
+
+    The recovered volume table is linear (``out = sample * volume / 64``) and the faithful
+    mixer sums several such channels onto a 0-based buffer, so the audible (AC) content of one
+    channel is ``(sample - mean) * volume / 64`` -- the per-sample DC is just an offset that
+    appears as the buffer's centre and is inaudible. PRE2 samples are *not* a fixed-centre
+    format (their rest byte is 0 on some instruments, 0x20 on others), so the only correct,
+    universal centring is to remove each sample's own DC. (Treating them as unsigned centred
+    at 0x80 -- the old bug -- shoved the whole waveform to a huge negative offset.)"""
+    a = np.frombuffer(pcm, dtype=np.uint8).astype(np.float32)
+    if a.size:
+        a = a - a.mean()
+    return a / 128.0
 
 
 class _Voice:
@@ -155,10 +166,10 @@ class EnhancedRenderer:
         self._free_run = free_run
         self._voices = [_Voice() for _ in range(NUM_VOICES)]
         self._sfx: list[_SfxVoice] = []
-        # Headroom: the original sums 4 channels into one 8-bit range (each ~1/4 scale), so a
-        # per-channel master near 1/NUM_VOICES keeps a full 4-voice mix about unity before the
-        # limiter -- without it 4 channels reach +-4 and slam the limiter into harsh distortion.
-        self._music_gain = 1.0 / NUM_VOICES
+        # Headroom: each DC-free channel peaks near +-0.25 (the vol_table's 1/4-of-range scale),
+        # so 4 channels sum to about unity; a master near 1 keeps a full mix just under the
+        # limiter knee instead of slamming it.
+        self._music_gain = 1.3
         self._sfx_gain = 0.6
         # Light stereo image (Amiga-style: channels 0,3 left / 1,2 right, softened to 70/30 so
         # it stays mono-compatible). The faithful path is mono; this is an enhanced-only nicety.
@@ -236,8 +247,8 @@ class EnhancedRenderer:
                     right[i:i + chunk] += seg * (1.0 - lf)
             self._samples_to_tick -= chunk
             i += chunk
-        out[:, 0] += left * (self._music_gain * 2.0)     # *2: pan halves each channel's bus
-        out[:, 1] += right * (self._music_gain * 2.0)
+        out[:, 0] += left * self._music_gain
+        out[:, 1] += right * self._music_gain
 
         if self._sfx:
             sl = np.zeros(n_frames, np.float32)
