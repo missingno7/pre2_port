@@ -75,11 +75,18 @@ def write_channel(mem, ch: int, cs: ChannelState) -> None:
 
 
 def read_instrument(mem, instr: int, channel_end: int) -> Instrument:
-    base = instr * 16
-    loop_start = _rw(mem, DATA_SEG, INSTR_LOOP_START + base)
-    loop_len = _rw(mem, DATA_SEG, INSTR_LOOP_LEN + base)
-    seg = _rw(mem, DATA_SEG, INSTR_PTR_SEG + base)
-    off = _rw(mem, DATA_SEG, INSTR_PTR_OFF + base)
+    # The ASM indexes the instrument table as [bx + disp] with bx = (instr << 4) and the
+    # effective address taken mod 0x10000 (16-bit DS offset).  For a valid instrument this
+    # is just instr*16, but a garbage/sentinel index (e.g. 0xFFFF on a channel left over
+    # from a transition) wraps: bx = 0xFFF0, [bx+0xBDA] -> 0x0BCA.  Mask the offsets at
+    # 16 bits so we read the SAME bytes the ASM does (byte-exact for valid instruments,
+    # and matches the ASM's wrapped read for garbage ones -- which is what made the live
+    # mixer diverge on its channel state).
+    base = (instr * 16) & 0xFFFF
+    loop_start = _rw(mem, DATA_SEG, (INSTR_LOOP_START + base) & 0xFFFF)
+    loop_len = _rw(mem, DATA_SEG, (INSTR_LOOP_LEN + base) & 0xFFFF)
+    seg = _rw(mem, DATA_SEG, (INSTR_PTR_SEG + base) & 0xFFFF)
+    off = _rw(mem, DATA_SEG, (INSTR_PTR_OFF + base) & 0xFFFF)
     flat = ((seg << 4) + off) & 0xFFFFF
     want = max(channel_end, loop_start + loop_len) + BLOCK_LEN + 8  # cover end + overshoot
     return Instrument(loop_start=loop_start, loop_len=loop_len,
