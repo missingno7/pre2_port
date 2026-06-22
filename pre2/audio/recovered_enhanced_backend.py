@@ -1,6 +1,7 @@
 """Rooted enhanced backend — the live event sink for the modern audio path.
 
-The drop-in the live audio thread (``scripts/sdl_view.EnhancedAudio``) drives: it consumes
+The deterministic core that the live runtime (``pre2.audio.live_engine.LiveEnhancedAudioEngine``)
+drives on its audio thread: it consumes
 the recovered command :mod:`pre2.audio.events` stream into the single
 :class:`~pre2.audio.recovered_system.RecoveredAudioSystem`, then renders it with the modern
 :class:`~pre2.audio.enhanced_render.EnhancedRenderer`. This is what replaces the clean-room

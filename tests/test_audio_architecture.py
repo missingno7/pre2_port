@@ -272,6 +272,41 @@ def test_rooted_backend_diagnostics_flag_repeats_and_missed_sfx():
     assert d["enh_sfx"] == "1" and d["enh_sfx_missed"] == "1"
 
 
+def test_live_engine_deterministic_render_through_queue():
+    """The live engine stays synchronously testable: posting commands then render() drains the
+    queue and produces the same audio as the core backend handling them directly."""
+    from pre2.audio.live_engine import LiveEnhancedAudioEngine
+    from pre2.audio.recovered_enhanced_backend import RecoveredEnhancedBackend
+    from pre2.audio.events import StartSong
+    mod = _pre2_module()
+    eng = LiveEnhancedAudioEngine(out_rate=22050, free_run=True)
+    eng.post(StartSong(recovered_module=mod))
+    y = eng.render(8192)                                  # drains the queue, then renders
+    assert eng.commands_applied == 1 and float(np.max(np.abs(y))) > 0.0
+    ref = RecoveredEnhancedBackend(out_rate=22050, free_run=True)
+    ref.handle(StartSong(recovered_module=mod))
+    assert np.array_equal(y, ref.render(8192))           # queue path == direct path
+
+
+def test_live_engine_post_does_not_mutate_state():
+    """Posting a command only enqueues; playback state changes only when the engine renders
+    (i.e. only the audio side advances state, never the poster)."""
+    from pre2.audio.live_engine import LiveEnhancedAudioEngine
+    from pre2.audio.events import StartSong
+    eng = LiveEnhancedAudioEngine(out_rate=22050, free_run=True)
+    eng.post(StartSong(recovered_module=_pre2_module()))
+    assert not eng.backend.system.playing                # not applied yet
+    eng.render(64)
+    assert eng.backend.system.playing                    # applied on the render/audio side
+
+
+def test_live_engine_has_no_vm_or_device_deps():
+    """The engine is a pure runtime wrapper: no VM, no Sound Blaster, no pygame/SDL."""
+    mods = _imports_of("pre2/audio/live_engine.py")
+    assert not any(m == "dos_re" or m.startswith("dos_re.") for m in mods)
+    assert not any("sound_blaster" in m or "pygame" in m or "sdl" in m for m in mods)
+
+
 def test_rooted_backend_does_not_read_sound_blaster():
     """The enhanced output is produced purely from the recovered model — it never reads the
     SB. Proven by rendering identical audio with no SB object anywhere in the path."""

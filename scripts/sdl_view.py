@@ -285,136 +285,42 @@ class SoundBlasterAudio:
             self._channel.stop()
 
 
-class EnhancedAudio:
-    """Play the enhanced backend's float32 stereo mix on a dedicated AUDIO thread.
+class PygameAudioDevice:
+    """:class:`pre2.audio.live_engine.AudioDevice` backed by an SDL/pygame mixer channel.
 
-    Fully detached from the DOS audio machine: SDL plays the queued PCM chunks on its own
-    audio clock, and a background thread keeps the channel fed by pulling
-    :meth:`EnhancedBackend.render`. The VM injects only **semantic events** via
-    :meth:`handle` (``StartSong`` / ``PlaySfx`` / ``SetMusicEnabled``); the song free-runs
-    at its own musical tempo. No SB blocks, DMA, IRQ timing, or original-mixer PCM are
-    read here. A slow/jittery video frame cannot starve or gap the audio.
+    Thin output sink: the engine's audio thread renders float blocks and submits them here;
+    SDL plays the queued PCM on its own audio clock, and that buffer state (busy / has-queue)
+    is the back-pressure that paces the engine. No rendering or playback state lives here."""
 
-    A lock guards the backend (render on the audio thread vs. handle from the main thread).
-    """
-
-    def __init__(self, pygame, backend, sound_blaster=None, status: dict | None = None, *,
-                 chunk_ms: float = 185.0) -> None:
-        # chunk_ms drives the app-level buffer depth: pygame's Channel.queue only holds
-        # ONE chunk ahead, so the headroom before an underrun is ~2*chunk_ms. The audio
-        # thread shares the GIL with the (CPU-bound) VM thread, so small chunks starve and
-        # crackle; ~120 ms (=> ~240 ms headroom) absorbs frame/VM jitter. The song clock is
-        # the device, so a larger buffer adds latency but NEVER changes tempo. (A true fix
-        # is a callback/ring-buffer stream that pulls in the audio driver's own thread,
-        # independent of the GIL -- pygame has no callback API, so we buffer generously.)
-        import threading
+    def __init__(self, pygame, *, channel_id: int = 2, status: dict | None = None) -> None:
         self._pygame = pygame
-        self._backend = backend
-        self._sb = sound_blaster
         self._status = status
-        self._available = False
-        self._channel = None
-        self._thread = None
         if not pygame.mixer.get_init():
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
-        init = pygame.mixer.get_init()
-        if init is None:
-            return
-        self._rate = int(init[0])
-        self._out_channels = int(init[2])
-        backend.out_rate = self._rate                 # render at the device rate
-        self._chunk = max(256, int(round(self._rate * max(10.0, float(chunk_ms)) / 1000.0)))
-        if pygame.mixer.get_num_channels() < 3:
-            pygame.mixer.set_num_channels(4)
-        self._channel = pygame.mixer.Channel(2)
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._available = True
-        # Diagnostics: an underrun (the channel went idle because we didn't feed it in
-        # time -> audible gap/crackle) is the prime suspect for "crackles", and a restart
-        # is when we had to ch.play() a fresh chunk after one. Surfaced so a busy frame
-        # starving this (GIL-shared) thread is visible, not silent.
-        self._underruns = 0
-        self._restarts = 0
-        self._errors = 0
-        self._started = False
-        self._thread = threading.Thread(target=self._run, name="enhanced-audio", daemon=True)
-        self._thread.start()
+        init = pygame.mixer.get_init() or (44100, -16, 2)
+        self.rate = int(init[0])
+        self.channels = int(init[2])
+        if pygame.mixer.get_num_channels() <= channel_id:
+            pygame.mixer.set_num_channels(channel_id + 2)
+        self._ch = pygame.mixer.Channel(channel_id)
 
-    def handle(self, event) -> None:
-        """Inject a semantic audio event (called from the VM/main thread)."""
-        with self._lock:
-            self._backend.handle(event)
+    def busy(self) -> bool:
+        return bool(self._ch.get_busy())
 
-    def _make_chunk(self):
-        with self._lock:
-            stereo = self._backend.render(self._chunk)   # (chunk, 2) float32 in [-1, 1]
-        block = stereo.mean(axis=1, keepdims=True) if self._out_channels == 1 else stereo
-        data = np.clip(block * 32767, -32768, 32767).astype(np.int16)
-        return self._pygame.mixer.Sound(buffer=np.ascontiguousarray(data).tobytes())
+    def has_queue(self) -> bool:
+        return self._ch.get_queue() is not None
 
-    def _is_playing(self) -> bool:
-        """Whether a song is actually sounding (so an idle channel is a real gap, not just
-        the silent title/menu where 'underruns' would be inaudible + alarmist)."""
-        sysm = getattr(self._backend, "system", None)
-        return bool(getattr(sysm, "playing", False)) if sysm is not None else True
+    def play(self, pcm: bytes) -> None:
+        self._ch.play(self._pygame.mixer.Sound(buffer=pcm))
 
-    def _run(self) -> None:
-        # Audio clock: SDL plays queued chunks continuously; we just keep one queued
-        # ahead.  Checking a few times per chunk keeps the channel fed even if the main
-        # (renderer) thread stalls -- audio never underruns because of a slow frame.
-        period = max(0.003, self._chunk / self._rate / 3.0)
-        while not self._stop.is_set():
-            try:
-                ch = self._channel
-                if not ch.get_busy():
-                    # Channel idle: first start, a real UNDERRUN (both the playing + queued
-                    # chunk drained before we refilled -> an audible gap), or just silence at
-                    # the title/menu. Only count it as a glitch when a song is actually playing.
-                    if self._started and self._is_playing():
-                        self._underruns += 1
-                        if self._underruns <= 5 or self._underruns % 50 == 0:
-                            print(f"[enhanced-audio] UNDERRUN #{self._underruns} "
-                                  "(audio thread starved -> gap/crackle)", flush=True)
-                    self._started = True
-                    self._restarts += 1
-                    ch.play(self._make_chunk())
-                    ch.queue(self._make_chunk())
-                elif ch.get_queue() is None:
-                    ch.queue(self._make_chunk())
-            except Exception as exc:
-                self._errors += 1
-                if self._errors <= 5:
-                    import traceback
-                    print(f"[enhanced-audio] thread error #{self._errors}: "
-                          f"{type(exc).__name__}: {exc}", flush=True)
-                    traceback.print_exc()
-            if self._status is not None:
-                self._status["enh_underruns"] = str(self._underruns)
-                self._status["enh_errors"] = str(self._errors)
-            self._stop.wait(period)
-
-    def pump(self) -> None:
-        # Housekeeping only: the enhanced mixer is fully detached from the DOS audio
-        # machine -- it free-runs the song on the audio thread, driven solely by semantic
-        # events (StartSong / PlaySfx / SetMusicEnabled).  We don't read or play the SB's
-        # PCM at all; just drop it so the (unused) capture buffer doesn't grow.
-        sb = self._sb
-        if sb is not None and sb.pcm_out:
-            sb.pcm_out.clear()
-        # Surface the rooted backend's audio red-flags (StartSong repeats, missed SFX, native
-        # tick cadence) on the HUD/log — the enhanced output never READS the SB above.
-        if self._status is not None:
-            diag = getattr(self._backend, "diagnostics", None)
-            if diag is not None:
-                self._status.update(diag())
+    def queue(self, pcm: bytes) -> None:
+        self._ch.queue(self._pygame.mixer.Sound(buffer=pcm))
 
     def close(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=0.5)
-        if self._channel is not None:
-            self._channel.stop()
+        try:
+            self._ch.stop()
+        except Exception:
+            pass
 
 
 def render_vga_rgb(mem: bytes, palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
