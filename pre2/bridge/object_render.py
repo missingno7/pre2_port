@@ -112,7 +112,15 @@ def read_attr(mem, sprite_id: int) -> SpriteAttr:
 
 
 def read_active_list(mem):
-    """Records in the ASM's processing order: cursor top (0x5720) down to base."""
+    """Records in the ASM's processing order: cursor top (0x5720) down to base.
+
+    NOTE (verified vs ASM 2026-06-22): starting at ``LIST_TOP`` is correct — do NOT
+    "fix" it to ``LIST_TOP - RECORD_BYTES``. The ASM sets ``si = 0x5720`` at 1030:270C
+    and checks/processes *that* record first (2713 ``cmp [si+4],-1``); only when it is
+    the empty terminator does it fall through (2719) to the 2DDA decrement. So the top
+    slot is a genuine processable slot (empty today, hence the per-record sprite_id ==
+    0xFFFF skip handles it); dropping it would lose a sprite whenever it is occupied.
+    """
     out = []
     off = LIST_TOP
     while off >= LIST_BASE:

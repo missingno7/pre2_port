@@ -78,6 +78,16 @@ via the recovered `object_render`; the object system layers gameplay sprites sep
 leaf hooks into one `render_frame` entry hook (the coastline's final step). The compositor
 `3B40`/`3B5F` (draw_grid→scroll→panel) static path is still unreached in any snapshot.
 
+## Phase 3 — cleanup status
+- **`read_active_list` "off-by-one": NOT a bug — do not change.** Verified vs ASM: 1030:270C
+  sets `si = 0x5720` (LIST_TOP) and 2713 processes that record first; the top slot is a
+  genuine processable slot (empty today → handled by the per-record `sprite_id == 0xFFFF`
+  skip). Starting at `LIST_TOP - RECORD_BYTES` would drop a sprite whenever the top slot is
+  occupied. Code comment added. (The review's hypothesis was wrong — the lockstep is the authority.)
+- Remaining (lower priority): object_render record-mutation split (SpritePlan/SpriteRecordUpdate),
+  coastline shortening, merge-target taxonomy, prune `pre2/probes/`. None block the renderer's
+  completeness; they tidy the recovered layer.
+
 ## NEEDS REPRO (for the user)
 - **Palette fade**: ~~F12 mid-fade~~ — **DONE** (snapshot 021225 supplied; fade recovered + verified).
 - **Horizontal scroll**: F12 while moving left/right across a wide level (to witness the
