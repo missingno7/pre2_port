@@ -21,6 +21,7 @@ import numpy as np
 
 from render_frame import DEFAULT_VGA_PALETTE
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.recovered.mixer import BLOCK_LEN
 
 WIDTH, HEIGHT = 320, 200
 _PLANAR_ROW_BYTES = 40   # 320 px / 8 px-per-byte, EGA/VGA 16-colour planar (mode 0Dh)
@@ -376,6 +377,154 @@ class SoundBlasterAudio:
     def _next_chunk(self):
         # Emit up to one chunk of whatever is buffered (callers gate on having a
         # full chunk for the queue path; the initial play path may emit the lead).
+        n = min(self._chunk, len(self._buf)) or 1
+        chunk, self._buf = self._buf[:n], self._buf[n:]
+        if self._channels > 1:
+            chunk = np.repeat(chunk[:, None], self._channels, axis=1)
+        return self._pygame.mixer.Sound(buffer=chunk.astype(np.int16).tobytes())
+
+    def close(self) -> None:
+        if self._channel is not None:
+            self._channel.stop()
+
+
+class NativeMixerAudio:
+    """Live audio from the recovered native ``AudioSystem`` — no emulated SB DMA capture.
+
+    The faithful engine (``pre2/recovered/audio_system.py``, byte-exact vs the original ISR)
+    is run **wall-clock-paced** (50 Hz blocks in real time) so it is decoupled from the VM's
+    speed: when the VM falls behind, the music keeps playing smoothly instead of underrunning
+    into the silent re-lead gaps the SB-DMA path produces. The song + SFX are synced from VM
+    memory (re-capture on a module change; inject SFX when the game queues a new one). The
+    8-bit/8.4 kHz blocks are phase-continuous resampled to the mixer rate (ear candy). The
+    VM's own SB output is ignored.
+    """
+
+    def __init__(self, pygame, rt, sound_blaster, status: dict | None = None, *,
+                 chunk_ms: float = 46.0) -> None:
+        self._pygame = pygame
+        self._rt = rt
+        self._sb = sound_blaster
+        self._status = status
+        self._available = False
+        self._channel = None
+        self._rate = 44100
+        self._channels = 1
+        self._buf = np.zeros(0, dtype=np.int16)
+        self._in = np.zeros(0, dtype=np.float64)
+        self._phase = 0.0
+        self._sys = None                 # the recovered AudioSystem (lazy: once music starts)
+        self._sig = None                 # current song signature (order table) for change detect
+        self._sfx_prev = 0               # last VM SFX remaining (detect an upward jump = new SFX)
+        self._src_rate = 8403
+        self._t0 = None                  # wall-clock start of generation
+        self._produced = 0               # 8-bit source samples generated so far
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+        init = pygame.mixer.get_init()
+        if init is None:
+            return
+        self._rate = int(init[0])
+        self._channels = int(init[2])
+        self._chunk = max(256, int(round(self._rate * max(10.0, float(chunk_ms)) / 1000.0)))
+        self._lead = int(self._rate * 0.12)
+        self._started = False
+        if pygame.mixer.get_num_channels() < 3:
+            pygame.mixer.set_num_channels(4)
+        self._channel = pygame.mixer.Channel(2)
+        self._available = True
+
+    # --- VM state sync (song change + SFX trigger) ----------------------------
+    def _sync(self) -> None:
+        from time import perf_counter
+
+        from pre2.bridge import audio as _a
+        from pre2.bridge.audio_system import _read_full_sfx, capture_audio_state
+        from pre2.recovered.audio_system import AudioSystem
+        mem = self._rt.cpu.mem
+        if not _a.music_on(mem):
+            return
+        sig = bytes(_a.read_order_table(mem)) + bytes([_a.read_song_length(mem)])
+        if self._sys is None or sig != self._sig:
+            # (re)start the song from the VM's current module
+            self._sys = AudioSystem(capture_audio_state(mem))
+            self._sig = sig
+            self._src_rate = (self._sb and self._sb.sample_rate) or self._src_rate
+            self._sfx_prev = self._sys.s.sfx.remaining
+            if self._t0 is None:
+                self._t0 = perf_counter()
+                self._produced = 0
+            return
+        # detect a freshly-queued SFX (VM remaining jumped up) and inject it
+        vm_rem = _a._rw(mem, _a.DATA_SEG, _a.SFX_REMAINING)
+        if vm_rem > self._sfx_prev + BLOCK_LEN:
+            self._sys.s.sfx = _read_full_sfx(mem)
+        self._sfx_prev = vm_rem
+
+    def pump(self) -> None:
+        if not self._available or self._channel is None:
+            return
+        self._sync()
+        self._generate()
+        self._feed()
+
+    def _generate(self) -> None:
+        from time import perf_counter
+        if self._sys is None or self._t0 is None:
+            return
+        # wall-clock-paced: keep ~120 ms ahead of real time, in SOURCE samples (the buffer
+        # cap + the output-rate jitter lead are handled separately in _resample/_feed)
+        target = int((perf_counter() - self._t0) * self._src_rate) + int(self._src_rate * 0.12)
+        produced8 = bytearray()
+        guard = 0
+        while self._produced < target and guard < 200:     # cap per pump (avoid runaway)
+            produced8 += self._sys.next_block()
+            self._produced += BLOCK_LEN
+            guard += 1
+        if produced8:
+            sig = (np.frombuffer(bytes(produced8), dtype=np.uint8).astype(np.float64) - 128) * 256
+            self._resample(sig)
+
+    def _resample(self, sig) -> None:
+        self._in = np.concatenate([self._in, sig])
+        ratio = self._src_rate / self._rate
+        avail = len(self._in)
+        if avail >= 2:
+            k = int((avail - 1 - self._phase) / ratio) + 1
+            pos = self._phase + np.arange(max(0, k)) * ratio
+            pos = pos[pos <= avail - 1]
+            if len(pos):
+                i0 = np.floor(pos).astype(np.int64)
+                frac = pos - i0
+                i1 = np.minimum(i0 + 1, avail - 1)
+                out = self._in[i0] * (1.0 - frac) + self._in[i1] * frac
+                self._buf = np.concatenate(
+                    [self._buf, np.clip(out, -32768, 32767).astype(np.int16)])
+                adv = self._phase + len(pos) * ratio
+                consumed = int(adv)
+                self._in = self._in[consumed:]
+                self._phase = adv - consumed
+        cap = self._rate
+        if len(self._buf) > cap:
+            self._buf = self._buf[-cap:]
+        if len(self._in) > cap:
+            self._in = self._in[-cap:]
+
+    def _feed(self) -> None:
+        if not self._started:
+            if len(self._buf) >= self._lead:
+                self._channel.play(self._next_chunk())
+                if len(self._buf) >= self._chunk:
+                    self._channel.queue(self._next_chunk())
+                self._started = True
+            return
+        if not self._channel.get_busy():
+            self._started = False
+            return
+        if self._channel.get_queue() is None and len(self._buf) >= self._chunk:
+            self._channel.queue(self._next_chunk())
+
+    def _next_chunk(self):
         n = min(self._chunk, len(self._buf)) or 1
         chunk, self._buf = self._buf[:n], self._buf[n:]
         if self._channels > 1:

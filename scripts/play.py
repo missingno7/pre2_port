@@ -304,7 +304,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     sound_blaster = None
     if getattr(args, "audio", "adlib") != "off":
         sound_blaster = enable_sound_blaster(rt)
-        sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
+        if getattr(args, "audio", "adlib") == "native":
+            # native mixer: the recovered AudioSystem produces the audio (wall-clock-paced,
+            # decoupled from VM speed -> click-free), syncing song/SFX from VM memory; the
+            # SB still runs so the game advances its audio state, but its PCM is ignored.
+            from sdl_view import NativeMixerAudio
+            sb_audio = NativeMixerAudio(pygame, rt, sound_blaster, audio_status)
+        else:
+            sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
 
     # The deterministic demo clock: advanced a fixed present_period each frame so the
     # PIT/SB/retrace cadence is a pure function of the frame index (reproducible).
@@ -667,7 +674,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--record-demo", metavar="NAME", help="(viewer) start recording an input demo immediately")
     p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (headless unless --view)")
     p.add_argument("--demo-dir", default=str(ROOT / "artifacts"), help="directory to write recorded demos into")
-    p.add_argument("--audio", default="adlib", choices=("adlib", "off"), help="viewer sound-card (OPL3) audio")
+    p.add_argument("--audio", default="adlib", choices=("adlib", "native", "off"),
+                   help="digital audio: 'adlib' = emulated-SB DMA capture (default); "
+                        "'native' = recovered AudioSystem, wall-clock-paced + click-free; 'off'")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
     p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
