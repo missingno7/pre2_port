@@ -120,7 +120,23 @@ def _run_panel(cpu, planes):
 
 @registry.replace(*_PANEL_ENTRY, "frame_panel_copy")
 def frame_panel_copy(cpu) -> None:
-    """Native replacement for the double-buffer page-flip copy at 1030:3054."""
+    """Verify/standalone hook for the double-buffer page-flip copy at 1030:3054.
+
+    IMPORTANT — this routine is NOT pure pixel logic: the ASM body is a 10-step
+    loop (``[0x3050]`` 0..0x28) that copies one symmetric strip-pair per step and
+    waits TWO vertical retraces between steps (``call 44CD`` x2 @307D/3080). That
+    vsync-paced, strip-by-strip reveal IS a visible effect — the "horizontal
+    curtain" that opens from the centre outward when entering a room/cave. Doing
+    the copy in one shot (as the recovered ``panel_copy`` does) produces the same
+    FINAL planes but collapses the reveal to a single instant frame. The plane-only
+    verify can't see that (the end state matches), which is why it passed.
+
+    A pure hook can't reproduce the wait either: a Python spin on 0x3DA would hang
+    the deterministic clock (only executing VM instructions advances it). So the
+    live hybrid lets the ASM run its own vsync-paced loop here. The recovered
+    ``panel_copy`` stays the pixel oracle (verify below + standalone render_frame,
+    where there is no display timing to honour).
+    """
     mem = cpu.mem
     if getattr(cpu, "pre2_verify_mode", False):
         snap = _spr.snapshot_planes(mem)
@@ -128,8 +144,8 @@ def frame_panel_copy(cpu) -> None:
         cpu.pre2_frame_panel_pending.append(snap)
         interpret_current_instruction_without_hook(cpu)
         return
-    _run_panel(cpu, _spr.plane_views(mem))
-    cpu.s.ip = cpu.pop()  # near ret; regs preserved (vsync wait omitted, timing-only)
+    # Hybrid: run the original vsync-paced reveal (its timing is the effect).
+    interpret_current_instruction_without_hook(cpu)
 
 
 # NOTE on 1030:3B5F (the frame compositor): it is a static composition —
