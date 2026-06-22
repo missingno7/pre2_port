@@ -81,42 +81,41 @@ WAV. `enhanced` identifies the loaded song among the `.TRK` assets and plays it 
 through `ModPlayer`; `faithful` runs the PRE2 oracle (8-bit, band-limit-resampled to
 44.1 kHz mono).
 
-## Two clocks (the key to clean, frame-independent audio)
+## Fully detached: driven only by semantic events
 
-The enhanced path deliberately separates *game audio time* from *audio playback time*:
+The enhanced backend is liberated from the DOS audio machine. It is driven **only** by
+semantic events from the recovered command layer and free-runs the song at its own musical
+tempo; it never reads SB blocks, DMA, IRQ timing, or the original mixer's PCM.
 
-* **Sequencer / intent** — `ModPlayer.tick()` advances the song one tracker tick (note
-  triggers, period→pitch, volume). It runs only when **game audio time** supplies a tick.
-* **Voice playback** — `ModPlayer.render_voices(n)` advances the **already-active** voices
-  by `n` samples of **audio time** (continuous PCM). It never advances the sequencer, so a
-  held note sustains and is never gapped.
+* **Voice playback** — `ModPlayer.render_voices(n)` advances the active voices by `n`
+  samples of audio time (continuous PCM); a held note sustains and is never gapped.
+* **Sequencer** — `ModPlayer.tick()` advances the song one tick at its own tempo
+  (`EnhancedBackend(free_run=True)`). The audio thread does both, paced solely by the
+  audio device — so a slow/jittery video frame can never starve, gap, or speed the audio.
 
-`EnhancedBackend.render(n)` renders voices continuously and ticks the sequencer only while
-`advance_ticks` has supplied game-time ticks (else notes sustain). Consequence — exactly
-the piano model: a slow/stalled game delays the *next* tick (notes farther apart), but
-every already-started note keeps playing cleanly. (Verified: a looping voice holds steady
-rms across a long no-tick stall; `tests/test_audio_architecture.py`.)
+(`EnhancedBackend` also has an optional `advance_ticks` budget mode — sequencer gated by an
+externally supplied game-audio tick — kept for experiments/tests, but the live and offline
+paths both use `free_run`: pure detachment.)
 
 ## Live wiring  (`play.py --view --audio enhanced`)
 
 `sdl_view.EnhancedAudio` owns the backend + a **dedicated audio thread**: SDL plays queued
 PCM chunks on its own audio clock, and the thread keeps the channel fed by calling
-`render(n)` — fully independent of the renderer/viewer loop, so a slow video frame can
-never starve or rebuild-gap the audio.
+`render(n)` — fully independent of the renderer/viewer loop.
 
-`pre2.bridge.audio_commands.install_command_observers(cpu, emit, assets_dir)`:
+The audio is driven entirely by the recovered command layer
+(`pre2.bridge.audio_commands.install_command_observers(cpu, emit, assets_dir)`):
 
 * hooks **play_sfx (0x0282)** at entry → emits `PlaySfx(resolve_sfx(dl))`;
 * returns a **`poll(mem)`** the viewer calls each frame → on a song load (the
   `[0xDC2]`/`[0xDC7]` order signature changing) maps it to a `.TRK` via `identify_song` and
   emits `StartSong(module)`; also emits `SetMusicEnabled` on the `cs:[3]&0x40` change.
 
-The Sound Blaster stays enabled (the game detects a digital device + runs its audio
-commands). Its PCM is **not played**; `EnhancedAudio.pump` uses it only as the **game-audio
-clock** — 1 SB DMA block = 1 tracker tick → `advance_ticks` — keeping the enhanced song in
-the game's tempo while the audio thread renders continuously. The mixer itself
-(`mod_player`, `enhanced_backend`) stays free of SB/DMA/frame concepts; the SB-as-clock
-coupling lives only in the bridge.
+The original **ASM** runs the game's own audio (the recovered tracker/mixer checkpoints are
+removed in this mode — they are the faithful/oracle path, and running the recovered mixer
+live currently corrupts state via a known divergence). The ASM keeps the game's state
+advancing; its SB PCM is **discarded, never played**. `EnhancedAudio.pump` only clears that
+unused capture. Nothing of the old machine reaches the enhanced mixer.
 
 ## Notes
 

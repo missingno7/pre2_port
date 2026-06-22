@@ -285,22 +285,17 @@ class SoundBlasterAudio:
             self._channel.stop()
 
 
-_SB_BLOCK = 168   # PRE2 SB DMA block size (= one tracker tick); see pre2.recovered.mixer
-
-
 class EnhancedAudio:
     """Play the enhanced backend's float32 stereo mix on a dedicated AUDIO thread.
 
-    The enhanced audio is a continuous, clock-independent subsystem: SDL plays the
-    queued PCM chunks on its own audio clock, and a background thread keeps the channel
-    fed by pulling :meth:`EnhancedBackend.render` (continuous voice playback). The VM
-    injects semantic events via :meth:`handle`, and game audio time advances the
-    sequencer via :meth:`advance_ticks` (fed from SB block production in :meth:`pump` --
-    1 block == 1 tracker tick). So a slow/jittery video frame only delays *new ticks*;
-    already-active voices keep playing cleanly on the audio thread (never starve/gap).
+    Fully detached from the DOS audio machine: SDL plays the queued PCM chunks on its own
+    audio clock, and a background thread keeps the channel fed by pulling
+    :meth:`EnhancedBackend.render`. The VM injects only **semantic events** via
+    :meth:`handle` (``StartSong`` / ``PlaySfx`` / ``SetMusicEnabled``); the song free-runs
+    at its own musical tempo. No SB blocks, DMA, IRQ timing, or original-mixer PCM are
+    read here. A slow/jittery video frame cannot starve or gap the audio.
 
-    A lock guards the backend (render on the audio thread vs. handle/advance_ticks from
-    the VM/main thread).
+    A lock guards the backend (render on the audio thread vs. handle from the main thread).
     """
 
     def __init__(self, pygame, backend, sound_blaster=None, status: dict | None = None, *,
@@ -336,11 +331,6 @@ class EnhancedAudio:
         with self._lock:
             self._backend.handle(event)
 
-    def advance_ticks(self, k: int) -> None:
-        """Supply game-audio-time ticks to the mixer's sequencer (thread-safe)."""
-        with self._lock:
-            self._backend.advance_ticks(k)
-
     def _make_chunk(self):
         with self._lock:
             stereo = self._backend.render(self._chunk)   # (chunk, 2) float32 in [-1, 1]
@@ -366,17 +356,13 @@ class EnhancedAudio:
             self._stop.wait(period)
 
     def pump(self) -> None:
-        # Game audio clock (NOT a render driver): the SB streams one 168-byte DMA block
-        # per tracker tick, so the blocks produced since the last pump == ticks of game
-        # audio time.  Feed those to the sequencer; the audio thread renders voices
-        # continuously and independently.  (The SB PCM bytes themselves are unused.)
+        # Housekeeping only: the enhanced mixer is fully detached from the DOS audio
+        # machine -- it free-runs the song on the audio thread, driven solely by semantic
+        # events (StartSong / PlaySfx / SetMusicEnabled).  We don't read or play the SB's
+        # PCM at all; just drop it so the (unused) capture buffer doesn't grow.
         sb = self._sb
-        if sb is None or not sb.pcm_out:
-            return
-        blocks = len(sb.pcm_out) // _SB_BLOCK
-        if blocks:
-            self.advance_ticks(blocks)
-            del sb.pcm_out[:blocks * _SB_BLOCK]
+        if sb is not None and sb.pcm_out:
+            sb.pcm_out.clear()
 
     def close(self) -> None:
         self._stop.set()

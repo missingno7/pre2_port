@@ -325,7 +325,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 for _addr in ((0x1030, 0x227C), (0x1030, 0x218F)):   # tracker, mixer
                     rt.cpu.replacement_hooks.pop(_addr, None)
                     rt.cpu.hook_names.pop(_addr, None)
-            _enh = EnhancedBackend()
+            # Fully detached from the DOS audio machine: the enhanced mixer free-runs the
+            # song at its own musical tempo and is driven ONLY by semantic events
+            # (StartSong / PlaySfx / SetMusicEnabled) from the recovered command layer --
+            # no SB block counting, no DMA/IRQ, no original mixer PCM.
+            _enh = EnhancedBackend(free_run=True)
             # EnhancedAudio owns the backend + a dedicated audio thread; events from the VM
             # are injected through its thread-safe handle (audio runs on its own clock).
             sb_audio = EnhancedAudio(pygame, _enh, sound_blaster, audio_status)
