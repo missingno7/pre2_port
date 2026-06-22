@@ -35,7 +35,7 @@ re-disassembled the scroll/grid region on GOG. Findings:
 | Scale/zoom transition | `31D0` loop, span-clear `32DE`, scaled copy `4700`/`473D` | **YES** (002633, 173821) | **span-clear `32DE` RECOVERED + ASM_MATCHED** (`recovered/transition.py:clear_span`, 1073 spans / 0 div over 002633+173821; committed test). Next: scaled copy `4700`/`473D`, then the scale loop `31D0` |
 | calc-scroll-source | `3588` | yes (gameplay) | decoded; small island |
 | vertical tile-column fill | `34ED`? | needs horizontal-scroll scene | confirm GOG addr |
-| Palette fade | `6772` | **NO** — `[0x6C01]\|[0x6C02]` never set in any snapshot's forward-run (routine is called but inactive) | **NEEDS REPRO: a snapshot captured mid palette-fade** |
+| Palette fade | `6772` | **YES** (021225, user-captured mid-fade) | **RECOVERED + VERIFIED + live** (`recovered/transition.py:fade_palette`, `bridge/palette.py`, `checkpoints/palette.py`): 56 fade steps / 0 divergence in-VM lockstep + exact done-correspondence; committed golden test |
 | object-draw render | `653D` (recovered, dormant) | needs object system to drive it | renderer↔object boundary |
 | frame compositor → update_frame | `3B40` | not reached in any snapshot | wire once leaves recovered; verify offline |
 
@@ -46,10 +46,11 @@ row<0xC8`. Left partial: `&= ~(0xFF>>(x&7))`; full bytes `= 0`; right partial:
 `&= 0xFF>>((width + x&7)&7)`. (Aligned + width<8 → only the right-partial path.)
 
 ## NEEDS REPRO (for the user)
-- **Palette fade**: F12 a snapshot *while the screen is fading* (between rooms / on
-  death / level-intro) — confirm `[0x6C01]|[0x6C02] != 0` at capture.
+- **Palette fade**: ~~F12 mid-fade~~ — **DONE** (snapshot 021225 supplied; fade recovered + verified).
 - **Horizontal scroll**: F12 while moving left/right across a wide level (to witness the
   vertical column-fill `34ED` + the directional scroll).
+- **Cold-start screen transitions**: from a fresh launch, press a key to dismiss the
+  "oldies"/title screen — the user noted these expose extra transitions worth snapshotting.
 
 ## Border (confirmed by the gameplay profile)
 The object system (update + object-draw loops) is the dominant non-idle ASM in gameplay

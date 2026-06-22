@@ -10,15 +10,20 @@ First primitive recovered here:
 * :func:`clear_span` (``1030:32DE``) — clear a horizontal pixel span across all four
   EGA planes, with partial-byte edge masks. Used to wipe the borders exposed as the
   image shrinks.
+* :func:`fade_palette` (``1030:6772``) — one step of a linear VGA DAC palette fade from
+  a source palette toward a target, stepping every component by a growing amount until
+  all arrive. Used by screen transitions (room/level/death fades).
 
-Pure: no ``cpu``/``mem``/``dos_re`` imports. Plane buffers + the dest page/stride are
-passed in; the VM↔memory translation lives in ``pre2/bridge/``.
+Pure: no ``cpu``/``mem``/``dos_re`` imports. Plane/palette buffers are passed in; the
+VM↔memory translation lives in ``pre2/bridge/``.
 """
 from __future__ import annotations
 
 from pre2.islands import oracle_link
 
-__all__ = ["SCREEN_W", "SCREEN_H", "ROW_STRIDE", "clear_span"]
+__all__ = ["SCREEN_W", "SCREEN_H", "ROW_STRIDE", "DAC_COMPONENTS", "clear_span", "fade_palette"]
+
+DAC_COMPONENTS = 0x30   # 16 colours × 3 (R,G,B), 6-bit each [asm 6794: cx=0x30]
 
 SCREEN_W = 0x140        # 320 px  [asm 32E3: cmp bx,0x140]
 SCREEN_H = 0xC8         # 200 rows [asm 32EF: cmp dx,0xC8]
@@ -60,3 +65,32 @@ def clear_span(planes, x: int, width: int, row: int, page: int,
         right_keep = (0xFF >> cl) & 0xFF
         for p in range(4):
             planes[p][di] &= right_keep
+
+
+@oracle_link("1030:6772",
+             "one step of a linear DAC palette fade: 0x30 (16 colours × RGB) 6-bit "
+             "components stepped from `a` toward `b` by `fade_amt`; returns (new 48-byte "
+             "DAC palette, all_arrived). Caller swaps a/b for the reverse direction "
+             "([0x6C02]) and stops (clears [0x6C01]/[0x6C02]) when all_arrived.",
+             "ASM_MATCHED", merge_target="renderer")
+def fade_palette(a: bytes, b: bytes, fade_amt: int) -> tuple[bytes, bool]:
+    """Recover ``1030:6772`` — advance a DAC palette one fade step from ``a`` toward ``b``.
+
+    Each of the ``DAC_COMPONENTS`` 6-bit components moves at most ``fade_amt`` toward the
+    target; a component within ``fade_amt`` snaps to ``b``. Returns the new 48-byte 6-bit
+    DAC palette and whether *every* component has arrived (the caller then ends the fade).
+
+    ``a`` is the side being stepped (``lodsb`` source); the original swaps ``a``/``b`` via
+    the direction flag ``[0x6C02]`` so the same routine runs the fade in either direction.
+    """
+    out = bytearray(DAC_COMPONENTS)
+    all_arrived = True
+    for i in range(DAC_COMPONENTS):
+        ai, bi = a[i], b[i]
+        diff = ai - bi                                # [asm 67AE: sub al,ah  (signed)]
+        if abs(diff) <= fade_amt:                     # [asm 67B6: cmp al,dl / jbe -> snap]
+            out[i] = bi                               # [asm 67B8: mov al,ah]
+        else:                                         # [asm 67BB: al = orig - (±fade_amt)]
+            out[i] = (ai - (fade_amt if diff >= 0 else -fade_amt)) & 0xFF
+            all_arrived = False                       # [asm 67BF: inc bp  (not-arrived count)]
+    return bytes(out), all_arrived

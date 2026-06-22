@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.transition import clear_span
+from pre2.recovered.transition import clear_span, fade_palette
 
 _FIX = Path(__file__).parent / "fixtures" / "transition" / "clear_span.json"
+_FADE = Path(__file__).parent / "fixtures" / "transition" / "fade_palette.json"
 
 
 def test_clear_span_byte_exact_vs_asm():
@@ -46,3 +47,24 @@ def test_clear_span_byte_exact_vs_asm():
                 f"x={x} width={width} row={row} plane{p}: span-clear mismatch\n"
                 f"  got  {got.hex()}\n  want {after[p].hex()}"
             )
+
+
+def test_fade_palette_byte_exact_vs_asm():
+    """`fade_palette` (1030:6772) — golden fade steps captured from the ASM under the VM
+    (snapshot 021225, a live palette fade). For each step the recovered fn must reproduce
+    the 48 6-bit DAC components exactly and agree on the all-arrived (fade-done) flag.
+    In-VM lockstep over the full fade confirmed 56 steps / 0 divergence + exact
+    done-correspondence; this is the fast committed check."""
+    data = json.loads(_FADE.read_text())
+    cases = data["cases"]
+    assert cases, "empty fade_palette fixture"
+    for cse in cases:
+        src = bytes.fromhex(cse["src"])
+        target = bytes.fromhex(cse["target"])
+        a, b = (target, src) if cse["direction"] != 0 else (src, target)
+        out, arrived = fade_palette(a, b, cse["fade_amt"])
+        assert out.hex() == cse["out"], (
+            f"fade_amt={cse['fade_amt']}: DAC mismatch\n"
+            f"  got  {out.hex()}\n  want {cse['out']}"
+        )
+        assert int(arrived) == cse["arrived"], f"fade_amt={cse['fade_amt']}: arrived flag"

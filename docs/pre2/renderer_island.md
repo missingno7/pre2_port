@@ -24,6 +24,8 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
 | `3B88` blit_sprite (type 0/1/≥2) | `recovered/renderer.py` | VERIFIED + live |
 | `348D` tile-row, `35A1` grid, `3A27` scroll-copy, `3054` panel | `recovered/frame_renderer.py` | VERIFIED + live |
 | `26FA` object_render (moving sprites) | `recovered/object_render.py` | VERIFIED + live |
+| `32DE` clear_span (transition border wipe) | `recovered/transition.py` | ASM_MATCHED (committed test) |
+| `6772` palette fade (DAC interpolation) | `recovered/transition.py` | VERIFIED + live |
 
 ## Gaps — renderer, still ASM (to recover)
 
@@ -34,11 +36,12 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
    copy `4700`**. Calls `26FA` (recovered) + panel. **Reproducible headless (snapshot
    002633).** Big, but the highest-value gap.
 
-2. **Palette fade `6772`.** Linear interpolation of 16 colours×3 (48 6-bit DAC
-   components) from a source palette (`[0x2D00 + [0x2D8A]*2]` ptr) toward the target
-   `[0xACB7]`, stepping by `[0x6C03]` (incremented per call) until all arrive, then clears
-   `[0x6C01]`/`[0x6C02]`. Direction flag `[0x6C02]` swaps src/target. Writes DAC via
-   3C8/3C9. **Needs a mid-fade snapshot** — it stays inactive in the 002633 forward-run.
+2. ~~**Palette fade `6772`.**~~ **DONE** — recovered as `recovered/transition.py:fade_palette`
+   (+ `bridge/palette.py`, `checkpoints/palette.py`), VERIFIED + live. Linear interpolation
+   of 16 colours×3 (48 6-bit DAC components) from a source palette (`[0x2D00 + [0x2D8A]*2]`
+   ptr) toward the target `[0xACB7]`, stepping by `[0x6C03]` (incremented per call) until all
+   arrive, then clears `[0x6C01]`/`[0x6C02]`. Direction flag `[0x6C02]` swaps src/target.
+   56 fade steps / 0 divergence (snapshot 021225) + committed golden test.
 
 3. **Scroll engine helpers** (re-mapped on GOG — the ledger was stale; see
    `renderer_status.md`): **`3588`–`35A0` = calc scroll source** (`[0x2DBA] = camera·… +
