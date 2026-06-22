@@ -76,12 +76,14 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
             pb_rec, voices_rec = c.pre2_tracker_pending.pop()
             mem = c.mem
             reason = None
-            if astuple(_audio.read_playback(mem)) != astuple(pb_rec):
-                reason = "playback state"
+            pb_asm = _audio.read_playback(mem)
+            if astuple(pb_asm) != astuple(pb_rec):
+                reason = f"playback asm={astuple(pb_asm)} rec={astuple(pb_rec)}"
             else:
                 for ch in range(NUM_VOICES):
-                    if astuple(_audio.read_voice(mem, ch)) != astuple(voices_rec[ch]):
-                        reason = f"voice{ch} state"
+                    v_asm = _audio.read_voice(mem, ch)
+                    if astuple(v_asm) != astuple(voices_rec[ch]):
+                        reason = f"voice{ch} asm={astuple(v_asm)} rec={astuple(voices_rec[ch])}"
                         break
             report(stats, on_result, raise_on_divergence, "audio_tracker_tick", reason)
         interpret_current_instruction_without_hook(c)

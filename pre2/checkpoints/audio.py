@@ -70,11 +70,13 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
             reason = None
             asm_block = bytes(mem.data[buf_flat:buf_flat + BLOCK_LEN])
             if asm_block != bytes(snap):
-                reason = "pcm block"
+                i = next(k for k in range(BLOCK_LEN) if asm_block[k] != snap[k])
+                reason = f"ch{ch} pcm@{i}: asm={asm_block[i]:02X} rec={snap[i]:02X}"
             else:
                 a = _audio.read_channel(mem, ch)
                 if (a.pos, a.end, a.frac) != (new_cs.pos, new_cs.end, new_cs.frac):
-                    reason = "channel state"
+                    reason = (f"ch{ch} state asm=(pos={a.pos:04X} end={a.end:04X} frac={a.frac:02X}) "
+                              f"rec=(pos={new_cs.pos:04X} end={new_cs.end:04X} frac={new_cs.frac:02X})")
             report(stats, on_result, raise_on_divergence, "audio_mix_channel", reason)
         interpret_current_instruction_without_hook(c)
 

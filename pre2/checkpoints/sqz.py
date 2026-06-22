@@ -102,16 +102,30 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
         # Reached the original decompressor's RET (verify mode let the ASM run).
         # Diff the just-completed decode's contract, then perform the RET.
         if c.pre2_verify_pending:
-            name, out_seg, native, _advance = c.pre2_verify_pending.pop()
+            name, out_seg, native, advance = c.pre2_verify_pending.pop()
             mem = c.mem
             base = (out_seg << 4) & 0xFFFFF
             asm_out = bytes(mem.data[base : base + len(native)])
             if asm_out != native:
-                reason = "output bytes"
+                i = next(k for k in range(len(native)) if asm_out[k] != native[k])
+                reason = (f"output@{i} of {len(native)}B: asm={asm_out[i]:02X} rec={native[i]:02X} "
+                          f"(out_seg={out_seg:04X})")
             elif (c.s.ax & 0xFFFF) != (out_seg & 0xFFFF):
                 reason = f"return ax {c.s.ax:04X}!={out_seg:04X}"
             else:
+                # Length check: the recovered output must not be SHORTER than what the ASM
+                # decoded.  The contract compared only the first len(native) bytes, so a
+                # truncated decode (recovered stops early) passed silently -- yet live it
+                # leaves the asset's tail stale and corrupts later loads.  The allocator
+                # reserves `advance` paragraphs; if the recovered stopped inside that span
+                # and the ASM wrote real bytes past the recovered end, it's truncated.
+                reserved = (advance * 16) & 0x1FFFFF
+                tail = bytes(mem.data[base + len(native) : base + reserved])
                 reason = None
+                if tail and any(tail):
+                    j = next(k for k in range(len(tail)) if tail[k])
+                    reason = (f"TRUNCATED: recovered {len(native)}B but ASM wrote past it "
+                              f"(@{len(native) + j}={tail[j]:02X}); reserved {reserved}B")
             report(stats, on_result, raise_on_divergence, name, reason)
         interpret_current_instruction_without_hook(c)  # original near-ret
 
