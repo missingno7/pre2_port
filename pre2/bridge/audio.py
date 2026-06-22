@@ -38,10 +38,11 @@ NUM_CHANNELS = 4
 # block fill target (ds/es=1A0F, di=[0x10C5]) + the music-off flag (cs:[3] bit 0x40)
 VAR_FILL_BUF = 0x10C5
 MUSIC_FLAG = (CODE_SEG, 0x0003, 0x40)   # music OFF when cs:[3] & 0x40
-# SFX overlay state
-SFX_SRC_OFF = 0x1002
-SFX_REMAINING = 0x1004
-SFX_SEG_PTR = 0x0B57
+# SFX overlay state (from the ISR base section 20D6-210C: di=[0x10C5] fill buffer,
+# cx=remaining [0x1006], si=src off [0x1004], ds=seg [0x0B59]).
+SFX_SRC_OFF = 0x1004
+SFX_REMAINING = 0x1006
+SFX_SEG_PTR = 0x0B59
 
 
 def _rw(mem, seg, off):
