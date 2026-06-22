@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pre2.audio.assets import SOURCE_RATE, Module
+from pre2.audio.assets import SOURCE_RATE
+from pre2.codecs.audio import ModModule
 
 __all__ = [
     "GameAudioEvent", "PlaySfx", "StartSong", "StopSong",
@@ -42,8 +43,13 @@ class PlaySfx(GameAudioEvent):
 
 @dataclass(frozen=True)
 class StartSong(GameAudioEvent):
-    """Start playing ``module`` (recovered from the song loader @ 1030:02cc)."""
-    module: Module
+    """Start playing ``module`` (recovered from the song loader @ 1030:02cc).
+
+    ``module`` is the **standard ProTracker** ``.TRK`` asset (the canonical song),
+    identified from the loaded module by :func:`pre2.bridge.audio_commands.identify_song`.
+    ``name`` is the source ``.TRK`` filename when known (diagnostics)."""
+    module: ModModule
+    name: str = ""
     song_id: int = 0
     loop: bool = True
     fade_ms: int = 0

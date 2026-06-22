@@ -19,9 +19,13 @@ Recovered command roots (GOG build, seg 1030 — see the symbol ledger / memory
 """
 from __future__ import annotations
 
+import glob
+import os
+
 from pre2.bridge import audio as _a
 from pre2.audio.assets import SOURCE_RATE, Module, SampleAsset
 from pre2.audio.events import PlaySfx, SetMusicEnabled, StartSong, StopSong
+from pre2.codecs.audio import ModModule, load_trk
 
 CODE_SEG = _a.CODE_SEG
 DATA_SEG = _a.DATA_SEG
@@ -32,8 +36,8 @@ SFX_TABLE = 0x1009         # DS:0x1009 + dl*4 -> {src word, len word}
 SFX_DEV_FLAGS = (0x1D6C, 0x1D6D)   # cs: digital-device-present flags (either == 1)
 
 __all__ = [
-    "resolve_sfx", "capture_module", "capture_start_song", "sfx_enabled", "music_enabled",
-    "install_command_observers",
+    "resolve_sfx", "capture_module", "identify_song", "make_start_song",
+    "sfx_enabled", "music_enabled", "install_command_observers",
 ]
 
 
@@ -95,21 +99,72 @@ def capture_module(mem, n_instruments: int = 64) -> Module:
     )
 
 
-def capture_start_song(mem, *, song_id: int = 0, loop: bool = True) -> StartSong:
-    return StartSong(module=capture_module(mem), song_id=song_id, loop=loop)
+# --- identify which standard .TRK the game just loaded (root StartSong in the asset) ---
+
+_TRK_INDEX: list[tuple[str, ModModule]] | None = None
+
+
+def _trk_index(assets_dir) -> list[tuple[str, ModModule]]:
+    """(filename, parsed module) for every ``.TRK`` asset, parsed once + cached."""
+    global _TRK_INDEX
+    if _TRK_INDEX is None:
+        _TRK_INDEX = []
+        for path in sorted(glob.glob(os.path.join(str(assets_dir), "*.TRK"))):
+            try:
+                _TRK_INDEX.append((os.path.basename(path), load_trk(open(path, "rb").read())))
+            except Exception:
+                pass
+    return _TRK_INDEX
+
+
+def identify_song(mem, assets_dir) -> tuple[str, ModModule] | None:
+    """Match the loaded in-memory module to its standard ``.TRK`` by order table.
+
+    The song loader (0x02cc) copies the module's order list to ``[0xDC7]`` and its
+    length to ``[0xDC2]``; the order sequence is a strong fingerprint of the song."""
+    order = _a.read_order_table(mem)
+    song_length = _a.read_song_length(mem)
+    target = list(order[:song_length])
+    if not target:
+        return None
+    idx = _trk_index(assets_dir)
+    for name, mod in idx:                               # exact order match
+        if list(mod.order) == target:
+            return name, mod
+    for name, mod in idx:                               # tolerant prefix match
+        n = min(len(mod.order), len(target))
+        if n >= 4 and list(mod.order[:n]) == target[:n]:
+            return name, mod
+    return None
+
+
+def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
+    """Build a :class:`StartSong` for the loaded song, or ``None`` if unidentified."""
+    found = identify_song(mem, assets_dir)
+    if found is None:
+        return None
+    name, mod = found
+    return StartSong(module=mod, name=name, loop=loop)
 
 
 # --- live observers: emit events while the original game runs ----------------------
 
-def install_command_observers(cpu, emit, *, also_run_original=None) -> None:
-    """Install transparent hooks that emit semantic events as the game issues commands.
+def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
+    """Install a transparent SFX hook + return a per-frame ``poll`` for song/music.
 
-    ``emit`` is called with each :class:`~pre2.audio.events.GameAudioEvent`. The hooks
-    are *observers*: they read state then run the real instruction (via
-    ``also_run_original``, normally ``interpret_current_instruction_without_hook``),
-    so the original audio path is unchanged — a backend can play the event stream
-    alongside (or instead of) the SB output. StartSong is detected by the module
-    signature changing, so it fires once per actual song load."""
+    ``emit`` is called with each :class:`~pre2.audio.events.GameAudioEvent`; ``assets_dir``
+    is where the ``.TRK`` songs live (to root ``StartSong`` in the standard asset).
+
+    * **play_sfx (0x0282)** is hooked at entry: ``dl`` and the descriptor table are both
+      valid there, so each SFX command is caught exactly once. The hook runs the real
+      instruction (``also_run_original``) so the original audio path is unchanged — a
+      backend plays the event stream instead of the SB PCM.
+    * **StartSong / music flag** are detected by the returned ``poll(mem=None)``, which the
+      caller invokes once per frame: the song loader fills ``[0xDC2]``/``[0xDC7]`` over a
+      full routine (not observable from a single entry instruction), so polling the order
+      signature at a frame boundary is the reliable trigger. Fires once per real change.
+
+    Returns ``poll`` (also called once now for the initial state)."""
     if also_run_original is None:
         from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook as also_run_original
 
@@ -118,32 +173,29 @@ def install_command_observers(cpu, emit, *, also_run_original=None) -> None:
     def on_play_sfx(c):
         try:
             if sfx_enabled(c.mem):
-                dl = c.s.dx & 0xFF
-                emit(resolve_sfx(c.mem, dl))
+                emit(resolve_sfx(c.mem, c.s.dx & 0xFF))
         except Exception:
             pass
         also_run_original(c)
 
-    def on_song_loader(c):
-        also_run_original(c)   # let the loader fill the module first, then observe it
+    cpu.replacement_hooks[(CODE_SEG, PLAY_SFX)] = on_play_sfx
+    cpu.hook_names[(CODE_SEG, PLAY_SFX)] = "obs:play_sfx"
+
+    def poll(mem=None):
+        m = cpu.mem if mem is None else mem
         try:
-            order = _a.read_order_table(c.mem)
-            sig = (order, _a.read_song_length(c.mem))
+            on = music_enabled(m)
+            if on != seen["music"]:
+                seen["music"] = on
+                emit(SetMusicEnabled(on))
+            sig = (bytes(_a.read_order_table(m)), _a.read_song_length(m))
             if sig != seen["order"]:
                 seen["order"] = sig
-                emit(capture_start_song(c.mem))
+                ev = make_start_song(m, assets_dir)
+                if ev is not None:
+                    emit(ev)
         except Exception:
             pass
 
-    def maybe_music_flag(c):
-        on = music_enabled(c.mem)
-        if on != seen["music"]:
-            seen["music"] = on
-            emit(SetMusicEnabled(on))
-
-    cpu.replacement_hooks[(CODE_SEG, PLAY_SFX)] = on_play_sfx
-    cpu.hook_names[(CODE_SEG, PLAY_SFX)] = "obs:play_sfx"
-    cpu.replacement_hooks[(CODE_SEG, SONG_LOADER)] = on_song_loader
-    cpu.hook_names[(CODE_SEG, SONG_LOADER)] = "obs:song_loader"
-    # music-flag changes are observed lazily off the SFX/song hooks + first song load
-    maybe_music_flag(cpu)
+    poll()
+    return poll

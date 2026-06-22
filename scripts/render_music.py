@@ -30,48 +30,54 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from pre2.audio.enhanced_backend import OUT_RATE, EnhancedBackend
-from pre2.audio.events import StartSong
 from pre2.audio.faithful_backend import FaithfulBackend
 from pre2.audio.assets import SOURCE_RATE
 from pre2.bridge import audio_commands as AC
 from pre2.runtime import load_pre2_snapshot
 
 
-def _write_wav(path: Path, samples_i16: np.ndarray, rate: int) -> None:
+def _write_wav(path: Path, samples_i16: np.ndarray, rate: int, nchannels: int) -> None:
     with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
+        w.setnchannels(nchannels)
         w.setsampwidth(2)
         w.setframerate(rate)
-        w.writeframes(samples_i16.tobytes())
+        w.writeframes(np.ascontiguousarray(samples_i16).tobytes())
 
 
 def render(snap_dir: Path, seconds: float, out: Path, backend: str) -> int:
     rt = load_pre2_snapshot(ROOT / "assets" / "pre2.exe", snap_dir,
                             game_root=ROOT / "assets", native_replacements=False)
-    module = AC.capture_module(rt.cpu.mem)
-    if module.song_length <= 0 or not module.patterns:
+    mem = rt.cpu.mem
+    pre2_module = AC.capture_module(mem)
+    if pre2_module.song_length <= 0 or not pre2_module.patterns:
         print("no module loaded in this snapshot (need one captured while music is playing)")
         return 2
 
     if backend == "enhanced":
+        ev = AC.make_start_song(mem, ROOT / "assets")
+        if ev is None:
+            print("could not identify the loaded song among the .TRK assets")
+            return 2
         eb = EnhancedBackend()
-        eb.handle(StartSong(module=module))
-        y = eb.render(int(seconds * OUT_RATE))
+        eb.handle(ev)
+        y = eb.render(int(seconds * OUT_RATE))                 # (n, 2) stereo float
         out_i16 = np.clip(y * 32767.0, -32768, 32767).astype(np.int16)
+        _write_wav(out, out_i16, OUT_RATE, nchannels=2)
+        print(f"[enhanced] song={ev.name} -> {len(out_i16)} frames @ {OUT_RATE}/16-bit stereo "
+              f"({len(out_i16) / OUT_RATE:.1f}s); wrote {out}")
     else:
         from scipy.signal import resample_poly
         fb = FaithfulBackend()
-        fb.handle(StartSong(module=module))
-        src_rate = module.source_rate or SOURCE_RATE
+        fb.start_module(pre2_module)
+        src_rate = pre2_module.source_rate or SOURCE_RATE
         n_blocks = int(seconds * src_rate / 168) + 1
         pcm8 = fb.render(n_blocks)
         # 8-bit unsigned -> signed (no DC removal, like DOSBox), polyphase to 44.1k
         x = (np.frombuffer(bytes(pcm8), dtype=np.uint8).astype(np.float64) - 128.0) * 256.0
         out_i16 = np.clip(resample_poly(x, OUT_RATE, src_rate), -32768, 32767).astype(np.int16)
-
-    _write_wav(out, out_i16, OUT_RATE)
-    print(f"[{backend}] order={list(module.order[:module.song_length + 1])} -> "
-          f"{len(out_i16)} frames @ {OUT_RATE}/16-bit ({len(out_i16) / OUT_RATE:.1f}s); wrote {out}")
+        _write_wav(out, out_i16, OUT_RATE, nchannels=1)
+        print(f"[faithful] order={list(pre2_module.order[:pre2_module.song_length + 1])} -> "
+              f"{len(out_i16)} frames @ {OUT_RATE}/16-bit mono ({len(out_i16) / OUT_RATE:.1f}s); wrote {out}")
     return 0
 
 

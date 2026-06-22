@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pre2.audio.assets import Module
 from pre2.audio.events import (
-    GameAudioEvent, PlaySfx, SetMusicEnabled, StartSong, StopSong,
+    GameAudioEvent, PlaySfx, SetMusicEnabled, StopSong,
 )
 from pre2.recovered.audio_system import AudioState, AudioSystem
 from pre2.recovered.mixer import BLOCK_LEN, CHANNEL_OFF, Instrument, Sfx
@@ -53,12 +53,19 @@ class FaithfulBackend:
         self._sys: AudioSystem | None = None
         self._music_on = True
 
+    def start_module(self, module: Module) -> None:
+        """Begin playing a PRE2 in-memory module (the oracle's native input).
+
+        The faithful path consumes the PRE2 ``assets.Module`` captured from VM memory
+        (``pre2.bridge.audio_commands.capture_module``), not the standard ``.TRK``
+        carried by ``StartSong`` — reproducing the original 8-bit mixer from a standard
+        module would require the recovered ``.TRK``->in-memory loader (0x02cc), which
+        is a separate, deeper recovery. Live playback uses the enhanced backend."""
+        self._sys = AudioSystem(audio_state_from_module(module, music_on=self._music_on))
+
     # -- event sink -----------------------------------------------------------
     def handle(self, event: GameAudioEvent) -> None:
-        if isinstance(event, StartSong):
-            self._sys = AudioSystem(audio_state_from_module(event.module,
-                                                            music_on=self._music_on))
-        elif isinstance(event, StopSong):
+        if isinstance(event, StopSong):
             self._sys = None
         elif isinstance(event, SetMusicEnabled):
             self._music_on = event.enabled

@@ -300,9 +300,24 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # while staying reproducible.  IRQ0/IRQ7 are delivered at batch boundaries.
     sb_audio = None
     sound_blaster = None
-    if getattr(args, "audio", "adlib") != "off":
+    audio_poll = None
+    audio_mode = getattr(args, "audio", "adlib")
+    if audio_mode != "off":
+        # The SB is enabled either way: the game detects a digital device and runs its
+        # song-loader / play-SFX commands (which we observe), and it keeps the original
+        # audio timing identical to the faithful path.
         sound_blaster = enable_sound_blaster(rt)
-        sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
+        if audio_mode == "enhanced":
+            # Modern path: observe the recovered audio *commands* and play the standard
+            # .TRK songs + SFX through the enhanced float mixer (the SB PCM is ignored).
+            from sdl_view import EnhancedAudio
+            from pre2.audio.enhanced_backend import EnhancedBackend
+            from pre2.bridge.audio_commands import install_command_observers
+            _enh = EnhancedBackend()
+            audio_poll = install_command_observers(rt.cpu, _enh.handle, args.game_root)
+            sb_audio = EnhancedAudio(pygame, _enh, sound_blaster, audio_status)
+        else:
+            sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)
 
     # The deterministic demo clock: advanced a fixed present_period each frame so the
     # PIT/SB/retrace cadence is a pure function of the frame index (reproducible).
@@ -504,6 +519,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 running = False
 
             # Audio is drained every game-frame (cheap, and pcm_out must not pile up).
+            if audio_poll is not None:     # detect song/music changes at a frame boundary
+                audio_poll()
             if sb_audio is not None:
                 sb_audio.pump()
 
@@ -659,9 +676,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--record-demo", metavar="NAME", help="(viewer) start recording an input demo immediately")
     p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (headless unless --view)")
     p.add_argument("--demo-dir", default=str(ROOT / "artifacts"), help="directory to write recorded demos into")
-    p.add_argument("--audio", default="adlib", choices=("adlib", "off"),
+    p.add_argument("--audio", default="adlib", choices=("adlib", "enhanced", "off"),
                    help="viewer digital audio: 'adlib' = faithful audio via the SB DMA path "
-                        "(the recovered mixer's output); 'off'")
+                        "(the recovered mixer's output); 'enhanced' = modern float mixer playing "
+                        "the standard .TRK songs + SFX driven by the recovered audio commands; 'off'")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
     p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")

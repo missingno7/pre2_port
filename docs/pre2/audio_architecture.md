@@ -56,31 +56,53 @@ constraint so its blocks stay identical to the ISR oracle.
 
 ## 4. EnhancedBackend  (`pre2/audio/enhanced_backend.py`) — modern ear-candy
 
-Consumes the **same events**, mixes in **float32 at 44.1 kHz**: per-voice linear-
-interpolated resampling, short attack ramps (no edge clicks), a soft limiter. Free of
-every DOS/SB constraint.
+Consumes the **same events** and renders **float32 / 44.1 kHz stereo**. Its music engine
+is a clean **standard ProTracker player** (`pre2/audio/mod_player.py`) playing the
+standard `.TRK` module carried by `StartSong` — standard Amiga period→frequency, standard
+speed/BPM tempo, signed 8-bit samples, looping, the A/B/C/D/F effects PRE2 uses — with
+per-voice linear-interpolated resampling, attack ramps (no edge clicks), and a soft
+limiter. SFX are one-shot float voices from the resolved `SAMPLE.SQZ` bytes.
 
-* **Must not leak in:** 8-bit wrapping arithmetic, the 168-byte DMA block, IRQ/ISR
-  timing, segment:offset layout, the original 8.4 kHz output rate, the 8-bit volume
-  table. (Enforced by `tests/test_audio_architecture.py::test_enhanced_backend_has_no_vm_or_mixer_deps`.)
-* **Reused from the recovered layer:** only the pure *sequencer* (`recovered.tracker`)
-  for musical note/effect decisions and tempo — that is song *content*, not mixer
-  mechanics. The one original timing fact it honours is the song tick rate
-  (`source_rate / 168` ≈ 50 Hz), which defines *tempo*, not output quality.
-* Uses the original samples/modules purely as assets (8-bit PCM lifted to float).
+* **Roots, not internals.** It plays the song *asset* (`.TRK`), not the PRE2 mixer's
+  compiled note-index/step form. The pressure test: `mod_player.py` + `enhanced_backend.py`
+  import **only** numpy + the pure asset model — **no** `period_table`, resample step,
+  8.4 kHz rate, 168-byte block, DMA/ISR, segment:offset, or the 8-bit volume table.
+  (Enforced by `tests/test_audio_architecture.py::test_enhanced_path_has_no_vm_or_mixer_deps`.)
+* The one original fact it honours is musical: the song's own speed/BPM tempo (from the
+  module), which is *content*, not a mixer constraint.
+
+This is the path you wire into the game; it is what `pre2_editor` does and what sounds
+clean and click-free.
 
 ## Selecting a backend
 
-`scripts/render_music.py <snapshot> --backend enhanced|faithful` renders either path to
-a WAV through the full pipeline (capture_module → StartSong → backend). The faithful
-WAV is the 8-bit oracle band-limit-resampled to 44.1 kHz; the enhanced WAV is mixed in
-float directly.
+`scripts/render_music.py <snapshot> --backend enhanced|faithful` renders either path to a
+WAV. `enhanced` identifies the loaded song among the `.TRK` assets and plays it stereo
+through `ModPlayer`; `faithful` runs the PRE2 oracle (8-bit, band-limit-resampled to
+44.1 kHz mono).
+
+## Live wiring  (`play.py --view --audio enhanced`)
+
+`pre2.bridge.audio_commands.install_command_observers(cpu, emit, assets_dir)`:
+
+* hooks **play_sfx (0x0282)** at entry → emits `PlaySfx(resolve_sfx(dl))` (the descriptor
+  table + `dl` are both valid there);
+* returns a **`poll(mem)`** the viewer calls each frame → detects a song load (the
+  `[0xDC2]`/`[0xDC7]` order signature changing), maps it to a `.TRK` via `identify_song`,
+  and emits `StartSong(module)`; also emits `SetMusicEnabled` on the `cs:[3]&0x40` change.
+
+The Sound Blaster stays enabled (so the game detects a digital device and runs its audio
+commands and original timing), but its PCM is **ignored** — `sdl_view.EnhancedAudio` plays
+the `EnhancedBackend` mix instead, paced by pygame's own playback (no DMA-underrun clicks).
 
 ## Notes
 
 * **No OPL3/AdLib.** This GOG PRE2 detects the Sound Blaster and is digital-only;
   the vendored `nuked_opl3` FM backend and its viewer wiring were removed (0 OPL writes
   observed). `dos_re` keeps the generic `set_adlib_callback` capability (game-agnostic).
-* Live viewer audio (`play.py --view`) currently plays the faithful SB-DMA stream. A
-  future step can drive a backend live from `install_command_observers` (needs a live
-  audio-testing loop). See the memory note `pre2-audio-command-interface`.
+* Live viewer audio: `play.py --view --audio adlib` plays the faithful SB-DMA stream;
+  `--audio enhanced` plays the modern backend driven by `install_command_observers`.
+* **Faithful-from-standard gap (deepest root, deferred):** the faithful backend plays the
+  PRE2 in-memory capture; making it consume `StartSong(.TRK)` byte-exact would require
+  recovering the song loader's `.TRK`→in-memory conversion (0x02cc: standard Amiga period
+  → note-index + the period→step table build). Not needed for the live (enhanced) game.

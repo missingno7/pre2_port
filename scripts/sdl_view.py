@@ -285,6 +285,70 @@ class SoundBlasterAudio:
             self._channel.stop()
 
 
+class EnhancedAudio:
+    """Play the enhanced backend's float32 stereo mix (event-driven, modern path).
+
+    Unlike :class:`SoundBlasterAudio`, this does not consume the SB PCM at all — it
+    pulls from an :class:`pre2.audio.enhanced_backend.EnhancedBackend` that renders the
+    standard ``.TRK`` song + SFX at the mixer rate. Generation is paced by pygame's own
+    playback: each queued chunk is rendered on demand, so the song advances at real time
+    regardless of VM speed (no DMA underrun clicks). The (ignored) SB capture is cleared
+    so it never accumulates.
+    """
+
+    def __init__(self, pygame, backend, sound_blaster=None, status: dict | None = None, *,
+                 chunk_ms: float = 46.0) -> None:
+        self._pygame = pygame
+        self._backend = backend
+        self._sb = sound_blaster
+        self._status = status
+        self._available = False
+        self._channel = None
+        self._started = False
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        init = pygame.mixer.get_init()
+        if init is None:
+            return
+        self._rate = int(init[0])
+        self._out_channels = int(init[2])
+        backend.out_rate = self._rate                 # render at the device rate
+        self._chunk = max(256, int(round(self._rate * max(10.0, float(chunk_ms)) / 1000.0)))
+        if pygame.mixer.get_num_channels() < 3:
+            pygame.mixer.set_num_channels(4)
+        self._channel = pygame.mixer.Channel(2)
+        self._available = True
+
+    def _chunk_sound(self):
+        stereo = self._backend.render(self._chunk)    # (chunk, 2) float32 in [-1, 1]
+        if self._out_channels == 1:
+            data = np.clip(stereo.mean(axis=1) * 32767, -32768, 32767).astype(np.int16)
+        else:
+            data = np.clip(stereo * 32767, -32768, 32767).astype(np.int16)
+        return self._pygame.mixer.Sound(buffer=np.ascontiguousarray(data).tobytes())
+
+    def pump(self) -> None:
+        if not self._available or self._channel is None:
+            return
+        if self._sb is not None and self._sb.pcm_out:
+            self._sb.pcm_out.clear()                  # the SB PCM is unused on this path
+        if not self._started:
+            self._channel.play(self._chunk_sound())
+            self._channel.queue(self._chunk_sound())
+            self._started = True
+            return
+        if not self._channel.get_busy():              # underran -> reprime
+            self._channel.play(self._chunk_sound())
+            self._channel.queue(self._chunk_sound())
+            return
+        if self._channel.get_queue() is None:
+            self._channel.queue(self._chunk_sound())
+
+    def close(self) -> None:
+        if self._channel is not None:
+            self._channel.stop()
+
+
 def render_vga_rgb(mem: bytes, palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
     """Decode VGA mode 13h A000:0000 linear 320x200x8bpp to RGB."""
     arr = np.frombuffer(mem, dtype=np.uint8)
