@@ -193,7 +193,11 @@ def read_tracker_instruments(mem, count: int = 64) -> list[TrackerInstrument]:
 
 
 def read_current_pattern(mem, order_pos: int) -> bytes:
-    pattern = read_order_table(mem)[order_pos]
+    # ASM: pattern = [bx + 0xDC7] with bx = order_pos, a 16-bit offset that wraps in the
+    # segment.  order_pos can be out of the 256-entry table (garbage before a song loads,
+    # cold boot / transitions); the ASM reads the wrapped byte (and plays whatever) rather
+    # than faulting, so we do the same -- never an IndexError.
+    pattern = _rb(mem, (ORDER_TABLE + order_pos) & 0xFFFF)
     seg = (_rw(mem, DATA_SEG, PATTERN_SEG_BASE) + pattern * 64) & 0xFFFF
     off = _rw(mem, DATA_SEG, PATTERN_OFF)
     flat = ((seg << 4) + off) & 0xFFFFF
