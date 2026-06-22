@@ -37,7 +37,7 @@ re-disassembled the scroll/grid region on GOG. Findings:
 | ~~vertical tile-column fill `34ED`~~ → **animated grid redraw** | `3668` (entry; loop `36B3-3715`) | **YES** (185902 + injected scroll) | **RECOVERED + ASM_MATCHED** (`frame_renderer.py:redraw_animated_grid`, 7 frames/0 div VRAM+state). The ledger's "34ED column fill" was STALE — `34ED` is just the recovered `draw_tile_row`'s loop tail. The real hot unrecovered routine during scroll was `3668`: redraws the 12×20 grid but blits only the *animated* tiles (flagged in table 0x6988), each remapped through the animation frame `[0x6BC2]`; all type-0 opaque; reuses the verified blit `3B88`. Throttle + anim-advance (`3668-36A6`) is the thin controller. |
 | Palette fade | `6772` | **YES** (021225, user-captured mid-fade) | **RECOVERED + VERIFIED + live** (`recovered/transition.py:fade_palette`, `bridge/palette.py`, `checkpoints/palette.py`): 56 fade steps / 0 divergence in-VM lockstep + exact done-correspondence; committed golden test |
 | object-draw render | `653D` (recovered, dormant) | needs object system to drive it | renderer↔object boundary |
-| frame compositor → update_frame | `3B40` | not reached in any snapshot | wire once leaves recovered; verify offline |
+| frame consolidation → `render_frame` | `3B40`/`3B5F` (ASM static subset, unreached) | n/a | **DONE**: `render_frame(RendererState)` built + proven standalone (Phase 4 below). `3B40`/`3B5F` is just one unreached ASM caller of a leaf subset |
 
 ## span-clear `32DE` — fully decoded (ready to recover)
 Clears pixels `[x, x+width)` at screen row `dx`, all 4 planes (caller sets SC map mask

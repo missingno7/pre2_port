@@ -42,7 +42,7 @@ ROW_STRIDE = 0x28       # 40 bytes per row
              "clear a horizontal pixel span [x, x+width) at screen row `row` across all "
              "4 EGA planes (partial-byte edge masks at both ends); VRAM byte = "
              "row*0x28 + page + x>>3",
-             "ASM_MATCHED", merge_target="frame renderer")
+             "ASM_MATCHED", merge_target="render_frame")
 def clear_span(planes, x: int, width: int, row: int, page: int,
                stride: int = ROW_STRIDE) -> None:
     """Recover ``1030:32DE`` — clear pixels ``[x, x+width)`` at ``row`` (all 4 planes).
@@ -80,7 +80,7 @@ def clear_span(planes, x: int, width: int, row: int, page: int,
              "for SCALE_COLUMNS source columns, scaled = (src*scale>>6)+offset; keep only "
              "columns whose scaled X is strictly decreasing AND below x_clamp. Returns "
              "(xs, ys) of the kept columns (the [0x6B14]/[0x6A88] tables + count bp).",
-             "ASM_MATCHED", merge_target="frame renderer")
+             "ASM_MATCHED", merge_target="render_frame")
 def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_clamp: int,
                          columns: int = SCALE_COLUMNS, running_init: int = 0x7D0):
     """Recover ``1030:31F4-3249`` — the per-frame scaled-column geometry.
@@ -113,7 +113,7 @@ def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_cla
              "x_clamp inward; per row clear the 4 borders (left+right of the row and its "
              "mirror about x_off) of a window whose half-extent follows the scaled-column "
              "table, via clear_span. Writes the 4 EGA planes; pure geometry otherwise.",
-             "ASM_MATCHED", merge_target="frame renderer")
+             "ASM_MATCHED", merge_target="render_frame")
 def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: int,
                      x_clamp: int, page: int, stride: int = ROW_STRIDE) -> None:
     """Recover ``1030:324B-32AE`` — clear the borders exposed at this scale step.
@@ -152,7 +152,7 @@ def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: in
              "components stepped from `a` toward `b` by `fade_amt`; returns (new 48-byte "
              "DAC palette, all_arrived). Caller swaps a/b for the reverse direction "
              "([0x6C02]) and stops (clears [0x6C01]/[0x6C02]) when all_arrived.",
-             "ASM_MATCHED", merge_target="renderer")
+             "ASM_MATCHED", merge_target="render_frame")
 def fade_palette(a: bytes, b: bytes, fade_amt: int) -> tuple[bytes, bool]:
     """Recover ``1030:6772`` — advance a DAC palette one fade step from ``a`` toward ``b``.
 

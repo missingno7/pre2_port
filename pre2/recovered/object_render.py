@@ -227,7 +227,7 @@ def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None
              "render the active-sprite list to A000 planar VRAM (cull/animate/position/clip "
              "+ shifted-masked planar blit, incl H-flip); mutates object-record flags + life "
              "+ frame counter",
-             "VERIFIED", merge_target="frame renderer")
+             "VERIFIED", merge_target="render_frame")
 def plan_frame(sprites, attrs, cam: Camera):
     """Walk the active list top->down and emit a draw command per visible sprite.
 

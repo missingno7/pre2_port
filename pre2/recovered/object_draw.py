@@ -29,7 +29,7 @@ _RING_COLS = 20       # screen col = (obj_col % 20) ...
 @oracle_link("1030:653D",
              "cull one object sprite vs the camera window, compute its screen offset, "
              "and blit it; [0x6BBD]=1 if drawn; CF set if culled; regs preserved",
-             "RECOVERED", merge_target="frame renderer")
+             "RECOVERED", merge_target="render_frame")
 def draw_object_sprite(planes, obj_pos, camera_x, camera_y, mode, sprite_index,
                        blit_type, bg_off, mask_region):
     """Recover ``1030:653D`` — draw one object's sprite (or cull it).

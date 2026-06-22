@@ -98,7 +98,7 @@ def blit_masked(planes: list[bytearray], idx: int, di: int, bg_off: int, mask: b
 
 
 @oracle_link("1030:3B88", "A000 planar framebuffer (one 16x16 slot); di += 2", "VERIFIED",
-             merge_target="renderer")
+             merge_target="render_frame")
 def blit_sprite(planes: list[bytearray], idx: int, di: int, sprite_type: int,
                 bg_off: int, mask: bytes = b"") -> None:
     """Dispatch one sprite blit on its transparency class (``1030:3B88``)."""

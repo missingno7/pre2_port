@@ -10,7 +10,8 @@ unless marked otherwise.
 The renderer is **`game state → pixels/palette`**: it consumes `Camera`/`ScrollState`/
 `TileMap`, sprite & object *positions*, and palette/fade *state*, and writes A000 planar
 VRAM + the VGA DAC. It does **not** update game state and does **not** own the object/
-level data model. The merge target for the whole landmass is a single `update_frame()`.
+level data model. The merge target for the whole landmass is a single `render_frame()`
+(built — `pre2/recovered/render_frame.py`; see `renderer_status.md` Phase 4).
 
 **Border test:** a routine is in the renderer iff it only *reads* state and *writes*
 VRAM/DAC, with no gameplay decision and no ownership of the object/level data model.
@@ -60,9 +61,11 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
      tail. The ledger's `3344/338E/33F5` are the scale transition, NOT scroll. The camera
      *advance* (deciding where to scroll) stays on the border (game loop).
 
-4. **Frame compositor `3B40`.** Static glue `draw_grid() → scroll_copy() → panel()`;
-   characterized, unwired (no available scenario reaches it). Becomes the renderer's
-   `update_frame()` once all its leaves are recovered.
+4. **Frame compositor `3B40`/`3B5F`.** Static glue `draw_grid() → scroll_copy() → panel()`;
+   characterized, unwired (no available scenario reaches it — a forced-full-redraw subset).
+   The recovered consolidation is `render_frame()` (built), which composes the *actual*
+   per-frame order `fade → animgrid → grid → scroll → objs`; `3B5F` is just one ASM caller
+   of a subset of those leaves.
 
 ## Border — NOT in the renderer island
 
@@ -70,19 +73,24 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
   `ObjectSlot` data model; they only *call* the blit → **object system**.
 - **Object/player update** (movement, AI, physics, collision) → gameplay.
 - **Frame conductor / tick dispatch** (decides *when* to call the compositor/transition) →
-  game loop. (`update_frame()` is the renderer's top; *who calls it* is outside.)
+  game loop. (`render_frame()` is the renderer's top; *who calls it* — the main loop
+  `1030:0214-0270`, which interleaves the leaves with game logic — is outside.)
 - **Camera advance** (the directional-scroll deciding *where* to scroll) → game loop/input;
   the scroll *render* (fill exposed row/col) is the renderer.
 - **Tally/score logic**, **asset load (SQZ)**, **audio** → separate systems. (Tally screen
   *drawing* is renderer; the *scoring* is not.)
 
-## Completion plan / repro needs
+## Completion status
 
-1. Scale transition (002633, headless) — recover next.
-2. Scroll engine — re-map `3569`/`34ED` on GOG; needs a horizontal-scroll snapshot.
-3. Palette fade `6772` — needs a snapshot captured mid-fade (`[0x6C01]|[0x6C02] != 0`).
-4. Wire `3B40 → update_frame()` once its leaves are all recovered; the per-hook coastline
-   then collapses to one frame entry.
+All renderer gaps recovered + verified (see `renderer_status.md` for per-island detail):
+1. ✅ Scale transition (`build_scaled_columns` + `draw_scale_frame` + `clear_span`), headless 002633.
+2. ✅ Scroll engine (`calc_scroll_source` 3588; the real horizontal-scroll routine is the
+   animated-grid redraw `3668`, reached via injected movement — the ledger's `34ED` was stale).
+3. ✅ Palette fade `6772` (VERIFIED + live; mid-fade snapshot 021225).
+4. ✅ `render_frame(RendererState)` consolidation built + proven standalone (renderer-owned
+   output byte-exact, no VM stepping). The per-hook coastline cannot collapse to one live hook
+   in the hybrid (the main loop calls leaves individually, interleaved with game logic); that
+   collapse is a **post-VM** step where a native renderer calls `render_frame` directly.
 
 Each gap follows the standard island workflow (faithful witness → pure module + bridge →
 byte-exact verify → thin hook). This file is the checklist; tick items as they land.

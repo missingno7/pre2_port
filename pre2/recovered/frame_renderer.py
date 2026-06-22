@@ -73,7 +73,7 @@ class RowFlags:
 
 @oracle_link("1030:348D",
              "A000 framebuffer (one 20-tile row) + OR-accumulated [0x6BBD]/[0x2DF2]/[0x2DF4]; di preserved",
-             "VERIFIED", merge_target="frame renderer")
+             "VERIFIED", merge_target="render_frame")
 def draw_tile_row(planes, tilemap, tile_offset, di, scroll_src, col_ring,
                   fine_scroll, blit_type, mask_region, flags=None):
     """Recover ``1030:348D`` — draw one 20-tile background row.
@@ -142,7 +142,7 @@ class GridResult:
 @oracle_link("1030:35A1",
              "A000 framebuffer (visible-grid type>=1 tiles) + [0x2DF2]/[0x2DF4]/[0x2DF5] + prev camera "
              "[0x2DE0]/[0x2DE2]; di/regs preserved",
-             "VERIFIED", merge_target="frame renderer")
+             "VERIFIED", merge_target="render_frame")
 def draw_grid(planes, tilemap, camera_x, camera_y, prev_x, prev_y, dirty, dirty_rows,
               scroll_src, col_ring, fine_scroll, blit_type, mask_region):
     """Recover ``1030:35A1`` — the full 12x20 visible-grid redraw.
@@ -218,7 +218,7 @@ def _copy_run(planes, si, di, n):
 @oracle_link("1030:3A27",
              "A000 planar scroll-copy of the visible window (ring buffer -> display page) "
              "+ all-plane clear of the leading strip; bx/di/si/ds/es preserved",
-             "VERIFIED", merge_target="frame renderer")
+             "VERIFIED", merge_target="render_frame")
 def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_factor):
     """Recover ``1030:3A27`` — the vertical-scroll screen copy.
 
@@ -276,7 +276,7 @@ def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_f
 @oracle_link("1030:3054",
              "A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, "
              "0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only)",
-             "VERIFIED", merge_target="frame renderer")
+             "VERIFIED", merge_target="render_frame")
 def panel_copy(planes, src_page, dst_page):
     """Recover ``1030:3054`` — the double-buffer page-flip copy.
 
@@ -303,7 +303,7 @@ def panel_copy(planes, src_page, dst_page):
 @oracle_link("1030:3588",
              "compute the scroll-copy source offset into the tile ring buffer: "
              "[0x2DBA] = 2*camera_col + 0x280*camera_row + 0x3F40 (16-bit)",
-             "ASM_MATCHED", merge_target="frame renderer")
+             "ASM_MATCHED", merge_target="render_frame")
 def calc_scroll_source(camera_col, camera_row):
     """Recover ``1030:3588-359A`` — the scroll-copy source pointer.
 
@@ -323,7 +323,7 @@ def calc_scroll_source(camera_col, camera_row):
              "type table over the whole grid) + [0x6BBD] (any-drawn flag). Redraws the "
              "12x20 visible grid but blits only tiles flagged in the 0x6988 table, each "
              "remapped through the current animation frame [0x6BC2]; di/regs preserved.",
-             "ASM_MATCHED", merge_target="frame renderer")
+             "ASM_MATCHED", merge_target="render_frame")
 def redraw_animated_grid(planes, tiles, type_tbl, flag_tbl, anim_xlat, blit_type,
                          camera_col, camera_row, fine_col, scroll_dest):
     """Recover ``1030:36B3-3715`` — redraw the animated background tiles.
