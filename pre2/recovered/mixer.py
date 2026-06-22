@@ -137,8 +137,22 @@ def mix_channel(buffer: bytearray, ch: ChannelState, instr: Instrument,
         else:
             cx -= 1                                    # [asm 21F9: loop 21E6]
 
-    if new_pos is None:                                # block filled (with or without loop wraps)
-        new_pos = si
+    if new_pos is None:
+        # Writeback end-check [asm 2257-2277]: when the block finished (cx==0) the ASM
+        # re-tests the final position against end (here si is already PTR_OFF-relative,
+        # which is the ASM's si after `sub si,[bx+0BDA]` at 2257).  If it has reached/passed
+        # end, a looping instrument restarts at loop_start (and end := loop_start+loop_len),
+        # a one-shot goes silent; otherwise it keeps the position.  Without this, a loop that
+        # lands exactly on end at block end was left at `end` instead of wrapping -> the live
+        # "channel state" divergence (and, used live, the corruption that froze the game).
+        if si >= end:                                  # [asm 225B: cmp end,si / jbe -> reset]
+            if instr.loop_len >= _LOOP_MIN:            # [asm 2268: cmp 2 / ja -> loop]
+                new_pos = instr.loop_start             # [asm 226D/2277: pos = loop_start]
+                end = (instr.loop_start + instr.loop_len) & 0xFFFF   # [asm 2271-2273]
+            else:
+                new_pos = CHANNEL_OFF                  # [asm 2261: si = 0xFFFF]
+        else:
+            new_pos = si                               # [asm 2277: pos = si]
     return replace(ch, pos=new_pos & 0xFFFF, end=end & 0xFFFF, frac=frac & 0xFF)
 
 
