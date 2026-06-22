@@ -70,6 +70,8 @@ class EnhancedBackend:
     # -- event sink -----------------------------------------------------------
     def handle(self, event: GameAudioEvent) -> None:
         if isinstance(event, StartSong):
+            if event.module is None:           # rooted path carries recovered_module instead
+                return
             self._player = ModPlayer(event.module, out_rate=self.out_rate, loop=event.loop)
             self._samples_to_tick = 0.0
             self._tick_budget = 0

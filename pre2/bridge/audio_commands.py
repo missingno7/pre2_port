@@ -158,12 +158,23 @@ def identify_song(mem, assets_dir) -> tuple[str, ModModule] | None:
 
 
 def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
-    """Build a :class:`StartSong` for the loaded song, or ``None`` if unidentified."""
+    """Build a :class:`StartSong` for the song just loaded into VM memory, or ``None`` if
+    no song is loaded.
+
+    Always carries the **recovered** in-memory module (:func:`capture_module`) — the
+    canonical song both audio systems branch from — so the rooted path never depends on
+    ``.TRK`` identification. The standard ``.TRK`` (``module``/``name``) is attached when
+    it can be matched, for the legacy clean-room player + diagnostics."""
+    order = _a.read_order_table(mem)
+    song_length = _a.read_song_length(mem)
+    if not song_length or not any(order[:song_length + 1]):
+        return None
+    recovered = capture_module(mem)
     found = identify_song(mem, assets_dir)
     if found is None:
-        return None
+        return StartSong(module=None, recovered_module=recovered, name="", loop=loop)
     name, mod = found
-    return StartSong(module=mod, name=name, loop=loop)
+    return StartSong(module=mod, recovered_module=recovered, name=name, loop=loop)
 
 
 # --- live observers: emit events while the original game runs ----------------------
@@ -213,13 +224,13 @@ def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
                 ev = make_start_song(m, assets_dir)
                 if ev is not None:
                     seen["starts"] = seen.get("starts", 0) + 1
-                    print(f"[audio-obs] StartSong #{seen['starts']}: {ev.name} "
+                    # The rooted path always has the recovered module; the .TRK name is just a
+                    # label ("[recovered]" when we couldn't match a standard .TRK).
+                    label = ev.name or "[recovered]"
+                    print(f"[audio-obs] StartSong #{seen['starts']}: {label} "
                           f"(order_len={sig[1]}) -- should fire ONCE per real song change",
                           flush=True)
                     emit(ev)
-                elif sig[1]:  # order changed to a non-empty song we could NOT identify
-                    print(f"[audio-obs] StartSong: order changed (len={sig[1]}) but no .TRK "
-                          f"matched -> NO MUSIC. order[:8]={sig[0][:8].hex()}", flush=True)
         except Exception as e:
             _diag("poll", e)
 
