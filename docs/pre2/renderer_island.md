@@ -40,13 +40,15 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
    `[0x6C01]`/`[0x6C02]`. Direction flag `[0x6C02]` swaps src/target. Writes DAC via
    3C8/3C9. **Needs a mid-fade snapshot** — it stays inactive in the 002633 forward-run.
 
-3. **Scroll engine helpers.** `3569` (compute scroll source `[0x2DB6]` from the camera)
-   and `34ED` (vertical tile-column fill — the horizontal-scroll counterpart to the
-   recovered row-fill `348D`). NOTE: the ledger's "directional scroll `3344/338E/33F5`"
-   does **not** match GOG disasm (that range is the scale transition above), so the
-   scroll-engine map must be **re-verified on GOG**. The camera *advance* itself is on the
-   border (game loop); only the fill/calc are renderer. **Needs a horizontal-scroll
-   snapshot.**
+3. **Scroll engine helpers** (re-mapped on GOG — the ledger was stale; see
+   `renderer_status.md`): **`3588`–`35A0` = calc scroll source** (`[0x2DBA] = camera·… +
+   0x3F40`), small/OBSERVED — the real GOG routine (ledger's `3569` is actually *inside*
+   the recovered `draw_grid` inner loop `~353A–3587`). The vertical tile-column fill
+   (horizontal-scroll counterpart to the recovered row-fill `348D`, ledger `34ED`) and the
+   directional-scroll proper still need locating via the call graph from the camera-advance
+   — **needs a horizontal-scroll snapshot**. The camera *advance* is on the border (game
+   loop); only the calc/fill are renderer. The ledger's `3344/338E/33F5` are the scale
+   transition, NOT scroll.
 
 4. **Frame compositor `3B40`.** Static glue `draw_grid() → scroll_copy() → panel()`;
    characterized, unwired (no available scenario reaches it). Becomes the renderer's
