@@ -22,6 +22,7 @@ Rules:
 | `capture_frame_state.py` | frame renderer (Camera/TileMap witness) | `tests/test_frame_bridge.py` | bridge fields stable (kept as the witness regen tool) |
 | `verify_frame.py` | tile-row draw (346E) | `tests/test_frame_renderer.py` | a headless 346E lockstep is folded into the test suite |
 | `verify_grid.py` | grid redraw (3582) | `tests/test_frame_renderer.py` | a headless 3582 lockstep is folded into the test suite |
+| `verify_render_frame.py` | the `render_frame(RendererState)` consolidation seam | `tests/test_render_frame.py` (composition) | a headless render_frame lockstep is folded into the suite (needs a small committed plane fixture) |
 | `render_audio_frame.py` | audio diagnostics | — | ad-hoc; delete when audio work closes |
 
 For reference: the SQZ island was recovered with ad-hoc probes (boundary-finding
