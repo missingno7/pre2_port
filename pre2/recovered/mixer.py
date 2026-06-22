@@ -87,9 +87,15 @@ def mix_channel(buffer: bytearray, ch: ChannelState, instr: Instrument,
     cx = block_len                                     # [asm 21DF: mov cx,0xA8] block counter
     di = 0                                             # [asm 21E2: di = fill buffer]
     while cx > 0:                                      # [asm mix loop @21E6 ... loop 21E6]
-        s = sample[si]                                 # [asm 21E6: es:lodsb] si rel to PTR_OFF
+        # The ASM reads es:lodsb / xlatb at 16-bit segment offsets that wrap at 0xFFFF and
+        # never fault; when the channel state is uninitialised (cold boot / a stray "on"
+        # channel before a song loads) si / vol_row can index past our fetched windows.
+        # Read out-of-range as 0 instead of raising -- a no-op for valid playback (si and
+        # vol_row+s are always in range there, so this stays byte-exact vs the ASM).
+        s = sample[si] if si < len(sample) else 0      # [asm 21E6: es:lodsb] si rel to PTR_OFF
         si = (si + 1) & 0xFFFF
-        scaled = vol_table[(vol_row + s) & 0xFFFF]     # [asm 21E8: xlatb volume table]
+        vi = (vol_row + s) & 0xFFFF                     # [asm 21E8: xlatb volume table]
+        scaled = vol_table[vi] if vi < len(vol_table) else 0
         if di < block_len:                             # [asm 21E9: add [di],al] (may overrun on wrap)
             buffer[di] = (buffer[di] + scaled) & 0xFF
         di += 1                                        # [asm 21EB: inc di]
@@ -129,7 +135,7 @@ def mix_channel(buffer: bytearray, ch: ChannelState, instr: Instrument,
 def mix_sfx(buffer: bytearray, sfx: Sfx, block_len: int = BLOCK_LEN) -> Sfx:
     """Recover ``20AB-20F3`` — write the block base: SFX sample (+ silence pad) or
     all-silence. Returns the SFX state with its source/remaining advanced."""
-    n = min(sfx.remaining, block_len)
+    n = min(sfx.remaining, block_len, len(sfx.sample))   # never index past the SFX sample
     for i in range(n):                                 # [asm rep movsw copy]
         buffer[i] = sfx.sample[i]
     for i in range(n, block_len):                      # [asm rep stosw 0 pad]
