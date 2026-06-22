@@ -299,7 +299,14 @@ class EnhancedAudio:
     """
 
     def __init__(self, pygame, backend, sound_blaster=None, status: dict | None = None, *,
-                 chunk_ms: float = 46.0) -> None:
+                 chunk_ms: float = 120.0) -> None:
+        # chunk_ms drives the app-level buffer depth: pygame's Channel.queue only holds
+        # ONE chunk ahead, so the headroom before an underrun is ~2*chunk_ms. The audio
+        # thread shares the GIL with the (CPU-bound) VM thread, so small chunks starve and
+        # crackle; ~120 ms (=> ~240 ms headroom) absorbs frame/VM jitter. The song clock is
+        # the device, so a larger buffer adds latency but NEVER changes tempo. (A true fix
+        # is a callback/ring-buffer stream that pulls in the audio driver's own thread,
+        # independent of the GIL -- pygame has no callback API, so we buffer generously.)
         import threading
         self._pygame = pygame
         self._backend = backend
@@ -309,7 +316,7 @@ class EnhancedAudio:
         self._channel = None
         self._thread = None
         if not pygame.mixer.get_init():
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
         init = pygame.mixer.get_init()
         if init is None:
             return
@@ -323,6 +330,14 @@ class EnhancedAudio:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._available = True
+        # Diagnostics: an underrun (the channel went idle because we didn't feed it in
+        # time -> audible gap/crackle) is the prime suspect for "crackles", and a restart
+        # is when we had to ch.play() a fresh chunk after one. Surfaced so a busy frame
+        # starving this (GIL-shared) thread is visible, not silent.
+        self._underruns = 0
+        self._restarts = 0
+        self._errors = 0
+        self._started = False
         self._thread = threading.Thread(target=self._run, name="enhanced-audio", daemon=True)
         self._thread.start()
 
@@ -347,12 +362,29 @@ class EnhancedAudio:
             try:
                 ch = self._channel
                 if not ch.get_busy():
+                    # Channel idle: either first start, or an UNDERRUN (we fell behind and
+                    # both the playing + queued chunk drained before we refilled -> a gap).
+                    if self._started:
+                        self._underruns += 1
+                        if self._underruns <= 5 or self._underruns % 50 == 0:
+                            print(f"[enhanced-audio] UNDERRUN #{self._underruns} "
+                                  "(audio thread starved -> gap/crackle)", flush=True)
+                    self._started = True
+                    self._restarts += 1
                     ch.play(self._make_chunk())
                     ch.queue(self._make_chunk())
                 elif ch.get_queue() is None:
                     ch.queue(self._make_chunk())
-            except Exception:
-                pass
+            except Exception as exc:
+                self._errors += 1
+                if self._errors <= 5:
+                    import traceback
+                    print(f"[enhanced-audio] thread error #{self._errors}: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
+                    traceback.print_exc()
+            if self._status is not None:
+                self._status["enh_underruns"] = str(self._underruns)
+                self._status["enh_errors"] = str(self._errors)
             self._stop.wait(period)
 
     def pump(self) -> None:

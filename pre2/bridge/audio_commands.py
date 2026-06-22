@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import glob
 import os
+import traceback
 
 from pre2.bridge import audio as _a
 from pre2.audio.assets import SOURCE_RATE, Module, SampleAsset
@@ -39,6 +40,21 @@ __all__ = [
     "resolve_sfx", "capture_module", "identify_song", "make_start_song",
     "sfx_enabled", "music_enabled", "install_command_observers",
 ]
+
+
+_diag_seen: dict[tuple, int] = {}
+
+
+def _diag(where: str, exc: BaseException) -> None:
+    """Make an observer error VISIBLE (don't silently swallow). Prints the first
+    occurrence of each distinct error with a traceback, then counts the rest, so a
+    real failure surfaces instead of hiding as silent no-music/no-sfx."""
+    key = (where, type(exc).__name__, str(exc)[:80])
+    n = _diag_seen.get(key, 0) + 1
+    _diag_seen[key] = n
+    if n == 1:
+        print(f"[audio-obs] ERROR in {where}: {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
 
 
 def _cs_byte(mem, off: int) -> int:
@@ -112,8 +128,11 @@ def _trk_index(assets_dir) -> list[tuple[str, ModModule]]:
         for path in sorted(glob.glob(os.path.join(str(assets_dir), "*.TRK"))):
             try:
                 _TRK_INDEX.append((os.path.basename(path), load_trk(open(path, "rb").read())))
-            except Exception:
-                pass
+            except Exception as e:
+                _diag(f"load_trk {os.path.basename(path)}", e)
+        if not _TRK_INDEX:
+            print(f"[audio-obs] WARNING: no .TRK songs parsed from {assets_dir} -> "
+                  "StartSong can never identify a song (no music).", flush=True)
     return _TRK_INDEX
 
 
@@ -174,8 +193,8 @@ def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
         try:
             if sfx_enabled(c.mem):
                 emit(resolve_sfx(c.mem, c.s.dx & 0xFF))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag("play_sfx", e)
         also_run_original(c)
 
     cpu.replacement_hooks[(CODE_SEG, PLAY_SFX)] = on_play_sfx
@@ -193,9 +212,16 @@ def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
                 seen["order"] = sig
                 ev = make_start_song(m, assets_dir)
                 if ev is not None:
+                    seen["starts"] = seen.get("starts", 0) + 1
+                    print(f"[audio-obs] StartSong #{seen['starts']}: {ev.name} "
+                          f"(order_len={sig[1]}) -- should fire ONCE per real song change",
+                          flush=True)
                     emit(ev)
-        except Exception:
-            pass
+                elif sig[1]:  # order changed to a non-empty song we could NOT identify
+                    print(f"[audio-obs] StartSong: order changed (len={sig[1]}) but no .TRK "
+                          f"matched -> NO MUSIC. order[:8]={sig[0][:8].hex()}", flush=True)
+        except Exception as e:
+            _diag("poll", e)
 
     poll()
     return poll
