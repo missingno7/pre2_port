@@ -313,6 +313,18 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             from sdl_view import EnhancedAudio
             from pre2.audio.enhanced_backend import EnhancedBackend
             from pre2.bridge.audio_commands import install_command_observers
+            # Let the ORIGINAL ASM run the game's audio here, by removing the recovered
+            # tracker/mixer checkpoints.  We don't use their output (the enhanced backend is
+            # the audio; we only consume SB block production as the tick clock + need the
+            # game's state to advance).  Crucially, the recovered mix_channel has a known
+            # state divergence that, run live, corrupts the game's channel state until a
+            # loop region degenerates and the mixer spins forever (freeze).  A fresh cold
+            # boot on the pure ASM audio runs clean for tens of millions of instructions.
+            # Kept under --verify-hooks (verification uses the ASM result, so no corruption).
+            if not getattr(args, "verify_hooks", False):
+                for _addr in ((0x1030, 0x227C), (0x1030, 0x218F)):   # tracker, mixer
+                    rt.cpu.replacement_hooks.pop(_addr, None)
+                    rt.cpu.hook_names.pop(_addr, None)
             _enh = EnhancedBackend()
             # EnhancedAudio owns the backend + a dedicated audio thread; events from the VM
             # are injected through its thread-safe handle (audio runs on its own clock).

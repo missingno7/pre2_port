@@ -86,6 +86,7 @@ def mix_channel(buffer: bytearray, ch: ChannelState, instr: Instrument,
     new_pos = None                                     # set only when the channel turns off
     cx = block_len                                     # [asm 21DF: mov cx,0xA8] block counter
     di = 0                                             # [asm 21E2: di = fill buffer]
+    wraps = 0                                          # loop-wrap watchdog (anti-freeze)
     while cx > 0:                                      # [asm mix loop @21E6 ... loop 21E6]
         # The ASM reads es:lodsb / xlatb at 16-bit segment offsets that wrap at 0xFFFF and
         # never fault; when the channel state is uninitialised (cold boot / a stray "on"
@@ -111,6 +112,15 @@ def mix_channel(buffer: bytearray, ch: ChannelState, instr: Instrument,
                 # segment offset, sample[] is based at PTR_OFF, so subtract it. The asm
                 # jmps back to 21E6 WITHOUT the `loop`, so cx is NOT decremented here.
                 si = (instr.loop_start - ptr_off) & 0xFFFF
+                # Anti-freeze watchdog: a valid loop wraps at most ~block_len/loop_len times
+                # (cx falls between wraps), so it can never exceed block_len wraps. A
+                # DEGENERATE loop region (loop_start past end, from a corrupt/garbage channel
+                # state) would make the ASM spin here forever -- bound it and silence the
+                # channel instead of hanging the whole game. No-op for valid loops.
+                wraps += 1
+                if wraps > block_len:
+                    new_pos = CHANNEL_OFF
+                    break
             else:
                 # One-shot ran out mid-block: linear release fade over the remaining
                 # block [asm 222A: al=buffer[di-1]; loop add [di],al / inc di / dec al
