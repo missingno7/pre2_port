@@ -45,6 +45,39 @@ Clears pixels `[x, x+width)` at screen row `dx`, all 4 planes (caller sets SC ma
 row<0xC8`. Left partial: `&= ~(0xFF>>(x&7))`; full bytes `= 0`; right partial:
 `&= 0xFF>>((width + x&7)&7)`. (Aligned + width<8 → only the right-partial path.)
 
+## Phase 4 — consolidated `render_frame(RendererState)` seam (built)
+
+The recovered leaves are consolidated into one VM-independent entry point — the
+**replaceable-renderer seam**:
+- `pre2/recovered/render_frame.py`: `RendererState` (plain-data input contract) +
+  `render_frame(state, planes, dac)`, composing the leaves in the original per-frame order
+  **palette fade (6772) → animated-grid (3668) → grid (35A1) → scroll-copy (3A27)**.
+- `pre2/bridge/render_state.py`: `read_renderer_state(mem)` reconstructs `RendererState`
+  read-only (reuses the frame/palette readers).
+- A future native enhanced renderer drops in by reimplementing `render_frame` against the
+  same `RendererState`.
+
+**Per-frame order** (traced in-VM, gameplay 212037/185902): each frame fires
+`fade → animgrid → grid → scroll → objs(26FA)` exactly once (no panel/compositor in steady
+state). `RendererState` is captured at the post-controller instant (after the camera +
+animation-frame `[0x6BC2]` advance — the grid-loop entry `36B3`).
+
+**Standalone proof:** `render_frame` reproduces the renderer-owned **background ring buffer
+byte-exact with NO VM stepping** — 0 divergence across steady AND grid-redraw frames
+(212037 + 185902). Committed composition test `tests/test_render_frame.py`.
+
+**Border confirmed (by profiling a steady frame):** the residual full-screen differences are
+the **object system** (`65A0`/`8BFF` iterating the ObjectSlot data model → the *shared* blit
+`2C00`) layering gameplay sprites on top. That owns gameplay state and is **outside** the
+renderer (exactly the border in `renderer_island.md`). So `render_frame` produces the
+renderer's contribution (bg + scroll + palette); the moving-sprite *list* pass `26FA` layers
+via the recovered `object_render`; the object system layers gameplay sprites separately.
+
+**Remaining for a full-screen standalone proof:** fold `26FA` into `render_frame` from
+`RendererState` (it currently reads its list via its own bridge), and collapse the 5 live
+leaf hooks into one `render_frame` entry hook (the coastline's final step). The compositor
+`3B40`/`3B5F` (draw_grid→scroll→panel) static path is still unreached in any snapshot.
+
 ## NEEDS REPRO (for the user)
 - **Palette fade**: ~~F12 mid-fade~~ — **DONE** (snapshot 021225 supplied; fade recovered + verified).
 - **Horizontal scroll**: F12 while moving left/right across a wide level (to witness the
