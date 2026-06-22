@@ -25,16 +25,20 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
 | `348D` tile-row, `35A1` grid, `3A27` scroll-copy, `3054` panel | `recovered/frame_renderer.py` | VERIFIED + live |
 | `26FA` object_render (moving sprites) | `recovered/object_render.py` | VERIFIED + live |
 | `32DE` clear_span (transition border wipe) | `recovered/transition.py` | ASM_MATCHED (committed test) |
+| `31F4` build_scaled_columns (scale geometry) | `recovered/transition.py` | ASM_MATCHED (40 frames/0 div) |
+| `324B` draw_scale_frame (border-clear pass) | `recovered/transition.py` | ASM_MATCHED (15 frames/0 div VRAM) |
 | `6772` palette fade (DAC interpolation) | `recovered/transition.py` | VERIFIED + live |
 
 ## Gaps — renderer, still ASM (to recover)
 
-1. **End-level scale/zoom transition.** Entry `31D0` (sets `[0x2DD0]`=0xE6 scale,
-   `[0x2DC0]`=4 step), main loop `31F4–32DD` (rebuilds a 0x40-entry scaled-column table
-   `[0x6B14]`/`[0x6A88]`, draws scaled spans, `sub [0x2DD0],[0x2DC0]; jg` until 0). Core
-   primitives: **span-clear `32DE`** (EGA edge-mask + `rep stosb` 0) and **scaled 4-plane
-   copy `4700`**. Calls `26FA` (recovered) + panel. **Reproducible headless (snapshot
-   002633).** Big, but the highest-value gap.
+1. ~~**End-level scale/zoom transition.**~~ **DONE** — the effect is a *shrink-via-border-
+   clear* (no image rescale; the `4700` "scaled copy" guess was wrong). All pixel/geometry
+   pieces recovered in `recovered/transition.py`, ASM_MATCHED byte-exact: `build_scaled_columns`
+   (`31F4-3249`, the per-frame scaled-column table `[0x6B14]`/`[0x6A88]`), `draw_scale_frame`
+   (`324B-32AE`, clears the 4 borders of the window shrinking about `([0x2DC6],[0x2DC8])`),
+   and `clear_span` (`32DE`). The outer loop `31F4..32DD` (scale `[0x2DD0]` 0xE6 step `[0x2DC0]`,
+   per-frame `452B` GC-reset / `26FA` / `4509` page-flip / `44CD` vsync / `6772` fade) is the
+   thin controller → folds into `render_frame` (Phase 4).
 
 2. ~~**Palette fade `6772`.**~~ **DONE** — recovered as `recovered/transition.py:fade_palette`
    (+ `bridge/palette.py`, `checkpoints/palette.py`), VERIFIED + live. Linear interpolation

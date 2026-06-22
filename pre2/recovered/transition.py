@@ -21,9 +21,17 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 
-__all__ = ["SCREEN_W", "SCREEN_H", "ROW_STRIDE", "DAC_COMPONENTS", "clear_span", "fade_palette"]
+__all__ = ["SCREEN_W", "SCREEN_H", "ROW_STRIDE", "DAC_COMPONENTS", "SCALE_COLUMNS",
+           "clear_span", "fade_palette", "build_scaled_columns", "draw_scale_frame"]
 
 DAC_COMPONENTS = 0x30   # 16 colours × 3 (R,G,B), 6-bit each [asm 6794: cx=0x30]
+SCALE_COLUMNS = 0x41    # 65 source columns scanned per frame [asm 3244: cmp 0x40, jbe]
+
+
+def _s16(v: int) -> int:
+    """Interpret a 16-bit value as signed (the transition's compares are ``jge`` = signed)."""
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
 
 SCREEN_W = 0x140        # 320 px  [asm 32E3: cmp bx,0x140]
 SCREEN_H = 0xC8         # 200 rows [asm 32EF: cmp dx,0xC8]
@@ -65,6 +73,78 @@ def clear_span(planes, x: int, width: int, row: int, page: int,
         right_keep = (0xFF >> cl) & 0xFF
         for p in range(4):
             planes[p][di] &= right_keep
+
+
+@oracle_link("1030:31F4",
+             "build one frame's scaled-column table for the end-level scale transition: "
+             "for SCALE_COLUMNS source columns, scaled = (src*scale>>6)+offset; keep only "
+             "columns whose scaled X is strictly decreasing AND below x_clamp. Returns "
+             "(xs, ys) of the kept columns (the [0x6B14]/[0x6A88] tables + count bp).",
+             "ASM_MATCHED", merge_target="frame renderer")
+def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_clamp: int,
+                         columns: int = SCALE_COLUMNS, running_init: int = 0x7D0):
+    """Recover ``1030:31F4-3249`` — the per-frame scaled-column geometry.
+
+    ``src_x``/``src_y`` are the per-column source tables (``[0x7090]``/``[0x6F90]``, one
+    byte per column). ``scale`` is ``[0x2DD0]`` (only its low byte is used — ``mul byte``).
+    The kept columns form a strictly-decreasing-X envelope clamped to ``x_clamp`` — the
+    visible outline of the image at this scale. Pure geometry; no VRAM writes.
+    """
+    xs: list[int] = []
+    ys: list[int] = []
+    running = running_init                                # [asm 31F6: [2DCC]=0x7D0]
+    sc = scale & 0xFF                                     # [asm 320C: mul byte ptr [2DD0]]
+    clamp = _s16(x_clamp)
+    for i in range(columns):                              # [asm 3204..3249: bx=0..0x40]
+        sx = _s16(((_s16((src_x[i] * sc) & 0xFFFF) >> 6) + x_off) & 0xFFFF)  # [asm 320C-3214]
+        if sx >= running:                                # [asm 3218-321C: cmp / jge]
+            continue
+        if sx >= clamp:                                  # [asm 321E-3222: cmp / jge]
+            continue
+        running = sx                                     # [asm 3224: [2DCC]=ax]
+        sy = _s16(((_s16((src_y[i] * sc) & 0xFFFF) >> 6) + y_off) & 0xFFFF)  # [asm 322B-3235]
+        xs.append(sx)                                    # [asm 3227: [si+6B14]=ax]
+        ys.append(sy)                                    # [asm 3239: [si+6A88]=ax]
+    return xs, ys
+
+
+@oracle_link("1030:324B",
+             "one frame's border-clear pass of the scale transition: walk rows from "
+             "x_clamp inward; per row clear the 4 borders (left+right of the row and its "
+             "mirror about x_off) of a window whose half-extent follows the scaled-column "
+             "table, via clear_span. Writes the 4 EGA planes; pure geometry otherwise.",
+             "ASM_MATCHED", merge_target="frame renderer")
+def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: int,
+                     x_clamp: int, page: int, stride: int = ROW_STRIDE) -> None:
+    """Recover ``1030:324B-32AE`` — clear the borders exposed at this scale step.
+
+    ``table_x``/``table_y`` are the raw ``[0x6B14]``/``[0x6A88]`` words (pass the live
+    region, not just the first ``count`` entries: the loop reads ``table_x[si]`` every
+    row and may step into stale tail entries exactly as the ASM does). The window is
+    symmetric about ``(x_off, y_off)``; ``page`` is the destination CRTC page ``[0x2DD8]``.
+    Caller has set SC map mask 0x0F (all planes) and reset the GC (1030:452B).
+    """
+    cur_y = y_off                                  # [asm 324D: [2DCA]=[2DC8]]
+    si = 0
+    bp = count
+    cur_x = x_clamp & 0xFFFF                        # [asm 3253: [2DD2]=[2DC4]]
+    while True:
+        if table_x[si] == cur_x:                   # [asm 3259-3261]
+            bp -= 1                                 # [asm 3263]
+            if bp < 0:                              # [asm 3264: js 32B0]
+                break
+            cur_y = table_y[si]                     # [asm 3266]
+            si += 1                                 # [asm 326D]
+        w_right = (0x140 - cur_y) & 0xFFFF          # [asm 3281: cx=0x140-bx]
+        mrow = (2 * x_off - cur_x) & 0xFFFF         # [asm 328A-3291]
+        w_left = (2 * y_off - cur_y) & 0xFFFF       # [asm 3296-329D]
+        clear_span(planes, cur_y, w_right, cur_x, page, stride)   # [asm 3287]
+        clear_span(planes, cur_y, w_right, mrow, page, stride)    # [asm 3293]
+        clear_span(planes, 0, w_left, mrow, page, stride)         # [asm 32A1]
+        clear_span(planes, 0, w_left, cur_x, page, stride)        # [asm 32A5]
+        cur_x = (cur_x - 1) & 0xFFFF                # [asm 32A8: dec [2DD2]]
+        if cur_x == 0:                              # [asm 32AC: je 32B0]
+            break
 
 
 @oracle_link("1030:6772",

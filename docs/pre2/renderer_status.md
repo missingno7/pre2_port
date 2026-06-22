@@ -32,7 +32,7 @@ re-disassembled the scroll/grid region on GOG. Findings:
 
 | Gap | GOG addr | Reproducible? | Status |
 |---|---|---|---|
-| Scale/zoom transition | `31D0` loop, span-clear `32DE`, scaled copy `4700`/`473D` | **YES** (002633, 173821) | **span-clear `32DE` RECOVERED + ASM_MATCHED** (`recovered/transition.py:clear_span`, 1073 spans / 0 div over 002633+173821; committed test). Next: scaled copy `4700`/`473D`, then the scale loop `31D0` |
+| Scale/zoom transition | `31D0` loop = build `31F4-3249` + draw `324B-32AE` + span-clear `32DE` | **YES** (002633, 173821) | **RECOVERED + ASM_MATCHED** — all three pixel/geometry pieces: `clear_span` (32DE, 1073 spans/0 div), `build_scaled_columns` (31F4, 40 frames/0 div), `draw_scale_frame` (324B, 15 frames/0 div byte-exact VRAM). Committed tests. Remaining outer-loop bits (`452B` GC-reset, `4509` page-flip, `44CD` vsync, scale-decrement) are presentation plumbing → fold into render_frame in Phase 4. **There is no separate "scaled image copy" — the effect is shrink-via-border-clear; `4700` is unrelated.** |
 | calc-scroll-source | `3588` | yes (gameplay) | decoded; small island |
 | vertical tile-column fill | `34ED`? | needs horizontal-scroll scene | confirm GOG addr |
 | Palette fade | `6772` | **YES** (021225, user-captured mid-fade) | **RECOVERED + VERIFIED + live** (`recovered/transition.py:fade_palette`, `bridge/palette.py`, `checkpoints/palette.py`): 56 fade steps / 0 divergence in-VM lockstep + exact done-correspondence; committed golden test |

@@ -12,13 +12,18 @@ incl. 192 changed clears; this is the fast committed check.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
-from pre2.recovered.transition import clear_span, fade_palette
+import pre2.recovered.transition as transition
+from pre2.recovered.transition import build_scaled_columns, clear_span, fade_palette
 
-_FIX = Path(__file__).parent / "fixtures" / "transition" / "clear_span.json"
-_FADE = Path(__file__).parent / "fixtures" / "transition" / "fade_palette.json"
+_DIR = Path(__file__).parent / "fixtures" / "transition"
+_FIX = _DIR / "clear_span.json"
+_FADE = _DIR / "fade_palette.json"
+_SCOLS = _DIR / "scaled_columns.json"
+_SFRAME = _DIR / "scale_frame.json"
 
 
 def test_clear_span_byte_exact_vs_asm():
@@ -68,3 +73,43 @@ def test_fade_palette_byte_exact_vs_asm():
             f"  got  {out.hex()}\n  want {cse['out']}"
         )
         assert int(arrived) == cse["arrived"], f"fade_amt={cse['fade_amt']}: arrived flag"
+
+
+def test_build_scaled_columns_byte_exact_vs_asm():
+    """`build_scaled_columns` (1030:31F4) — the per-frame scaled-column geometry of the
+    end-level scale transition. Golden: real ASM inputs (source tables + scale + offsets)
+    captured under the VM (snapshot 002633); the recovered fn must reproduce the kept
+    columns' [0x6B14]/[0x6A88] tables exactly. In-VM lockstep confirmed 40 frames / 0
+    divergence."""
+    data = json.loads(_SCOLS.read_text())
+    assert data["cases"], "empty scaled_columns fixture"
+    for cse in data["cases"]:
+        xs, ys = build_scaled_columns(cse["src_x"], cse["src_y"], cse["scale"],
+                                      cse["x_off"], cse["y_off"], cse["x_clamp"])
+        assert [v & 0xFFFF for v in xs] == cse["xs"], "scaled X table mismatch"
+        assert [v & 0xFFFF for v in ys] == cse["ys"], "scaled Y table mismatch"
+
+
+def test_draw_scale_frame_geometry_vs_asm():
+    """`draw_scale_frame` (1030:324B) — the border-clear pass. Golden: real captured
+    inputs + the clear_span call sequence the recovered fn emits (independently verified
+    byte-exact vs the ASM's VRAM, 15 frames / 0 divergence). This guards the geometry
+    (which spans get cleared, in order); clear_span's pixel writes are tested separately."""
+    data = json.loads(_SFRAME.read_text())
+    assert data["cases"], "empty scale_frame fixture"
+    real = transition.clear_span
+    for cse in data["cases"]:
+        calls: list[list[int]] = []
+        transition.clear_span = lambda planes, x, width, row, pg, stride=0x28: \
+            calls.append([x, width, row])
+        try:
+            transition.draw_scale_frame([None] * 4, cse["table_x"], cse["table_y"],
+                                        cse["count"], cse["x_off"], cse["y_off"],
+                                        cse["x_clamp"], cse["page"])
+        finally:
+            transition.clear_span = real
+        assert len(calls) == cse["ncalls"], "clear_span call count"
+        assert calls[:3] == cse["first3"] and calls[-3:] == cse["last3"]
+        flat = [v for c in calls for v in c]
+        h = hashlib.sha256(bytes(str(flat), "ascii")).hexdigest()[:16]
+        assert h == cse["calls_sha16"], "clear_span call-sequence hash"
