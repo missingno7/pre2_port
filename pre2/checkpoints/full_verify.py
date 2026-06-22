@@ -50,20 +50,29 @@ def _sqz_ignore(cpu):
     not drowning a genuine divergence in ~60 KB of benign buffer noise.
     """
     from pre2.checkpoints.common import _read_cstring
-    from pre2.codecs.sqz import sqz_bump_advance
+    from pre2.codecs.sqz import sqz_bump_advance, unpack_sqz
     mem = cpu.mem
     out_seg = mem.rw(0x1A0F, 0x2875)
+    base = (out_seg << 4) & 0xFFFFF
+    adv = 0
+    declared = 0
     try:
         raw = cpu.pre2_dos.resolve_game_path(_read_cstring(mem, 0x1A0F, cpu.s.dx)).read_bytes()
         adv = sqz_bump_advance(raw)
+        declared = len(unpack_sqz(raw))     # the asset's real output length
     except Exception:
-        adv = 0
+        pass
     ltb = (((out_seg + adv) & 0xFFFF) << 4) & 0xFFFFF
+    reserved_end = base + adv * 16
     return [
         (ltb, min(ltb + 0xF000, len(mem.data))),           # compressed-file input buffer
         ((0x1030 << 4) + 0x1204, (0x1030 << 4) + 0x1208),  # DOS file handle + out_seg copy
         ((0x1030 << 4) + 0x140F, (0x1030 << 4) + 0x1414),  # input-buffer mode/size/limit [140F/1410/1412]
         ((out_seg << 4) + 0x418, (out_seg << 4) + 0x420),  # 6-byte header read scratch
+        # The ASM over-decodes up to ~1 byte past the declared output into the +1
+        # paragraph the allocator reserves; the recovered stops at the declared length.
+        # Ignore only that reserved padding [declared, reserved), never the real output.
+        (base + declared, min(reserved_end, len(mem.data))) if declared else (0, 0),
     ]
 
 
@@ -120,7 +129,7 @@ def _diff_regions(rec: bytearray, asm: bytearray):
     return regions
 
 
-def enable_pre2_full_state_verify(rt, *, on_result=None, only=None, max_asm_steps=2_000_000):
+def enable_pre2_full_state_verify(rt, *, on_result=None, only=None, max_asm_steps=16_000_000):
     """Install the foolproof full-effect verify over every recovered hook.
 
     ``on_result(name, ok, reason)`` fires once per *distinct* divergence (same hook +
@@ -132,6 +141,7 @@ def enable_pre2_full_state_verify(rt, *, on_result=None, only=None, max_asm_step
     registry.install(cpu)
     cpu.pre2_verify_mode = False  # recovered runs on the full-effect path; the wrapper is the oracle
     seen: dict[tuple, int] = {}   # (name, locations) -> repeat count, for dedup
+    incomplete: set[str] = set()  # routines whose ASM run hit the step cap (warned once)
 
     recovered_handlers = dict(cpu.replacement_hooks)
     for key, recovered in recovered_handlers.items():
@@ -139,10 +149,11 @@ def enable_pre2_full_state_verify(rt, *, on_result=None, only=None, max_asm_step
             continue
         name = cpu.hook_names.get(key, f"{key[0]:04X}:{key[1]:04X}")
         ignore_fn = _IGNORE.get(key)
-        cpu.replacement_hooks[key] = _make_wrapper(recovered, name, on_result, max_asm_steps, seen, ignore_fn)
+        cpu.replacement_hooks[key] = _make_wrapper(recovered, name, on_result, max_asm_steps,
+                                                   seen, ignore_fn, incomplete)
 
 
-def _make_wrapper(recovered, name, on_result, max_asm_steps, seen, ignore_fn):
+def _make_wrapper(recovered, name, on_result, max_asm_steps, seen, ignore_fn, incomplete):
     def wrapper(c):
         mem = c.mem
         entry = copy.copy(c.s)
@@ -173,7 +184,15 @@ def _make_wrapper(recovered, name, on_result, max_asm_steps, seen, ignore_fn):
         if not rec_returned:
             interpret_current_instruction_without_hook(c)  # pass-through hook: nothing to diff
             return
-        _drive_asm(c, entry_cs, ret_ip, ret_sp, max_asm_steps)
+        if not _drive_asm(c, entry_cs, ret_ip, ret_sp, max_asm_steps):
+            # ASM did not finish within the step budget -> its buffer is half-written;
+            # comparing it would be a FALSE divergence. Skip + warn once per routine.
+            if name not in incomplete:
+                incomplete.add(name)
+                print(f"[full-verify] {name}: ASM routine did not return within "
+                      f"{max_asm_steps:,} steps -> NOT COMPARED (raise max_asm_steps to verify)",
+                      flush=True)
+            return
 
         # Neutralise the routine's freed stack frame (below entry SP in SS): the
         # recovered (Python stack) and ASM (8086 stack) legitimately leave different
@@ -212,15 +231,20 @@ def _emit(on_result, seen, name, locs, reason) -> None:
         on_result(name, False, reason)
 
 
-def _drive_asm(c, entry_cs, ret_ip, ret_sp, max_asm_steps):
+def _drive_asm(c, entry_cs, ret_ip, ret_sp, max_asm_steps) -> bool:
     """Single-step the original ASM routine until it returns to its caller.
 
     No async IRQs are injected (the recovered effect is also synchronous), so the
-    stack unwinds cleanly and ``sp``/``ip`` identify the return precisely.
+    stack unwinds cleanly and ``sp``/``ip`` identify the return precisely. Returns
+    True if the routine returned, False if it hit ``max_asm_steps`` first — in which
+    case the ASM result is INCOMPLETE and must NOT be compared (a half-decoded buffer
+    would look like a divergence; e.g. the slow "other"-format SQZ decode needs ~4-11M
+    steps and at the old 2M cap masqueraded as a SAMPLE/PRESENT/SPRITES output bug).
     """
     steps = 0
     while not (c.s.cs == entry_cs and c.s.ip == ret_ip and c.s.sp == ret_sp):
         interpret_current_instruction_without_hook(c)
         steps += 1
         if steps > max_asm_steps:
-            break
+            return False
+    return True
