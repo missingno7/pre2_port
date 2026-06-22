@@ -29,6 +29,7 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
 | `324B` draw_scale_frame (border-clear pass) | `recovered/transition.py` | ASM_MATCHED (15 frames/0 div VRAM) |
 | `6772` palette fade (DAC interpolation) | `recovered/transition.py` | VERIFIED + live |
 | `3588` calc_scroll_source | `recovered/frame_renderer.py` | ASM_MATCHED (15 calls/0 div) |
+| `3668` redraw_animated_grid (animated bg tiles) | `recovered/frame_renderer.py` | ASM_MATCHED (7 frames/0 div) |
 
 ## Gaps — renderer, still ASM (to recover)
 
@@ -48,15 +49,16 @@ VRAM/DAC, with no gameplay decision and no ownership of the object/level data mo
    arrive, then clears `[0x6C01]`/`[0x6C02]`. Direction flag `[0x6C02]` swaps src/target.
    56 fade steps / 0 divergence (snapshot 021225) + committed golden test.
 
-3. **Scroll engine helpers** (re-mapped on GOG — the ledger was stale; see
-   `renderer_status.md`): **`3588`–`35A0` = calc scroll source** (`[0x2DBA] = camera·… +
-   0x3F40`), small/OBSERVED — the real GOG routine (ledger's `3569` is actually *inside*
-   the recovered `draw_grid` inner loop `~353A–3587`). The vertical tile-column fill
-   (horizontal-scroll counterpart to the recovered row-fill `348D`, ledger `34ED`) and the
-   directional-scroll proper still need locating via the call graph from the camera-advance
-   — **needs a horizontal-scroll snapshot**. The camera *advance* is on the border (game
-   loop); only the calc/fill are renderer. The ledger's `3344/338E/33F5` are the scale
-   transition, NOT scroll.
+3. ~~**Scroll engine helpers.**~~ **DONE** (reached headless by injecting movement —
+   right/left arrow 0x4D/0x4B — into gameplay snapshot 185902 to drive a real scroll):
+   - **`3588` calc_scroll_source** — `[0x2DBA] = 2*col + 0x280*row + 0x3F40`. RECOVERED
+     (`frame_renderer.py:calc_scroll_source`, ASM_MATCHED, committed golden).
+   - **`3668` redraw_animated_grid** — the actual hot unrecovered scroll routine: redraws
+     the 12×20 grid blitting only animated tiles (flagged in 0x6988), remapped through the
+     animation frame `[0x6BC2]`. RECOVERED (`frame_renderer.py`, ASM_MATCHED, 7 frames/0 div).
+   - The ledger's `34ED` "column fill" was STALE — it's the recovered `draw_tile_row`'s loop
+     tail. The ledger's `3344/338E/33F5` are the scale transition, NOT scroll. The camera
+     *advance* (deciding where to scroll) stays on the border (game loop).
 
 4. **Frame compositor `3B40`.** Static glue `draw_grid() → scroll_copy() → panel()`;
    characterized, unwired (no available scenario reaches it). Becomes the renderer's

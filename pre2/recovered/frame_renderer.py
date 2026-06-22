@@ -33,8 +33,14 @@ from pre2.recovered.renderer import ROW_STRIDE, WRAP_AT, WRAP_SPAN, blit_sprite
 __all__ = [
     "RowFlags", "GridResult", "VISIBLE_COLS", "VISIBLE_ROWS", "RING_COLS",
     "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy", "panel_copy",
-    "calc_scroll_source",
+    "calc_scroll_source", "redraw_animated_grid",
 ]
+
+
+class AnimGridUnsupported(Exception):
+    """Raised when ``redraw_animated_grid`` meets a non-type-0 tile — the original only
+    ever blits opaque (type-0) animated tiles here and does *not* maintain a background
+    pointer for the masked path, so a masked tile is unrecovered (fail loud, never guess)."""
 
 SCROLL_WRAP_SRC = 0x3F40   # source offset of the ring-buffer wrap section (3A27)
 SCREEN_ROW = 0x28          # bytes per screen row (the per-row source back-step)
@@ -310,3 +316,56 @@ def calc_scroll_source(camera_col, camera_row):
     bx = (dx << 1) & 0xFFFF                           # [asm 3592: shl bx,1]  (row<<9)
     dx = (dx >> 1) & 0xFFFF                           # [asm 3594: shr dx,1]  (row<<7)
     return (ax + dx + bx + SCROLL_WRAP_SRC) & 0xFFFF  # [asm 3596-359A: +0x3F40]
+
+
+@oracle_link("1030:3668",
+             "A000 framebuffer (the animated background tiles only) + [0x2DF2] (OR of the "
+             "type table over the whole grid) + [0x6BBD] (any-drawn flag). Redraws the "
+             "12x20 visible grid but blits only tiles flagged in the 0x6988 table, each "
+             "remapped through the current animation frame [0x6BC2]; di/regs preserved.",
+             "ASM_MATCHED", merge_target="frame renderer")
+def redraw_animated_grid(planes, tiles, type_tbl, flag_tbl, anim_xlat, blit_type,
+                         camera_col, camera_row, fine_col, scroll_dest):
+    """Recover ``1030:36B3-3715`` — redraw the animated background tiles.
+
+    Walks the 12x20 visible grid (same ring buffer as :func:`draw_grid`): for every tile
+    it ORs ``type_tbl[tile]`` into the accumulated flags, and **only where**
+    ``flag_tbl[tile] != 0`` (the animated tiles) it remaps the tile through the current
+    animation frame (``anim_xlat[tile]`` = ``[[0x6BC2] + tile]``) and blits it opaque.
+
+    Returns ``(tile_flags_acc, any_drawn)`` (the ``[0x2DF2]`` / ``[0x6BBD]`` contract).
+    The throttle + animation-frame advance (3668-36A6) is the thin controller that
+    supplies ``anim_xlat``; here ``anim_xlat`` is already the selected frame's 256-byte
+    remap slice. Every animated tile observed is type 0 (opaque); a non-type-0 tile is
+    unrecovered (the ASM keeps no background pointer here) and fails loud.
+    """
+    tile_flags_acc = 0                                 # [asm 36A9] [0x2DF2] reset, then OR
+    any_drawn = 0                                      # [asm 36AE] [0x6BBD] reset
+    si = (camera_row * 0x100 + camera_col) & 0xFFFF    # [asm 36B3-36BA] si = ah:al
+    di = scroll_dest & 0xFFFF                          # [asm 36C0] di = [0x2DBA]
+
+    for _row in range(VISIBLE_ROWS):                   # [asm 36C4] ch = 0x0C
+        dx = fine_col                                  # [asm 36C4] dx = [0x2DE8] (per row)
+        for _col in range(VISIBLE_COLS):               # [asm 36C8] cl = 0x14
+            tile = tiles[si]                           # [asm 36CA] bl = es:[si]
+            tile_flags_acc |= type_tbl[tile]           # [asm 36CD-36D1] -> [0x2DF2]
+            if flag_tbl[tile] != 0:                    # [asm 36D5] draw only flagged tiles
+                any_drawn = 1                          # [asm 36DC] [0x6BBD] = 1
+                remapped = anim_xlat[tile]             # [asm 36E1-36E7] xlat via [0x6BC2]
+                if blit_type[remapped] != 0:           # 3B88 derives type from [0x4DF8]
+                    raise AnimGridUnsupported(
+                        f"animated tile {tile} -> {remapped} is type "
+                        f"{blit_type[remapped]} (only type-0 recovered)")
+                if di >= WRAP_AT:                      # [asm 36EA] pre-blit ring wrap
+                    di = (di - WRAP_SPAN) & 0xFFFF
+                blit_sprite(planes, remapped, di, 0, 0)  # [asm 36F4 -> 3B88] opaque blit
+            dx += 1                                    # [asm 36F9] inc dx
+            if dx >= RING_COLS:                        # [asm 36FA-3702] row-buffer ring
+                di = (di - ROW_STRIDE) & 0xFFFF
+                dx = 0
+            di = (di + 2) & 0xFFFF                      # [asm 3704] per-tile (blit nets +2)
+            si = (si + 1) & 0xFFFF                      # [asm 3706] next tile
+        di = (di + GRID_DI_ROW_ADVANCE) & 0xFFFF        # [asm 370B] +0x280 next screen row
+        si = (si + GRID_SI_ROW_ADVANCE) & 0xFFFF        # [asm 370F] +0xEC next tilemap row
+
+    return tile_flags_acc & 0xFF, any_drawn

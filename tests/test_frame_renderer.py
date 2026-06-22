@@ -37,6 +37,65 @@ def test_calc_scroll_source_byte_exact_vs_asm():
         )
 
 
+def test_redraw_animated_grid_geometry():
+    """`redraw_animated_grid` (1030:3668) — guards the loop logic: it ORs the type table
+    over *every* tile, but blits *only* the tiles flagged in the 0x6988 table, each
+    remapped through the animation frame, at the ring-buffer di. Byte-exact pixel fidelity
+    is covered in-VM by lockstep vs ASM (7 frames / 0 divergence, snapshot 185902 + injected
+    scroll). Here the blit is shimmed to record (remapped_tile, di)."""
+    import pre2.recovered.frame_renderer as fr
+
+    tiles = bytearray(0x10000)
+    tiles[0] = 0xAA          # grid cell (row0,col0): si = row*0x100 + col
+    tiles[0x101] = 0xBB      # grid cell (row1,col1)
+    type_tbl = bytearray(256)
+    type_tbl[0x00] = 0x01    # every unflagged cell contributes 0x01
+    type_tbl[0xAA] = 0x04
+    type_tbl[0xBB] = 0x20
+    flag_tbl = bytearray(256)
+    flag_tbl[0xAA] = 1       # only these two are animated -> drawn
+    flag_tbl[0xBB] = 1
+    anim_xlat = bytearray(256)
+    anim_xlat[0xAA] = 0x33   # remapped through the current animation frame
+    anim_xlat[0xBB] = 0x44
+    blit_type = bytearray(256)  # all type 0 (opaque)
+
+    calls = []
+    real = fr.blit_sprite
+    fr.blit_sprite = lambda planes, idx, di, typ, bg, mask=b"": calls.append((idx, di))
+    try:
+        acc, drawn = fr.redraw_animated_grid(
+            [None] * 4, bytes(tiles), bytes(type_tbl), bytes(flag_tbl),
+            bytes(anim_xlat), bytes(blit_type),
+            camera_col=0, camera_row=0, fine_col=0, scroll_dest=0x1000)
+    finally:
+        fr.blit_sprite = real
+
+    # cell(0,0): blit at di=dest=0x1000. After 20 cols the col-ring (dx hits 0x14)
+    # wraps di back to 0x1000; the per-row advance +0x280 -> row1 starts at 0x1280.
+    # cell(1,1): col0 skips (di->0x1282), col1 blits at 0x1282.
+    assert calls == [(0x33, 0x1000), (0x44, 0x1282)], calls
+    assert drawn == 1
+    # acc = OR of type_tbl over all 240 cells = 0x01 (the 0x00 cells) | 0x04 | 0x20
+    assert acc == (0x01 | 0x04 | 0x20)
+
+
+def test_redraw_animated_grid_rejects_masked_tile():
+    """A non-type-0 animated tile is unrecovered (no bg pointer maintained) -> fail loud."""
+    import pre2.recovered.frame_renderer as fr
+
+    tiles = bytearray(0x10000)
+    tiles[0] = 0x10
+    flag_tbl = bytearray(256); flag_tbl[0x10] = 1
+    anim_xlat = bytearray(256); anim_xlat[0x10] = 0x10
+    blit_type = bytearray(256); blit_type[0x10] = 2     # masked -> unsupported
+    import pytest
+    with pytest.raises(fr.AnimGridUnsupported):
+        fr.redraw_animated_grid([None] * 4, bytes(tiles), bytes(256), bytes(flag_tbl),
+                                bytes(anim_xlat), bytes(blit_type),
+                                camera_col=0, camera_row=0, fine_col=0, scroll_dest=0x1000)
+
+
 def _planes():
     return [bytearray(PLANE) for _ in range(4)]
 
