@@ -111,6 +111,28 @@ def read_attr(mem, sprite_id: int) -> SpriteAttr:
     )
 
 
+def read_object_render_inputs(mem, *, frame_pre_inc: bool = True):
+    """Bundle the moving-sprite pass (26FA) inputs for ``render_frame``: the object
+    camera, the active-sprite list, the per-id attributes, and the sprite-pixel source
+    segments referenced (each as a 64 KiB byte image). Read-only.
+
+    Returns ``(camera, sprites_tuple, attrs_by_id, src_banks_by_seg)``.
+    """
+    cam = read_camera(mem, frame_pre_inc=frame_pre_inc)
+    sprites = []
+    attrs: dict = {}
+    segs: set = set()
+    for _off, spr in read_active_list(mem):
+        sprites.append(spr)
+        if spr.sprite_id != 0xFFFF:
+            attr = read_attr(mem, spr.sprite_id)
+            attrs[spr.sprite_id] = attr
+            segs.add(attr.src_seg)
+    banks = {seg: bytes(mem.data[((seg << 4) & 0xFFFFF):((seg << 4) & 0xFFFFF) + 0x10000])
+             for seg in segs}
+    return cam, tuple(sprites), attrs, banks
+
+
 def read_active_list(mem):
     """Records in the ASM's processing order: cursor top (0x5720) down to base.
 

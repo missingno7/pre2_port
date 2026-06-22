@@ -76,6 +76,42 @@ def test_render_frame_runs_fade_first_and_updates_dac():
     assert dac == [[0, 0, 0] for _ in range(16)]
 
 
+def test_render_frame_runs_sprite_pass_when_object_camera_set():
+    """With object_camera set, render_frame runs the moving-sprite pass (plan_frame ->
+    paint_sprite) after scroll; with it None, the pass is skipped."""
+    import types
+
+    class _Draw:
+        src_seg = 7
+        src_off = 0
+        src_bw = 1
+        full_rows = 1
+
+    cam = types.SimpleNamespace(row_stride=40)
+
+    # with object_camera: plan_frame yields one draw -> one paint_sprite
+    saved = (RF.fade_palette, RF.redraw_animated_grid, RF.draw_grid, RF.scroll_copy,
+             RF.plan_frame, RF.paint_sprite)
+    calls: list = []
+
+    class _Grid:
+        redrew = False
+
+    RF.fade_palette = lambda a, b, amt: (bytes(48), True)
+    RF.redraw_animated_grid = lambda *a, **k: calls.append("animgrid")
+    RF.draw_grid = lambda *a, **k: (calls.append("grid"), _Grid())[1]
+    RF.scroll_copy = lambda *a, **k: calls.append("scroll")
+    RF.plan_frame = lambda sprites, attrs, c: (calls.append("plan"), [_Draw()])[1]
+    RF.paint_sprite = lambda planes, d, src, stride: calls.append(("paint", stride))
+    try:
+        render_frame(_state(object_camera=cam, object_src_banks={7: bytes(128)}),
+                     [None] * 4, dac=None)
+    finally:
+        (RF.fade_palette, RF.redraw_animated_grid, RF.draw_grid, RF.scroll_copy,
+         RF.plan_frame, RF.paint_sprite) = saved
+    assert calls == ["animgrid", "grid", "scroll", "plan", ("paint", 40)]
+
+
 def test_render_frame_routes_state_to_leaves():
     calls: list = []
     restore = _shim(calls)

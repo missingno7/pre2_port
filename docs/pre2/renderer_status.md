@@ -62,9 +62,19 @@ The recovered leaves are consolidated into one VM-independent entry point — th
 state). `RendererState` is captured at the post-controller instant (after the camera +
 animation-frame `[0x6BC2]` advance — the grid-loop entry `36B3`).
 
-**Standalone proof:** `render_frame` reproduces the renderer-owned **background ring buffer
-byte-exact with NO VM stepping** — 0 divergence across steady AND grid-redraw frames
-(212037 + 185902). Committed composition test `tests/test_render_frame.py`.
+**Moving-sprite pass folded in:** `render_frame` now also runs the `26FA` pass
+(`plan_frame` → `paint_sprite` over the active-sprite list, bundled in `RendererState` via
+`read_object_render_inputs`), layered on the scrolled background. So the order is
+`fade → animgrid → grid → scroll → objs(26FA)`.
+
+**Standalone proof:** `render_frame` reproduces the renderer-owned output **with NO VM
+stepping** — the background ring buffer is byte-exact (0 div across steady AND grid-redraw
+frames, 212037 + 185902); the full framebuffer at the `26FA` RET matches except a fixed
+single-bit residual that is the **object system** (gameplay sprites via `65A0`/`8BFF` → the
+shared blit, the documented border — *not* the special `0x135` HUD sprite, which is absent
+here). RendererState must be captured at the post-controller instant (after the camera +
+animation-frame `[0x6BC2]` advance = grid-loop entry `36B3`). Committed composition tests
+`tests/test_render_frame.py`.
 
 **Border confirmed (by profiling a steady frame):** the residual full-screen differences are
 the **object system** (`65A0`/`8BFF` iterating the ObjectSlot data model → the *shared* blit

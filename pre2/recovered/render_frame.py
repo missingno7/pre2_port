@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pre2.recovered.frame_renderer import (
     draw_grid, redraw_animated_grid, scroll_copy,
 )
+from pre2.recovered.object_render import paint_sprite, plan_frame
 from pre2.recovered.transition import fade_palette
 
 __all__ = ["RendererState", "FadeStep", "render_frame"]
@@ -69,6 +70,11 @@ class RendererState:
     dirty: int              # [0x2DF4]
     dirty_rows: int         # [0x2DF5]
     fade: FadeStep | None   # palette fade step, or None when inactive
+    # --- moving-sprite pass (26FA); object_camera None => skip it ---
+    object_camera: object = None     # object_render.Camera (frame counter post-incremented)
+    object_sprites: tuple = ()       # the active-sprite list (object_render.Sprite records)
+    object_attrs: dict | None = None  # sprite_id -> object_render.SpriteAttr
+    object_src_banks: dict | None = None  # src_seg -> 64 KiB sprite-pixel segment bytes
 
 
 def render_frame(state: RendererState, planes, dac=None):
@@ -111,6 +117,17 @@ def render_frame(state: RendererState, planes, dac=None):
         planes, s.scroll_src, s.dest_page, s.col_ring, s.fine_scroll,
         s.row_ring, s.row_factor,
     )
+
+    # 5) moving-sprite pass — 26FA (the active-sprite list; cull/animate/position/clip
+    #    + planar blit). Layered on top of the scrolled background. Record mutations
+    #    (life/drawn) are the object-record write-back contract, not part of the pixels.
+    if s.object_camera is not None:
+        banks = s.object_src_banks or {}
+        for draw in plan_frame(s.object_sprites, s.object_attrs or {}, s.object_camera):
+            bank = banks.get(draw.src_seg, b"")
+            size = draw.src_bw * draw.full_rows * 6 + 64   # [asm read_source extent]
+            paint_sprite(planes, draw, bank[draw.src_off:draw.src_off + size],
+                         s.object_camera.row_stride)
 
     return grid
 

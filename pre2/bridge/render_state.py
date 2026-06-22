@@ -8,6 +8,7 @@ field semantics stay in one spot.
 from __future__ import annotations
 
 from pre2.bridge import frame as _frame
+from pre2.bridge import object_render as _obj
 from pre2.bridge import palette as _pal
 from pre2.recovered.render_frame import FadeStep, RendererState
 
@@ -39,11 +40,16 @@ def _fade_step(mem):
     return FadeStep(a=a, b=b, amount=fi.fade_amt)
 
 
-def read_renderer_state(mem) -> RendererState:
-    """Snapshot every renderer input from VM memory into a plain :class:`RendererState`."""
+def read_renderer_state(mem, *, frame_pre_inc: bool = True) -> RendererState:
+    """Snapshot every renderer input from VM memory into a plain :class:`RendererState`.
+
+    ``frame_pre_inc`` matches the object renderer's +1 to [0x6BD5] applied at 26FA entry
+    (capture this state *before* that increment to see the value the engine will use)."""
     tm = _frame.read_tilemap(mem)
     st = _frame.read_scroll_state(mem)
     c = st.camera
+    obj_cam, obj_sprites, obj_attrs, obj_banks = _obj.read_object_render_inputs(
+        mem, frame_pre_inc=frame_pre_inc)
     return RendererState(
         tiles=tm.tiles,
         type_tbl=tm.tile_flags,        # 1A0F:0x805E
@@ -64,4 +70,8 @@ def read_renderer_state(mem) -> RendererState:
         dirty=st.dirty,
         dirty_rows=st.dirty_rows,
         fade=_fade_step(mem),
+        object_camera=obj_cam,
+        object_sprites=obj_sprites,
+        object_attrs=obj_attrs,
+        object_src_banks=obj_banks,
     )
