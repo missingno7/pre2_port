@@ -257,10 +257,14 @@ class EnhancedRenderer:
     def _pitch_advance(self, period: int) -> float:
         """Recovered resample step -> float source-samples consumed per output sample.
 
-        The recovered mixer advances the source by ``1 + period/256`` per *faithful* output
-        sample (base lodsb + fractional step) at ``SOURCE_RATE``; the enhanced renderer plays
-        that same pitch at ``out_rate``."""
-        return (1.0 + period / 256.0) * SOURCE_RATE / self.out_rate
+        The recovered mixer advances the source by ``1 + step/256`` per *faithful* output
+        sample (base lodsb + fractional step) at ``SOURCE_RATE``. The step is a **signed**
+        16-bit increment: the mixer accumulates it into a 16-bit ``frac`` whose high byte is
+        sign-extended, so low/bass notes use a small *negative* step (play a touch slower =
+        lower pitch). Reading it unsigned turned e.g. -15 (0xFFF1) into +65521 -> a ~49x
+        advance = the ultrasonic notes."""
+        step = period - 0x10000 if period >= 0x8000 else period      # signed 16-bit
+        return (1.0 + step / 256.0) * SOURCE_RATE / self.out_rate
 
     # -- output ---------------------------------------------------------------
     def render(self, n_frames: int) -> np.ndarray:
