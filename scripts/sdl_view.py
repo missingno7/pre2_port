@@ -389,15 +389,18 @@ class SoundBlasterAudio:
 
 
 class NativeMixerAudio:
-    """Live audio from the recovered native ``AudioSystem`` — no emulated SB DMA capture.
+    """Live audio — a robust hybrid of the recovered native engine and the faithful SB output.
 
-    The faithful engine (``pre2/recovered/audio_system.py``, byte-exact vs the original ISR)
-    is run **wall-clock-paced** (50 Hz blocks in real time) so it is decoupled from the VM's
-    speed: when the VM falls behind, the music keeps playing smoothly instead of underrunning
-    into the silent re-lead gaps the SB-DMA path produces. The song + SFX are synced from VM
-    memory (re-capture on a module change; inject SFX when the game queues a new one). The
-    8-bit/8.4 kHz blocks are phase-continuous resampled to the mixer rate (ear candy). The
-    VM's own SB output is ignored.
+    * When **validated tracker music** is playing (gameplay), the recovered ``AudioSystem``
+      (byte-exact vs the original ISR) drives the audio **wall-clock-paced** (decoupled from
+      VM speed) so it never underruns into the silent re-lead gaps the SB-DMA path produces;
+      it syncs the song (re-capture on a module change) + injects SFX when the game queues one.
+    * Otherwise (oldies/title/intro/menus/transitions, where there is no well-formed tracker
+      song) it falls back to draining the faithful ``pcm_out`` — exactly the default path —
+      so every screen still plays correctly and nothing crashes on a transient/garbage state.
+
+    The 8-bit/8.4 kHz source (either path) is phase-continuous resampled to the mixer rate
+    (the ear candy). All of it is guarded: any failure falls back to ``pcm_out``.
     """
 
     def __init__(self, pygame, rt, sound_blaster, status: dict | None = None, *,
@@ -434,56 +437,77 @@ class NativeMixerAudio:
         self._channel = pygame.mixer.Channel(2)
         self._available = True
 
-    # --- VM state sync (song change + SFX trigger) ----------------------------
-    def _sync(self) -> None:
+    def pump(self) -> None:
+        if not self._available or self._channel is None:
+            return
+        if self._sb and self._sb.sample_rate:
+            self._src_rate = self._sb.sample_rate
+        try:
+            if self._engine_ok():
+                self._engine_mode()          # valid tracker music -> native engine (decoupled)
+            else:
+                self._drop_engine()          # menus/oldies/intro/transitions -> faithful pcm_out
+                self._drain_pcmout()
+        except Exception:                    # never let audio crash the viewer
+            try:
+                self._drop_engine()
+                self._drain_pcmout()
+            except Exception:
+                pass
+        self._feed()
+
+    def _engine_ok(self) -> bool:
+        from pre2.bridge.audio_system import valid_audio_state
+        return valid_audio_state(self._rt.cpu.mem)
+
+    def _drop_engine(self) -> None:
+        # leaving engine mode: forget it so we re-capture fresh + never free-run a stale song
+        self._sys = None
+        self._sig = None
+        self._t0 = None
+
+    def _engine_mode(self) -> None:
         from time import perf_counter
 
         from pre2.bridge import audio as _a
         from pre2.bridge.audio_system import _read_full_sfx, capture_audio_state
         from pre2.recovered.audio_system import AudioSystem
         mem = self._rt.cpu.mem
-        if not _a.music_on(mem):
-            return
-        sig = bytes(_a.read_order_table(mem)) + bytes([_a.read_song_length(mem)])
+        sig = bytes(_a.read_order_table(mem))     # song signature (order table)
         if self._sys is None or sig != self._sig:
-            # (re)start the song from the VM's current module
             self._sys = AudioSystem(capture_audio_state(mem))
             self._sig = sig
-            self._src_rate = (self._sb and self._sb.sample_rate) or self._src_rate
             self._sfx_prev = self._sys.s.sfx.remaining
-            if self._t0 is None:
-                self._t0 = perf_counter()
-                self._produced = 0
-            return
-        # detect a freshly-queued SFX (VM remaining jumped up) and inject it
-        vm_rem = _a._rw(mem, _a.DATA_SEG, _a.SFX_REMAINING)
-        if vm_rem > self._sfx_prev + BLOCK_LEN:
-            self._sys.s.sfx = _read_full_sfx(mem)
-        self._sfx_prev = vm_rem
-
-    def pump(self) -> None:
-        if not self._available or self._channel is None:
-            return
-        self._sync()
-        self._generate()
-        self._feed()
-
-    def _generate(self) -> None:
-        from time import perf_counter
-        if self._sys is None or self._t0 is None:
-            return
-        # wall-clock-paced: keep ~120 ms ahead of real time, in SOURCE samples (the buffer
-        # cap + the output-rate jitter lead are handled separately in _resample/_feed)
+            self._t0 = perf_counter()
+            self._produced = 0
+        else:
+            # inject a freshly-queued SFX (VM remaining jumped up)
+            vm_rem = _a._rw(mem, _a.DATA_SEG, _a.SFX_REMAINING)
+            if vm_rem > self._sfx_prev + BLOCK_LEN:
+                self._sys.s.sfx = _read_full_sfx(mem)
+            self._sfx_prev = vm_rem
+        # wall-clock-paced (decoupled from VM speed): keep ~120 ms ahead, in SOURCE samples
         target = int((perf_counter() - self._t0) * self._src_rate) + int(self._src_rate * 0.12)
         produced8 = bytearray()
         guard = 0
-        while self._produced < target and guard < 200:     # cap per pump (avoid runaway)
+        while self._produced < target and guard < 200:
             produced8 += self._sys.next_block()
             self._produced += BLOCK_LEN
             guard += 1
+        if self._sb is not None:
+            self._sb.pcm_out.clear()          # the SB still runs; discard its (ignored) output
         if produced8:
-            sig = (np.frombuffer(bytes(produced8), dtype=np.uint8).astype(np.float64) - 128) * 256
-            self._resample(sig)
+            sig8 = (np.frombuffer(bytes(produced8), dtype=np.uint8).astype(np.float64) - 128) * 256
+            self._resample(sig8)
+
+    def _drain_pcmout(self) -> None:
+        sb = self._sb
+        if sb is None or not sb.pcm_out:
+            return
+        raw = bytes(sb.pcm_out)
+        sb.pcm_out.clear()
+        sig = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64) - 128) * 256
+        self._resample(sig)
 
     def _resample(self, sig) -> None:
         self._in = np.concatenate([self._in, sig])

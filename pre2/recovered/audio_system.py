@@ -62,7 +62,16 @@ class AudioSystem:
         """Produce the next ``BLOCK_LEN``-byte 8-bit PCM block, advancing all state."""
         s = self.s
         if s.music_on:
-            pattern = s.patterns[s.order_table[s.pb.order_pos]]
+            # Defensive bounds (invalid live state should be gated out before we get here,
+            # but never crash): wrap a stray order_pos, silence an unknown pattern.
+            oi = s.pb.order_pos
+            if not s.order_table or s.pb.speed <= 0:
+                return bytearray(BLOCK_LEN)
+            if oi >= len(s.order_table):
+                oi = s.pb.order_pos = oi % len(s.order_table)
+            pattern = s.patterns.get(s.order_table[oi])
+            if pattern is None:
+                return bytearray(BLOCK_LEN)
             tracker_tick(s.pb, s.voices, pattern, s.order_table, s.song_length,
                          s.period_table, s.tracker_instruments)
         # Project the tracker voices onto the mixer's channel view + pick each channel's

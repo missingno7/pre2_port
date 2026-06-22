@@ -160,9 +160,12 @@ def write_voice(mem, ch: int, v: TrackerVoice) -> None:
     _ww(mem, DATA_SEG, V_EFFECT + i, v.effect)
 
 
+ORDER_TABLE_LEN = 0x100   # max MOD order positions (song_length must be below this)
+
+
 def read_order_table(mem) -> bytes:
     base = ((DATA_SEG << 4) + ORDER_TABLE) & 0xFFFFF
-    return bytes(mem.data[base:base + 0x80])
+    return bytes(mem.data[base:base + ORDER_TABLE_LEN])
 
 
 def read_song_length(mem) -> int:

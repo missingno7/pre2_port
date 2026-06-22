@@ -27,10 +27,24 @@ def _read_full_sfx(mem) -> Sfx:
     return Sfx(pos=pos, remaining=remaining, sample=bytes(mem.data[flat:flat + remaining]))
 
 
+def valid_audio_state(mem) -> bool:
+    """Whether VM memory currently holds a well-formed tracker song safe to play natively.
+
+    Non-gameplay screens (oldies/intro/menus) and mid-transition states can leave the
+    music vars garbage; running the engine on those produces noise or indexes out of
+    range. This gate keeps the native engine to genuine, sane tracker music."""
+    if not _a.music_on(mem):
+        return False
+    song_length = _a.read_song_length(mem)
+    pb = _a.read_playback(mem)
+    return (0 < pb.speed <= 0x20 and song_length < _a.ORDER_TABLE_LEN
+            and pb.order_pos <= song_length and pb.row < 0x40)
+
+
 def capture_audio_state(mem, n_instruments: int = 64) -> AudioState:
     """Snapshot the full song + SFX + playback state into a detached :class:`AudioState`."""
     order_table = _a.read_order_table(mem)
-    song_length = _a.read_song_length(mem)
+    song_length = min(_a.read_song_length(mem), len(order_table) - 1)   # bound (defensive)
     tracker_instruments = _a.read_tracker_instruments(mem, n_instruments)
     mixer_instruments = [_a.read_instrument(mem, i, tracker_instruments[i].length)
                          for i in range(n_instruments)]
