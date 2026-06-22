@@ -299,7 +299,7 @@ class EnhancedAudio:
     """
 
     def __init__(self, pygame, backend, sound_blaster=None, status: dict | None = None, *,
-                 chunk_ms: float = 120.0) -> None:
+                 chunk_ms: float = 185.0) -> None:
         # chunk_ms drives the app-level buffer depth: pygame's Channel.queue only holds
         # ONE chunk ahead, so the headroom before an underrun is ~2*chunk_ms. The audio
         # thread shares the GIL with the (CPU-bound) VM thread, so small chunks starve and
@@ -353,6 +353,12 @@ class EnhancedAudio:
         data = np.clip(block * 32767, -32768, 32767).astype(np.int16)
         return self._pygame.mixer.Sound(buffer=np.ascontiguousarray(data).tobytes())
 
+    def _is_playing(self) -> bool:
+        """Whether a song is actually sounding (so an idle channel is a real gap, not just
+        the silent title/menu where 'underruns' would be inaudible + alarmist)."""
+        sysm = getattr(self._backend, "system", None)
+        return bool(getattr(sysm, "playing", False)) if sysm is not None else True
+
     def _run(self) -> None:
         # Audio clock: SDL plays queued chunks continuously; we just keep one queued
         # ahead.  Checking a few times per chunk keeps the channel fed even if the main
@@ -362,9 +368,10 @@ class EnhancedAudio:
             try:
                 ch = self._channel
                 if not ch.get_busy():
-                    # Channel idle: either first start, or an UNDERRUN (we fell behind and
-                    # both the playing + queued chunk drained before we refilled -> a gap).
-                    if self._started:
+                    # Channel idle: first start, a real UNDERRUN (both the playing + queued
+                    # chunk drained before we refilled -> an audible gap), or just silence at
+                    # the title/menu. Only count it as a glitch when a song is actually playing.
+                    if self._started and self._is_playing():
                         self._underruns += 1
                         if self._underruns <= 5 or self._underruns % 50 == 0:
                             print(f"[enhanced-audio] UNDERRUN #{self._underruns} "

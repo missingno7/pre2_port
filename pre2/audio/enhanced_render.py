@@ -155,8 +155,14 @@ class EnhancedRenderer:
         self._free_run = free_run
         self._voices = [_Voice() for _ in range(NUM_VOICES)]
         self._sfx: list[_SfxVoice] = []
-        self._music_gain = 0.7
-        self._sfx_gain = 0.9
+        # Headroom: the original sums 4 channels into one 8-bit range (each ~1/4 scale), so a
+        # per-channel master near 1/NUM_VOICES keeps a full 4-voice mix about unity before the
+        # limiter -- without it 4 channels reach +-4 and slam the limiter into harsh distortion.
+        self._music_gain = 1.0 / NUM_VOICES
+        self._sfx_gain = 0.6
+        # Light stereo image (Amiga-style: channels 0,3 left / 1,2 right, softened to 70/30 so
+        # it stays mono-compatible). The faithful path is mono; this is an enhanced-only nicety.
+        self._pan_left = (0.70, 0.30, 0.30, 0.70)
         self._samples_per_tick = out_rate / TICK_HZ
         self._samples_to_tick = 0.0
         self._tick_budget = 0
@@ -202,7 +208,9 @@ class EnhancedRenderer:
         for ev in self.sys.drain_sfx():
             self._sfx.append(_SfxVoice(ev, self.out_rate))
 
-        mono = np.zeros(n_frames, np.float32)
+        left = np.zeros(n_frames, np.float32)
+        right = np.zeros(n_frames, np.float32)
+        tmp = np.zeros(n_frames, np.float32)
         i = 0
         while i < n_frames:
             if self._samples_to_tick <= 0.0:
@@ -214,18 +222,22 @@ class EnhancedRenderer:
             chunk = min(n_frames - i, max(1, int(self._samples_to_tick)))
             voices = self.sys.voices
             if self.sys.music_on and voices:
-                seg = mono[i:i + chunk]
                 for vi in range(min(NUM_VOICES, len(voices))):
                     rv = voices[vi]
                     fv = self._voices[vi]
                     if not fv.active:
                         continue
                     gain = (rv.volume / VOL_MAX) if rv.volume <= VOL_MAX else 1.0
+                    seg = tmp[:chunk]
+                    seg[:] = 0.0
                     fv.render_into(seg, self._pitch_advance(rv.period), gain)
+                    lf = self._pan_left[vi]
+                    left[i:i + chunk] += seg * lf
+                    right[i:i + chunk] += seg * (1.0 - lf)
             self._samples_to_tick -= chunk
             i += chunk
-        out[:, 0] += mono * self._music_gain
-        out[:, 1] += mono * self._music_gain
+        out[:, 0] += left * (self._music_gain * 2.0)     # *2: pan halves each channel's bus
+        out[:, 1] += right * (self._music_gain * 2.0)
 
         if self._sfx:
             sl = np.zeros(n_frames, np.float32)
@@ -235,5 +247,10 @@ class EnhancedRenderer:
             out[:, 1] += sl * self._sfx_gain
             self._sfx = [v for v in self._sfx if v.active]
 
-        np.tanh(out, out=out)          # soft limiter (no hard-clip clicks)
+        # Gentle soft-knee limiter: linear below ~0.7, tanh only catches the rare overshoot
+        # (the headroom above keeps a normal mix well under 1.0, so this stays transparent).
+        np.clip(out, -3.0, 3.0, out=out)
+        knee = 0.7
+        over = np.abs(out) > knee
+        out[over] = np.sign(out[over]) * (knee + (1.0 - knee) * np.tanh((np.abs(out[over]) - knee) / (1.0 - knee)))
         return out
