@@ -86,7 +86,7 @@ def test_song_load_fingerprint_stable_and_empty():
     base = (DS << 4) + 0xDC7
     mem.data[base:base + len(order)] = bytes(order)
     mem.data[(DS << 4) + 0xDC2] = len(order)            # song_length
-    mem.data[(DS << 4) + 0xB82] = 6                     # playback speed (initialised)
+    mem.data[(DS << 4) + 0xB84] = 6                     # playback speed (PB_SPEED, initialised)
     fp1 = AC.song_load_fingerprint(mem)
     assert fp1 is not None and AC.song_load_fingerprint(mem) == fp1   # stable when unchanged
     mem.data[base] = 99                                 # loader still mutating -> changes

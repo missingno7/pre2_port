@@ -157,24 +157,34 @@ def identify_song(mem, assets_dir) -> tuple[str, ModModule] | None:
     return None
 
 
-def song_load_fingerprint(mem) -> tuple | None:
-    """A cheap signature of the loaded song's *static* data (order + speed + instrument
-    lengths + the first pattern).
+def song_load_fingerprint(mem) -> int | None:
+    """A content hash of the loaded song's *whole* static data — order, speed, **all**
+    patterns, and **all** sample bytes/loops.
 
-    The song loader fills the order, then the patterns/samples, then the playback state over
-    several frames; capturing mid-load snapshots a half-built (silent) song. This fingerprint
-    changes every frame while the loader is running and goes constant once it finishes, so a
-    caller can wait for two equal readings before capturing. ``None`` when no song is loaded.
-    It fingerprints the *static* song (not the live row/tick), so it is also stable during
-    normal playback."""
+    The song loader fills the order first, then the patterns and the sample PCM, then the
+    playback state, over several frames. Capturing mid-load snapshots a half-built song:
+    patterns still streaming -> missing channels / garbage note periods (notes index a bad
+    period_table entry -> ultrasonic), sample bytes still streaming -> wrong timbre. A caller
+    waits for two equal readings, so capture happens only once EVERYTHING the renderer reads
+    has stopped changing. Hashing the full module costs a capture per frame, but only while a
+    song is loading (a handful of frames). ``None`` when no song is loaded / speed not yet set.
+    (Fingerprints the static song, not the live row/tick, so it is also stable during play.)"""
     order = _a.read_order_table(mem)
     song_length = _a.read_song_length(mem)
     if not song_length or not any(order[:song_length + 1]):
         return None
     speed = _a.read_playback(mem).speed
-    instr = _a.read_tracker_instruments(mem, 16)
-    pat0 = _a.read_current_pattern(mem, 0)
-    return (bytes(order), song_length, speed, tuple(i.length for i in instr), hash(pat0))
+    if speed <= 0:
+        return None
+    # Hash exactly what the recovered tracker + enhanced renderer READ: the order, every
+    # pattern (notes = instrument + note_period + effect), and the period table (note -> pitch
+    # step). NOT the in-memory sample PCM -- the game reuses that RAM as it streams the level
+    # so it never settles, and the enhanced path plays the full-res .TRK samples from disk
+    # anyway. Capturing before all patterns/periods settle is what gave missing channels +
+    # garbage (ultrasonic) note periods on cold start.
+    pats = tuple(hash(_a.read_current_pattern(mem, op)) for op in range(song_length + 1))
+    return hash((bytes(order[:song_length + 1]), song_length, speed, pats,
+                 hash(tuple(_a.read_period_table(mem)))))
 
 
 def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
