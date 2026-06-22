@@ -53,10 +53,37 @@ class AudioState:
 
 
 class AudioSystem:
-    """Drives :class:`AudioState` one PCM block at a time (the recovered audio ISR)."""
+    """Drives :class:`AudioState` one PCM block at a time (the recovered audio ISR).
+
+    The sequencer (:meth:`tick`) and the faithful mix are separable: :meth:`next_block`
+    is the fused, byte-exact ISR unit (one tick + one 8-bit block); :meth:`tick` is the
+    sequencer alone, the *single musical clock* a non-faithful renderer (e.g. the
+    enhanced float renderer) shares — it advances the same recovered ``tracker_tick``
+    and reads the same per-voice note/pitch/volume state, never a parallel sequencer."""
 
     def __init__(self, state: AudioState):
         self.s = state
+
+    def tick(self) -> None:
+        """Advance the song one sequencer tick (the recovered tracker) **without** mixing.
+
+        Mirrors :meth:`next_block`'s sequencer guards exactly, so the notes/periods/volumes
+        it lays on the voices are identical to the faithful path; only the per-sample read
+        (8-bit mixer vs. float renderer) differs downstream. No-op when music is off or the
+        playback state is degenerate (no order / unknown pattern / speed<=0)."""
+        s = self.s
+        if not s.music_on:
+            return
+        if not s.order_table or s.pb.speed <= 0:
+            return
+        oi = s.pb.order_pos
+        if oi >= len(s.order_table):
+            oi = s.pb.order_pos = oi % len(s.order_table)
+        pattern = s.patterns.get(s.order_table[oi])
+        if pattern is None:
+            return
+        tracker_tick(s.pb, s.voices, pattern, s.order_table, s.song_length,
+                     s.period_table, s.tracker_instruments)
 
     def next_block(self) -> bytearray:
         """Produce the next ``BLOCK_LEN``-byte 8-bit PCM block, advancing all state."""

@@ -16,34 +16,11 @@ from pre2.audio.assets import Module
 from pre2.audio.events import (
     GameAudioEvent, PlaySfx, SetMusicEnabled, StopSong,
 )
+from pre2.audio.recovered_system import audio_state_from_module
 from pre2.recovered.audio_system import AudioState, AudioSystem
-from pre2.recovered.mixer import BLOCK_LEN, CHANNEL_OFF, Instrument, Sfx
-from pre2.recovered.tracker import PlaybackState, TrackerInstrument, TrackerVoice
+from pre2.recovered.mixer import BLOCK_LEN, Sfx
 
 __all__ = ["FaithfulBackend", "audio_state_from_module"]
-
-
-def audio_state_from_module(module: Module, *, music_on: bool = True) -> AudioState:
-    """Build a fresh :class:`AudioState` (song at the top) from a neutral module."""
-    return AudioState(
-        pb=PlaybackState(tick=module.initial_speed, speed=module.initial_speed,
-                         order_pos=0, row=0),
-        voices=[TrackerVoice(pos=CHANNEL_OFF, end=0, instrument=0, period=0, volume=0,
-                             frac=0, volume_slide=0, note_period=0, effect=0)
-                for _ in range(4)],
-        order_table=bytes(module.order),
-        patterns=dict(module.patterns),
-        song_length=module.song_length,
-        period_table=list(module.period_table),
-        tracker_instruments=[TrackerInstrument(length=s.length, default_volume=s.default_volume)
-                             for s in module.samples],
-        mixer_instruments=[Instrument(loop_start=s.loop_start, loop_len=s.loop_len,
-                                      sample=s.pcm, ptr_off=0)
-                           for s in module.samples],
-        vol_table=module.vol_table,
-        sfx=Sfx(pos=0, remaining=0, sample=b""),
-        music_on=music_on,
-    )
 
 
 class FaithfulBackend:

@@ -149,7 +149,47 @@ def test_audio_state_from_module_starts_at_song_top():
     assert len(st.mixer_instruments) == 1
 
 
-# ---- the enhanced path must not depend on DOS/SB/mixer internals ----------------
+# ---- single owner + rooted enhanced renderer -------------------------------------
+
+def test_recovered_system_owns_one_clock_for_both_strategies():
+    """RecoveredAudioSystem is the single owner: faithful and enhanced both branch from
+    the same recovered model + sequencer (no parallel player)."""
+    from pre2.audio.recovered_system import RecoveredAudioSystem
+    sysm = RecoveredAudioSystem()
+    sysm.start_song(_pre2_module())
+    # faithful strategy: byte-exact 8-bit blocks straight off the recovered mixer.
+    block = b"".join(bytes(sysm.render_faithful_block()) for _ in range(30))
+    assert len(block) == 30 * 168 and any(b not in (0, 0x80) for b in block)
+
+
+def test_enhanced_renderer_is_rooted_in_recovered_voices():
+    """The enhanced renderer plays the recovered tracker's intent: a note triggered by
+    the recovered sequencer (not a clean-room parse) drives a float voice."""
+    from pre2.audio.recovered_system import RecoveredAudioSystem
+    from pre2.audio.enhanced_render import EnhancedRenderer
+    sysm = RecoveredAudioSystem()
+    sysm.start_song(_pre2_module())
+    er = EnhancedRenderer(sysm, out_rate=22050, free_run=True)
+    y = er.render(22050)
+    assert y.shape == (22050, 2) and y.dtype == np.float32
+    assert not np.isnan(y).any() and float(np.max(np.abs(y))) > 0.0
+    # the pitch the renderer used came from the recovered voice's resample step
+    voice = sysm.voices[0]
+    assert voice.period == 256                          # period_table[100] from the fixture
+    assert abs(er._pitch_advance(voice.period) - (1.0 + 256 / 256) * (8403 / 22050)) < 1e-6
+
+
+def test_enhanced_renderer_sfx_from_recovered_command():
+    """A PlaySfx command on the recovered system surfaces as an enhanced one-shot."""
+    from pre2.audio.recovered_system import RecoveredAudioSystem
+    from pre2.audio.enhanced_render import EnhancedRenderer
+    sysm = RecoveredAudioSystem()
+    sysm.play_sfx(bytes((i * 4) & 0xFF for i in range(128)))
+    er = EnhancedRenderer(sysm, out_rate=22050, free_run=True)
+    assert float(np.max(np.abs(er.render(2048)))) > 0.0
+
+
+# ---- the enhanced renderer is rooted in the recovered MODEL, but free of the machine --
 
 def _imports_of(rel_path: str) -> set[str]:
     tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"))
@@ -162,10 +202,22 @@ def _imports_of(rel_path: str) -> set[str]:
     return mods
 
 
-def test_enhanced_path_has_no_vm_or_mixer_deps():
-    forbidden = ("dos_re", "pre2.recovered", "pre2.bridge")
-    for rel in ("pre2/audio/enhanced_backend.py", "pre2/audio/mod_player.py"):
+def test_enhanced_renderer_rooted_in_model_but_free_of_machine():
+    """The modern enhanced renderer may grow from the pure recovered model (tracker voices,
+    instruments, sequencer) — that is the point — but must NOT depend on the VM, the bridge,
+    or the Sound Blaster / DMA / IRQ machine."""
+    mods = _imports_of("pre2/audio/enhanced_render.py")
+    forbidden = ("dos_re", "pre2.bridge")
+    leaked = [m for m in mods for f in forbidden if m == f or m.startswith(f + ".")]
+    assert not leaked, f"enhanced renderer leaks machine deps: {leaked}"
+    assert not any("sound_blaster" in m or "dma" in m or "_irq" in m for m in mods)
+    # rooted: it consumes the recovered audio system (not a stand-alone clean-room player)
+    assert "pre2.audio.recovered_system" in mods
+
+
+def test_recovered_model_layer_has_no_vm_deps():
+    """The recovered audio owner + the recovered engine stay pure (no VM/SB)."""
+    for rel in ("pre2/audio/recovered_system.py", "pre2/recovered/audio_system.py"):
         mods = _imports_of(rel)
-        leaked = [m for m in mods for f in forbidden if m == f or m.startswith(f + ".")]
-        assert not leaked, f"{rel} leaks low-level deps: {leaked}"
-        assert not any("sound_blaster" in m or "dma" in m or "period_table" in m for m in mods)
+        assert not any(m == "dos_re" or m.startswith("dos_re.") for m in mods)
+        assert not any("sound_blaster" in m or "cpu" in m for m in mods)
