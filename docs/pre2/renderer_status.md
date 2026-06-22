@@ -32,7 +32,7 @@ re-disassembled the scroll/grid region on GOG. Findings:
 
 | Gap | GOG addr | Reproducible? | Status |
 |---|---|---|---|
-| Scale/zoom transition | `31D0` loop, span-clear `32DE`, scaled copy `4700`/`473D` | **YES** (002633, 173821) | span-clear `32DE` fully decoded; recover next |
+| Scale/zoom transition | `31D0` loop, span-clear `32DE`, scaled copy `4700`/`473D` | **YES** (002633, 173821) | **span-clear `32DE` RECOVERED + ASM_MATCHED** (`recovered/transition.py:clear_span`, 1073 spans / 0 div over 002633+173821; committed test). Next: scaled copy `4700`/`473D`, then the scale loop `31D0` |
 | calc-scroll-source | `3588` | yes (gameplay) | decoded; small island |
 | vertical tile-column fill | `34ED`? | needs horizontal-scroll scene | confirm GOG addr |
 | Palette fade | `6772` | **NO** — `[0x6C01]\|[0x6C02]` never set in any snapshot's forward-run (routine is called but inactive) | **NEEDS REPRO: a snapshot captured mid palette-fade** |
