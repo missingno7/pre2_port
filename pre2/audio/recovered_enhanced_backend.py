@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from pre2.audio.enhanced_render import OUT_RATE, EnhancedRenderer
-from pre2.audio.events import GameAudioEvent, StartSong
+from pre2.audio.events import GameAudioEvent, PlaySfx, StartSong
 from pre2.audio.recovered_system import RecoveredAudioSystem
 
 __all__ = ["RecoveredEnhancedBackend"]
@@ -35,7 +35,14 @@ class RecoveredEnhancedBackend:
         self._free_run = free_run
         self._out_rate = out_rate
         self._renderer = EnhancedRenderer(self.system, out_rate=out_rate, free_run=free_run)
-        self.unrooted_start_songs = 0      # diagnostic: StartSong missing a recovered module
+        # Diagnostics (the user's red-flag list): a song should StartSong once per real change;
+        # a re-StartSong of the SAME order is suspicious (the bug behind restarts/"tempo" jumps).
+        self.start_songs = 0
+        self.repeated_start_songs = 0      # StartSong with an unchanged order signature
+        self.unrooted_start_songs = 0      # StartSong missing a recovered module (no audio)
+        self.sfx_played = 0
+        self.sfx_missed = 0                # PlaySfx that carried no PCM
+        self._last_order: tuple | None = None
 
     @property
     def out_rate(self) -> int:
@@ -55,13 +62,35 @@ class RecoveredEnhancedBackend:
             if event.recovered_module is None:
                 self.unrooted_start_songs += 1     # a song loaded but we couldn't capture it
                 return
+            order = tuple(event.recovered_module.order[:event.recovered_module.song_length + 1])
+            if order == self._last_order:
+                self.repeated_start_songs += 1
+            self._last_order = order
+            self.start_songs += 1
             self.system.start_song(event.recovered_module)
+        elif isinstance(event, PlaySfx):
+            if event.pcm:
+                self.sfx_played += 1
+            else:
+                self.sfx_missed += 1
+            self.system.handle(event)
         else:
             self.system.handle(event)
 
     def advance_ticks(self, k: int) -> None:
         """Supply game-audio ticks (ignored in free-run; for a game-paced clock variant)."""
         self._renderer.advance_ticks(k)
+
+    def diagnostics(self) -> dict[str, str]:
+        """Surface the audio red-flags (for the viewer HUD / logs)."""
+        return {
+            "enh_songs": str(self.start_songs),
+            "enh_song_repeat": str(self.repeated_start_songs),
+            "enh_song_unrooted": str(self.unrooted_start_songs),
+            "enh_sfx": str(self.sfx_played),
+            "enh_sfx_missed": str(self.sfx_missed),
+            "enh_tick_hz": f"{self._renderer.tick_cadence_hz():.1f}",
+        }
 
     # -- output (audio thread) ------------------------------------------------
     def render(self, n_frames: int) -> np.ndarray:

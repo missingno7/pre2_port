@@ -160,6 +160,11 @@ class EnhancedRenderer:
         self._samples_per_tick = out_rate / TICK_HZ
         self._samples_to_tick = 0.0
         self._tick_budget = 0
+        # Diagnostics (native tick cadence): a healthy free-run renderer ticks the recovered
+        # sequencer at ~TICK_HZ relative to the frames it renders. A drift means the audio
+        # clock and the sequencer disagree (the bug class behind "tempo changes").
+        self.ticks_rendered = 0
+        self.frames_rendered = 0
 
     # -- clocks ---------------------------------------------------------------
     def advance_ticks(self, k: int) -> None:
@@ -170,8 +175,15 @@ class EnhancedRenderer:
     def _sequencer_tick(self) -> None:
         """One shared sequencer tick: advance the recovered system + react to retriggers."""
         triggered = self.sys.advance_tick()
+        self.ticks_rendered += 1
         for i in triggered:
             self._voices[i].trigger(self.sys.mixer_instrument(self.sys.voices[i].instrument))
+
+    def tick_cadence_hz(self) -> float:
+        """The realised sequencer rate per rendered audio time (should track ``TICK_HZ``)."""
+        if self.frames_rendered <= 0:
+            return 0.0
+        return self.ticks_rendered * self.out_rate / self.frames_rendered
 
     def _pitch_advance(self, period: int) -> float:
         """Recovered resample step -> float source-samples consumed per output sample.
@@ -185,6 +197,7 @@ class EnhancedRenderer:
     def render(self, n_frames: int) -> np.ndarray:
         """Render ``n_frames`` of float32 stereo ``(n, 2)``, driven by audio time."""
         out = np.zeros((n_frames, 2), np.float32)
+        self.frames_rendered += n_frames
         # SFX: spawn float one-shots from the recovered command queue (pure audio time).
         for ev in self.sys.drain_sfx():
             self._sfx.append(_SfxVoice(ev, self.out_rate))

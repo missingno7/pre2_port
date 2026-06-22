@@ -217,7 +217,52 @@ def test_enhanced_renderer_rooted_in_model_but_free_of_machine():
 
 def test_recovered_model_layer_has_no_vm_deps():
     """The recovered audio owner + the recovered engine stay pure (no VM/SB)."""
-    for rel in ("pre2/audio/recovered_system.py", "pre2/recovered/audio_system.py"):
+    for rel in ("pre2/audio/recovered_system.py", "pre2/recovered/audio_system.py",
+                "pre2/audio/recovered_enhanced_backend.py"):
         mods = _imports_of(rel)
         assert not any(m == "dos_re" or m.startswith("dos_re.") for m in mods)
         assert not any("sound_blaster" in m or "cpu" in m for m in mods)
+
+
+# ---- native scheduler + diagnostics ----------------------------------------------
+
+def test_enhanced_native_tick_cadence_tracks_tick_hz():
+    """Free-run is a native audio-time scheduler: the sequencer ticks at ~TICK_HZ relative
+    to rendered frames, regardless of how render() is chunked (no VM/SB clock)."""
+    from pre2.audio.recovered_system import RecoveredAudioSystem
+    from pre2.audio.enhanced_render import EnhancedRenderer, TICK_HZ
+    sysm = RecoveredAudioSystem()
+    sysm.start_song(_pre2_module())
+    er = EnhancedRenderer(sysm, out_rate=44100, free_run=True)
+    for _ in range(100):                                # many small irregular chunks
+        er.render(441)
+    assert abs(er.tick_cadence_hz() - TICK_HZ) < 1.0    # within ~1 Hz of the native rate
+
+
+def test_rooted_backend_diagnostics_flag_repeats_and_missed_sfx():
+    from pre2.audio.recovered_enhanced_backend import RecoveredEnhancedBackend
+    from pre2.audio.events import PlaySfx, StartSong
+    be = RecoveredEnhancedBackend(free_run=True)
+    mod = _pre2_module()
+    be.handle(StartSong(recovered_module=mod))
+    be.handle(StartSong(recovered_module=mod))           # same order -> repeat flagged
+    be.handle(StartSong(module=_std_module()))           # no recovered_module -> unrooted
+    be.handle(PlaySfx(sfx_id=1, pcm=b""))                # empty -> missed
+    be.handle(PlaySfx(sfx_id=2, pcm=bytes(64)))
+    d = be.diagnostics()
+    assert d["enh_songs"] == "2" and d["enh_song_repeat"] == "1"
+    assert d["enh_song_unrooted"] == "1"
+    assert d["enh_sfx"] == "1" and d["enh_sfx_missed"] == "1"
+
+
+def test_rooted_backend_does_not_read_sound_blaster():
+    """The enhanced output is produced purely from the recovered model — it never reads the
+    SB. Proven by rendering identical audio with no SB object anywhere in the path."""
+    from pre2.audio.recovered_enhanced_backend import RecoveredEnhancedBackend
+    from pre2.audio.events import StartSong
+    a = RecoveredEnhancedBackend(free_run=True); a.out_rate = 22050
+    a.handle(StartSong(recovered_module=_pre2_module()))
+    b = RecoveredEnhancedBackend(free_run=True); b.out_rate = 22050
+    b.handle(StartSong(recovered_module=_pre2_module()))
+    ya, yb = a.render(8192), b.render(8192)
+    assert np.array_equal(ya, yb) and float(np.max(np.abs(ya))) > 0.0

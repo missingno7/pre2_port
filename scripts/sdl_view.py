@@ -395,6 +395,12 @@ class EnhancedAudio:
         sb = self._sb
         if sb is not None and sb.pcm_out:
             sb.pcm_out.clear()
+        # Surface the rooted backend's audio red-flags (StartSong repeats, missed SFX, native
+        # tick cadence) on the HUD/log — the enhanced output never READS the SB above.
+        if self._status is not None:
+            diag = getattr(self._backend, "diagnostics", None)
+            if diag is not None:
+                self._status.update(diag())
 
     def close(self) -> None:
         self._stop.set()
