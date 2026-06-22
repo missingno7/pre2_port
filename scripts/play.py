@@ -516,6 +516,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 running = False
             except Exception as exc:  # noqa: BLE001 - keep bring-up useful
                 status = f"exception: {type(exc).__name__}: {exc}"
+                import traceback as _tb
+                _tb.print_exc()       # full traceback to stderr to pinpoint the failure
                 running = False
 
             # Audio is drained every game-frame (cheap, and pcm_out must not pile up).

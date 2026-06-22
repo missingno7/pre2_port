@@ -26,8 +26,12 @@ from pre2.codecs.audio import ModModule
 __all__ = ["ModPlayer", "PAL_CLOCK"]
 
 PAL_CLOCK = 7093789.2          # Amiga PAL: sample_rate = PAL_CLOCK / (period * 2)
-DEFAULT_SPEED = 6              # ticks per row
-DEFAULT_BPM = 125             # 50 Hz tick rate
+DEFAULT_SPEED = 6              # ticks per row (until the song's first Fxx)
+# PRE2 is NOT Amiga-CIA timed: its tracker ticks once per SB DMA block (168 bytes at the
+# ~8403 Hz mixer rate), a FIXED ~50 Hz. It has no BPM concept — every Fxx sets *speed*
+# (ticks/row), matching the recovered tracker (pre2.recovered.tracker effect 0x0F). So the
+# only tempo control is speed, and the tick rate is constant.
+PRE2_TICK_HZ = 8403 / 168     # ~50.02 Hz, the game's tracker tick (SB block cadence)
 ROWS_PER_PATTERN = 64
 NUM_CHANNELS = 4
 VOL_MAX = 64
@@ -111,7 +115,6 @@ class ModPlayer:
             self._samples.append((a.astype(np.float32)) / 128.0)
         self.channels = [_Chan(pan=_PAN[c]) for c in range(NUM_CHANNELS)]
         self.speed = DEFAULT_SPEED
-        self.bpm = DEFAULT_BPM
         self.tick = 0
         self.row = 0
         self.order_pos = 0
@@ -161,11 +164,8 @@ class ModPlayer:
     def _apply_tick0_effect(self, c: _Chan, eff: int, param: int) -> None:
         if eff == 0x0C:                                   # set volume
             c.volume = min(param, VOL_MAX)
-        elif eff == 0x0F:                                 # set speed / tempo
-            if param < 0x20:
-                self.speed = max(1, param)
-            else:
-                self.bpm = param
+        elif eff == 0x0F:                                 # set speed (PRE2: always speed,
+            self.speed = max(1, param)                    # no BPM — fixed SB-block tick)
         elif eff == 0x0B:                                 # position jump
             self._jump_order = param
         elif eff == 0x0D:                                 # pattern break (BCD row)
@@ -215,7 +215,7 @@ class ModPlayer:
         while i < n_frames:
             if self._tick_samples_left <= 0.0:
                 self._do_tick()
-                self._tick_samples_left += self.out_rate * 2.5 / self.bpm
+                self._tick_samples_left += self.out_rate / PRE2_TICK_HZ
             chunk = min(n_frames - i, max(1, int(self._tick_samples_left)))
             left = out[i:i + chunk, 0]
             right = out[i:i + chunk, 1]
