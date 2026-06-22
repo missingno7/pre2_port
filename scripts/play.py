@@ -323,8 +323,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             # Modern path: observe the recovered audio *commands* and render them through
             # the recovered native audio system (the SB is a detection stub; its PCM/IRQ
             # block production is gone).
-            from sdl_view import PygameAudioDevice
-            from pre2.audio.live_engine import LiveEnhancedAudioEngine
+            from sdl_view import SdlEnhancedAudio
             from pre2.bridge.audio_commands import install_command_observers
             # With the detection stub the game's audio ISR does not run during playback (no
             # block IRQ fires), so the recovered tracker/mixer checkpoints would never be hit
@@ -335,16 +334,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 for _addr in ((0x1030, 0x227C), (0x1030, 0x218F)):   # tracker, mixer
                     rt.cpu.replacement_hooks.pop(_addr, None)
                     rt.cpu.hook_names.pop(_addr, None)
-            # Live enhanced audio is an INDEPENDENT runtime: the game thread only ENQUEUES
-            # semantic commands; the engine's own audio thread drains them and renders the
-            # recovered audio system on the audio device's clock. Tempo is therefore independent
-            # of game/VM/render/frame timing and of any SB/DMA/IRQ cadence -- no original mixer
-            # PCM is consumed. Rooted: StartSong carries the recovered Module (+ the .TRK for
-            # full-res samples), so the live output is the modern branch of the same recovered
-            # model + sequencer as the faithful path, never a parallel .TRK player.
-            sb_audio = LiveEnhancedAudioEngine(free_run=True, status=audio_status)
-            sb_audio.start(PygameAudioDevice(pygame), chunk_ms=185.0)
-            # The command layer's emit just posts onto the engine's thread-safe queue.
+            # Live enhanced audio is a COMMAND-DRIVEN modern player with its OWN continuous
+            # clock. The recovery layer discovers intent (which song / SFX); SDL_mixer then
+            # plays the whole identified .TRK module on its own C audio thread. Music tempo is
+            # owned by the audio device, so it can NOT be slowed by Python/VM/render/frame
+            # scheduling, queue starvation, or any SB/DMA/IRQ cadence (the live clocking bug).
+            # The recovered tracker/mixer stay on the faithful oracle path; enhanced never
+            # consumes original PCM or recovered mix timing.
+            sb_audio = SdlEnhancedAudio(pygame, args.game_root, audio_status)
             audio_poll = install_command_observers(rt.cpu, sb_audio.post, args.game_root)
         else:
             sb_audio = SoundBlasterAudio(pygame, sound_blaster, audio_status)

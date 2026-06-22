@@ -17,6 +17,8 @@ core runtime, the PNG tool and the tests do not require ``pygame``.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from render_frame import DEFAULT_VGA_PALETTE
@@ -283,6 +285,123 @@ class SoundBlasterAudio:
     def close(self) -> None:
         if self._channel is not None:
             self._channel.stop()
+
+
+class SdlEnhancedAudio:
+    """Modern enhanced audio: a command-driven player that owns a CONTINUOUS clock.
+
+    The recovery/command layer discovers high-level *intent* — which song starts (the
+    identified standard ``.TRK`` module), when it stops, which SFX fire — and hands whole
+    semantic commands here. This player then plays the complete module with SDL_mixer's MOD
+    player, which streams on SDL's own C audio thread. So music tempo is owned entirely by the
+    audio device and can NOT be slowed by Python/VM/render/frame scheduling or queue
+    starvation (the live clocking bug). It does not touch the recovered tracker/mixer, the SB,
+    DMA blocks, or original PCM — those belong to the faithful oracle path.
+
+    Commands (called from the game thread; SDL does the streaming):
+    ``StartSong`` -> load + play the song's standard MOD; ``StopSong`` -> stop;
+    ``SetMusicEnabled`` -> mute/unmute; ``PlaySfx`` -> one-shot on a mixer channel.
+    """
+
+    def __init__(self, pygame, assets_dir, status: dict | None = None, *,
+                 music_volume: float = 0.65, sfx_volume: float = 0.7) -> None:
+        self._pygame = pygame
+        self._assets_dir = str(assets_dir)
+        self._status = status
+        self._music_volume = music_volume
+        self._sfx_volume = sfx_volume
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
+        init = pygame.mixer.get_init() or (44100, -16, 2)
+        self._rate = int(init[0])
+        self._out_ch = int(init[2])
+        pygame.mixer.set_num_channels(16)
+        self._sfx_channels = [pygame.mixer.Channel(i) for i in range(8)]
+        self._rr = 0
+        self._mod_cache: dict[str, bytes] = {}
+        self._cur_io = None                # keep a ref so SDL can stream from it
+        self._music_on = True
+        self._last_name = None
+        # diagnostics (the user's red-flag list)
+        self.start_songs = 0
+        self.song_repeat = 0
+        self.song_unrooted = 0             # StartSong with no identified .TRK (can't play)
+        self.sfx_played = 0
+        self.sfx_missed = 0
+        self.errors = 0
+
+    # -- the song's standard MOD bytes (decompressed once, cached; off the audio path) --
+    def _mod_bytes(self, name: str) -> bytes:
+        if name not in self._mod_cache:
+            from pre2.codecs.audio import unpack_sqz
+            with open(os.path.join(self._assets_dir, name), "rb") as f:
+                self._mod_cache[name] = unpack_sqz(f.read())
+        return self._mod_cache[name]
+
+    def _sfx_sound(self, ev):
+        """Resolved 8-bit signed SFX -> a pygame Sound at the mixer's 16-bit stereo format."""
+        a = np.frombuffer(ev.pcm, dtype=np.int8).astype(np.float32) / 128.0
+        src = ev.source_rate or 8000
+        n_out = max(1, int(len(a) * self._rate / src))
+        idx = np.clip((np.arange(n_out) * src / self._rate).astype(np.int64), 0, len(a) - 1)
+        mono = np.clip(a[idx] * self._sfx_volume * 32767.0, -32768, 32767).astype(np.int16)
+        data = mono if self._out_ch == 1 else np.repeat(mono[:, None], 2, axis=1)
+        return self._pygame.mixer.Sound(buffer=np.ascontiguousarray(data).tobytes())
+
+    # -- command sink (game thread) ----------------------------------------------------
+    def post(self, command) -> None:
+        """Drop-in for the command layer's ``emit``. SDL owns timing, so handling a command is
+        just a quick control op (load/play/stop/volume) — safe from the game thread."""
+        from pre2.audio.events import (
+            PlaySfx, SetMusicEnabled, SetSfxEnabled, StartSong, StopSong,
+        )
+        try:
+            if isinstance(command, StartSong):
+                if not command.name:                  # only identified standard .TRK songs
+                    self.song_unrooted += 1
+                    return
+                if command.name == self._last_name:
+                    self.song_repeat += 1
+                self._last_name = command.name
+                self.start_songs += 1
+                import io
+                self._cur_io = io.BytesIO(self._mod_bytes(command.name))
+                self._pygame.mixer.music.load(self._cur_io)
+                self._pygame.mixer.music.set_volume(self._music_volume if self._music_on else 0.0)
+                self._pygame.mixer.music.play(-1 if command.loop else 0)
+            elif isinstance(command, StopSong):
+                self._pygame.mixer.music.stop()
+            elif isinstance(command, SetMusicEnabled):
+                self._music_on = command.enabled
+                self._pygame.mixer.music.set_volume(self._music_volume if self._music_on else 0.0)
+            elif isinstance(command, PlaySfx):
+                if not command.pcm:
+                    self.sfx_missed += 1
+                    return
+                self.sfx_played += 1
+                self._sfx_channels[self._rr % len(self._sfx_channels)].play(self._sfx_sound(command))
+                self._rr += 1
+        except Exception as exc:               # never let a bad command kill the game loop
+            self.errors += 1
+            if self.errors <= 3:
+                print(f"[enh-audio] command error: {type(exc).__name__}: {exc}", flush=True)
+
+    def pump(self) -> None:
+        """Per-frame hook (game thread). No audio work — SDL streams on its own clock; only
+        refresh the HUD diagnostics. enh_tick_hz / enh_underruns are N/A: SDL owns the clock so
+        there is no Python render cadence to drift and no queue to underrun."""
+        if self._status is not None:
+            self._status.update(
+                enh_songs=str(self.start_songs), enh_song_repeat=str(self.song_repeat),
+                enh_song_unrooted=str(self.song_unrooted), enh_sfx=str(self.sfx_played),
+                enh_sfx_missed=str(self.sfx_missed), enh_errors=str(self.errors),
+                enh_clock="SDL", enh_underruns="0(SDL)")
+
+    def close(self) -> None:
+        try:
+            self._pygame.mixer.music.stop()
+        except Exception:
+            pass
 
 
 class PygameAudioDevice:

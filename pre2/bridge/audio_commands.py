@@ -173,32 +173,12 @@ def song_load_fingerprint(mem) -> int | None:
     song_length = _a.read_song_length(mem)
     if not song_length or not any(order[:song_length + 1]):
         return None
-    speed = _a.read_playback(mem).speed
-    if speed <= 0:
-        return None
-    pats = [_a.read_current_pattern(mem, op) for op in range(song_length + 1)]
-    # READINESS by VALIDITY, not just stability: while the loader is still decoding the patterns
-    # in-place (which can stay momentarily constant, and a snapshot can freeze it), the note
-    # cells hold uninitialised note-period values that are *large* (e.g. 22016) and index
-    # unloaded period_table slots -> step 0/garbage -> missing channels + ultrasonic notes. A
-    # real note period is a small index (the meaningful period_table range is the low end). Wait
-    # until almost no cell carries a garbage period.
-    total = garbage = 0
-    for pat in pats:
-        for i in range(0, len(pat) - 3, 4):
-            period = (pat[i] | (pat[i + 1] << 8)) & 0x7FFF
-            if period:
-                total += 1
-                if period > 1024:
-                    garbage += 1
-    if total and garbage > total * 0.02:
-        return None
-    # Hash exactly what the recovered tracker + enhanced renderer READ: order, every pattern,
-    # and the period table (note -> pitch step). NOT the in-memory sample PCM -- the game reuses
-    # that RAM streaming the level so it never settles, and the enhanced path plays the full-res
-    # .TRK samples from disk anyway.
-    return hash((bytes(order[:song_length + 1]), song_length, speed,
-                 tuple(hash(p) for p in pats), hash(tuple(_a.read_period_table(mem)))))
+    # The order table identifies the song (matched to a standard .TRK) and is the first thing
+    # the loader writes; it is the reliable, early "which song" signal. The live enhanced player
+    # plays that identified .TRK module from disk, so it does NOT depend on the in-memory
+    # patterns/samples (which stream in later and can be momentarily garbage). Wait for the
+    # order to be stable across two polls, then fire.
+    return (bytes(order[:song_length + 1]), song_length)
 
 
 def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
