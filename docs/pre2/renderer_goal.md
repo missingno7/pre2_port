@@ -1,8 +1,13 @@
 # GOAL: completely finish the renderer island (unattended)
 
 Recover every remaining renderer routine into clean, VM-independent source, proven
-byte-exact against the original ASM, with a thin hook surface — until the renderer
-island is exhausted. Work on branch `complete-renderer-island`; commit per island;
+byte-exact against the original ASM, **and consolidate it into one coherent, HIGH-LEVEL
+`render_frame(RendererState)` system that runs standalone (no VM stepping) from a captured
+state.** End state: the recovered renderer is both the faithful reference *and* the clean
+seam where a future **native enhanced renderer** (frame interpolation, higher fidelity, …)
+drops in by reimplementing `render_frame` against the same `RendererState`. So favour clear
+high-level structure and a stable state model over a pile of per-routine hooks — without ever
+losing byte-exact verifiability. Work on branch `complete-renderer-island`; commit per island;
 push the branch (never merge to main — the user reviews and merges).
 
 ## Orient first (do not skip)
@@ -75,12 +80,15 @@ object_render}.py`) and their bridges/checkpoints to match style and patterns.
    `[0x6C01]`/`[0x6C02]` when done; `[0x6C02]` swaps direction. Verify the DAC contract.
 4. Any new gaps found in Phase 1.
 
-**Repro-gating (important):** the palette fade and (likely) horizontal scroll do NOT
-activate in the static forward-run of the current snapshots — they need a trigger. If, after
-honest effort (driving with input scancodes via `deliver_scancode`, trying every snapshot),
-a gap cannot be made to run, DO NOT guess an implementation. Record it in `renderer_island.md`
-as `NEEDS REPRO: <exact snapshot/trigger needed>` and move on. Recover everything that CAN be
-witnessed; leave a precise request for the rest.
+**Repro-gating (mine the snapshots first):** most effects DO occur in the existing snapshots —
+**003841 (level-3 load) and 002633 (tally) both trigger transitions/fades**, and there are many
+others. Before ever declaring something unreproducible: (a) drive EVERY snapshot fully through
+its transition (not just a few frames); (b) scan all snapshots/frames for the trigger flags
+being set — e.g. the palette fade is active when `[0x6C01]|[0x6C02] != 0`; find/drive to a frame
+where it is, then capture there; (c) inject input via `deliver_scancode` to provoke effects.
+Only if, after all of that, a specific effect genuinely never runs in ANY snapshot, record it in
+`renderer_island.md` as `NEEDS REPRO: <exact trigger>` and move on. **Never guess an
+implementation** — the lockstep is the authority.
 
 ## Phase 3 — clean + refactor (behaviour-preserving; verify after each)
 - **object_render record-mutation split** (from the renderer review): introduce
@@ -99,23 +107,39 @@ witnessed; leave a precise request for the rest.
   (renderer/frame renderer/sprite pipeline) per `renderer_island.md`.
 - **Prune** `pre2/probes/` scaffolding for islands now proven by committed tests + verifier.
 
-## Phase 4 — culminate in `update_frame()`
-Once the frame_renderer leaves (grid/scroll-copy/panel), the directional scroll, and the
-transitions are recovered, wire the frame compositor `3B40` as a recovered `update_frame()`
-that composes the verified leaves directly (recovered→recovered), with verify coverage at
-its RET. This collapses the per-hook coastline to one clean frame entry — the architecture
-goal. If `3B40` still has no reachable scenario, document that it's recovered-but-unwired and
-verify it offline against its static composition.
+## Phase 4 — consolidate into a high-level, REPLACEABLE renderer (required end state)
+The recovered pieces must crystallize into ONE coherent renderer, designed so a native
+enhanced renderer can later drop in:
+- Define **`RendererState`** — the stable INPUT contract: `Camera`/`ScrollState`/`TileMap`,
+  the sprite & object lists (positions), palette + fade state, and transition state.
+  Reconstructed from original memory via the bridge (read-only; one place).
+- Implement **`render_frame(state, planes, dac)`** that composes ALL recovered leaves
+  (decode/classify/blit, grid/scroll-copy/panel, object_render, the scale/zoom transition,
+  the palette fade) — wiring the compositor `3B40` as its background spine and
+  `update_frame()` as the top.
+- **Prove it runs STANDALONE:** given a `RendererState` captured from a snapshot,
+  `render_frame` reproduces that frame's VRAM + DAC byte-exact **without stepping the VM**.
+  Add this as a committed test. This is the proof the renderer is a clean, VM-independent,
+  drop-in-replaceable unit.
+- This `render_frame(RendererState)` API is the seam for the future enhanced renderer
+  (interpolation etc.): it reimplements `render_frame` against the same `RendererState`. Keep
+  the state model small and the composition readable.
+- The per-hook coastline then collapses to: the frame entry hook + the state bridge.
+- If `3B40` (or a transition) has no reachable scenario even after Phase-2 mining, mark it
+  recovered-but-unwired and verify it offline against its static composition / a captured
+  state — but still include it in `render_frame`.
 
 ## Done when
 - `renderer_island.md` gap list is fully ticked: each item recovered + VERIFIED/ASM_MATCHED,
-  or explicitly `NEEDS REPRO: <…>`.
+  or explicitly `NEEDS REPRO: <…>` (only after exhausting Phase-2 mining of all snapshots).
 - Full suite green (the single pre-existing `nuked_opl3` `.pyd` failure is expected — leave it).
 - Verify-hooks shows **0 renderer divergences** on every available snapshot.
-- Recovered renderer modules are clean VM-independent source; hooks are thin; `update_frame()`
-  composes the leaves where a scenario allows.
-- Write `docs/pre2/renderer_status.md` summarising what was recovered, what is NEEDS-REPRO,
-  the final border, and any follow-ups. Update the project memory.
+- **A high-level `render_frame(RendererState)` exists and is proven to reproduce a snapshot's
+  frame standalone (no VM stepping)** — the replaceable-renderer seam, with a committed test.
+- Recovered renderer modules are clean VM-independent source; the hook surface is thin.
+- Write `docs/pre2/renderer_status.md` summarising what was recovered, the `RendererState` /
+  `render_frame` API (for the future native enhanced renderer), any NEEDS-REPRO items, the final
+  border, and follow-ups. Update the project memory.
 
 ## Unattended guardrails
 - Commit each verified island / refactor as its own commit with a clear message; push the
