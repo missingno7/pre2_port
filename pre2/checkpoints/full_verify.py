@@ -38,6 +38,39 @@ from dos_re.hooks import registry
 # full-effect-diff because the "recovered" path *is* the ASM. Skip them.
 _PASSTHROUGH: set[tuple[int, int]] = {(0x1030, 0x3054)}  # frame_panel_copy
 
+
+def _sqz_ignore(cpu):
+    """Don't-care regions for sqz_decompress (1030:107B).
+
+    The recovered decoder reads the asset in Python and commits only the decoded
+    OUTPUT (+ the [2875] load-ptr bump). The ASM instead opens a DOS file handle and
+    streams the COMPRESSED file through an input buffer at ``out_seg+advance`` — pure
+    I/O scratch a different-but-equivalent mechanism legitimately doesn't reproduce.
+    Ignoring it keeps the real contract (output bytes + [2875]) fully checked while
+    not drowning a genuine divergence in ~60 KB of benign buffer noise.
+    """
+    from pre2.checkpoints.common import _read_cstring
+    from pre2.codecs.sqz import sqz_bump_advance
+    mem = cpu.mem
+    out_seg = mem.rw(0x1A0F, 0x2875)
+    try:
+        raw = cpu.pre2_dos.resolve_game_path(_read_cstring(mem, 0x1A0F, cpu.s.dx)).read_bytes()
+        adv = sqz_bump_advance(raw)
+    except Exception:
+        adv = 0
+    ltb = (((out_seg + adv) & 0xFFFF) << 4) & 0xFFFFF
+    return [
+        (ltb, min(ltb + 0xF000, len(mem.data))),           # compressed-file input buffer
+        ((0x1030 << 4) + 0x1204, (0x1030 << 4) + 0x1208),  # DOS file handle + out_seg copy
+        ((0x1030 << 4) + 0x140F, (0x1030 << 4) + 0x1414),  # input-buffer mode/size/limit [140F/1410/1412]
+        ((out_seg << 4) + 0x418, (out_seg << 4) + 0x420),  # 6-byte header read scratch
+    ]
+
+
+# Per-hook don't-care regions: ``(cs, ip) -> fn(cpu_at_entry) -> [(phys_lo, phys_hi), ...]``.
+# Only for routines that legitimately differ from the ASM in *mechanism*, not result.
+_IGNORE = {(0x1030, 0x107B): _sqz_ignore}
+
 # phys-range -> human name, for localising a diff. DGROUP is listed before the code
 # segment so addresses in their overlap read as game data (the usual culprit).
 _MEM_SEGMENTS = (
@@ -105,16 +138,18 @@ def enable_pre2_full_state_verify(rt, *, on_result=None, only=None, max_asm_step
         if (only is not None and key not in only) or key in _PASSTHROUGH:
             continue
         name = cpu.hook_names.get(key, f"{key[0]:04X}:{key[1]:04X}")
-        cpu.replacement_hooks[key] = _make_wrapper(recovered, name, on_result, max_asm_steps, seen)
+        ignore_fn = _IGNORE.get(key)
+        cpu.replacement_hooks[key] = _make_wrapper(recovered, name, on_result, max_asm_steps, seen, ignore_fn)
 
 
-def _make_wrapper(recovered, name, on_result, max_asm_steps, seen):
+def _make_wrapper(recovered, name, on_result, max_asm_steps, seen, ignore_fn):
     def wrapper(c):
         mem = c.mem
         entry = copy.copy(c.s)
         entry_cs, entry_sp = entry.cs, entry.sp
         ret_ip = mem.rw(entry.ss, entry_sp)              # near-ret target
         ret_sp = (entry_sp + 2) & 0xFFFF
+        ignore = ignore_fn(c) if ignore_fn else ()       # don't-care regions (mechanism-only diffs)
         real_data = mem.data
 
         # --- run the WHOLE recovered effect on a throwaway copy (one copy) ---
@@ -145,6 +180,11 @@ def _make_wrapper(recovered, name, on_result, max_asm_steps, seen):
         # leftovers there, and it is don't-care once the routine has returned.
         ss_lo = (entry.ss << 4) & 0xFFFFF
         scratch[ss_lo:ss_lo + entry_sp] = real_data[ss_lo:ss_lo + entry_sp]
+
+        # Neutralise this routine's declared don't-care regions (mechanism-only diffs,
+        # e.g. SQZ's compressed-file I/O scratch) so a real divergence isn't buried.
+        for lo, hi in ignore:
+            scratch[lo:hi] = real_data[lo:hi]
 
         # --- compare: fast path is one memcmp over all of memory ---
         if scratch != real_data:                          # equal -> done (common case)
