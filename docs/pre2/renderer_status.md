@@ -121,8 +121,9 @@ in `render_frame`, but it is DAC-only so the order is pixel-equivalent.) The com
   an `id 0x135` (`bx==0x26A`) sprite is in the active list (absent in current snapshots). It's an
   **8×12 sprite drawn at a FIXED screen position** (the `2784` path skips the camera-X subtract):
   effectively a small **green capsule/pill** (fill = colour `A`, frame = colour `6`; attr
-  `[0x7190]`=8×12, src `650A:0BC7`) — likely a HUD meter/collectible token. The id is computed
-  (no literal `0x135` in the code), so it must be witnessed live, not traced statically.
+  `[0x7190]`=8×12, src `650A:0BC7`) — **almost certainly a boss health-bar segment** (per the
+  user; repeated fixed-position pills). The id is computed (no literal `0x135` in the code), so
+  it must be witnessed live (a boss fight), not traced statically.
 - **Cold-start screen transitions**: dismiss the "oldies"/title screen from a fresh launch.
 
 ## Border (confirmed — full per-frame main-loop classification)
