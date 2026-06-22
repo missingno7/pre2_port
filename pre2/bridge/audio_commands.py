@@ -182,25 +182,21 @@ def song_load_fingerprint(mem) -> int | None:
 
 
 def make_start_song(mem, assets_dir, *, loop: bool = True) -> StartSong | None:
-    """Build a :class:`StartSong` for the song just loaded into VM memory, or ``None`` if
-    no song is loaded.
+    """Build a :class:`StartSong` for the song just loaded into VM memory, or ``None`` if no
+    song is loaded.
 
-    Always carries the **recovered** in-memory module (:func:`capture_module`) — the
-    canonical song both audio systems branch from — so the rooted path never depends on
-    ``.TRK`` identification. The standard ``.TRK`` (``module``/``name``) is attached when
-    it can be matched, for the legacy clean-room player + diagnostics."""
+    Carries the standard ``.TRK`` module (``module``/``name``) identified from the loaded
+    order table — that is what the live enhanced player plays. ``module`` is ``None`` when no
+    ``.TRK`` matched (the player reports it as unrooted and stays silent)."""
     order = _a.read_order_table(mem)
     song_length = _a.read_song_length(mem)
     if not song_length or not any(order[:song_length + 1]):
         return None
-    if _a.read_playback(mem).speed <= 0:
-        return None
-    recovered = capture_module(mem)
     found = identify_song(mem, assets_dir)
     if found is None:
-        return StartSong(module=None, recovered_module=recovered, name="", loop=loop)
+        return StartSong(module=None, name="", loop=loop)
     name, mod = found
-    return StartSong(module=mod, recovered_module=recovered, name=name, loop=loop)
+    return StartSong(module=mod, name=name, loop=loop)
 
 
 # --- live observers: emit events while the original game runs ----------------------
@@ -213,8 +209,8 @@ def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
 
     * **play_sfx (0x0282)** is hooked at entry: ``dl`` and the descriptor table are both
       valid there, so each SFX command is caught exactly once. The hook runs the real
-      instruction (``also_run_original``) so the original audio path is unchanged — a
-      backend plays the event stream instead of the SB PCM.
+      instruction (``also_run_original``) so the game's own command code still executes and
+      its state stays consistent; the player plays the emitted semantic event.
     * **StartSong / music flag** are detected by the returned ``poll(mem=None)``, which the
       caller invokes once per frame: the song loader fills ``[0xDC2]``/``[0xDC7]`` over a
       full routine (not observable from a single entry instruction), so polling the order
@@ -257,9 +253,9 @@ def install_command_observers(cpu, emit, assets_dir, *, also_run_original=None):
                 if ev is not None:
                     seen["order"] = sig
                     seen["starts"] = seen.get("starts", 0) + 1
-                    # The rooted path always has the recovered module; the .TRK name is just a
-                    # label ("[recovered]" when we couldn't match a standard .TRK).
-                    label = ev.name or "[recovered]"
+                    # ev.name is the identified .TRK; "" when no .TRK matched the order (the
+                    # player can't play it and reports it as unrooted).
+                    label = ev.name or "[unidentified]"
                     print(f"[audio-obs] StartSong #{seen['starts']}: {label} "
                           f"(order_len={sig[1]}) -- should fire ONCE per real song change",
                           flush=True)

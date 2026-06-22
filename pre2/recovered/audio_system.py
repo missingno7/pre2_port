@@ -16,9 +16,11 @@ Per the original audio ISR (``1030:204D`` → DMA flip → mix), one **block** o
      position.
 
 ``AudioState`` is the stable, plain-data input contract (module + samples + playback +
-SFX), reconstructed from VM memory by ``pre2.bridge.audio_system`` (read-only). A future
-high-quality backend consumes :meth:`AudioSystem.next_block` (or :meth:`render`) and
-resamples the 8-bit/8.4 kHz stream cleanly to the device rate — no SB DMA, no underruns.
+SFX), reconstructed from VM memory by ``pre2.bridge.audio_system`` (read-only). This engine
+is the **faithful oracle**: :class:`pre2.audio.faithful_backend.FaithfulBackend` and the
+in-VM lockstep probe (``pre2/probes/verify_audio_system.py``) use it to reproduce the
+original 8-bit/block output byte-exact. (The live, modern audio is a separate path — SDL_mixer
+plays the standard ``.TRK`` — and does not consume this engine.)
 
 Pure: no ``cpu``/``mem``/``dos_re`` imports.
 """

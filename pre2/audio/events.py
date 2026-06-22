@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pre2.audio.assets import SOURCE_RATE, Module
+from pre2.audio.assets import SOURCE_RATE
 from pre2.codecs.audio import ModModule
 
 __all__ = [
@@ -45,18 +45,12 @@ class PlaySfx(GameAudioEvent):
 class StartSong(GameAudioEvent):
     """Start playing the song the loader (@ 1030:02cc) just installed.
 
-    Carries the song two ways so both audio systems branch from the *recovered* model:
-
-    * ``recovered_module`` — the in-memory PRE2 :class:`~pre2.audio.assets.Module` captured
-      from VM memory (``capture_module``). This is the canonical, recovered song both the
-      faithful and enhanced systems consume; present whenever a song actually loaded.
-    * ``module`` — the matching standard ProTracker ``.TRK`` asset, identified by
-      :func:`pre2.bridge.audio_commands.identify_song` (``None`` when unidentified). Retained
-      for the legacy clean-room player + diagnostics; the rooted path does not need it.
-
-    ``name`` is the source ``.TRK`` filename when known (diagnostics)."""
+    ``module`` is the matching standard ProTracker ``.TRK`` asset, identified from the loaded
+    order table by :func:`pre2.bridge.audio_commands.identify_song` (``None`` when
+    unidentified). The live enhanced player plays this whole module on its own clock; the
+    recovery layer's only job here is to discover *which* song started. ``name`` is the source
+    ``.TRK`` filename (diagnostics)."""
     module: ModModule | None = None
-    recovered_module: Module | None = None
     name: str = ""
     song_id: int = 0
     loop: bool = True

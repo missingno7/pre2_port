@@ -407,44 +407,6 @@ class SdlEnhancedAudio:
             pass
 
 
-class PygameAudioDevice:
-    """:class:`pre2.audio.live_engine.AudioDevice` backed by an SDL/pygame mixer channel.
-
-    Thin output sink: the engine's audio thread renders float blocks and submits them here;
-    SDL plays the queued PCM on its own audio clock, and that buffer state (busy / has-queue)
-    is the back-pressure that paces the engine. No rendering or playback state lives here."""
-
-    def __init__(self, pygame, *, channel_id: int = 2, status: dict | None = None) -> None:
-        self._pygame = pygame
-        self._status = status
-        if not pygame.mixer.get_init():
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
-        init = pygame.mixer.get_init() or (44100, -16, 2)
-        self.rate = int(init[0])
-        self.channels = int(init[2])
-        if pygame.mixer.get_num_channels() <= channel_id:
-            pygame.mixer.set_num_channels(channel_id + 2)
-        self._ch = pygame.mixer.Channel(channel_id)
-
-    def busy(self) -> bool:
-        return bool(self._ch.get_busy())
-
-    def has_queue(self) -> bool:
-        return self._ch.get_queue() is not None
-
-    def play(self, pcm: bytes) -> None:
-        self._ch.play(self._pygame.mixer.Sound(buffer=pcm))
-
-    def queue(self, pcm: bytes) -> None:
-        self._ch.queue(self._pygame.mixer.Sound(buffer=pcm))
-
-    def close(self) -> None:
-        try:
-            self._ch.stop()
-        except Exception:
-            pass
-
-
 def render_vga_rgb(mem: bytes, palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
     """Decode VGA mode 13h A000:0000 linear 320x200x8bpp to RGB."""
     arr = np.frombuffer(mem, dtype=np.uint8)
