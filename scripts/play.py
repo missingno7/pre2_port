@@ -312,24 +312,25 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     audio_poll = None
     audio_mode = getattr(args, "audio", "adlib")
     if audio_mode != "off":
-        # The SB is enabled either way: the game detects a digital device and runs its
-        # song-loader / play-SFX commands (which we observe), and it keeps the original
-        # audio timing identical to the faithful path.
-        sound_blaster = enable_sound_blaster(rt)
+        # The game must detect a digital device to run its song-loader / play-SFX commands
+        # (which we observe). For the ENHANCED path the audio is produced by the recovered
+        # native system, so we attach only a DETECTION STUB: the game detects the card and
+        # emits commands, but no PCM streams and no playback IRQ fires (the SB/DMA/IRQ block
+        # production is gone — oracle/scaffolding only). The ADLIB path plays the SB's own
+        # PCM, so it needs the full streaming card.
+        sound_blaster = enable_sound_blaster(rt, detection_only=(audio_mode == "enhanced"))
         if audio_mode == "enhanced":
-            # Modern path: observe the recovered audio *commands* and play the standard
-            # .TRK songs + SFX through the enhanced float mixer (the SB PCM is ignored).
+            # Modern path: observe the recovered audio *commands* and render them through
+            # the recovered native audio system (the SB is a detection stub; its PCM/IRQ
+            # block production is gone).
             from sdl_view import EnhancedAudio
             from pre2.audio.recovered_enhanced_backend import RecoveredEnhancedBackend
             from pre2.bridge.audio_commands import install_command_observers
-            # Let the ORIGINAL ASM run the game's audio here, by removing the recovered
-            # tracker/mixer checkpoints.  We don't use their output (the enhanced backend is
-            # the audio; we only consume SB block production as the tick clock + need the
-            # game's state to advance).  Crucially, the recovered mix_channel has a known
-            # state divergence that, run live, corrupts the game's channel state until a
-            # loop region degenerates and the mixer spins forever (freeze).  A fresh cold
-            # boot on the pure ASM audio runs clean for tens of millions of instructions.
-            # Kept under --verify-hooks (verification uses the ASM result, so no corruption).
+            # With the detection stub the game's audio ISR does not run during playback (no
+            # block IRQ fires), so the recovered tracker/mixer checkpoints would never be hit
+            # anyway; drop them so the lone detection-handshake IRQ can't touch the recovered
+            # mix_channel either (its live state divergence once corrupted channel state into
+            # a freeze). Kept under --verify-hooks (verification uses the ASM result).
             if not getattr(args, "verify_hooks", False):
                 for _addr in ((0x1030, 0x227C), (0x1030, 0x218F)):   # tracker, mixer
                     rt.cpu.replacement_hooks.pop(_addr, None)

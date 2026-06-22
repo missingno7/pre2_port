@@ -103,6 +103,16 @@ class SoundBlaster:
     dma: int = 1
     raise_irq: Callable[[int], None] | None = None  # called with the IRQ number
     read_mem: Callable[[int], int] | None = None     # phys addr -> byte (DMA fetch)
+    # Detection-stub mode: a card that answers the DSP probe + the IRQ-wiring test of the
+    # detection handshake, but never streams PCM or sustains continuous playback. The
+    # front-end uses this when the actual audio is produced elsewhere (a recovered/native
+    # audio engine), so the program still *detects* a digital device and emits its audio
+    # commands while the DMA/IRQ block production is gone. Generic (no program knowledge):
+    # it services the first ``detect_irq_limit`` block IRQs (the handshake probe) then goes
+    # silent. ``detect_irq_limit`` defaults to 1 (one probe DMA + IRQ test).
+    detection_only: bool = False
+    detect_irq_limit: int = 1
+    _dma_requests: int = 0
 
     channels: dict[int, DmaChannel] = field(default_factory=lambda: {c: DmaChannel() for c in range(4)})
     speaker_on: bool = False
@@ -235,6 +245,16 @@ class SoundBlaster:
     def _start_dma(self, *, length: int, auto: bool) -> None:
         self.auto_init = auto
         self.dma_active = True
+        self._dma_requests += 1
+        if self.detection_only:
+            # Detection stub: service the handshake's IRQ-wiring test (the first probe
+            # DMA), then never fetch PCM or raise another block IRQ. Playback DMA requests
+            # are accepted as no-ops, so the program's audio driver stays in digital mode +
+            # keeps emitting commands while the real audio comes from elsewhere.
+            self.log.append(("dma_stub", {"len": length, "auto": auto, "n": self._dma_requests}))
+            if self._dma_requests <= self.detect_irq_limit:
+                self._fire_irq()
+            return
         ch = self.channels[self.dma]
         # Pull the block out of memory over DMA (8-bit unsigned PCM) and capture it.
         if self.read_mem is not None:

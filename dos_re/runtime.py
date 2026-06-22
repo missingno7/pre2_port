@@ -75,7 +75,8 @@ def _init_bios_environment(memory) -> None:
     data[0x463], data[0x464] = 0xD4, 0x03   # 0040:0063 = 03D4h
 
 
-def enable_sound_blaster(rt: Runtime, *, base: int = 0x220, irq: int = 7, dma: int = 1):
+def enable_sound_blaster(rt: Runtime, *, base: int = 0x220, irq: int = 7, dma: int = 1,
+                         detection_only: bool = False):
     """Attach an emulated Sound Blaster + PIC so the program detects and uses it.
 
     Opt-in (an interactive front-end calls this); the deterministic demo/test path
@@ -83,6 +84,11 @@ def enable_sound_blaster(rt: Runtime, *, base: int = 0x220, irq: int = 7, dma: i
     *how* to deliver IRQs: at batch boundaries (``pic.acknowledge`` + a forced
     ``deliver_interrupt``) to avoid interrupting the game mid-render, or inline via
     ``rt.cpu.pending_irq`` for tight detection loops.
+
+    ``detection_only`` attaches a *detection stub* (see :class:`SoundBlaster`): the
+    program detects a digital device and emits its audio commands, but no PCM is
+    streamed and no playback IRQs fire — for front-ends that produce the audio with
+    their own (e.g. recovered/native) engine and only need the command stream.
     """
     from .pic import PIC8259
     from .sblaster import SoundBlaster
@@ -92,6 +98,7 @@ def enable_sound_blaster(rt: Runtime, *, base: int = 0x220, irq: int = 7, dma: i
         base=base, irq=irq, dma=dma,
         raise_irq=pic.raise_irq,
         read_mem=lambda a: rt.cpu.mem.data[a & 0xFFFFF],
+        detection_only=detection_only,
     )
     rt.dos.pic = pic
     rt.dos.sound_blaster = sb
