@@ -8,10 +8,11 @@ lifting the real game code from evidence.
 
 PRE2 uses BIOS text, linear VGA, and a VGA/EGA-compatible 320x200 16-colour
 planar graphics path.  The viewer renders those VM-visible video states and
-drives the vendored Nuked-OPL3 backend from the original AdLib register stream.
+plays the game's digital audio (MOD music + PCM SFX) via the emulated Sound
+Blaster DMA path; PRE2 (GOG) is digital-only and never drives the OPL3/AdLib.
 
 Three ways to use it:
-  * ``--view``                live VGA/text viewer + OPL3 audio; F11 records a
+  * ``--view``                live VGA/text viewer + digital audio; F11 records a
                               demo, F12 saves a snapshot.
   * ``--view --record-demo N`` start recording an input demo immediately.
   * ``--play-demo DIR``       replay a recorded demo (headless by default, or add
@@ -241,7 +242,7 @@ def _advance_demo_frame(rt, *, chunk_steps, sub_batch, clock, pic,
 
 
 def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | None = None) -> int:
-    """Live VGA/text viewer for PRE2 bring-up, with OPL3 audio and demo record/replay.
+    """Live VGA/text viewer for PRE2 bring-up, with digital audio and demo record/replay.
 
     This intentionally avoids gameplay hooks/frame boundaries.  It advances a
     fixed ``chunk_steps`` of original VM instructions per displayed frame, then
@@ -253,7 +254,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     import pygame
     import numpy as np
     from time import perf_counter, sleep
-    from sdl_view import NukedAdlibAudio, SoundBlasterAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
+    from sdl_view import SoundBlasterAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
     from dos_re.runtime import enable_sound_blaster
@@ -287,13 +288,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     rt.cpu.trace_enabled = False
     rt.dos.console_input_fallback = None
 
-    # Sound-card (OPL3/AdLib) audio: the VM runs the original AdLib driver and
-    # forwards YM3812 register writes; this turns that stream into PCM.
+    # PRE2 (GOG) is digital-only: it detects the Sound Blaster and streams MOD music +
+    # PCM SFX via DMA; it never writes the OPL3/AdLib (YM3812) ports (verified: 0 OPL
+    # writes during gameplay), so there is no FM path here.
     audio_status: dict[str, str] = {}
-    adlib = None
-    if getattr(args, "audio", "adlib") == "adlib":
-        adlib = NukedAdlibAudio(pygame, audio_status, enabled=True)
-        rt.dos.set_adlib_callback(lambda reg, value: adlib.write(reg, value), emit_current=True)
 
     # Gameplay digital audio: enable the emulated Sound Blaster so the original
     # driver detects it and DMA-streams its PCM (MOD music + PCM SFX).  Enabled for
@@ -483,8 +481,6 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         # and underrunning.  Pumping every few ms keeps the slot filled.
                         nowp = perf_counter()
                         if nowp - last_audio >= 0.004:
-                            if adlib is not None:
-                                adlib.pump()
                             if sb_audio is not None:
                                 sb_audio.pump()
                             last_audio = nowp
@@ -508,8 +504,6 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 running = False
 
             # Audio is drained every game-frame (cheap, and pcm_out must not pile up).
-            if adlib is not None:
-                adlib.pump()
             if sb_audio is not None:
                 sb_audio.pump()
 
@@ -543,8 +537,6 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     finally:
         if not replaying:
             stop_recording()
-        if adlib is not None:
-            adlib.close()
         if sb_audio is not None:
             sb_audio.close()
         if getattr(rt, "_verify_summary", None) is not None:
@@ -653,7 +645,7 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Prehistorik 2 DOS VM bootstrap/source-port runner (VGA + OPL3)")
+    p = argparse.ArgumentParser(description="Prehistorik 2 DOS VM bootstrap/source-port runner (VGA + digital audio)")
     p.add_argument("--exe", default=str(ROOT / "assets" / "pre2.exe"), help="path to original PRE2.EXE")
     p.add_argument("--game-root", default=str(ROOT / "assets"), help="directory containing PRE2 assets")
     p.add_argument("--dos-args", default="", help="raw DOS command tail to pass to PRE2.EXE")
@@ -663,7 +655,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trace-tail", type=int, default=40, help="number of recent trace lines to keep/print")
     p.add_argument("--save-snapshot", nargs="?", const="auto", help="save a VM snapshot; optional directory path")
     p.add_argument("--inventory", action="store_true", help="print PRE2 executable/asset inventory and exit")
-    p.add_argument("--view", action="store_true", help="open the live pygame VGA/text viewer with OPL3 audio")
+    p.add_argument("--view", action="store_true", help="open the live pygame VGA/text viewer with digital audio")
     p.add_argument("--record-demo", metavar="NAME", help="(viewer) start recording an input demo immediately")
     p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (headless unless --view)")
     p.add_argument("--demo-dir", default=str(ROOT / "artifacts"), help="directory to write recorded demos into")

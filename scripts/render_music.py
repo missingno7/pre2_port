@@ -1,102 +1,90 @@
-"""Render PRE2 music to a high-quality WAV from the native AudioSystem (audio ear-candy).
+"""Render PRE2 music to a WAV through the semantic-event audio pipeline.
 
-Demonstrates the layered audio architecture:
-  * the **source of truth** is the recovered, byte-exact ``AudioSystem`` (Layer 5) — it runs
-    the recovered tracker + mixer with NO VM and NO emulated Sound Blaster;
-  * the **ear candy** is a separate output stage: the faithful 8-bit / ~8.4 kHz blocks are
-    band-limited resampled (scipy polyphase) to 44.1 kHz / 16-bit, click-free.
+Demonstrates the two-layer architecture end to end:
 
-Faithful fidelity is proven by ``pre2/probes/verify_audio_system.py`` (40 blocks / 0
-divergence vs the original ISR). Here we capture the song state from a snapshot at a clean
-sequencer-tick boundary and render forward. NOTE: this offline render plays the music + the
-SFX active at capture; game-triggered SFX that fire later cannot be replayed offline (live
-integration observes them per block). Use a music snapshot.
+    snapshot VM memory
+      -> pre2.bridge.audio_commands.capture_module        (recovered command layer)
+      -> events.StartSong(module)                          (semantic event)
+      -> FaithfulBackend | EnhancedBackend                 (interchangeable backends)
+      -> WAV
 
-Run:  python scripts/render_music.py <snapshot_dir> [seconds] [out.wav]
+The module is captured as a neutral asset and played **from the top** with no VM and
+no Sound Blaster. ``--backend faithful`` reproduces the byte-exact 8-bit/8.4 kHz output
+(then band-limit-resampled to 44.1 kHz for the WAV); ``--backend enhanced`` mixes in
+float32 at 44.1 kHz directly (HQ resampling, no 8-bit wrap, no DMA/block constraints).
+
+Run:  python scripts/render_music.py <snapshot_dir> [--backend enhanced|faithful]
+                                      [--seconds N] [--out file.wav]
 """
 from __future__ import annotations
 
+import argparse
 import sys
 import wave
 from pathlib import Path
 
 import numpy as np
-from scipy.signal import resample_poly
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import play
-from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
-from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.audio_system import capture_audio_state
-from pre2.recovered.audio_system import AudioSystem
-from pre2.recovered.mixer import BLOCK_LEN
+from pre2.audio.enhanced_backend import OUT_RATE, EnhancedBackend
+from pre2.audio.events import StartSong
+from pre2.audio.faithful_backend import FaithfulBackend
+from pre2.audio.assets import SOURCE_RATE
+from pre2.bridge import audio_commands as AC
 from pre2.runtime import load_pre2_snapshot
 
-CS = 0x1030
-TRACKER = 0x227C
-DET = 450000.0
-WARMUP_TICKS = 60
-OUT_RATE = 44100
 
-
-def render(snap_dir: Path, seconds: float, out: Path) -> int:
-    rt = load_pre2_snapshot(ROOT / "assets" / "pre2.exe", snap_dir,
-                            game_root=ROOT / "assets", native_replacements=True)
-    cpu = rt.cpu
-    cpu.trace_enabled = False
-    sb = enable_sound_blaster(rt)
-    det_now = lambda: cpu.instruction_count / DET  # noqa: E731
-    sb.clock = det_now
-    rt.dos.time_source = det_now
-
-    grab = {"state": None, "n": 0}
-
-    def at_tracker(c):
-        grab["n"] += 1
-        if grab["n"] == WARMUP_TICKS and grab["state"] is None:
-            grab["state"] = capture_audio_state(c.mem)
-        interpret_current_instruction_without_hook(c)
-
-    cpu.replacement_hooks[(CS, TRACKER)] = at_tracker
-    cpu.hook_names[(CS, TRACKER)] = "capture"
-    ts = {"next": 0.0}
-    guard = 0
-    while grab["state"] is None and guard < 4000:
-        play._pump_and_step(rt, now=det_now(), pic=rt.dos.pic, sound_blaster=sb,
-                            timer_irq=True, input_irq_steps=2_000_000, tick_state=ts, n_steps=4000)
-        guard += 1
-    if grab["state"] is None:
-        print("no music tracker activity in this snapshot (need a snapshot with music playing)")
-        return 2
-
-    src_rate = sb.sample_rate or 8403
-    n_blocks = int(seconds * src_rate / BLOCK_LEN) + 1
-    pcm8 = AudioSystem(grab["state"]).render(n_blocks)            # faithful 8-bit source of truth
-
-    # ear candy: 8-bit unsigned -> signed 16-bit (no DC removal, like DOSBox), polyphase to 44.1k
-    x = (np.frombuffer(bytes(pcm8), dtype=np.uint8).astype(np.float64) - 128.0) * 256.0
-    y = np.clip(resample_poly(x, OUT_RATE, src_rate), -32768, 32767).astype(np.int16)
-    with wave.open(str(out), "wb") as w:
+def _write_wav(path: Path, samples_i16: np.ndarray, rate: int) -> None:
+    with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(OUT_RATE)
-        w.writeframes(y.tobytes())
-    print(f"rendered {len(pcm8)} faithful 8-bit bytes @ {src_rate} Hz "
-          f"-> {len(y)} frames @ {OUT_RATE}/16-bit ({len(y)/OUT_RATE:.1f}s); wrote {out}")
+        w.setframerate(rate)
+        w.writeframes(samples_i16.tobytes())
+
+
+def render(snap_dir: Path, seconds: float, out: Path, backend: str) -> int:
+    rt = load_pre2_snapshot(ROOT / "assets" / "pre2.exe", snap_dir,
+                            game_root=ROOT / "assets", native_replacements=False)
+    module = AC.capture_module(rt.cpu.mem)
+    if module.song_length <= 0 or not module.patterns:
+        print("no module loaded in this snapshot (need one captured while music is playing)")
+        return 2
+
+    if backend == "enhanced":
+        eb = EnhancedBackend()
+        eb.handle(StartSong(module=module))
+        y = eb.render(int(seconds * OUT_RATE))
+        out_i16 = np.clip(y * 32767.0, -32768, 32767).astype(np.int16)
+    else:
+        from scipy.signal import resample_poly
+        fb = FaithfulBackend()
+        fb.handle(StartSong(module=module))
+        src_rate = module.source_rate or SOURCE_RATE
+        n_blocks = int(seconds * src_rate / 168) + 1
+        pcm8 = fb.render(n_blocks)
+        # 8-bit unsigned -> signed (no DC removal, like DOSBox), polyphase to 44.1k
+        x = (np.frombuffer(bytes(pcm8), dtype=np.uint8).astype(np.float64) - 128.0) * 256.0
+        out_i16 = np.clip(resample_poly(x, OUT_RATE, src_rate), -32768, 32767).astype(np.int16)
+
+    _write_wav(out, out_i16, OUT_RATE)
+    print(f"[{backend}] order={list(module.order[:module.song_length + 1])} -> "
+          f"{len(out_i16)} frames @ {OUT_RATE}/16-bit ({len(out_i16) / OUT_RATE:.1f}s); wrote {out}")
     return 0
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print(__doc__)
-        return 1
-    snap = Path(sys.argv[1])
-    seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 8.0
-    out = Path(sys.argv[3]) if len(sys.argv) > 3 else ROOT / "artifacts" / "pre2_music_hq.wav"
-    return render(snap, seconds, out)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("snapshot", type=Path)
+    p.add_argument("--backend", choices=("enhanced", "faithful"), default="enhanced")
+    p.add_argument("--seconds", type=float, default=12.0)
+    p.add_argument("--out", type=Path, default=None)
+    args = p.parse_args()
+    out = args.out or ROOT / "artifacts" / f"pre2_music_{args.backend}.wav"
+    return render(args.snapshot, args.seconds, out, args.backend)
 
 
 if __name__ == "__main__":

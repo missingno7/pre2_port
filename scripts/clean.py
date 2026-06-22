@@ -23,15 +23,6 @@ DEFAULT_FILE_GLOBS = (
     "tmp_*.png",
     "ega_first_present.png",
     "ega_first_present.ppm",
-    "nuked_opl3/_opl3_cffi*.pyd",
-    "nuked_opl3/_opl3_cffi*.so",
-    "nuked_opl3/_opl3_cffi*.dylib",
-    "nuked_opl3/_opl3_cffi*.dll",
-    "nuked_opl3/_opl3_cffi*.c",
-    "nuked_opl3/*.obj",
-    "nuked_opl3/*.o",
-    "nuked_opl3/*.exp",
-    "nuked_opl3/*.lib",
 )
 
 DEFAULT_DIR_GLOBS = (
