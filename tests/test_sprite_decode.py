@@ -3,7 +3,7 @@
 The transform was proven byte-for-byte equal to the original ASM (``1030:42F7``
 local bank + ``1030:436A`` shared bank) by capturing the *load-time* witness — the
 decompressed sprite sheet at level load together with the four planar VRAM cache
-planes the ASM produced (``pre2/probes/capture_sprite_decode.py``). The mid-game
+planes the ASM produced (captured from the ASM at the decode boundary). The mid-game
 snapshot is not a faithful witness (the sheet RAM is freed and the cache is
 over-drawn), so the capture is taken with the asset live at the decode boundary.
 
@@ -83,8 +83,8 @@ def test_demux_sprite_is_four_planes_of_thirtytwo_bytes():
 # ---- live replacement-adapter wiring (1030:42F7) ----------------------------
 # A lightweight memory stub exercises the adapter's contract — the planar cache
 # writes plus the [0x2CF1]/[0x2871]/[0x25CA] data side effects and the si/ds exit
-# registers — without standing up the whole VM (the in-VM lockstep is proven
-# separately by pre2/probes/verify_sprite_decode.py).
+# registers — without standing up the whole VM. (In-VM lockstep was used during
+# recovery; the committed golden + this adapter test are the permanent checks.)
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE  # noqa: E402
 
 from pre2.bridge.sprites import DATA_SEG, CACHE_OFF, read_slot  # noqa: E402

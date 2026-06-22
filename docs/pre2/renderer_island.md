@@ -93,6 +93,26 @@ The per-frame main loop `1030:0214-0270` is now fully classified. The renderer l
 - **Tally/score logic**, **asset load (SQZ)**, **audio** → separate systems. (Tally screen
   *drawing* is renderer; the *scoring* is not.)
 
+## Other scene renderers — separate islands (NOT the gameplay frame renderer)
+
+A full hot-ASM survey across all 25 snapshots (profiling interpreted CS:IP) found no
+unrecovered routine inside the *gameplay* frame renderer — it is exhausted. The remaining
+hot interpreted regions belong to **other scenes**, each its own system with its own state
+block (not `Camera`/`ScrollState`/`TileMap`), so they are distinct future islands, not gaps
+in this one:
+
+- **Text/font renderer `9886`** (menu / title / high-score / tally *text*; scenes 173937,
+  002659). Reads a string at `[bx]`; maps each char to a `char*0x60` glyph + font base
+  `[0xB1AC]`; uses the `0xB180`/`0xB1A6` state block. Its presentation is `9600` (CRTC
+  start-address / sequencer setup) + `9900` (a vsync busy-wait spin — the ~31k-hit "hot"
+  region is just that spin, not work). **This is the most renderer-like un-recovered code**;
+  a clean next island if the menus/score screens are in scope.
+- **Level-load DAC palette set `9200`** (003841): reads + writes the 6-bit DAC during a
+  level load (palette install/fade). Load-time presentation.
+- **Level loader / file I/O `~1200-1400`** (190338): DOS `int 21h` file reads → load-time, border.
+
+These were classified by disassembly, not recovered (out of the gameplay-renderer scope).
+
 ## Completion status
 
 All renderer gaps recovered + verified (see `renderer_status.md` for per-island detail):

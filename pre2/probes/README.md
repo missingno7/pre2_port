@@ -17,8 +17,6 @@ Rules:
 | Probe | Island | Permanent replacement | Retire when |
 |---|---|---|---|
 | `capture_sb.py` | SoundBlaster audio | `tests/test_sblaster_snapshot.py` + manual play | SB DSP/DMA contract has a headless regression test |
-| `capture_sprite_decode.py` / `verify_sprite_decode.py` | sprite decode (42F7/436A) | `tests/test_sprite_decode.py` | already covered — prune next cleanup |
-| `capture_blit.py` / `verify_blit.py` | sprite blit (3B69) | `tests/test_blit_renderer.py` | already covered — prune next cleanup |
 | `capture_frame_state.py` | frame renderer (Camera/TileMap witness) | `tests/test_frame_bridge.py` | bridge fields stable (kept as the witness regen tool) |
 | `verify_frame.py` | tile-row draw (346E) | `tests/test_frame_renderer.py` | a headless 346E lockstep is folded into the test suite |
 | `verify_grid.py` | grid redraw (3582) | `tests/test_frame_renderer.py` | a headless 3582 lockstep is folded into the test suite |

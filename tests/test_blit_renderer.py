@@ -4,7 +4,8 @@ The three blit paths (type 0 opaque copy, type 1 background restore, type ≥2 m
 composite ``(bg AND mask) OR sprite``) were proven byte-for-byte equal to the
 original ASM (``1030:3B69`` dispatch + ``3D65`` bg-restore) by capturing a per-blit
 witness in gameplay — the four EGA planes before and after one real blit call of
-each type plus its inputs (``pre2/probes/capture_blit.py``).
+each type plus its inputs (captured from the ASM under the VM; the committed fixture
+below is the regression check).
 
 The fixture below replays each captured case on a sparse plane buffer (sources
 placed at their real VRAM offsets) and checks the rendered slot matches the ASM

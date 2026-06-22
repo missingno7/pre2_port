@@ -118,7 +118,11 @@ in `render_frame`, but it is DAC-only so the order is pixel-equivalent.) The com
   (`[0x7DE6] != -1` — explosion / hit-spark / collectible sparkle frame) would let the small
   particle subsystem be recovered. Empty in every available snapshot.
 - **Special HUD sprite `0x135`** (object_render's no-camera path `2784`, border): a frame where
-  an `id & 0x5FFF == 0x135` sprite is in the active list (absent in current snapshots).
+  an `id 0x135` (`bx==0x26A`) sprite is in the active list (absent in current snapshots). It's an
+  **8×12 sprite drawn at a FIXED screen position** (the `2784` path skips the camera-X subtract):
+  effectively a small **green capsule/pill** (fill = colour `A`, frame = colour `6`; attr
+  `[0x7190]`=8×12, src `650A:0BC7`) — likely a HUD meter/collectible token. The id is computed
+  (no literal `0x135` in the code), so it must be witnessed live, not traced statically.
 - **Cold-start screen transitions**: dismiss the "oldies"/title screen from a fresh launch.
 
 ## Border (confirmed — full per-frame main-loop classification)
