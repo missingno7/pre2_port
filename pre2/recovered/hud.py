@@ -13,7 +13,17 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 
-__all__ = ["HUD_GLYPH_BASE", "HUD_GLYPH_BYTES", "HUD_GLYPH_ROWS", "blit_hud_glyph"]
+__all__ = ["HUD_GLYPH_BASE", "HUD_GLYPH_BYTES", "HUD_GLYPH_ROWS", "blit_hud_glyph",
+           "HUD_LIVES_DI", "HUD_SCORE_DI", "HUD_ENERGY_DI", "HUD_MAX_HEARTS", "draw_hud"]
+
+# Dynamic status-bar layout (1030:45B8). Screen byte offsets within the page (add the page base):
+HUD_LIVES_DI = 0x1CED            # lives: one digit [asm 45FB]
+HUD_SCORE_DI = 0x1CF1            # score: 6 digits + a fixed trailing 0 [asm 462F]
+HUD_ENERGY_DI = 0x1D01           # energy: up to MAX_HEARTS hearts [asm 465C]
+HUD_MAX_HEARTS = 3               # [asm 465A dl=3]
+_HEART_FULL = 0x0A               # full-heart glyph [asm 4667]
+_HEART_EMPTY = 0x0B              # empty-heart glyph [asm 4678]
+_SCORE_DIGITS = 6                # digits drawn from [0x6F52] before the trailing 0
 
 HUD_GLYPH_BASE = 0xE60 + 0x7B0   # 0x1610 — font offset of glyph 0 [asm 4750/4753]
 HUD_GLYPH_BYTES = 0x60           # 96 bytes/glyph = 4 planes x 12 rows x 2 bytes [asm 474C mul 0x60]
@@ -41,3 +51,34 @@ def blit_hud_glyph(planes, glyph, di, font):
             planes[p][(d + 1) & 0xFFFF] = font[src + 1]
             src += 2
             d = (d + _ROW_STRIDE) & 0xFFFF
+
+
+@oracle_link("1030:45B8",
+             "dynamic status-bar layout: draw the lives digit (0x1CED), the 6-digit score + a "
+             "fixed trailing 0 (0x1CF1; displayed = internal*10), and the energy hearts (0x1D01, "
+             "`energy` full glyph 0x0A + the rest empty glyph 0x0B) via the 473D glyph blit.",
+             "VERIFIED", merge_target="render_frame")
+def draw_hud(planes, hud, font, page=0):
+    """Recover the dynamic part of ``1030:45B8`` — draw the status-bar values from ``HudState``.
+
+    ``hud`` carries ``score`` (displayed = internal*10), ``lives``, ``energy``; ``font`` is the
+    HUD glyph font bytes; ``page`` is the EGA page base offset. Draws onto the (separately drawn)
+    static status bar. Does not interpolate or read prior render output.
+    """
+    # lives — one digit, clamped to 9 (the one-digit field)  [asm 45F5]
+    blit_hud_glyph(planes, min(hud.lives, 9) & 0xFF, (HUD_LIVES_DI + page) & 0xFFFF, font)
+    # score — the internal value (=displayed//10) as 6 zero-padded digits, then a fixed trailing 0
+    di = (HUD_SCORE_DI + page) & 0xFFFF
+    for ch in f"{(hud.score // 10) % (10 ** _SCORE_DIGITS):0{_SCORE_DIGITS}d}":
+        blit_hud_glyph(planes, ord(ch) - 0x30, di, font)
+        di = (di + 2) & 0xFFFF
+    blit_hud_glyph(planes, 0, di, font)
+    # energy — `energy` full hearts then the remainder empty, up to MAX_HEARTS
+    di = (HUD_ENERGY_DI + page) & 0xFFFF
+    full = min(max(hud.energy, 0), HUD_MAX_HEARTS)
+    for _ in range(full):
+        blit_hud_glyph(planes, _HEART_FULL, di, font)
+        di = (di + 2) & 0xFFFF
+    for _ in range(HUD_MAX_HEARTS - full):
+        blit_hud_glyph(planes, _HEART_EMPTY, di, font)
+        di = (di + 2) & 0xFFFF
