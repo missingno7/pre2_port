@@ -192,6 +192,19 @@ class HudState:
 
 
 @dataclass(frozen=True)
+class HudChromeAsset:
+    """The static HUD chrome — loaded asset data (not rendered pixels). The status-bar background
+    is a 320x23 planar bitmap (gray bar + baked LIVES:/SCORE:/ENERGY: labels + player-head icon +
+    weapon-slot frame) at segment 0x252B:0x0B48; the glyph font (digits/hearts/weapon) is in the
+    same chrome segment at 0x1610. Bridge-fed; the segment/offset knowledge stays in the bridge.
+
+    The boss health meter is a separate boss-only sprite (id 0x135), not part of this chrome.
+    """
+    bar: bytes = b""    # 320x23 planar status-bar bitmap: 4 planes x 0x398 bytes (plane-major)
+    font: bytes = b""   # HUD glyph-font segment bytes (blit_hud_glyph indexes 0x1610 + glyph*0x60)
+
+
+@dataclass(frozen=True)
 class GameFrameSnapshot:
     """One frame's complete render intent — the unit of verification and interpolation.
 

@@ -13,7 +13,7 @@ from pre2.bridge import palette as _pal
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.recovered.animation import AnimStep
 from pre2.recovered.render_frame import ASSET_HI, ASSET_LO, FadeStep, IrisState, RendererState
-from pre2.recovered.render_model import CameraShakeState, HudState
+from pre2.recovered.render_model import CameraShakeState, HudChromeAsset, HudState
 
 _DS = 0x1A0F
 _ANIM_FRAME_PTR = 0x6BC2   # [0x6BC2] = current animation-frame remap base
@@ -66,6 +66,22 @@ def _anim_step(mem) -> AnimStep:
     counter, the animated-tiles-present gate, and the scroll speed."""
     return AnimStep(frame_ptr=_rw(mem, _ANIM_FRAME_PTR), throttle=_rb(mem, _ANIM_THROTTLE),
                     active=_rb(mem, _ANIM_ACTIVE) != 0, speed=_rw(mem, _ANIM_SPEED))
+
+
+_HUD_CHROME_SEG = 0x3d    # [0x3d] = loaded HUD chrome segment (status-bar bitmap + glyph font), 0x252B
+_HUD_BAR_OFF = 0x0B48     # status-bar bitmap offset within the chrome segment
+_HUD_BAR_LEN = 0xE60      # 4 planes x 0x398
+_HUD_FONT_LEN = 0x3000    # covers the glyph tables (glyph 0 at 0x1610 .. ~0x2E0F)
+
+
+def _hud_chrome(mem) -> HudChromeAsset:
+    """Capture the static HUD chrome assets from the loaded chrome segment ([0x3d]=0x252B): the
+    status-bar bitmap (0x0B48) and the glyph font (0x1610). Segment/offset knowledge stays here."""
+    base = (_rw(mem, _HUD_CHROME_SEG) << 4) & 0xFFFFF
+    return HudChromeAsset(
+        bar=bytes(mem.data[base + _HUD_BAR_OFF:base + _HUD_BAR_OFF + _HUD_BAR_LEN]),
+        font=bytes(mem.data[base:base + _HUD_FONT_LEN]),
+    )
 
 
 def _hud_state(mem) -> HudState:
@@ -146,6 +162,7 @@ def read_renderer_state(mem, dos=None, *, frame_pre_inc: bool = True) -> Rendere
         anim=_anim_step(mem),
         shake=_shake_state(mem),
         hud_state=_hud_state(mem),
+        hud_chrome=_hud_chrome(mem),
         asset_planes=_asset_planes(mem),
         object_camera=obj_cam,
         object_sprites=obj_sprites,

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pre2.recovered.frame_renderer import (
     build_background_ring, draw_grid, redraw_animated_grid, scroll_copy,
 )
+from pre2.recovered.hud import draw_hud, draw_status_bar
 from pre2.recovered.object_render import paint_sprite, plan_frame
 from pre2.recovered.transition import fade_palette
 
@@ -93,6 +94,7 @@ class RendererState:
     anim: "AnimStep | None" = None    # animated-tile cycle inputs (pre2.recovered.animation.AnimStep)
     shake: "CameraShakeState | None" = None  # camera-shake-on-fall state (render_model.CameraShakeState)
     hud_state: "HudState | None" = None  # status-bar values score/lives/energy (render_model.HudState)
+    hud_chrome: "HudChromeAsset | None" = None  # static HUD chrome assets (bar bitmap + glyph font)
     # --- planar tile/sprite ASSET data (cache + parallax base) the tile draws read from VRAM ---
     # The tile-graphic cache (0x5E80) and parallax base layer (0x7E80) live above the ring in each
     # EGA plane. They are level ASSET data (built at load), not per-frame render output, so the bridge
@@ -178,6 +180,13 @@ def render_frame(state: RendererState, planes, dac=None, rebuild=False):
             size = draw.src_bw * draw.full_rows * 6 + 64   # [asm read_source extent]
             paint_sprite(planes, draw, bank[draw.src_off:draw.src_off + size],
                          s.object_camera.row_stride)
+
+    # 6) HUD region — only on a full rebuild (the incremental path leaves the HUD to its own redraw).
+    #    Static status-bar chrome then the dynamic values on top, into the same page as the frame.
+    if rebuild and s.hud_chrome is not None:
+        draw_status_bar(planes, s.dest_page, s.hud_chrome.bar)
+        if s.hud_state is not None:
+            draw_hud(planes, s.hud_state, s.hud_chrome.font, s.dest_page)
 
     return grid
 

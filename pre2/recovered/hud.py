@@ -14,7 +14,12 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 
 __all__ = ["HUD_GLYPH_BASE", "HUD_GLYPH_BYTES", "HUD_GLYPH_ROWS", "blit_hud_glyph",
-           "HUD_LIVES_DI", "HUD_SCORE_DI", "HUD_ENERGY_DI", "HUD_MAX_HEARTS", "draw_hud"]
+           "HUD_LIVES_DI", "HUD_SCORE_DI", "HUD_ENERGY_DI", "HUD_MAX_HEARTS", "draw_hud",
+           "HUD_BAR_DI", "HUD_BAR_PLANE_BYTES", "draw_status_bar"]
+
+# Static status-bar background blit (1030:4580). The bar is a 320x23 planar bitmap.
+HUD_BAR_DI = 0x1B80              # status-bar top-left screen offset within the page (row 176)
+HUD_BAR_PLANE_BYTES = 0x398     # 0x398 = 40 bytes/row x 23 rows, per plane [asm 4587 cx=0x1CC words]
 
 # Dynamic status-bar layout (1030:45B8). Screen byte offsets within the page (add the page base):
 HUD_LIVES_DI = 0x1CED            # lives: one digit [asm 45FB]
@@ -82,3 +87,22 @@ def draw_hud(planes, hud, font, page=0):
     for _ in range(HUD_MAX_HEARTS - full):
         blit_hud_glyph(planes, _HEART_EMPTY, di, font)
         di = (di + 2) & 0xFFFF
+
+
+@oracle_link("1030:4580",
+             "blit the static HUD chrome (320x23 planar status-bar bitmap) into page+0x1B80: per "
+             "plane (SC map mask), rep movsw 0x398 bytes contiguously from the bar asset. "
+             "Page-targeted; the original also duplicates to the other page (a page-system detail).",
+             "VERIFIED", merge_target="render_frame")
+def draw_status_bar(planes, page, bar):
+    """Recover ``1030:4580`` (page-targeted) — draw the static status-bar background into ``page``.
+
+    ``bar`` is the 320x23 planar bitmap (4 planes x ``HUD_BAR_PLANE_BYTES``, plane-major); ``page``
+    is the EGA page base offset. Pure asset blit — no reuse of previously rendered pixels. The
+    original ASM duplicates the bar to both display pages; that double-copy is left to a VM-faithful
+    wrapper (the recovered renderer describes the bar in one target frame)."""
+    di = (page + HUD_BAR_DI) & 0xFFFF
+    n = HUD_BAR_PLANE_BYTES
+    for p in range(4):
+        s = p * n
+        planes[p][di:di + n] = bar[s:s + n]
