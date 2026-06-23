@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dos_re.hooks import registry
 
-from . import audio, blit, frame, object_render, palette, present, sprite_classify, sprite_decode, sqz, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
+from . import animation, audio, blit, frame, object_render, palette, present, sprite_classify, sprite_decode, sqz, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
 from .common import HookTraceStats, HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
 from .sprite_decode import sprite_decode_local, sprite_decode_shared  # noqa: F401 — re-exported
 from .sqz import sqz_decompress  # noqa: F401 — re-exported
@@ -83,6 +83,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.pre2_object_pending = []
     cpu.pre2_classify_pending = []
     cpu.pre2_palette_pending = []
+    cpu.pre2_anim_pending = []
     cpu.pre2_iris_pending = []
     cpu.pre2_text_pending = []
     cpu.pre2_scroll_pending = []
@@ -97,6 +98,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     object_render.register_verify(cpu, stats, on_result, raise_on_divergence)
     sprite_classify.register_verify(cpu, stats, on_result, raise_on_divergence)
     palette.register_verify(cpu, stats, on_result, raise_on_divergence)
+    animation.register_verify(cpu, stats, on_result, raise_on_divergence)
     transition.register_verify(cpu, stats, on_result, raise_on_divergence)
     text.register_verify(cpu, stats, on_result, raise_on_divergence)
     present.register_verify(cpu, stats, on_result, raise_on_divergence)

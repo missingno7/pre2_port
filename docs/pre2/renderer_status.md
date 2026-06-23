@@ -3,6 +3,37 @@
 Running status for the "finish the renderer island" goal. Updated as islands land.
 Companion to `renderer_island.md` (the map/border) and `renderer_goal.md` (the plan).
 
+## STATUS (2026-06-23): clean-framebuffer normal-gameplay composition COMPLETE
+
+`render_frame(RendererState, planes, rebuild=True, game_root=...)` produces the **complete normal
+gameplay frame from a CLEAN (zeroed) framebuffer**, from explicit `RendererState` + named assets,
+with **no dependence on ASM-populated VRAM / scroll-ring / temp memory**. Every composed system is
+verified **byte-exact vs the ASM page on every current witness**:
+
+| System | How sourced | Verified (witness) |
+|---|---|---|
+| Background (parallax base + opaque + dynamic tiles) | `build_background_ring` (rebuild) + `asset_planes` (bridge-fed level assets) | 0 div over viewport rows 0–175 (185902, mapscroll) |
+| Moving sprites (player/enemies/pickups/popups) | object pass `plan_frame`→`paint_sprite`, banks in `RendererState` | object goldens + live lockstep |
+| Palette / fade | `fade_palette` + `PaletteState` | fade math 0 div; live colours == DAC |
+| HUD chrome (panel) + dynamic overlay (lives/score/hearts) | `HudChromeAsset` from **ALLFONTS.SQZ** (persistent asset) + `draw_hud` | HUD strip 0/3680 (185902) |
+| Boss health meter (vertical bars) | N× HUD sprite `0x135` via the object pass | band 0/640 (192126 full=8, 192140 less=5) |
+
+**The clean-framebuffer composition seam is closed for all observed systems.** Stop hunting for
+hidden normal-frame render pieces unless a *new visual witness* proves one.
+
+**Watch-list (NOT on the done list):** the **particle/effect system `4B8E`** remains **NEEDS-REPRO**.
+Open question = which side of the seam it's on: if particles spawn into the active-sprite list they
+are *already composed* (state-producer only); if `4B8E` has its own blit it is an open composition
+piece. One particle witness (dust/splash/hit-spark, `[0x7DE6] != -1`) settles it.
+
+**Remaining work is now STATE OWNERSHIP / CONTROLLER RECOVERY, not normal-frame composition.** The
+renderer can *display* the game; the next roots explain *who creates the displayed state* — see
+`renderer_goal.md`/the symbol ledger: (1) wire the already-verified controllers (`advance_animation`,
+camera-shake apply) from *read* → *owned*; (2) scope the object-update system `65A0`/`8BFF` (the
+active-list producer) with a disciplined side-effect map *before* making it authoritative; (3) the
+iris/transition controller (scene-gated). The faithful layer stays byte/state-verifiable against the
+oracle; a later enhanced layer may be non-byte-identical but must consume this verified state.
+
 ## Phase 1 — reconnaissance (done this pass)
 
 Profiled all 24 snapshots + the gameplay snapshots (185902, 212037) in hybrid, and
@@ -117,13 +148,13 @@ in `render_frame`, but it is DAC-only so the order is pixel-equivalent.) The com
 - **Particle/effect system** (`4b8e`, border): a snapshot with active particles
   (`[0x7DE6] != -1` — explosion / hit-spark / collectible sparkle frame) would let the small
   particle subsystem be recovered. Empty in every available snapshot.
-- **Boss-meter / HUD sprite `0x135`** — **RECOVERED** from the ASM (`plan_sprite`'s no-camera
-  branch, `1030:2784`): drawn at a FIXED screen position `screen_x = world_x - x_off`,
-  `screen_y = world_y + y_off` (no camera / row_factor / fine_scroll), skipping the off-screen-X
-  and `screen_y<=0` culls (keeps `top_row>=0xB0`). It's an 8×12 green capsule/pill (boss
-  health-bar segment). **VERIFY PENDING** — needs a boss-fight snapshot (`id 0x135` in the
-  active list) to lockstep-confirm the pixels; the planner branch is committed + live (no-op
-  until such a sprite appears, so 0 regression).
+- **Boss-meter / HUD sprite `0x135`** — **RECOVERED + VERIFIED** (`plan_sprite`'s no-camera branch,
+  `1030:2784`): drawn at a FIXED screen position `screen_x = world_x - x_off`, `screen_y = world_y +
+  y_off` (no camera / row_factor / fine_scroll), skipping the off-screen-X and `screen_y<=0` culls.
+  The boss health meter is **N instances** of `0x135` (one per health unit) = vertical teal bars
+  bottom-left just above the HUD. **VERIFIED byte-exact** on boss-fight snapshots 192126 (full=8
+  bars) / 192140 (less=5 bars): render_frame band 0/640. Committed golden
+  `tests/fixtures/object_render_boss_meter.json` + `test_object_render_boss_meter_byte_exact`.
 - **Text/font renderer `9886`** — **RECOVERED** from the ASM (`pre2/recovered/text.py:draw_string`):
   the menu/title/score/tally text drawer. **VERIFY PENDING** — every snapshot is captured
   *after* the draw (the font segment `[0x2875]` + shade base + VGA state are gone), so there's
