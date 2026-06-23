@@ -71,7 +71,12 @@ boundary mismatches the displayed page **Δ=675–912** — so the boundary is n
 (no tolerance, no fallback). The live `--faithful-verify` mismatch during movement was a TRUE
 state↔page out-of-phase signal; capturing at 6772 resolves it.
 
-NEXT: wire the viewer's `--faithful` path to the 6772-boundary capture (display the latest
-`GameVisualState`, not a live read); use this same snapshot path to verify the remaining leaves
-(curtain, scenes). The cave-enter witness is ALSO mid-curtain — the curtain (`panel_copy` per-step
-reveal) is a separate transition leaf, investigated next.
+VIEWER WIRED (2026-06-24, commit 462199e): `play.py --faithful` now mirrors the 6772-boundary capture
+(a hook wrapping the palette-fade hook at 6772 captures + renders + (with `--faithful-verify`) diffs vs
+the displayed page; the viewer shows the latest capture for gameplay/iris). SCENE/IMAGE still fail loud
+(`FaithfulVisualGap` diagnostic + console), never ASM VRAM. Regression `verify_frame_boundary` covers the
+cave witness (231731 @6772 Δ=0). `render_game_visual_state` reuses `render_visual` → the same leaves
+(one-impl). The cave-enter witness was NOT mid-curtain (both pages full; 44E4 is a vsync wait) — so this
+fully resolves the camera-fidelity bug. The ACTUAL curtain (`panel_copy` per-step reveal) needs a
+mid-3054 witness (cs:ip in 3054..309A during cave ENTER) — investigated next, along with the HUD runtime
+adapter, SCENE/IMAGE leaves, and palette-controller ownership.
