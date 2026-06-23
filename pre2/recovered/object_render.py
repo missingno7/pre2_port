@@ -171,7 +171,9 @@ def _placement(spr: Sprite, attr: SpriteAttr, cam: Camera):
     is_hud = (spr.sprite_id & 0x1FFF) == 0x135           # [asm 277E: cmp bx,0x26A] HUD/boss-meter
     if is_hud:
         # Fixed-screen HUD sprite (id 0x135): FIXED position, NO camera, SKIPS the off-screen-X
-        # and screen_y<=0 culls [asm 2784-2790 jmp 27DE]. RECOVERED; VERIFY PENDING (NEEDS REPRO).
+        # and screen_y<=0 culls [asm 2784-2790 jmp 27DE]. This is the BOSS HEALTH METER: N instances
+        # (one per health unit) drawn as vertical bars bottom-left above the HUD. VERIFIED byte-exact
+        # vs the ASM page on boss-fight snapshots 192126 (full=8 bars) / 192140 (less=5 bars).
         screen_x = _s16(spr.x - x_off)                  # [asm 2784: no camera X]
         screen_y = _s16(spr.y + _s8(attr.y_off))        # [asm 2788-278D: no row_factor/camera]
     else:

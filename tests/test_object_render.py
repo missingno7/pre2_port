@@ -54,7 +54,8 @@ def test_object_render_byte_exact_vs_asm():
 def test_hud_boss_meter_no_camera_0x135():
     """The fixed-screen HUD / boss-meter sprite (id 0x135, 1030:2784) is positioned with NO
     camera offset and skips the off-screen-X / screen_y<=0 culls, unlike a normal sprite.
-    RECOVERED from disassembly; pixel fidelity verify-pending on a boss-fight snapshot."""
+    RECOVERED from disassembly; pixel fidelity VERIFIED separately in
+    test_object_render_boss_meter_byte_exact (boss-fight snapshot 192126)."""
     cam = Camera(cam_x=100, cam_y=20, fine_scroll=0, row_factor=0, dest_page=0x2000,
                  row_stride=0x28, global_shift=0, frame=1)
     attr = SpriteAttr(width=8, height=12, x_off=4, y_off=0, src_seg=0x650A, src_off=0x0BC7)
@@ -67,6 +68,33 @@ def test_hud_boss_meter_no_camera_0x135():
     assert draw.shift == (50 - 4) & 7, "HUD screen_x must be world_x - x_off (no camera)"
     # the flag bits (drawn/flash) don't change the special-case selection.
     assert plan_sprite(Sprite(x=50, y=120, sprite_id=0x2135, flags=0, life=10), attr, cam) is not None
+
+
+def test_object_render_boss_meter_byte_exact():
+    """The boss health meter = N instances of the fixed-screen HUD sprite (id 0x135), one per
+    health unit, drawn bottom-left just above the HUD with NO camera. Captured from a boss-fight
+    snapshot (192126, full health = 8 bars): seed the verified background band, paint the eight
+    0x135 sprites via the recovered planner+blit, and assert the band matches the ASM page exactly.
+    This is the pixel-fidelity witness the 0x135 path was waiting on."""
+    fix = json.loads((Path(__file__).parent / "fixtures" / "object_render_boss_meter.json").read_text())
+    cam = Camera(**fix["cam"])
+    planes = [bytearray(0x10000) for _ in range(4)]
+    for key, vals in fix["before"].items():            # seed the (verified) background under the bars
+        off = int(key, 16)
+        for p in range(4):
+            planes[p][off] = vals[p]
+    drawn = 0
+    for it in fix["sprites"]:
+        draw = plan_sprite(Sprite(**it["spr"]), SpriteAttr(**it["attr"]), cam)
+        assert draw is not None, "the planner culled a boss-meter bar the ASM drew"
+        paint_sprite(planes, draw, bytes.fromhex(it["src"]), fix["stride"])
+        drawn += 1
+    assert drawn == 8, f"expected 8 boss-meter bars (full health), got {drawn}"
+    for key, vals in fix["after"].items():
+        off = int(key, 16)
+        for p in range(4):
+            assert planes[p][off] == vals[p], (
+                f"boss-meter off {key} plane{p}: got {planes[p][off]:#04x} want {vals[p]:#04x}")
 
 
 def test_object_render_clipped_flip_byte_exact():
