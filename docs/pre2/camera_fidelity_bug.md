@@ -54,7 +54,24 @@ and the **runtime-replaced output** (the hybrid leaves drawing the actual page) 
 transitions *because the mirror reads the wrong frame's state*, not because the leaves are wrong. The
 fix is the frame-boundary snapshot, not a viewer tolerance or an ASM fallback.
 
-## Next step
-Implement the frame-boundary `GameVisualState` capture (lift `read_renderer_state` into a
-`FrameCapture`-style boundary snapshot keyed to the committed page) and re-run the witness — target
-viewport Δ→0 at the captured boundary. Then return to the curtain/`panel_copy` per-step integration.
+## Frame-boundary capture — BUILT (2026-06-23)
+
+The commit boundary is **`1030:6772`** (palette-fade entry — the LAST op in the per-frame main loop,
+AFTER the page flip). There `ega_display_start` is the just-committed frame and the scroll/camera state
+has not yet advanced, so `render_frame(state)@display_start == display_start`.
+
+`pre2/bridge/game_visual_state.py`: `GameVisualState` (scene_kind + RendererState with dest_page =
+committed page + iris) + `capture_game_visual_state(mem, dos, display_page, game_root)` (capture ONLY
+at 6772) + `render_game_visual_state(gvs)` (reuses `render_visual` → the same recovered leaves). This is
+the canonical verification substrate.
+
+PROOF (`pre2/probes/verify_frame_boundary.py`, driven gameplay, pure-ASM oracle): at the 6772 boundary
+the capture reproduces the displayed page **Δ≤58 (blink-phase only)**; a read ~600 instr OFF the
+boundary mismatches the displayed page **Δ=675–912** — so the boundary is necessary and sufficient
+(no tolerance, no fallback). The live `--faithful-verify` mismatch during movement was a TRUE
+state↔page out-of-phase signal; capturing at 6772 resolves it.
+
+NEXT: wire the viewer's `--faithful` path to the 6772-boundary capture (display the latest
+`GameVisualState`, not a live read); use this same snapshot path to verify the remaining leaves
+(curtain, scenes). The cave-enter witness is ALSO mid-curtain — the curtain (`panel_copy` per-step
+reveal) is a separate transition leaf, investigated next.
