@@ -238,6 +238,73 @@ ownership). C — `GameVisualState` convergence (RendererState/SceneState as sli
 the single fx owner; GameFrameSnapshot as its projection). D — collapse the checkpoints to verify-only.
 Each phase keeps the lockstep-vs-ASM oracle and the one-impl rule.
 
+## Runtime integration audit (2026-06-23) — mode-1 (viewer mirror) vs mode-2 (ASM actually replaced)
+
+Two senses of "faithful render", which must be distinguished: **mode 1 (viewer mirror)** = the VM
+runs, the bridge reads state, `render_visual`/`render_frame` re-composes a clean frame for display
+(proof/diagnostic — does NOT remove the ASM). **mode 2 (runtime replacement)** = the game reaches an
+ASM render call, the `@registry.replace` hook runs the recovered leaf, writes the exact side effects,
+and **skips the ASM body** (`cpu.s.ip = pop/EXIT`) — the old call is gone from the live path.
+
+**Key finding: almost the entire renderer is ALREADY mode-2.** Auditing each hook's *live* (non-verify)
+branch:
+
+| Routine | CS:IP | Recovered leaf | Live behaviour | Class |
+|---|---|---|---|---|
+| draw_tile_row | 3476 | `draw_tile_row` | skips ASM (`pop`) | **RUNTIME-REPLACED** |
+| draw_grid | 35A1 | `draw_grid` | skips ASM | **RUNTIME-REPLACED** |
+| scroll_copy | 3A27 | `scroll_copy` | skips ASM | **RUNTIME-REPLACED** |
+| object/sprite pass | 26FA | `plan_frame`/`paint_sprite` | skips ASM | **RUNTIME-REPLACED** |
+| sprite blit | 2C00 | `blit_sprite` | skips ASM | **RUNTIME-REPLACED** |
+| palette fade | 6772 | `fade_palette` | skips ASM | **RUNTIME-REPLACED** |
+| iris | 31F4 | `compose_iris` | skips ASM (→32B0) | **RUNTIME-REPLACED** |
+| draw_string (text) | 9886 | `draw_string` | skips ASM | **RUNTIME-REPLACED** |
+| menu bg scroll-blit | 965A | `scroll_blit_column` | skips ASM | **RUNTIME-REPLACED** |
+| menu framebuffer scroll | 9804 | `scroll_shift_frame` | skips ASM | **RUNTIME-REPLACED** |
+| sprite_decode / sqz / audio | … | recovered | skips ASM | **RUNTIME-REPLACED** |
+| **panel_copy / curtain** | 3054 | `panel_copy` | **passthrough (ASM runs)** | **VERIFY-ONLY — can't replace (vsync-paced reveal timing IS the effect; a pure hook would hang the det-clock)** |
+| **anim advance** | 367D | `advance_animation` | **passthrough** | **VERIFY-ONLY shadow (PROVEN) — deliberately not authoritative (state-ownership "keep ASM oracle"); can be promoted to mode-2** |
+| **camera-shake apply** | 4C30 | `apply_camera_shake` | **passthrough** | **VERIFY-ONLY shadow (PROVEN) — can be promoted to mode-2** |
+
+So the user's worry — "ASM renderer still runs and the viewer re-renders afterward" — is mostly NOT the
+case: the recovered leaves ARE the live render path (the ASM bodies are skipped). The `--faithful`
+viewer is an *additional* mode-1 whole-frame re-compose (`render_frame`/`render_visual`) that shares
+those same leaves — useful as the clean-framebuffer proof, redundant with the (already recovered)
+hybrid VRAM.
+
+### Answers to the audit questions
+- **Already runtime-replaced:** grid/tile_row/scroll_copy, object+sprite blit, palette fade, iris,
+  draw_string, menu bg scroll, decode/sqz/audio. (≈ the whole renderer.)
+- **Only viewer-level re-rendering:** `render_frame`'s whole-frame orchestration + its `rebuild`
+  path (`build_background_ring`) are mode-1 only (the runtime uses the per-leaf hooks + incremental
+  `draw_grid`). Same leaves, different orchestration — not a duplicate impl.
+- **Verify-only scaffolding (ASM still runs):** curtain `panel_copy` (3054), `anim_advance` (367D),
+  `camera_shake_apply` (4C30).
+- **Old ASM that still executes despite a recovered impl:** those same three.
+- **Replacements blocked by unmodelled side effects:** (a) the curtain's per-step vsync PACING (its
+  pixels are recoverable as a partial `panel_copy`, but the timing is presentation, not state);
+  (b) the **whole-render-block collapse** into one `FaithfulVisual.render` hook — blocked because the
+  main loop (0214-0270) interleaves the render leaf-calls WITH game logic, so one hook can't replace
+  the block without recovering that interleaved logic ⇒ **converges with the state-ownership track**.
+- **Need lifting from VGA/page semantics first:** the curtain (page-copy + vsync → a frame-clock /
+  per-step surface), the page-flip/displayed-page choice (presentation detail — just fixed for the
+  viewer), and the scene leaves (menu present → a `SceneState` surface).
+
+### Runtime-integration plan (collapse toward one FaithfulVisual island)
+1. **Promote the two PROVEN verify-only shadows to mode-2** (`advance_animation`, `apply_camera_shake`):
+   flip their live branch from passthrough to skip-ASM + write the contract. They are already
+   shadow-verified 0-divergence — this removes two more ASM calls from the live path (the cleanest
+   next mode-1→mode-2 step) while the checkpoint stays as the verify oracle.
+2. **Curtain:** model the per-step reveal as a partial `panel_copy(step)` (the pixels), keep the
+   vsync PACING as the VM's (or the enhanced renderer's own clock) — it can become a faithful
+   *rendered* effect (viewer + enhanced) even if the live hook stays passthrough for timing.
+3. **Scene leaves (menu/map/intro/…):** recover + hook each (most of the menu is already mode-2 —
+   bg scroll + draw_string; what's missing is the `SceneState` assembly + a clean-FB scene compose).
+4. **The collapse to one `FaithfulVisual.render` hook** is the end-state, gated on recovering the
+   interleaved game logic (state-ownership). Until then, the per-leaf mode-2 hooks ARE the canonical
+   render path; `render_frame`/`render_visual` is the whole-frame mirror that the collapse converges
+   onto. One-impl rule holds throughout (checkpoint + runtime hook + mirror call the same leaf).
+
 ## Relationship to the other phases
 
 This consolidation runs *alongside* the object-system recovery (state ownership): VisualControllers is
