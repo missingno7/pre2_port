@@ -32,7 +32,7 @@ from pre2.recovered.renderer import ROW_STRIDE, WRAP_AT, WRAP_SPAN, blit_sprite
 
 __all__ = [
     "RowFlags", "GridResult", "VISIBLE_COLS", "VISIBLE_ROWS", "RING_COLS",
-    "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "scroll_copy", "panel_copy",
+    "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "build_background_ring", "scroll_copy", "panel_copy",
     "calc_scroll_source", "redraw_animated_grid",
 ]
 
@@ -203,6 +203,51 @@ def draw_grid(planes, tilemap, camera_x, camera_y, prev_x, prev_y, dirty, dirty_
         si = (si + GRID_SI_ROW_ADVANCE) & 0xFFFF          # [asm 3634]
 
     return GridResult(True, new_prev_x, new_prev_y, new_dirty, 0, tile_flags_acc & 0xFF)
+
+
+def build_background_ring(planes, tilemap, camera_x, camera_y, scroll_src, col_ring,
+                          fine_scroll, blit_type, mask_region):
+    """Full background/ring REBUILD from a clean ring — the explicit recovered counterpart of the
+    level-start / camera-jump full redraw, so the background can be produced from RendererState +
+    asset graphics with NO dependence on the ASM-built scroll ring.
+
+    Draws **every** visible tile (all 12x20) into the ring, including the **type-0 opaque** tiles
+    that :func:`draw_grid` skips (the per-frame path leaves opaque tiles in the ring from scrolling;
+    this path does not assume any prior ring contents). It mirrors ``draw_grid``'s exact ring
+    coordinate walk (so type>=1 tiles land identically) and applies the ``WRAP_AT`` ring wrap to
+    *all* tiles (as ``draw_tile_row`` does), since opaque tiles are now drawn too.
+
+    Consumes only: tilemap indices, the tile-graphic cache + parallax base already restored into
+    ``planes`` (from ``RendererState.asset_planes``), and camera/scroll state. Reads no previously
+    rendered output. Returns the OR-accumulated ``tile_flags``. Animated (type-0) tiles are laid at
+    their base frame here; the caller runs ``redraw_animated_grid`` after to advance them.
+    """
+    tile_flags_acc = 0
+    si = (camera_y * 0x100 + camera_x) & 0xFFFF
+    di = scroll_src & 0xFFFF
+    bg_ptr = BG_PTR_BIAS
+    for _row in range(VISIBLE_ROWS):
+        dx = col_ring
+        for _col in range(VISIBLE_COLS):
+            tile = tilemap.tiles[si]
+            tile_flags_acc |= tilemap.tile_flags[tile]
+            typ = blit_type[tile]
+            if di >= WRAP_AT:                          # ring wrap for ALL tiles (cf draw_tile_row)
+                di = (di - WRAP_SPAN) & 0xFFFF
+            mask = mask_region[(typ - 2) * 0x20:(typ - 2) * 0x20 + 0x20] if typ >= 2 else b""
+            bg_off = (bg_ptr - ROW_STRIDE * fine_scroll) & 0xFFFF
+            blit_sprite(planes, tile, di, typ, bg_off, mask)   # ALL types, incl type-0 opaque
+            dx += 1
+            if dx >= RING_COLS:
+                di = (di - ROW_STRIDE) & 0xFFFF
+                dx = 0
+            bg_ptr = (bg_ptr + 2) & 0xFFFF
+            di = (di + 2) & 0xFFFF
+            si = (si + 1) & 0xFFFF
+        bg_ptr = (bg_ptr + GRID_BG_ROW_ADVANCE) & 0xFFFF
+        di = (di + GRID_DI_ROW_ADVANCE) & 0xFFFF
+        si = (si + GRID_SI_ROW_ADVANCE) & 0xFFFF
+    return tile_flags_acc
 
 
 def _copy_run(planes, si, di, n):

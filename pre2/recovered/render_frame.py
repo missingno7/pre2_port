@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pre2.recovered.frame_renderer import (
-    draw_grid, redraw_animated_grid, scroll_copy,
+    build_background_ring, draw_grid, redraw_animated_grid, scroll_copy,
 )
 from pre2.recovered.object_render import paint_sprite, plan_frame
 from pre2.recovered.transition import fade_palette
@@ -106,7 +106,7 @@ class RendererState:
     object_src_banks: dict | None = None  # src_seg -> 64 KiB sprite-pixel segment bytes
 
 
-def render_frame(state: RendererState, planes, dac=None):
+def render_frame(state: RendererState, planes, dac=None, rebuild=False):
     """Render one frame's **renderer-owned** output into ``planes`` (and ``dac``).
 
     ``planes`` is the four EGA plane buffers (the scrolling ring buffer + the visible
@@ -134,18 +134,33 @@ def render_frame(state: RendererState, planes, dac=None):
         for i in range(16):
             dac[i] = [out[3 * i] & 0x3F, out[3 * i + 1] & 0x3F, out[3 * i + 2] & 0x3F]
 
-    # 2) animated-grid redraw — 3668 (redraw the animated background tiles into the ring)
-    redraw_animated_grid(
-        planes, s.tiles, s.type_tbl, s.flag_tbl, s.anim_xlat, s.blit_type,
-        s.camera_x & 0xFF, s.camera_y & 0xFF, s.col_ring, s.scroll_src,
-    )
+    if rebuild:
+        # FULL rebuild from a clean ring: draw EVERY tile (incl. type-0 opaque) into the ring from
+        # RendererState + assets, then advance animated (type-0) tiles to the current frame. This is
+        # the explicit init/full-redraw path that removes the per-frame reliance on the ASM-built
+        # ring. The normal incremental path (else) is unchanged.
+        build_background_ring(
+            planes, _TileMapView(s), s.camera_x, s.camera_y, s.scroll_src, s.col_ring,
+            s.fine_scroll, s.blit_type, s.mask_region,
+        )
+        redraw_animated_grid(
+            planes, s.tiles, s.type_tbl, s.flag_tbl, s.anim_xlat, s.blit_type,
+            s.camera_x & 0xFF, s.camera_y & 0xFF, s.col_ring, s.scroll_src,
+        )
+        grid = None
+    else:
+        # 2) animated-grid redraw — 3668 (redraw the animated background tiles into the ring)
+        redraw_animated_grid(
+            planes, s.tiles, s.type_tbl, s.flag_tbl, s.anim_xlat, s.blit_type,
+            s.camera_x & 0xFF, s.camera_y & 0xFF, s.col_ring, s.scroll_src,
+        )
 
-    # 3) grid redraw — 35A1 (full visible-grid redraw; early-exits unless the camera moved)
-    grid = draw_grid(
-        planes, _TileMapView(s), s.camera_x, s.camera_y, s.prev_x, s.prev_y,
-        s.dirty, s.dirty_rows, s.scroll_src, s.col_ring, s.fine_scroll,
-        s.blit_type, s.mask_region,
-    )
+        # 3) grid redraw — 35A1 (full visible-grid redraw; early-exits unless the camera moved)
+        grid = draw_grid(
+            planes, _TileMapView(s), s.camera_x, s.camera_y, s.prev_x, s.prev_y,
+            s.dirty, s.dirty_rows, s.scroll_src, s.col_ring, s.fine_scroll,
+            s.blit_type, s.mask_region,
+        )
 
     # 4) scroll copy — 3A27 (blit the ring buffer to the visible page)
     scroll_copy(
