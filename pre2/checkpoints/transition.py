@@ -20,7 +20,7 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge import transition as _tr
-from pre2.recovered.transition import build_scaled_columns, draw_scale_frame
+from pre2.recovered.transition import compose_iris
 
 from .common import report
 
@@ -29,19 +29,11 @@ _EXIT = (0x1030, 0x32B0)
 
 
 def _run(planes, inp):
-    """Build this frame's iris-circle table and clear outside it, writing ``planes``.
-    Returns ``(xs, ys, cur_y, cur_x)`` — the scaled-column tables + the draw loop's
-    terminal row/column (the DGROUP scratch the ASM leaves at 32B0)."""
-    xs, ys = build_scaled_columns(inp.src_x, inp.src_y, inp.scale,
-                                  inp.x_off, inp.y_off, inp.x_clamp)
-    tbl_x, tbl_y = list(inp.tbl_x), list(inp.tbl_y)
-    for i, v in enumerate(xs):
-        tbl_x[i] = v
-    for i, v in enumerate(ys):
-        tbl_y[i] = v
-    cur_y, cur_x = draw_scale_frame(planes, tbl_x, tbl_y, len(xs),
-                                    inp.x_off, inp.y_off, inp.x_clamp, inp.page)
-    return xs, ys, cur_y, cur_x
+    """Build this frame's iris-circle table and clear outside it, writing ``planes`` — via the
+    shared :func:`pre2.recovered.transition.compose_iris` (the same impl the faithful dispatcher
+    uses; no second copy). Returns ``(xs, ys, cur_y, cur_x)``."""
+    return compose_iris(planes, inp.src_x, inp.src_y, inp.scale, inp.x_off, inp.y_off,
+                        inp.x_clamp, inp.tbl_x, inp.tbl_y, inp.page)
 
 
 @registry.replace(*_ENTRY, "iris_transition")

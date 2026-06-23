@@ -24,7 +24,7 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 
 __all__ = ["SCREEN_W", "SCREEN_H", "ROW_STRIDE", "DAC_COMPONENTS", "SCALE_COLUMNS",
-           "clear_span", "fade_palette", "build_scaled_columns", "draw_scale_frame"]
+           "clear_span", "fade_palette", "build_scaled_columns", "draw_scale_frame", "compose_iris"]
 
 DAC_COMPONENTS = 0x30   # 16 colours × 3 (R,G,B), 6-bit each [asm 6794: cx=0x30]
 SCALE_COLUMNS = 0x41    # 65 source columns scanned per frame [asm 3244: cmp 0x40, jbe]
@@ -154,6 +154,26 @@ def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: in
         if cur_x == 0:                              # [asm 32AC: je 32B0]
             break
     return cur_y & 0xFFFF, cur_x & 0xFFFF           # terminal [0x2DCA]/[0x2DD2]
+
+
+def compose_iris(planes, src_x, src_y, scale: int, x_off: int, y_off: int, x_clamp: int,
+                 tbl_x, tbl_y, page: int):
+    """One iris frame: build this scale step's circle column table and clear everything OUTSIDE
+    the circle into ``planes`` (over a base frame already drawn). The single shared compose used by
+    BOTH the verify checkpoint (1030:31F4) and the faithful visual dispatcher — no second copy.
+
+    ``tbl_x``/``tbl_y`` are the live cos/sin regions ([0x6B14]/[0x6A88]); the first ``len(xs)``
+    entries are overwritten with this frame's scaled columns (the rest stay as the ASM leaves them).
+    Returns ``(xs, ys, cur_y, cur_x)`` (the scaled tables + the terminal scratch the ASM leaves at 32B0).
+    """
+    xs, ys = build_scaled_columns(src_x, src_y, scale, x_off, y_off, x_clamp)
+    tx, ty = list(tbl_x), list(tbl_y)
+    for i, v in enumerate(xs):
+        tx[i] = v
+    for i, v in enumerate(ys):
+        ty[i] = v
+    cur_y, cur_x = draw_scale_frame(planes, tx, ty, len(xs), x_off, y_off, x_clamp, page)
+    return xs, ys, cur_y, cur_x
 
 
 @oracle_link("1030:6772",

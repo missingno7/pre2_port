@@ -308,7 +308,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from time import perf_counter, sleep
     from sdl_view import (SoundBlasterAudio, render_planar_rgb, render_planar_rgb_from_planes,
                           render_text_rgb, render_vga_rgb)
-    from pre2.bridge.live_render import is_gameplay_frame, render_gameplay_planes
+    from pre2.bridge.live_render import render_visual_planes
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
@@ -472,11 +472,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     faithful = getattr(args, "faithful", False)
     faithful_verify = getattr(args, "faithful_verify", False)
 
-    def _faithful_planar(ds):
-        """Render the gameplay frame the recovered way (clean framebuffer from explicit state +
-        assets), not from ASM VRAM. Returns the deplanarized RGB. Optionally diffs vs the VM page."""
-        planes, page = render_gameplay_planes(rt.cpu.mem, rt.dos, game_root=args.game_root,
-                                              dest_page=ds)
+    def _faithful_planar(mem_bytes, ds):
+        """Faithful visual dispatch: derive the scene kind and render via the recovered visual leaf
+        (gameplay frame, or the end-level iris over it). Falls back to the VM frame for scenes whose
+        leaf is not recovered yet (intro/menu/map/...). Optionally diffs vs the VM page."""
+        planes, page, kind = render_visual_planes(rt.cpu.mem, rt.dos, game_root=args.game_root)
+        if planes is None:                               # IMAGE/SCENE leaf not recovered -> VM frame
+            faithful_info[0] = f"faithful: {kind.name}->VM"
+            return render_planar_rgb(mem_bytes, ds, rt.dos.vga_palette)
         if faithful_verify:
             d = 0
             data = rt.program.memory.data
@@ -488,9 +491,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         a = (base + cb) & 0xFFFF
                         if planes[p][a] != data[apb + a]:
                             d += 1
-            faithful_info[0] = f"faithful Δ={d}" + ("" if d <= 64 else " !!")
+            faithful_info[0] = f"faithful[{kind.name}] Δ={d}" + ("" if d <= 96 else " !!")
         else:
-            faithful_info[0] = "faithful"
+            faithful_info[0] = f"faithful[{kind.name}]"
         return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
 
     def render_current():
@@ -503,10 +506,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             rgb = render_vga_rgb(mem, rt.dos.vga_palette)
         elif rt.program.memory.ega_planar:
             ds = rt.program.memory.ega_display_start
-            if faithful and is_gameplay_frame(rt.cpu.mem):
-                # Live FAITHFUL path: the displayed gameplay image comes from the recovered renderer,
-                # not the ASM-populated VRAM. Non-gameplay scenes fall through to the VM frame below.
-                rgb = _faithful_planar(ds)
+            if faithful:
+                # Live FAITHFUL VISUAL path: the displayed image comes from the recovered visual
+                # dispatcher (gameplay frame / iris transition), not ASM VRAM. Scenes whose leaf is
+                # not recovered yet fall back to the VM frame inside _faithful_planar.
+                rgb = _faithful_planar(mem, ds)
             else:
                 # Interim: PRE2's intro/menu currently runs in 16-colour planar mode
                 # 0Dh in the VM (the VGA mode-13h path is not yet taken).  Render it so

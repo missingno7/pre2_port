@@ -22,16 +22,24 @@ from pre2.bridge.render_state import read_renderer_state
 from pre2.recovered.render_frame import render_frame
 
 _DS = 0x1A0F
-_ANIM_PTR = 0x6BC2          # [0x6BC2] animated-tile remap pointer
-_ANIM_LO, _ANIM_HI = 0x6688, 0x6888   # its valid cycle range (3 tables) — set only during gameplay
+_CAM_X = 0x2DE4             # [0x2DE4] camera X (tiles)
+_CAM_Y = 0x2DE6            # [0x2DE6] camera Y (tiles)
+
+
+def _word(mem, off):
+    b = ((_DS << 4) + off) & 0xFFFFF
+    return mem.data[b] | (mem.data[b + 1] << 8)
 
 
 def is_gameplay_frame(mem) -> bool:
-    """Cheap gate: the animated-tile cycle pointer ``[0x6BC2]`` sits in its valid table range only
-    during gameplay. Used so the gameplay renderer is not applied to menu/scene frames (the other
-    visual modes are not yet recovered — see docs/pre2/scene_island.md). Heuristic, v1."""
-    b = ((_DS << 4) + _ANIM_PTR) & 0xFFFFF
-    return _ANIM_LO <= (mem.data[b] | (mem.data[b + 1] << 8)) <= _ANIM_HI
+    """Heuristic gameplay gate: a level is loaded with a NON-origin camera ``[0x2DE4]/[0x2DE6]``.
+    The menu / map / intro / title scenes all sit at camera (0,0); gameplay (and the level-end tally)
+    have a scrolled camera — and the tally is caught earlier by the iris check, so among 0Dh non-iris
+    frames a non-zero camera means gameplay. (The earlier ``[0x6BC2]`` anim-ptr gate was too loose —
+    menu frames share that range.) No clean gameplay flag exists (see scene_state.py); this is the
+    best available signal. A gameplay frame exactly at camera origin (level start) would fall back to
+    the VM frame for that frame — acceptable."""
+    return (_word(mem, _CAM_X) | _word(mem, _CAM_Y)) != 0
 
 
 def render_gameplay_planes(mem, dos, *, game_root, dest_page: int | None = None):
@@ -53,3 +61,33 @@ def render_gameplay_planes(mem, dos, *, game_root, dest_page: int | None = None)
     # planes only and deplanarize with the live DAC — the planes themselves are fade-independent.
     render_frame(rs, planes, None, rebuild=True)
     return planes, page
+
+
+def render_visual_planes(mem, dos, *, game_root):
+    """Live FAITHFUL VISUAL dispatch: derive the scene kind and route to the recovered visual leaf.
+
+    Returns ``(planes, page, scene_kind)`` for a faithfully-composed frame (GAMEPLAY or the end-level
+    IRIS over the gameplay frame), or ``(None, None, scene_kind)`` when the scene's leaf is not
+    recovered yet (IMAGE/SCENE) so the caller falls back to the VM's own frame. The recovered
+    dispatcher (:func:`pre2.recovered.faithful_visual.render_visual`) reuses the same leaves the
+    checkpoints verify — render_frame + compose_iris — no second copy."""
+    from dataclasses import replace as _replace
+    from pre2.bridge.scene_state import derive_scene_kind
+    from pre2.bridge import transition as _tr
+    from pre2.recovered.faithful_visual import SceneKind, render_visual
+
+    kind = derive_scene_kind(mem, dos)
+    if kind not in (SceneKind.GAMEPLAY, SceneKind.IRIS):
+        return None, None, kind                       # leaf not recovered -> caller falls back
+
+    rs = read_renderer_state(mem, dos, game_root=game_root)
+    page = rs.dest_page
+    cam = rs.object_camera
+    rs = replace(rs, dest_page=page,
+                 object_camera=(replace(cam, dest_page=page) if cam is not None else None))
+    iris = None
+    if kind == SceneKind.IRIS:
+        iris = _replace(_tr.read_iris_inputs(mem), page=page)   # align the iris clear to our page
+    planes = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]
+    render_visual(kind, rs, planes, iris=iris)
+    return planes, page, kind
