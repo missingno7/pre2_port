@@ -427,7 +427,6 @@ def render_planar_rgb(mem: bytes, display_start: int = 0,
     that 16-colour path instead of true VGA mode 13h.
     """
     arr = np.frombuffer(mem, dtype=np.uint8)
-    pal = np.array(palette if palette is not None else DEFAULT_VGA_PALETTE, dtype=np.uint8)
     start = display_start & 0xFFFF
     # Page-wrap for the menu/title screens. PRE2's mode-select present (1030:9600 / the pan at
     # ~97BE) masks the CRTC start with `and bh,0x1f` — it treats the display as a 0x2000-byte
@@ -437,11 +436,32 @@ def render_planar_rgb(mem: bytes, display_start: int = 0,
     # with its scroll ring (content well past 0x2000) so it keeps the full 0x10000 wrap, unchanged.
     plane0 = arr[EGA_APERTURE:EGA_APERTURE + EGA_PLANE_STRIDE]
     wrap = 0x1FFF if (start < 0x2000 and not plane0[0x2000:].any()) else 0xFFFF
+    return _planar_to_rgb(lambda p: arr[EGA_APERTURE + p * EGA_PLANE_STRIDE:
+                                        EGA_APERTURE + (p + 1) * EGA_PLANE_STRIDE],
+                          display_start, palette, wrap)
+
+
+def render_planar_rgb_from_planes(planes, display_start: int = 0,
+                                  palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
+    """Decode four explicit 64 KiB EGA plane buffers (the recovered ``render_frame`` output) to RGB.
+
+    The live-FAITHFUL viewer path: instead of reading the ASM-populated shadow aperture, this
+    deplanarizes the planes the recovered renderer produced from a clean framebuffer. Gameplay fills
+    the plane past 0x2000 so the full 0x10000 scanline wrap applies (no menu single-page wrap)."""
+    parr = [np.frombuffer(bytes(p), dtype=np.uint8) for p in planes]
+    return _planar_to_rgb(lambda p: parr[p], display_start, palette, 0xFFFF)
+
+
+def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int) -> np.ndarray:
+    """Shared core: assemble the 4-bit colour index from four bit-planes (MSB-first) through the
+    DAC. ``get_plane(p)`` returns plane p as a uint8 array indexable up to ``wrap``."""
+    pal = np.array(palette if palette is not None else DEFAULT_VGA_PALETTE, dtype=np.uint8)
+    start = display_start & 0xFFFF
     rowbase = (start + np.arange(HEIGHT) * _PLANAR_ROW_BYTES) & wrap
     off = (rowbase[:, None] + np.arange(_PLANAR_ROW_BYTES)[None, :]) & wrap     # (200,40)
     color = np.zeros((HEIGHT, _PLANAR_ROW_BYTES, 8), dtype=np.uint8)
     for plane in range(4):
-        plane_bytes = arr[EGA_APERTURE + plane * EGA_PLANE_STRIDE + off]        # (200,40)
+        plane_bytes = get_plane(plane)[off]                                    # (200,40)
         bits = np.unpackbits(plane_bytes[..., None], axis=2)                    # (200,40,8) MSB-first
         color |= bits << plane
     return pal[color.reshape(HEIGHT, WIDTH)]

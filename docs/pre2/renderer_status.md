@@ -26,6 +26,30 @@ Open question = which side of the seam it's on: if particles spawn into the acti
 are *already composed* (state-producer only); if `4B8E` has its own blit it is an open composition
 piece. One particle witness (dust/splash/hit-spark, `[0x7DE6] != -1`) settles it.
 
+### LIVE FAITHFUL PATH (2026-06-23) — promoted from offline/test to a live authoritative renderer
+
+The gameplay renderer is no longer only an offline/snapshot/test island. `pre2/bridge/live_render.py`
+`render_gameplay_planes(mem, dos, game_root)` reads an explicit `RendererState` from live VM memory
+each frame and renders the visible frame into a CLEAN framebuffer via `render_frame(rebuild=True)`,
+deplanarized by `sdl_view.render_planar_rgb_from_planes`. The viewer flag **`--faithful`** displays
+that recovered output instead of ASM-populated VRAM (the VM still runs as oracle/state-producer);
+**`--faithful-verify`** shows the per-frame divergence vs the VM page in the title bar. Non-gameplay
+scenes (menu/intro/map) fall back to the VM frame via the `is_gameplay_frame` gate (the other visual
+modes are not yet recovered — see `scene_island.md`).
+
+PROOF (`pre2/probes/verify_live_faithful.py`, vs **pure ASM** = the true oracle, sampled at the
+object-pass RET 2DF9 where state↔page are phase-aligned): the gameplay viewport (rows 0–175) is
+**byte-exact** on a settled scene (boss frame 192126: 0/28160 every frame) and within a
+≤single-sprite-edge residual on a fast-motion scene (185902 falling player: ≤5px after settling) —
+that residual is a live-sampling artifact (the object pass mutates each record's blink/life `[+0x11]`
+as it draws, so state read at the RET is a hair off-phase for one sprite), NOT a renderer defect.
+
+ARCHITECTURE NOTE: keep growing the faithful renderer as ONE deeply-rooted island (render_frame is
+the single seam; don't accumulate disconnected render routines). The long-term faithful visual layer
+extends beyond gameplay to a `GameVisualState`/`SceneFrame` family (Intro/Menu/Map/Gameplay/
+Transition/Ending), each grounded in the oracle — see `scene_island.md`. The ENHANCED renderer stays
+separate: it consumes the verified state/model and is NOT byte-diffed; do not build it on guesses.
+
 **Remaining work is now STATE OWNERSHIP / CONTROLLER RECOVERY, not normal-frame composition.** The
 renderer can *display* the game; the next roots explain *who creates the displayed state* — see
 `renderer_goal.md`/the symbol ledger: (1) wire the already-verified controllers (`advance_animation`,

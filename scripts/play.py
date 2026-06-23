@@ -306,7 +306,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     import pygame
     import numpy as np
     from time import perf_counter, sleep
-    from sdl_view import SoundBlasterAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
+    from sdl_view import (SoundBlasterAudio, render_planar_rgb, render_planar_rgb_from_planes,
+                          render_text_rgb, render_vga_rgb)
+    from pre2.bridge.live_render import is_gameplay_frame, render_gameplay_planes
+    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
     from dos_re.runtime import enable_sound_blaster
@@ -465,19 +468,50 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 rec.record_dos_key(boundary=frame, scancode=sc, text=text, value=value)
 
     last_rgb = [None]  # most recent rendered frame, for F10 screenshots
+    faithful_info = [""]  # title-bar note for the live faithful renderer (gameplay only)
+    faithful = getattr(args, "faithful", False)
+    faithful_verify = getattr(args, "faithful_verify", False)
+
+    def _faithful_planar(ds):
+        """Render the gameplay frame the recovered way (clean framebuffer from explicit state +
+        assets), not from ASM VRAM. Returns the deplanarized RGB. Optionally diffs vs the VM page."""
+        planes, page = render_gameplay_planes(rt.cpu.mem, rt.dos, game_root=args.game_root,
+                                              dest_page=ds)
+        if faithful_verify:
+            d = 0
+            data = rt.program.memory.data
+            for p in range(4):
+                apb = EGA_APERTURE + p * EGA_PLANE_STRIDE
+                for row in range(176):                       # the gameplay viewport (HUD verified separately)
+                    base = (page + row * 0x28) & 0xFFFF
+                    for cb in range(0x28):
+                        a = (base + cb) & 0xFFFF
+                        if planes[p][a] != data[apb + a]:
+                            d += 1
+            faithful_info[0] = f"faithful Δ={d}" + ("" if d <= 64 else " !!")
+        else:
+            faithful_info[0] = "faithful"
+        return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
 
     def render_current():
         mem = bytes(rt.program.memory.data)
         mode = rt.dos.video_mode & 0x7F
+        faithful_info[0] = ""
         if mode in (0, 1, 2, 3, 7):
             rgb = render_text_rgb(mem, rt.dos.video_mode & 0xFF, rt.dos.video_page)
         elif mode in (0x13, 0x19):
             rgb = render_vga_rgb(mem, rt.dos.vga_palette)
         elif rt.program.memory.ega_planar:
-            # Interim: PRE2's intro/menu currently runs in 16-colour planar mode
-            # 0Dh in the VM (the VGA mode-13h path is not yet taken).  Render it so
-            # the screens are visible/navigable; colours come from the live DAC.
-            rgb = render_planar_rgb(mem, rt.program.memory.ega_display_start, rt.dos.vga_palette)
+            ds = rt.program.memory.ega_display_start
+            if faithful and is_gameplay_frame(rt.cpu.mem):
+                # Live FAITHFUL path: the displayed gameplay image comes from the recovered renderer,
+                # not the ASM-populated VRAM. Non-gameplay scenes fall through to the VM frame below.
+                rgb = _faithful_planar(ds)
+            else:
+                # Interim: PRE2's intro/menu currently runs in 16-colour planar mode
+                # 0Dh in the VM (the VGA mode-13h path is not yet taken).  Render it so
+                # the screens are visible/navigable; colours come from the live DAC.
+                rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette)
         else:
             screen.fill((0, 0, 0))
             pygame.display.flip()
@@ -635,6 +669,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     f"PRE2 VM | {status} | frame={frame} steps={steps_done:,} | "
                     f"CS:IP={rt.cpu.s.cs:04X}:{rt.cpu.s.ip:04X} | mode={rt.dos.video_mode & 0xFF:02X}h"
                     + (f" | {caption_extra}" if caption_extra else "")
+                    + (f" | {faithful_info[0]}" if faithful_info[0] else "")
                     + (" | REC" if demo["rec"] is not None else "")
                 )
                 last_render = now
@@ -783,6 +818,8 @@ def main(argv: list[str] | None = None) -> int:
                         "(the recovered mixer's output); 'enhanced' = modern float mixer playing "
                         "the standard .TRK songs + SFX driven by the recovered audio commands; 'off'")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
+    p.add_argument("--faithful", action="store_true", help="(viewer) display GAMEPLAY frames from the recovered faithful renderer (render_frame on a clean framebuffer from explicit RendererState + assets) instead of the ASM-populated VRAM. The VM still runs as oracle/state-producer. Non-gameplay scenes (menu/intro/map) fall back to the VM frame (not yet recovered)")
+    p.add_argument("--faithful-verify", action="store_true", help="(with --faithful) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
     p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
