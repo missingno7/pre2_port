@@ -88,11 +88,22 @@ def _hud_chrome(mem) -> HudChromeAsset:
     )
 
 
+_BONUS_FLASH = 0x6C00      # [0x6C00] BONUS celebration/flash mode (!=0 -> all 5 letters flash by parity)
+_BONUS_MASK = 0x6CA7       # [0x6CA7] collected B/O/N/U/S bitmask (drawn in normal mode)
+_FRAME_CTR_B = 0x6BD5      # [0x6BD5] frame counter (bit0 = the flash parity)
+
+
 def _hud_state(mem) -> HudState:
     """Read the status-bar values the HUD render (1030:45B8) draws: the score ([0x6C0E]/[0x6C10],
-    a 32-bit count displayed *10), lives ([0x27D8]) and energy hearts ([0x27D6])."""
+    a 32-bit count displayed *10), lives ([0x27D8]), energy hearts ([0x27D6]), and the EFFECTIVE
+    BONUS-letter mask (1030:4683: collected [0x6CA7] normally, or 0x1F/0 by frame parity when the
+    BONUS celebration [0x6C00] is active)."""
     score = (_rw(mem, _SCORE) | (_rw(mem, _SCORE + 2) << 16)) * 10
-    return HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY))
+    if _rb(mem, _BONUS_FLASH) != 0:
+        bonus = 0x1F if (_rb(mem, _FRAME_CTR_B) & 1) else 0
+    else:
+        bonus = _rb(mem, _BONUS_MASK)
+    return HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY), bonus_mask=bonus)
 
 
 def _asset_planes(mem) -> tuple:

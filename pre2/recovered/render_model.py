@@ -189,6 +189,9 @@ class HudState:
     score: int = 0          # displayed score (= internal [0x6C0E]/[0x6C10] * 10)
     lives: int = 0          # [0x27D8]
     energy: int = 0         # [0x27D6] (hearts)
+    bonus_mask: int = 0     # B/O/N/U/S collected-letter bitmask the HUD draws (1030:46AD glyphs 0xC..0x10);
+                            # the EFFECTIVE mask: collected [0x6CA7] normally, or the parity flash when
+                            # the BONUS celebration ([0x6C00]) is active (all 5 toggling on [0x6BD5]&1)
 
 
 @dataclass(frozen=True)

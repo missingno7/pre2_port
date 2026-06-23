@@ -29,6 +29,10 @@ HUD_MAX_HEARTS = 3               # [asm 465A dl=3]
 _HEART_FULL = 0x0A               # full-heart glyph [asm 4667]
 _HEART_EMPTY = 0x0B              # empty-heart glyph [asm 4678]
 _SCORE_DIGITS = 6                # digits drawn from [0x6F52] before the trailing 0
+# BONUS letters B/O/N/U/S — glyphs 0x0C..0x10 at fixed page-relative di [asm 46AD loop, table 0x6F86],
+# each drawn only if its bit is set in the effective mask (1030:46AD `shr ah,1; jae skip`).
+HUD_BONUS_DI = (0x1C91, 0x1BF2, 0x1CE3, 0x1C6C, 0x1C1D)   # [0x6F86] B,O,N,U,S positions
+_BONUS_GLYPH0 = 0x0C             # first BONUS-letter glyph (B) [asm 46AD al=0xC]
 
 HUD_GLYPH_BASE = 0xE60 + 0x7B0   # 0x1610 — font offset of glyph 0 [asm 4750/4753]
 HUD_GLYPH_BYTES = 0x60           # 96 bytes/glyph = 4 planes x 12 rows x 2 bytes [asm 474C mul 0x60]
@@ -87,6 +91,10 @@ def draw_hud(planes, hud, font, page=0):
     for _ in range(HUD_MAX_HEARTS - full):
         blit_hud_glyph(planes, _HEART_EMPTY, di, font)
         di = (di + 2) & 0xFFFF
+    # BONUS letters — glyph 0xC+i at its fixed di, drawn only if collected (bit i of the mask) [asm 46AD]
+    for i, bdi in enumerate(HUD_BONUS_DI):
+        if (hud.bonus_mask >> i) & 1:
+            blit_hud_glyph(planes, (_BONUS_GLYPH0 + i) & 0xFF, (bdi + page) & 0xFFFF, font)
 
 
 @oracle_link("1030:4580",
