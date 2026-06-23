@@ -27,6 +27,8 @@ from .common import report
 _DS = 0x1A0F
 _ENTRY = (0x1030, 0x367D)
 _EXIT = (0x1030, 0x3717)
+_REDRAW = 0x36A9       # continuation when the cycle advanced this frame (the grid redraw)
+_SKIP = 0x3665         # continuation when it did not (gate-fail / throttle-miss) -> jmp 3717 epilogue
 _FRAME_PTR = 0x6BC2    # [0x6BC2] remap pointer (the cycle state advanced here)
 _THROTTLE = 0x6BD4     # [0x6BD4] per-frame throttle counter
 _ACTIVE = 0x6BBD       # [0x6BBD] animated tiles present this frame (the gate)
@@ -42,21 +44,45 @@ def _rb(mem, off):
     return mem.data[((_DS << 4) + off) & 0xFFFFF]
 
 
-def _predict(mem):
-    """Run the recovered advance from the inputs as they stand at block entry; returns the
-    predicted ``([0x6BC2], [0x6BD4])`` the ASM should produce by the epilogue."""
-    new_fp, new_thr, _adv = advance_animation(
+def _ww(mem, off, val):
+    b = ((_DS << 4) + off) & 0xFFFFF
+    mem.data[b] = val & 0xFF
+    mem.data[b + 1] = (val >> 8) & 0xFF
+
+
+def _wb(mem, off, val):
+    mem.data[((_DS << 4) + off) & 0xFFFFF] = val & 0xFF
+
+
+def _run(mem):
+    """Run the recovered advance from the inputs as they stand at block entry; returns
+    ``(new_frame_ptr, new_throttle, advanced)``."""
+    return advance_animation(
         _rw(mem, _FRAME_PTR), _rb(mem, _THROTTLE), _rb(mem, _ACTIVE) != 0, _rw(mem, _SPEED))
-    return new_fp, new_thr
 
 
 @registry.replace(*_ENTRY, "anim_advance")
 def anim_advance(cpu) -> None:
-    """Shadow checkpoint at 1030:367D. Verify mode predicts the advance from the entry inputs;
-    the ASM remains authoritative. Live hybrid = transparent passthrough (not yet owning state)."""
+    """Mode-2 replacement at 1030:367D (the cycle advance inside redraw_animated_grid 3668).
+
+    Live hybrid: the recovered controller OWNS the cycle state — write its contract
+    (``[0x6BC2]`` remap pointer, ``[0x6BD4]`` throttle) and steer the routine's control flow the way
+    the ASM advance block does: into the grid redraw (``36A9``) when the cycle advanced this frame,
+    else to the skip (``3665`` -> jmp 3717 epilogue). The hook sits AFTER the routine prologue
+    (``3668`` pushed the regs), so it must NOT touch the stack — the ASM epilogue at 3717 pops it.
+    The redraw itself stays ASM. Promoted from verify-only shadow after 0-divergence proof
+    (`pre2/probes/verify_animation_live.py`). Verify mode keeps the ASM as oracle: shadow-predict +
+    passthrough, diffed at the epilogue (`register_verify`)."""
     if getattr(cpu, "pre2_verify_mode", False):
-        cpu.pre2_anim_pending.append(_predict(cpu.mem))
-    interpret_current_instruction_without_hook(cpu)
+        new_fp, new_thr, _adv = _run(cpu.mem)
+        cpu.pre2_anim_pending.append((new_fp, new_thr))
+        interpret_current_instruction_without_hook(cpu)
+        return
+    mem = cpu.mem
+    new_fp, new_thr, advanced = _run(mem)
+    _ww(mem, _FRAME_PTR, new_fp)   # [0x6BC2]
+    _wb(mem, _THROTTLE, new_thr)   # [0x6BD4]
+    cpu.s.ip = _REDRAW if advanced else _SKIP
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:

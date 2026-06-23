@@ -66,7 +66,25 @@ high-level `update_frame()`. Verification boundaries rise with them (next sectio
 
 ## One recovered leaf, many adapters — convergence, not parallelism
 
-A mature subsystem must converge to **one recovered implementation per behavior**, with several thin
+**The goal is NOT to build a parallel renderer beside the original game.** It is to progressively hook
+original ASM routines, extract their behavior into verified high-level recovered code, and use that
+recovered code to *replace* the old ASM behavior. The mental model:
+
+- **hooks are roots** into the original game — where we tap a routine to learn and then take it over;
+- **recovered leaves are reconstructed organs** — the verified pure functions the behavior crystallizes into;
+- **FaithfulVisual is the higher-level body** that composes those organs into a full frame.
+
+**When a hook takes over a routine:** the original game still *triggers* the operation, but instead of
+running the ASM body it runs the recovered code, the ASM is skipped (`cpu.s.ip = cpu.pop()` / jump past
+the block), the game gets **faster**, and we gain **proof** we understood the original behavior. (Example,
+2026-06-24: the camera-shake `4C30` and anim-advance `367D` controllers — the game still reaches them each
+frame, but the recovered controller runs and the ASM body is skipped.)
+
+We do **NOT** want three copies of a behavior — a hook version + a faithful version + an enhanced version.
+We want **one verified recovered function**: used by the original game *through a hook*, used by
+FaithfulVisual *as a mirror/verifier*, and later used as the *foundation for the enhanced backend*.
+
+So a mature subsystem converges to **one recovered implementation per behavior**, with several thin
 **adapters** pointing at it — never a second copy that can drift:
 
 ```

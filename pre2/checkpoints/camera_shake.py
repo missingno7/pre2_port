@@ -36,6 +36,16 @@ def _rb(mem, off):
     return mem.data[((_DS << 4) + off) & 0xFFFFF]
 
 
+def _ww(mem, off, val):
+    b = ((_DS << 4) + off) & 0xFFFFF
+    mem.data[b] = val & 0xFF
+    mem.data[b + 1] = (val >> 8) & 0xFF
+
+
+def _wb(mem, off, val):
+    mem.data[((_DS << 4) + off) & 0xFFFFF] = val & 0xFF
+
+
 def _predict(mem):
     """Run the recovered apply from the inputs at routine entry; returns the predicted
     ``(row_factor, magnitude, h_scroll)`` the ASM should leave at the ret."""
@@ -46,11 +56,24 @@ def _predict(mem):
 
 @registry.replace(*_ENTRY, "camera_shake_apply")
 def camera_shake_apply(cpu) -> None:
-    """Shadow checkpoint at 1030:4C30. Verify mode predicts the apply from the entry inputs; the
-    ASM remains authoritative. Live hybrid = transparent passthrough (not yet owning state)."""
+    """Mode-2 replacement at 1030:4C30 (a clean CALL'd routine -> ret 4C68).
+
+    Live hybrid: the recovered controller OWNS the shake state — write its full contract
+    (``[0x6BF8]`` row-stride bias, the jitter-updated ``[0x6BEA]`` magnitude, the ``[0x4F1E]``
+    horizontal nudge) and return to the caller, skipping the ASM body. Promoted from verify-only
+    shadow after 0-divergence proof (`pre2/probes/verify_camera_shake_live.py`); the contract is
+    idempotent on the paths where the ASM writes nothing (it returns the input values). Verify mode
+    keeps the ASM as oracle: shadow-predict + passthrough, diffed at the ret (`register_verify`)."""
     if getattr(cpu, "pre2_verify_mode", False):
         cpu.pre2_shake_pending.append(_predict(cpu.mem))
-    interpret_current_instruction_without_hook(cpu)
+        interpret_current_instruction_without_hook(cpu)
+        return
+    mem = cpu.mem
+    rf, mag, h = _predict(mem)
+    _ww(mem, _ROW_FACTOR, rf)      # [0x6BF8] renderer row-stride bias (word)
+    _wb(mem, _MAGNITUDE, mag)      # [0x6BEA] shake magnitude/timer (byte; +1 jitter on odd-active)
+    _ww(mem, _H_SCROLL, h)         # [0x4F1E] horizontal nudge (word; -3 on odd-active)
+    cpu.s.ip = cpu.pop()
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:

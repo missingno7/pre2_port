@@ -28,6 +28,13 @@ multiple thin **adapters**, never a second copy:
        checkpoint/probe verifier (oracle diff at the ASM RET)
 ```
 
+Mental model: **hooks are roots** into the original game (we tap a routine, then take it over — the game
+still triggers it but runs recovered code, the ASM body is skipped, the game gets faster, and we gain
+proof); **recovered leaves are reconstructed organs**; **FaithfulVisual is the body** that composes them
+into a full frame. We do NOT want three copies (a hook version + a faithful version + an enhanced version)
+— we want ONE verified recovered function used by the game *through a hook*, by FaithfulVisual *as a
+mirror/verifier*, and later as the *enhanced backend's foundation*.
+
 `FaithfulVisual` (`recovered/faithful_visual.render_visual`) is the **umbrella OVER the leaves**, not a
 second renderer. Convergence is **bidirectional**:
 - **bottom-up:** ASM hook → verified recovered leaf → FaithfulVisual reuses it.
@@ -43,8 +50,8 @@ second renderer. Convergence is **bidirectional**:
 | scroll_copy | 3A27 | ✓ skip | ✓ | ✓ |
 | sprite blit | 3B69 | ✓ skip | ✓ | ✓ |
 | object/sprite pass | 26FA | ✓ skip | ✓ | ✓ |
-| anim cycle advance | 367D | passthrough (shadow) | ✓ | ✓ (bridge-read) |
-| camera shake apply | 4C30 | passthrough (shadow) | ✓ | ✓ (row_factor) |
+| anim cycle advance | 367D | ✓ skip (mode-2, 2026-06-24) | ✓ | ✓ (owns [0x6BC2]/[0x6BD4]) |
+| camera shake apply | 4C30 | ✓ skip (mode-2, 2026-06-24) | ✓ | ✓ (owns [0x6BF8]/[0x6BEA]/[0x4F1E]) |
 | palette fade | 6772 | ✓ skip | ✓ | DAC carries it (see deferred) |
 | iris compose | 31F4 | ✓ skip | ✓ | ✓ (IRIS path) |
 | **HUD draw** | **45B8** | — (verify-only; ASM draws) | **✓ NEW (`checkpoints/hud.py`)** | ✓ (`draw_hud`) |
@@ -79,7 +86,10 @@ second renderer. Convergence is **bidirectional**:
 ### Deferred (NOT gaps — explicitly out of scope until their trigger)
 - **Runtime *replacement* of HUD** (45B8 mode-2): the draw is incremental + dual-page + caches
   `[0x6CA0..0x6CA7]` → low gain; verify-only checkpoint is sufficient grounding.
-- **Promote anim/shake shadows to mode-2** — proven 0-divergence; a clean next step, not required.
+- ~~Promote anim/shake shadows to mode-2~~ **DONE 2026-06-24** — `checkpoints/animation.py` (367D) +
+  `checkpoints/camera_shake.py` (4C30) now skip the ASM and write the contract live (the recovered
+  controllers own `[0x6BC2]`/`[0x6BD4]` and `[0x6BF8]`/`[0x6BEA]`/`[0x4F1E]`). Verified 4 ways: verify
+  shadow 0-div, mode-2-vs-pure-ASM differential 0 diffs/89 boundaries, frame-boundary mirror Δ=0, suite.
 - **`GameFrameSnapshot` → `GameVisualState` convergence (Phase C)** — real overlap, but it serves the
   *enhanced-interp* master, not the byte-exact master; merging now would couple the verifier to the
   interpolator. Defer.
@@ -342,8 +352,8 @@ branch:
 | menu framebuffer scroll | 9804 | `scroll_shift_frame` | skips ASM | **RUNTIME-REPLACED** |
 | sprite_decode / sqz / audio | … | recovered | skips ASM | **RUNTIME-REPLACED** |
 | **panel_copy / curtain** | 3054 | `panel_copy` | **passthrough (ASM runs)** | **VERIFY-ONLY — can't replace (vsync-paced reveal timing IS the effect; a pure hook would hang the det-clock)** |
-| **anim advance** | 367D | `advance_animation` | **passthrough** | **VERIFY-ONLY shadow (PROVEN) — deliberately not authoritative (state-ownership "keep ASM oracle"); can be promoted to mode-2** |
-| **camera-shake apply** | 4C30 | `apply_camera_shake` | **passthrough** | **VERIFY-ONLY shadow (PROVEN) — can be promoted to mode-2** |
+| **anim advance** | 367D | `advance_animation` | **skips ASM** (write [0x6BC2]/[0x6BD4]; ip→36A9 advanced / 3665 skip) | **RUNTIME-REPLACED (mode-2, 2026-06-24)** — checkpoint stays the verify oracle |
+| **camera-shake apply** | 4C30 | `apply_camera_shake` | **skips ASM** (write [0x6BF8]/[0x6BEA]/[0x4F1E]; pop) | **RUNTIME-REPLACED (mode-2, 2026-06-24)** — checkpoint stays the verify oracle |
 
 So the user's worry — "ASM renderer still runs and the viewer re-renders afterward" — is mostly NOT the
 case: the recovered leaves ARE the live render path (the ASM bodies are skipped). The `--faithful`
@@ -370,10 +380,11 @@ hybrid VRAM.
   viewer), and the scene leaves (menu present → a `SceneState` surface).
 
 ### Runtime-integration plan (collapse toward one FaithfulVisual island)
-1. **Promote the two PROVEN verify-only shadows to mode-2** (`advance_animation`, `apply_camera_shake`):
-   flip their live branch from passthrough to skip-ASM + write the contract. They are already
-   shadow-verified 0-divergence — this removes two more ASM calls from the live path (the cleanest
-   next mode-1→mode-2 step) while the checkpoint stays as the verify oracle.
+1. ~~Promote the two PROVEN verify-only shadows to mode-2~~ **DONE 2026-06-24** (`advance_animation`,
+   `apply_camera_shake`): their live branch now skips the ASM + writes the contract (the recovered
+   controllers own `[0x6BC2]`/`[0x6BD4]` and `[0x6BF8]`/`[0x6BEA]`/`[0x4F1E]`); the checkpoint stays the
+   verify oracle. Verified: verify-shadow 0-div + a mode-2-vs-pure-ASM differential (0 diffs/89 boundaries,
+   anim path exercised 22×) + frame-boundary mirror Δ=0.
 2. **Curtain:** model the per-step reveal as a partial `panel_copy(step)` (the pixels), keep the
    vsync PACING as the VM's (or the enhanced renderer's own clock) — it can become a faithful
    *rendered* effect (viewer + enhanced) even if the live hook stays passthrough for timing.
