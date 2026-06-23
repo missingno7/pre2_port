@@ -35,8 +35,9 @@ The **state-producing** side is the update/collision dispatch below.
 | `653D` | object-draw **primitive** (cull vs camera + dest-off + blit) | RECOVERED (`object_draw.py`, dormant) |
 | `65xx` (ret `65AE`) / `8Bxx` (ret `8BF5`) | draw-primitive **variants** (stride/mode + force-redraw) | mapped here (render side, blit-backed) |
 | `5406` | **ObjectSlot structure** draw loop (multi-tile, proximity-triggered) | partially (calls `653D`) |
-| `5C40` | per-type **update + collision dispatch** (`call [bx*2+0x7DA9]`) | **NO** — the state producer |
-| `5C9E` | object-update handler dispatch (`call [bx*2+0x7DA5]`) + self-draw | **NO** |
+| `5C04` | per-object **UPDATE** handler dispatch (`call [bx+0x7D9B]`) | **NO** — the state producer |
+| `5C33` | **DRAW**-primitive selector by tile-type under the object (`call [bx+0x7DA9]`, idx=tile_attr&0xF) → `0x6672`/`0x6673`/`0x65AF` | render side (blit-backed) |
+| `5C9E` | object-update handler dispatch + self-draw | **NO** |
 | `4b8e` | particle/effect system | **NO** (NEEDS-REPRO, watch-list) |
 | `3721` | tile-flag trigger | **NO** |
 | `3922` | auto-scroll script | **NO** |
@@ -74,8 +75,18 @@ The **state-producing** side is the update/collision dispatch below.
 - **Audio events:** `play_sfx` @ `1030:0282` (dl=SFX index) — handlers fire SFX on hit/pickup.
 - **Particles:** `4b8e` — **OPEN** (NEEDS-REPRO); determine if it spawns into the active list
   (already composed) or owns its own blit.
-- **RNG:** **OPEN** — the seed var / generator the handlers use is not yet located. First task of
-  the recovery pass (a recovered handler can only be byte-exact if it consumes the same RNG stream).
+- **RNG: RESOLVED — there is NO RNG in the gameplay path (the game is deterministic).** Checked
+  2026-06-23: over 900k steps of executed gameplay (2862 unique code sites, pure ASM) there are
+  **0** LCG `imul`-with-immediate and **0** `int 1A` (the only raw `CD1A` byte match, 0x9179, is a
+  mid-instruction false positive in a planar-copy loop). The 6 `mul`/1 `div` are the renderer's tile
+  math. Corroborated by the project's already byte-reproducible demos (a timer-seeded RNG would break
+  that). Any pseudo-variety is a deterministic function of the frame counter `[0x6BD5]` / position.
+  CONSEQUENCE: handlers are deterministic functions of (state, input, frame counter) — no RNG stream
+  to track in the verification contract.
+- **Input vector (located 2026-06-23):** the keyboard ISR **int 9 @ `1030:1820`** reads port 0x60,
+  stores the raw scancode at **`[0x2874]`** and bumps an event counter **`[0x2877]`** (make/break via
+  scancode bit 7). The player-control handler reads the resulting held-key state; the popup/effect
+  handlers read no input. Exact held-key state vars: map when recovering the player handler.
 
 ## Verification contract (define before authoritative)
 
@@ -94,9 +105,11 @@ render side effects**, not a hand-picked subset:
 
 ## Phased recovery order (each phase: recover pure → shadow-verify → only then authoritative)
 
-1. **Locate RNG + the input vector** (seed var/generator; keyboard/state inputs the handlers read).
-2. **Enumerate the per-type handler tables** `[0x7DA5]`/`[0x7DA9]` fully (count types, map each
-   handler entry to its routine) — the object-type catalogue.
+1. ~~**Locate RNG + the input vector**~~ — **DONE** (2026-06-23): no RNG (deterministic); input
+   vector = int 9 @ `1030:1820` → scancode `[0x2874]` + counter `[0x2877]`.
+2. **Enumerate the per-object UPDATE handler table** `[0x7D9B]` (called at `5C04`) fully — the
+   object-type catalogue. (The `[0x7DA9]` table at `5C33` is the DRAW selector by tile-type, already
+   mapped: `0x6672`/`0x6673`/`0x65AF`.)
 3. **Recover one simple handler** (e.g. a static pickup or a popup like the "500" score sprite)
    pure, shadow-verify its record + SFX + render contract over a demo (the `advance_animation` /
    `camera_shake` ownership pattern), ASM still oracle.
