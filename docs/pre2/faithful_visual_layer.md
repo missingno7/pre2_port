@@ -9,6 +9,85 @@ composer + duplicated transition logic". This document audits what exists and pr
 consolidation. **Rule: do not duplicate recovered visual logic** — the live faithful pipeline must
 *reuse* the recovered controller/leaf functions the checkpoints already verify, never reimplement them.
 
+## ★ CURRENT PLAN & STATUS (2026-06-24) — read this first
+
+This is the authoritative summary; the older audit sections below are kept for provenance but where
+they conflict with this section, **this section wins**.
+
+### The architecture (one leaf, many adapters — bidirectional convergence)
+
+Every visual behavior has **ONE recovered implementation** (a pure fn in `pre2/recovered/`) with
+multiple thin **adapters**, never a second copy:
+
+```
+                   pre2/recovered/<leaf>     ← the ONE implementation
+                         ▲   ▲   ▲   ▲
+      runtime hook ──────┘   │   │   └────── later enhanced projection
+  (checkpoints/, ASM-skip)   │   └────────── frame-boundary faithful mirror
+                             │               (render_visual / render_frame)
+       checkpoint/probe verifier (oracle diff at the ASM RET)
+```
+
+`FaithfulVisual` (`recovered/faithful_visual.render_visual`) is the **umbrella OVER the leaves**, not a
+second renderer. Convergence is **bidirectional**:
+- **bottom-up:** ASM hook → verified recovered leaf → FaithfulVisual reuses it.
+- **top-down:** if FaithfulVisual uses a leaf that lacks a checkpoint at its ASM call site, push it
+  DOWN — locate the routine, add a verifier, diff vs the oracle, then both hook and mirror call the
+  same leaf. (Applied to the HUD this session — see below.)
+
+### Leaf-grounding map — every gameplay/transition leaf is now grounded
+
+| Leaf | ASM | Runtime hook | Verify checkpoint | FaithfulVisual uses it |
+|---|---|---|---|---|
+| draw_grid / tile-row | 35A1 / 348D | ✓ skip | ✓ | ✓ (mirror via ring rebuild) |
+| scroll_copy | 3A27 | ✓ skip | ✓ | ✓ |
+| sprite blit | 3B69 | ✓ skip | ✓ | ✓ |
+| object/sprite pass | 26FA | ✓ skip | ✓ | ✓ |
+| anim cycle advance | 367D | passthrough (shadow) | ✓ | ✓ (bridge-read) |
+| camera shake apply | 4C30 | passthrough (shadow) | ✓ | ✓ (row_factor) |
+| palette fade | 6772 | ✓ skip | ✓ | DAC carries it (see deferred) |
+| iris compose | 31F4 | ✓ skip | ✓ | ✓ (IRIS path) |
+| **HUD draw** | **45B8** | — (verify-only; ASM draws) | **✓ NEW (`checkpoints/hud.py`)** | ✓ (`draw_hud`) |
+| panel-flip / **curtain** | 3054 | passthrough (vsync pacing) | ✓ (final copy) | covered by render_frame (sub-frame) |
+| draw_string | 9886 | ✓ skip | ✓ | scene leaf pending |
+| menu scroll_blit / shift | 965A / 9804 | ✓ skip | ✓ | scene leaf pending |
+
+### Resolved this session (2026-06-24)
+- **Curtain CLOSED** (no faithful leaf needed). `3054` is the per-frame page-flip; the center-out strip
+  reveal is **entirely sub-frame** (within one call, ~10 vsyncs). At the 6772 boundary the flip is
+  complete, so the committed front page is always a whole frame that `render_frame` reproduces (proven:
+  partially-revealed boundary `disp_black=17%` → mirror Δ=0%). Live reveal = the `frame_panel_copy`
+  passthrough's vsync timing; `panel_copy` is the verified oracle (now `completed_pairs`-capable for an
+  optional sub-frame mirror). Fixed the stale `panel_copy` docstring (`[0x2DD8]`/`[0x2DD6]`, strip copy
+  `309B` — was wrongly `[0x2DD4]`/`[0x2DD2]`).
+- **HUD grounded (bug-table #6 CLOSED)** — added verify-only `checkpoints/hud.py` at the dynamic-HUD ret
+  (45AB); diffs recovered `draw_hud` glyph cells vs the ASM page `[0x2DD8]` (fired 53×, 0 divergences).
+  Grounds `draw_hud` + `effective_bonus_mask`. Pruned the superseded `probes/verify_hud_layout.py`.
+- **De-duplication:** the page-retarget dance (was copy-pasted in 3 sites) → one bridge helper
+  `render_state.retarget_page`. The BONUS flash-parity DECISION moved OUT of the bridge into the leaf
+  `recovered/hud.effective_bonus_mask` (bridge = state-extraction only).
+
+### The ONLY remaining faithful-visual gaps (need RECOVERY, not just an adapter)
+1. **SCENE leaf** (menu / map / loading / tally / game-over, mode 0Dh) — `render_visual` raises
+   `FaithfulVisualGap`. Text/palette/cursor located + `draw_string`/`scroll_blit` leaves runtime-replaced,
+   but the **background is a history-dependent scroll buffer** (`scroll_shift_frame` self-copy) — a
+   from-scratch page↔pattern rebuild reaches only ~11%. **BLOCKED** on the buffer invariant or a
+   scroll-replay (see `renderer_bug_table.md` #3). Do NOT guess a second theory.
+2. **IMAGE leaf** (intro / title, mode 13h) — the displayed image is **not a direct `.SQZ` decode**;
+   source unidentified (`renderer_bug_table.md` #4). Needs the source found before a `render_image` leaf.
+
+### Deferred (NOT gaps — explicitly out of scope until their trigger)
+- **Runtime *replacement* of HUD** (45B8 mode-2): the draw is incremental + dual-page + caches
+  `[0x6CA0..0x6CA7]` → low gain; verify-only checkpoint is sufficient grounding.
+- **Promote anim/shake shadows to mode-2** — proven 0-divergence; a clean next step, not required.
+- **`GameFrameSnapshot` → `GameVisualState` convergence (Phase C)** — real overlap, but it serves the
+  *enhanced-interp* master, not the byte-exact master; merging now would couple the verifier to the
+  interpolator. Defer.
+- **Whole-block collapse** (one `FaithfulVisual.render` hook over the main loop 0214-0270) — a
+  state-ownership milestone, explicitly NOT the renderer-done bar.
+
+---
+
 ## Audit — every visual island, classified
 
 ### 1. Frame composition (compose one frame's pixels — the gameplay slice is DONE byte-exact)
@@ -333,17 +412,18 @@ FaithfulVisual leaf/controller; the final frame is verified by the clean Faithfu
 | Palette / DAC behaviour verified | **DONE** (`fade_palette` verified + runtime-replaced) |
 | Transitions: **iris** modeled + verified | **DONE** (`compose_iris`, verified, runtime-replaced) |
 | Transitions: **fade** | **DONE** (palette fade; DAC on the live palette) |
-| Transitions: **curtain** (`panel_copy`) modeled + verified | **OPEN** — recovered final copy; per-step vsync reveal not yet modeled/verified |
+| Transitions: **curtain** (`panel_copy`) modeled + verified | **DONE (2026-06-24)** — sub-frame page-flip; mirror reproduces every committed boundary frame (Δ=0); `panel_copy` verified oracle + `frame_panel_copy` passthrough |
 | Text / present leaves verified | **PARTIAL** — `draw_string` + menu present runtime-replaced; verify-pending a mid-draw witness |
 | Scene leaves: menu/map | **OPEN** — menu located (bg present + 4 text runs + highlight); SceneState reader + verify pending |
 | Scene leaves: intro/title **IMAGE** (13h) | **OPEN** — not recovered (fails loud) |
 | Scene leaves: loading / tally / game-over | **OPEN** |
 | No silent ASM-VRAM fallback | **DONE** (`render_visual` raises `FaithfulVisualGap`) |
 | All visual call sites classified (replaced / lifted / frame-boundary-verified / verify-only+blocker) | **DONE** (runtime-integration audit table above) |
-| Whole-frame mirror matches oracle across scene changes + camera movement | **OPEN** — frame-boundary snapshot needed (see `camera_fidelity_bug.md`); curtain reveal |
+| Whole-frame mirror matches oracle across camera movement | **DONE (2026-06-24)** — frame-boundary `GameVisualState` capture at 6772 (`game_visual_state.py`); cave witness 231731 Δ=0, worst gameplay boundary Δ≤58 (blink residual) |
+| Whole-frame mirror matches oracle across SCENE changes | **OPEN** — only because the SCENE/IMAGE leaves aren't recovered (mirror raises `FaithfulVisualGap`, no silent fallback) |
 
-So "renderer done" = the OPEN rows closed: curtain modeled+verified, the scene/image leaves
-recovered+verified, the mirror frame-boundary-correct across movement/scene-changes. The whole-block
+So "renderer done" = the remaining OPEN rows closed: the **scene (menu/map) + image (intro/title)
+leaves recovered+verified**. Curtain, the frame-boundary mirror, and the HUD are now DONE. The whole-block
 collapse is explicitly OUT of this definition (it follows later, with state ownership).
 
 ## One-implementation audit (2026-06-24) — one recovered leaf, many adapters
@@ -362,18 +442,19 @@ mirror (`render_frame`/`render_visual`), and the verify checkpoint/probe — dif
 | draw_string (9886) | `draw_string` | `draw_string_hook` ✓ skip | (scene leaf not wired) | ✓ | runtime+verify ✓; **mirror pending** (scene) |
 | **draw_grid (35A1)** | `draw_grid` (incremental) | `frame_grid` ✓ skip | mirror uses **`build_background_ring`** (full rebuild), NOT `draw_grid` | ✓ | **two ORCHESTRATIONS** of the same `draw_tile_row` leaf — incremental (runtime, needs ring history) vs full rebuild (mirror, clean FB has no history). Legit, but the grid-walk logic is expressed twice; lift the shared walk if it drifts. |
 | **palette fade (6772)** | `fade_palette` | `palette_fade` ✓ skip | mirror runs it only if `dac` passed — `live_render` passes `dac=None` → mirror uses the LIVE DAC, NOT `fade_palette` | ✓ | **mirror does not run the leaf** (DAC carries the fade) → run `fade_palette` in a VisualController for a single owner |
-| **HUD (45B8)** | `draw_hud`/`draw_status_bar`/`blit_hud_glyph` | **NO runtime hook** — the ASM still draws the HUD | `render_frame` rebuild ✓ | golden `test_hud_chrome` (no live checkpoint) | **MISSING runtime adapter** (hook 45B8) + missing live verify — mirror+golden only |
-| **curtain (3054)** | `panel_copy` (final copy) | `frame_panel_copy` **PASSTHROUGH** (ASM runs; vsync pacing) | **NOT in mirror** | ✓ (final planes) | **per-step reveal not modeled**; mirror missing; runtime passthrough |
+| **HUD (45B8)** | `draw_hud`/`draw_status_bar`/`blit_hud_glyph` + `effective_bonus_mask` | verify-only (ASM draws; mode-2 deferred) | `render_frame` rebuild ✓ | **`checkpoints/hud.py` ✓ (live oracle diff, NEW 2026-06-24) + golden `test_hud_chrome`** | **ONE-IMPL ✓** — leaf grounded by a registered checkpoint; runtime *replacement* deferred (low gain) |
+| **curtain (3054)** | `panel_copy` (now `completed_pairs`-capable) | `frame_panel_copy` **PASSTHROUGH** (vsync pacing IS the effect) | covered by `render_frame` (reveal is sub-frame; boundary Δ=0) | ✓ (final planes) | **ONE-IMPL ✓** — sub-frame effect; no separate mirror leaf needed (see status section) |
 | scene render (render_scene) | `render_scene` (partial) | n/a | not wired (SCENE gap) | n/a | **mirror + SceneState reader missing** |
 | image (13h intro/title) | — | — | gap | — | **not recovered** |
 
-**Conclusion:** the one-impl rule HOLDS for the core gameplay leaves (tile_row/scroll/object/blit/iris).
-The real gaps/violations to close: (1) **HUD** has no runtime adapter (ASM draws it; recovered only in
-mirror+golden) — add a 45B8 hook; (2) **palette fade** mirror uses the live DAC, not `fade_palette` —
-run the leaf in a VisualController; (3) **draw_grid vs build_background_ring** are two orchestrations of
-the shared `draw_tile_row` — keep the walk shared; (4) **curtain/scenes/image** mirror integration is the
-remaining recovery. Frame-boundary `render_game_visual_state` already follows the rule (it reuses
-`render_visual` → the same leaves; no second copy).
+**Conclusion (updated 2026-06-24):** the one-impl rule now HOLDS for **all gameplay + transition leaves**
+including the HUD (grounded by `checkpoints/hud.py`) and the curtain (sub-frame, no separate leaf). The
+only remaining one-impl items are cleanups, not violations: (1) **palette fade** mirror uses the live DAC,
+not `fade_palette` — run the leaf in a VisualController (deferred, displays correctly); (2) **draw_grid vs
+build_background_ring** are two orchestrations of the shared `draw_tile_row` (legit: incremental-with-ring-
+history vs clean-FB rebuild — keep the walk shared if it drifts). The remaining true RECOVERY work is the
+**scene + image leaves** (`render_visual` fails loud for them). Frame-boundary `render_game_visual_state`
+follows the rule (reuses `render_visual` → the same leaves; no second copy).
 
 ## Relationship to the other phases
 

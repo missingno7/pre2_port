@@ -1,5 +1,17 @@
 # Scene island — the non-gameplay visual seam (`SceneState → render_scene`)
 
+> **★ 2026-06-24 — this is now THE remaining faithful-visual critical path.** Gameplay + all transitions
+> (iris, fade, curtain) + HUD are done and grounded (one leaf, many adapters — see
+> `faithful_visual_layer.md`). The only faithful-visual RECOVERY gaps left are the two scene leaves below,
+> and both need a recovered leaf, not just an adapter:
+> - **SCENE** (menu / map / loading / tally / game-over, 0Dh): text/palette/cursor located + `draw_string`/
+>   `scroll_blit` runtime-replaced, but the **background is a history-dependent scroll buffer** — a
+>   from-scratch page↔pattern rebuild reaches only ~11% (`renderer_bug_table.md` #3). **BLOCKED** on the
+>   buffer invariant or a deterministic scroll-replay. Do NOT guess a second theory.
+> - **IMAGE** (intro / title, 13h): the displayed image is **not a direct `.SQZ` decode** — source
+>   unidentified (`renderer_bug_table.md` #4). Find the source before writing `render_image`.
+> `render_visual` raises `FaithfulVisualGap` for both (no silent fallback) — that loud gap is the to-do.
+
 The gameplay frame collapsed into a meaningful seam: `RendererState → render_frame(...)`.
 The startup / title / menu / map / loading / tally screens need the **same kind of target**
 so we recover their *visual intent*, not a pile of isolated VGA hooks:
@@ -179,19 +191,17 @@ gives witnesses for the image present, the palette install, and the menu cursor.
 Routing all labeled scene witnesses through `render_visual` (the dispatcher) located the remaining
 scene work precisely (no silent fallback — each unrecovered scene raises `FaithfulVisualGap`):
 
-* **Curtain (room/cave-enter) transition = the ALREADY-RECOVERED `panel_copy` (1030:3054)** — an
-  INTEGRATION piece, not a new recovery (corrected 2026-06-23; my earlier "diagonal wipe" was wrong).
-  It copies 2-byte-wide × 0xB0-row **vertical strips** from the back page to the front at symmetric
-  columns `0x14±2k` (k=0..9), centre-outward, vsync-paced — that strip-by-strip reveal IS the curtain
-  (`frame_renderer.panel_copy` + the `checkpoints/frame.py:frame_panel_copy` hook, which already notes
-  the vsync pacing is the visible effect and a pure hook can't reproduce the wait without hanging the
-  det-clock). The user notes both vertical and horizontal curtains, so a horizontal-strip counterpart
-  likely exists too. INTEGRATION (island-fusion): wire `panel_copy` into `render_visual` as the curtain
-  transition leaf — FINAL frame = `panel_copy(src,dst)`; the per-step reveal needs a partial
-  `panel_copy(step)` keyed on the loop step. ARCHITECTURAL NUANCE: unlike the iris (a per-frame state
-  machine driven by radius `[0x2DD0]`), the curtain is a BLOCKING vsync-paced strip loop — its per-step
-  PIXELS are recoverable (partial panel_copy) but the step PACING is VM-/enhanced-clock-driven. Needs a
-  mid-curtain witness to verify the per-step reveal.
+* **Curtain (room/cave-enter) transition — CLOSED 2026-06-24 (no faithful leaf needed).** Resolved with
+  the mid-Cave witness `231731`: `1030:3054` is the **per-frame double-buffer page-flip** (one call/frame,
+  alternating pages; inner strip copy `1030:309B`, `si+=[0x2DD8]` `di+=[0x2DD6]`). It copies 2-byte ×
+  0xB0-row **vertical strips** centre-outward (`0x14±2k`, k=0..9), vsync-paced — and that reveal happens
+  **entirely within one call** (~10 internal vsyncs), a SUB-FRAME CRT effect. By the main-loop frame
+  boundary `1030:6772` the flip is complete, so the committed front page is always a *whole* frame that
+  `render_frame` reproduces byte-exact (proven: partially-revealed boundary `disp_black=17%` → mirror
+  Δ=0%). So: `panel_copy` is the verified full-copy oracle (now `completed_pairs`-capable for an optional
+  sub-frame mirror); `checkpoints/frame.py:frame_panel_copy` PASSTHROUGH gives the live vsync-paced reveal;
+  the faithful boundary mirror needs **no separate curtain leaf**. (Iris likewise already reused by
+  `render_visual`.) See `faithful_visual_layer.md` status section + `renderer_bug_table.md` #5.
 * **`transition_fade_003841` = a PALETTE FADE-TO-BLACK** (captured at `1030:92C1`: `in al,dx; and
   al,0x3f; out dx,al` DAC clamping), a scene-flow fade — NOT the curtain (earlier mislabeled a "diagonal
   wipe"). It is the recovered `fade_palette` behavior on the live DAC. `palette_fade_021225` routes to

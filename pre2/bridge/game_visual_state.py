@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from dos_re.memory import EGA_PLANE_STRIDE
-from pre2.bridge.render_state import read_renderer_state
+from pre2.bridge.render_state import read_renderer_state, retarget_page
 from pre2.bridge.scene_state import derive_scene_kind
 from pre2.recovered.faithful_visual import SceneKind, render_visual
 
@@ -46,10 +46,8 @@ def capture_game_visual_state(mem, dos, display_page: int, *, game_root) -> Game
     iris = None
     rs = None
     if kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
-        rs = read_renderer_state(mem, dos, game_root=game_root)
-        cam = rs.object_camera
-        rs = replace(rs, dest_page=page,                       # target the DISPLAYED page, not [0x2DD8]
-                     object_camera=(replace(cam, dest_page=page) if cam is not None else None))
+        rs = retarget_page(read_renderer_state(mem, dos, game_root=game_root),
+                           page)                               # target the DISPLAYED page, not [0x2DD8]
         if kind == SceneKind.IRIS:
             from pre2.bridge import transition as _tr
             iris = replace(_tr.read_iris_inputs(mem), page=page)

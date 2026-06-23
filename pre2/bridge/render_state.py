@@ -7,12 +7,15 @@ field semantics stay in one spot.
 """
 from __future__ import annotations
 
+from dataclasses import replace as _replace
+
 from pre2.bridge import frame as _frame
 from pre2.bridge import object_render as _obj
 from pre2.bridge import palette as _pal
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge.hud_chrome import load_hud_chrome
 from pre2.recovered.animation import AnimStep
+from pre2.recovered.hud import effective_bonus_mask
 from pre2.recovered.render_frame import ASSET_HI, ASSET_LO, FadeStep, IrisState, RendererState
 from pre2.recovered.render_model import CameraShakeState, HudChromeAsset, HudState
 
@@ -95,14 +98,12 @@ _FRAME_CTR_B = 0x6BD5      # [0x6BD5] frame counter (bit0 = the flash parity)
 
 def _hud_state(mem) -> HudState:
     """Read the status-bar values the HUD render (1030:45B8) draws: the score ([0x6C0E]/[0x6C10],
-    a 32-bit count displayed *10), lives ([0x27D8]), energy hearts ([0x27D6]), and the EFFECTIVE
-    BONUS-letter mask (1030:4683: collected [0x6CA7] normally, or 0x1F/0 by frame parity when the
-    BONUS celebration [0x6C00] is active)."""
+    a 32-bit count displayed *10), lives ([0x27D8]), energy hearts ([0x27D6]), and the BONUS-letter
+    mask. The flash-parity DECISION (1030:4683) lives with the HUD leaf
+    (:func:`pre2.recovered.hud.effective_bonus_mask`); the bridge only extracts the raw inputs."""
     score = (_rw(mem, _SCORE) | (_rw(mem, _SCORE + 2) << 16)) * 10
-    if _rb(mem, _BONUS_FLASH) != 0:
-        bonus = 0x1F if (_rb(mem, _FRAME_CTR_B) & 1) else 0
-    else:
-        bonus = _rb(mem, _BONUS_MASK)
+    bonus = effective_bonus_mask(_rb(mem, _BONUS_MASK), _rb(mem, _BONUS_FLASH) != 0,
+                                 _rb(mem, _FRAME_CTR_B))
     return HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY), bonus_mask=bonus)
 
 
@@ -191,3 +192,26 @@ def read_renderer_state(mem, dos=None, *, game_root=None, frame_pre_inc: bool = 
         object_attrs=obj_attrs,
         object_src_banks=obj_banks,
     )
+
+
+def read_hud_state(mem) -> HudState:
+    """Public lean reader for just the status-bar values (score/lives/energy/effective BONUS mask),
+    without building a full :class:`RendererState`. Used by the HUD verify checkpoint so it feeds the
+    recovered ``draw_hud`` the same state the ASM drew from. The flash-parity decision lives in the
+    recovered leaf (:func:`pre2.recovered.hud.effective_bonus_mask`); this only extracts raw inputs."""
+    return _hud_state(mem)
+
+
+def retarget_page(rs: RendererState, page: int) -> RendererState:
+    """Return ``rs`` with every page-relative leaf aimed at ``page`` (the EGA byte offset of the
+    target page: ``[0x2DD8]`` back buffer, or ``ega_display_start`` for the displayed page).
+
+    A :class:`RendererState` carries the page in two coupled places — ``dest_page`` (the frame
+    composer's target) and ``object_camera.dest_page`` (the sprite pass's target) — which must stay
+    in lockstep. This is the ONE place that retargets both, so the live render, the frame-boundary
+    capture, and any probe all agree on what "render to page P" means (was copy-pasted in three
+    sites). Pure transform on the dataclass; no VM access."""
+    cam = rs.object_camera
+    page &= 0xFFFF
+    return _replace(rs, dest_page=page,
+                    object_camera=(_replace(cam, dest_page=page) if cam is not None else None))

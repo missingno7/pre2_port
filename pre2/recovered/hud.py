@@ -15,7 +15,7 @@ from pre2.islands import oracle_link
 
 __all__ = ["HUD_GLYPH_BASE", "HUD_GLYPH_BYTES", "HUD_GLYPH_ROWS", "blit_hud_glyph",
            "HUD_LIVES_DI", "HUD_SCORE_DI", "HUD_ENERGY_DI", "HUD_MAX_HEARTS", "draw_hud",
-           "HUD_BAR_DI", "HUD_BAR_PLANE_BYTES", "draw_status_bar"]
+           "HUD_BAR_DI", "HUD_BAR_PLANE_BYTES", "draw_status_bar", "effective_bonus_mask"]
 
 # Static status-bar background blit (1030:4580). The bar is a 320x23 planar bitmap.
 HUD_BAR_DI = 0x1B80              # status-bar top-left screen offset within the page (row 176)
@@ -38,6 +38,23 @@ HUD_GLYPH_BASE = 0xE60 + 0x7B0   # 0x1610 — font offset of glyph 0 [asm 4750/4
 HUD_GLYPH_BYTES = 0x60           # 96 bytes/glyph = 4 planes x 12 rows x 2 bytes [asm 474C mul 0x60]
 HUD_GLYPH_ROWS = 0x0C            # 12 rows [asm 475F cx=0xC]
 _ROW_STRIDE = 0x28               # screen bytes per row
+
+
+@oracle_link("1030:4683",
+             "resolve the EFFECTIVE BONUS-letter mask the HUD draws: when the BONUS celebration "
+             "[0x6C00] is active, all five letters flash together by frame parity (0x1F on odd "
+             "[0x6BD5]&1, 0 on even); otherwise the collected mask [0x6CA7] is shown as-is.",
+             "VERIFIED", merge_target="render_frame")
+def effective_bonus_mask(collected, flash_active, frame_parity):
+    """Recover the ``1030:4683`` BONUS-mask decision (which of B/O/N/U/S light up this frame).
+
+    Pure presentation logic that belongs with the HUD leaf, not the bridge: ``collected`` is the
+    raw collected bitmask (``[0x6CA7]``), ``flash_active`` whether the pickup celebration is running
+    (``[0x6C00] != 0``), ``frame_parity`` the frame counter (``[0x6BD5]``). During the celebration
+    all five letters flash in unison on the frame parity; otherwise the collected set is drawn."""
+    if flash_active:
+        return 0x1F if (frame_parity & 1) else 0
+    return collected & 0xFF
 
 
 @oracle_link("1030:473D",

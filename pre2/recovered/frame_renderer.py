@@ -319,25 +319,37 @@ def scroll_copy(planes, scroll_src, dest, col_ring, fine_scroll, row_ring, row_f
 
 
 @oracle_link("1030:3054",
-             "A000 page-flip copy: back page [0x2DD4] -> front page [0x2DD2] (4-plane, "
-             "0xB0-row 2-byte strips); regs preserved (vsync wait is timing-only)",
+             "per-frame double-buffer page-flip: back page [0x2DD8] -> front page [0x2DD6] "
+             "(4-plane, 0xB0-row 2-byte strips, screen stride 0x28); the strip copy itself is "
+             "1030:309B (si+=[0x2DD8], di+=[0x2DD6]); regs preserved (vsync wait is timing-only)",
              "VERIFIED", merge_target="render_frame")
-def panel_copy(planes, src_page, dst_page):
-    """Recover ``1030:3054`` — the double-buffer page-flip copy.
+def panel_copy(planes, src_page, dst_page, completed_pairs=10):
+    """Recover ``1030:3054`` — the per-frame double-buffer page-flip copy.
 
-    Copies 2-byte-wide x 0xB0-row vertical strips (write-mode-1 latched 4-plane
-    copy, screen stride 0x28) from the back page (``[0x2DD4]``) to the front page
-    (``[0x2DD2]``), at the symmetric columns ``0x14-2k`` and ``0x14+2k`` for
-    ``k=0..9`` (the original interleaves these with vsync waits to flip tear-free;
-    the wait is timing-only and carries no pixel contract, so it is omitted).
+    Called once per frame; copies 2-byte-wide x 0xB0-row vertical strips (the inner
+    strip copy is ``1030:309B``: ``si += [0x2DD8]``, ``di += [0x2DD6]``, screen stride
+    0x28) from the back page (``src_page`` = ``[0x2DD8]``) to the front page (``dst_page``
+    = ``[0x2DD6]``), at the symmetric columns ``0x14-2k`` and ``0x14+2k`` for ``k=0..9``.
+    The original interleaves these with vsync waits to flip tear-free; the wait is
+    timing-only and carries no pixel contract, so it is omitted.
+
+    Because the copy targets the *displayed* page strip-by-strip with vsync waits, when
+    the back page holds a brand-new scene and the front page is black (room/cave enter)
+    this single call's center-out order is the visible "curtain" reveal — a SUB-FRAME CRT
+    effect (the whole copy completes within one call, before the main-loop frame boundary
+    1030:6772 is reached, so the committed front page is always a complete frame that
+    ``render_frame`` reproduces byte-exact; the live reveal is the ``frame_panel_copy``
+    passthrough's vsync timing). ``completed_pairs`` (default 10 = the full flip) runs only
+    the first N center-out strip-pairs — i.e. ``panel_copy_partial`` — so a caller that
+    wants the mid-reveal planes (e.g. a sub-frame mirror) can reproduce step N's pixels.
     """
     rows = SCROLL_HEIGHT                              # cx = 0xB0 (176) per strip
-    for k in range(10):                               # [asm 304B-3076] 0x3031 = 0,4,..,0x24
+    for k in range(min(completed_pairs, 10)):         # [asm 305C-308F] cs:[0x3052]=0x14, cs:[0x3050]=0,4,..,0x24
         field_3033 = (0x14 - 2 * k) & 0xFFFF
-        for col in (field_3033, (field_3033 + 4 * k) & 0xFFFF):  # two 307C calls
-            si = (col + src_page) & 0xFFFF            # [asm 3084] si = di + [0x2DD4]
-            di = (col + dst_page) & 0xFFFF            # [asm 3088] di = di + [0x2DD2]
-            for _ in range(rows):                     # [asm 3096-309E] movsb x2 then +0x26
+        for col in (field_3033, (field_3033 + 4 * k) & 0xFFFF):  # two 309B calls (3072 / 307A)
+            si = (col + src_page) & 0xFFFF            # [asm 30A3] si += [0x2DD8]
+            di = (col + dst_page) & 0xFFFF            # [asm 30A7] di += [0x2DD6]
+            for _ in range(rows):                     # [asm 30B5-30BD] movsb x2 then +0x26
                 for c in range(2):
                     for p in range(4):
                         planes[p][(di + c) & 0xFFFF] = planes[p][(si + c) & 0xFFFF]

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dos_re.hooks import registry
 
-from . import animation, audio, blit, camera_shake, frame, object_render, palette, present, sprite_classify, sprite_decode, sqz, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
+from . import animation, audio, blit, camera_shake, frame, hud, object_render, palette, present, sprite_classify, sprite_decode, sqz, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
 from .common import HookTraceStats, HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
 from .sprite_decode import sprite_decode_local, sprite_decode_shared  # noqa: F401 — re-exported
 from .sqz import sqz_decompress  # noqa: F401 — re-exported
@@ -101,6 +101,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     palette.register_verify(cpu, stats, on_result, raise_on_divergence)
     animation.register_verify(cpu, stats, on_result, raise_on_divergence)
     camera_shake.register_verify(cpu, stats, on_result, raise_on_divergence)
+    hud.register_verify(cpu, stats, on_result, raise_on_divergence)
     transition.register_verify(cpu, stats, on_result, raise_on_divergence)
     text.register_verify(cpu, stats, on_result, raise_on_divergence)
     present.register_verify(cpu, stats, on_result, raise_on_divergence)

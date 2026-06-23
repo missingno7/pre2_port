@@ -3,6 +3,22 @@
 Running status for the "finish the renderer island" goal. Updated as islands land.
 Companion to `renderer_island.md` (the map/border) and `renderer_goal.md` (the plan).
 
+> **★ 2026-06-24 — the current plan lives in [`faithful_visual_layer.md`](faithful_visual_layer.md)
+> ("CURRENT PLAN & STATUS" section).** Deltas since the notes below:
+> - **Architecture = one recovered leaf, many adapters** (runtime hook + verify checkpoint + faithful
+>   mirror + later enhanced), with **bidirectional convergence** (bottom-up grounding *and* top-down:
+>   ground any mirror-used leaf that lacks a checkpoint). `FaithfulVisual.render_visual` is the umbrella.
+> - **Frame-boundary mirror** is the canonical live path now: capture at 6772 (`bridge/game_visual_state.py`)
+>   so the mirror matches the *displayed* page (cave witness 231731 Δ=0). `render_gameplay_planes` /
+>   `render_visual_planes` (`live_render.py`) remain probe entry points and now share `retarget_page`.
+> - **Curtain** = sub-frame page-flip → no faithful leaf needed (mirror reproduces boundary frames Δ=0).
+> - **HUD** grounded by a registered verify checkpoint (`checkpoints/hud.py`); `effective_bonus_mask` is
+>   now a recovered leaf (was bridge logic).
+> - **Every gameplay/transition leaf now has a registered checkpoint.** The only remaining faithful-visual
+>   RECOVERY gaps are the **SCENE** (menu/map bg — blocked on the history-dependent scroll buffer) and
+>   **IMAGE** (intro/title — source unidentified) leaves. Everything else is deferred cleanup
+>   (palette-fade ownership, anim/shake mode-2 promotion, `GameFrameSnapshot`→`GameVisualState` Phase C).
+
 ## STATUS (2026-06-23): clean-framebuffer normal-gameplay composition COMPLETE
 
 `render_frame(RendererState, planes, rebuild=True, game_root=...)` produces the **complete normal

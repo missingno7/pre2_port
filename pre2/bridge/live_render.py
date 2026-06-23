@@ -15,10 +15,8 @@ recovered — see docs/pre2/scene_island.md; rendering them faithfully is future
 """
 from __future__ import annotations
 
-from dataclasses import replace
-
 from dos_re.memory import EGA_PLANE_STRIDE
-from pre2.bridge.render_state import read_renderer_state
+from pre2.bridge.render_state import read_renderer_state, retarget_page
 from pre2.recovered.render_frame import render_frame
 
 _DS = 0x1A0F
@@ -53,9 +51,7 @@ def render_gameplay_planes(mem, dos, *, game_root, dest_page: int | None = None)
     returned planes at ``page`` with the live DAC (``render_planar_rgb_from_planes``)."""
     rs = read_renderer_state(mem, dos, game_root=game_root)
     page = rs.dest_page if dest_page is None else (dest_page & 0xFFFF)
-    cam = rs.object_camera
-    rs = replace(rs, dest_page=page,
-                 object_camera=(replace(cam, dest_page=page) if cam is not None else None))
+    rs = retarget_page(rs, page)
     planes = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]
     # dac=None: the fade is a DAC-only effect already reflected in the live palette, so we render the
     # planes only and deplanarize with the live DAC — the planes themselves are fade-independent.
@@ -87,9 +83,7 @@ def render_visual_planes(mem, dos, *, game_root, display_page=None):
         render_visual(kind, None, planes)             # raises FaithfulVisualGap — no silent fallback
     rs = read_renderer_state(mem, dos, game_root=game_root)
     page = rs.dest_page if display_page is None else (display_page & 0xFFFF)
-    cam = rs.object_camera
-    rs = replace(rs, dest_page=page,
-                 object_camera=(replace(cam, dest_page=page) if cam is not None else None))
+    rs = retarget_page(rs, page)
     iris = None
     if kind == SceneKind.IRIS:
         iris = _replace(_tr.read_iris_inputs(mem), page=page)   # align the iris clear to our page

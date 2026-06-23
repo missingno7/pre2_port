@@ -64,6 +64,38 @@ and must declare the larger system it will merge upward into:
 Neighbouring islands coalesce into subsystems, and subsystems into a single
 high-level `update_frame()`. Verification boundaries rise with them (next section).
 
+## One recovered leaf, many adapters — convergence, not parallelism
+
+A mature subsystem must converge to **one recovered implementation per behavior**, with several thin
+**adapters** pointing at it — never a second copy that can drift:
+
+```
+                  pre2/recovered/<leaf>            ← the ONE implementation
+                        ▲   ▲   ▲   ▲
+     runtime hook ──────┘   │   │   └────── later enhanced projection
+ (replacement adapter)      │   └────────── faithful mirror (clean-FB re-compose)
+                            │
+       verifier (checkpoint/probe: oracle diff at the ASM boundary)
+```
+
+The umbrella composer (e.g. `recovered/faithful_visual.render_visual` for the renderer) sits ABOVE the
+leaves and reuses them — it is **not** a second renderer beside the hooks. The four hook roles
+(probe/verifier/replacement adapter/gap detector) are exactly these adapters.
+
+**Convergence is bidirectional:**
+- **bottom-up** — ASM call site → verifier proves a recovered leaf → the faithful composer reuses that
+  leaf. (The normal flow.)
+- **top-down** — if the faithful composer already uses a leaf that has **no checkpoint at its ASM call
+  site**, push it back DOWN: locate the routine, add a verifier, diff vs the oracle, then both the hook
+  and the composer call the same leaf. (A behavior implemented only in the mirror is not yet grounded.)
+
+**Anti-patterns to refuse:** a hook implementation and a mirror implementation of the same logic; the
+bridge (`pre2/bridge/`) holding visual/gameplay *decisions* instead of pure state-extraction; tests/probes
+carrying their own copy of a behavior instead of calling the recovered leaf; a new parallel renderer layer
+for a gap that should be a recovered leaf with adapters. The concrete renderer instance of this principle —
+the leaf-grounding map, the resolved/deferred items, and the remaining gaps — is maintained in
+`faithful_visual_layer.md` ("CURRENT PLAN & STATUS").
+
 ## Structs/dataclasses are the bidirectional bridge
 
 Our dataclasses are **not arbitrary modern abstractions** — they are our
