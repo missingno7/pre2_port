@@ -35,9 +35,22 @@ The **state-producing** side is the update/collision dispatch below.
 | `653D` | object-draw **primitive** (cull vs camera + dest-off + blit) | RECOVERED (`object_draw.py`, dormant) |
 | `65xx` (ret `65AE`) / `8Bxx` (ret `8BF5`) | draw-primitive **variants** (stride/mode + force-redraw) | mapped here (render side, blit-backed) |
 | `5406` | **ObjectSlot structure** draw loop (multi-tile, proximity-triggered) | partially (calls `653D`) |
-| `5C04` | per-object **UPDATE** handler dispatch (`call [bx+0x7D9B]`) | **NO** — the state producer |
-| `5C33` | **DRAW**-primitive selector by tile-type under the object (`call [bx+0x7DA9]`, idx=tile_attr&0xF) → `0x6672`/`0x6673`/`0x65AF` | render side (blit-backed) |
-| `5C9E` | object-update handler dispatch + self-draw | **NO** |
+| `5C04` | **PLAYER** movement-state dispatch (`call [bx+0x7D9B]`, idx=player state) | **NO** — player state producer |
+| `5C33` | **DRAW**-primitive selector by tile-type under the player (`call [bx+0x7DA9]`, idx=tile_attr&0xF) → `0x6672`/`0x6673`/`0x65AF` | render side (blit-backed) |
+| `5CAC` | tile-collision response dispatch (`call [bx+0x7D95]`, idx=tile attr 2/4) | player tile reaction |
+| `5C9E`/`5CCE` | **PLAYER** per-frame orchestration (`call 0x62EC` gravity / `0x6333` input / `0x6374` collide / `0x638B` anim) | **NO** — player update |
+
+### Map correction (2026-06-23): `0x7D9x` is the PLAYER state machine, NOT the object catalogue
+
+Enumerating `0x7D9B` and disassembling its cluster (`0x652C..0x6680`) showed these are **player**
+handlers — they do player physics (`es:[di+0x100]` tile-collision xlatb, position `[0x4F1E]`, facing
+`[0x4F24]=0..3`) and `0x65AF→0x65B3` is the **player death** handler (dec lives `[0x27D8]`, reset
+energy `[0x27D6]`, set `[0x6BE4]=2`). The three tables share one pointer array (`0x7D95` tile-reaction,
+`0x7D9B` movement-state, `0x7DA9` draw-by-tile). So the player is a self-contained FSM. The general
+**enemy / pickup / "500" popup** updates live in a SEPARATE main-loop system (one of `6822`/`6210`/
+`60FE`/`4907`/`5850`, classified as "other game systems" in `renderer_island.md`) that walks the
+active-sprite list — **still to locate**. This correction avoids recovering the wrong handler (the
+user's "do not assume" caution).
 | `4b8e` | particle/effect system | **NO** (NEEDS-REPRO, watch-list) |
 | `3721` | tile-flag trigger | **NO** |
 | `3922` | auto-scroll script | **NO** |
@@ -107,9 +120,10 @@ render side effects**, not a hand-picked subset:
 
 1. ~~**Locate RNG + the input vector**~~ — **DONE** (2026-06-23): no RNG (deterministic); input
    vector = int 9 @ `1030:1820` → scancode `[0x2874]` + counter `[0x2877]`.
-2. **Enumerate the per-object UPDATE handler table** `[0x7D9B]` (called at `5C04`) fully — the
-   object-type catalogue. (The `[0x7DA9]` table at `5C33` is the DRAW selector by tile-type, already
-   mapped: `0x6672`/`0x6673`/`0x65AF`.)
+2. ~~Enumerate `[0x7D9B]`~~ — **DONE, but it is the PLAYER FSM, not the object catalogue** (see the
+   map correction above). NEXT: **locate the general object-update system** that walks the active-sprite
+   list and updates enemies / pickups / the "500" popup (one of `6822`/`6210`/`60FE`/`4907`/`5850`),
+   and find its per-type dispatch — the real object-type catalogue.
 3. **Recover one simple handler** (e.g. a static pickup or a popup like the "500" score sprite)
    pure, shadow-verify its record + SFX + render contract over a demo (the `advance_animation` /
    `camera_shake` ownership pattern), ASM still oracle.
