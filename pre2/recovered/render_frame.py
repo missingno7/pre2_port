@@ -182,7 +182,10 @@ def render_frame(state: RendererState, planes, dac=None, rebuild=False):
                          s.object_camera.row_stride)
 
     # 6) HUD region — only on a full rebuild (the incremental path leaves the HUD to its own redraw).
-    #    Static status-bar chrome then the dynamic values on top, into the same page as the frame.
+    #    Static status-bar chrome (320x23 panel from the persistent ALLFONTS.SQZ asset, BRIDGE-FED)
+    #    then the dynamic values (RECOVERED) on top, into the same page as the frame. The static-chrome
+    #    *compositor* (level-init build of the panel) is NOT YET RECOVERED — the panel is consumed as a
+    #    named renderer asset (HudChromeAsset.bar), proven byte-exact vs the VM strip (test_hud_chrome).
     if rebuild and s.hud_chrome is not None:
         draw_status_bar(planes, s.dest_page, s.hud_chrome.bar)
         if s.hud_state is not None:
