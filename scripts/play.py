@@ -309,6 +309,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from sdl_view import (SoundBlasterAudio, render_planar_rgb, render_planar_rgb_from_planes,
                           render_text_rgb, render_vga_rgb)
     from pre2.bridge.live_render import render_visual_planes
+    from pre2.recovered.faithful_visual import FaithfulVisualGap
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
@@ -472,14 +473,21 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     faithful = getattr(args, "faithful", False)
     faithful_verify = getattr(args, "faithful_verify", False)
 
+    gap_seen = [None]
+
     def _faithful_planar(mem_bytes, ds):
         """Faithful visual dispatch: derive the scene kind and render via the recovered visual leaf
-        (gameplay frame, or the end-level iris over it). Falls back to the VM frame for scenes whose
-        leaf is not recovered yet (intro/menu/map/...). Optionally diffs vs the VM page."""
-        planes, page, kind = render_visual_planes(rt.cpu.mem, rt.dos, game_root=args.game_root)
-        if planes is None:                               # IMAGE/SCENE leaf not recovered -> VM frame
-            faithful_info[0] = f"faithful: {kind.name}->VM"
-            return render_planar_rgb(mem_bytes, ds, rt.dos.vga_palette)
+        (gameplay frame, or the end-level iris over it). For a scene whose leaf is not recovered yet
+        there is NO silent ASM fallback — it prints the exact missing-leaf hint and shows a diagnostic
+        frame, so the gap is glaring and we complete the renderer. Optionally diffs vs the VM page."""
+        try:
+            planes, page, kind = render_visual_planes(rt.cpu.mem, rt.dos, game_root=args.game_root)
+        except FaithfulVisualGap as gap:
+            if gap_seen[0] != gap.scene_kind:            # print the precise hint once per scene kind
+                gap_seen[0] = gap.scene_kind
+                print(f"[faithful] {gap}", flush=True)
+            faithful_info[0] = f"FAITHFUL GAP: {gap.scene_kind.name} (see console)"
+            return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)   # diagnostic frame, NOT ASM VRAM
         if faithful_verify:
             d = 0
             data = rt.program.memory.data

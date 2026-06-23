@@ -17,7 +17,7 @@ from enum import IntEnum
 from pre2.recovered.render_frame import render_frame
 from pre2.recovered.transition import compose_iris
 
-__all__ = ["SceneKind", "render_visual"]
+__all__ = ["SceneKind", "FaithfulVisualGap", "render_visual"]
 
 
 class SceneKind(IntEnum):
@@ -27,20 +27,42 @@ class SceneKind(IntEnum):
     SCENE = 3      # menu / map / loading / tally / game-over (mode 0Dh planar) -> leaf NOT recovered yet
 
 
-def render_visual(scene_kind: SceneKind, rs, planes, *, iris=None, dac=None) -> bool:
+# What each not-yet-recovered scene needs, so the gap names exactly what is missing.
+_GAP_HINT = {
+    SceneKind.IMAGE: "intro/title IMAGE scene (mode 13h linear) — recover the linear-image scene leaf "
+                     "(bridge/scene_state image inputs + a render_image leaf) and wire it into render_visual",
+    SceneKind.SCENE: "menu/map/loading/tally/game-over SCENE (mode 0Dh planar) — wire the recovered "
+                     "render_scene + draw_string leaves (+ a bridge SceneState reader) into render_visual",
+}
+
+
+class FaithfulVisualGap(RuntimeError):
+    """The faithful visual layer reached a scene whose recovered leaf does not exist yet.
+
+    Raised LOUD instead of silently falling back to the ASM-populated VRAM — a silent fallback would
+    HIDE exactly the missing visual work we must complete (the "no silent fallback" rule). Carries the
+    :class:`SceneKind` and a precise hint of what to recover."""
+
+    def __init__(self, scene_kind: SceneKind):
+        self.scene_kind = scene_kind
+        super().__init__(f"faithful visual gap: {scene_kind.name} not recovered — "
+                         f"{_GAP_HINT.get(scene_kind, 'recover its leaf and wire it into render_visual')}")
+
+
+def render_visual(scene_kind: SceneKind, rs, planes, *, iris=None, dac=None) -> None:
     """Compose one faithful frame for ``scene_kind`` into ``planes`` (clean framebuffer).
 
-    Returns ``True`` if rendered faithfully, ``False`` if the scene's leaf is not recovered yet (the
-    caller should fall back to the VM's own frame). ``rs`` is the gameplay ``RendererState``; ``iris``
+    Raises :class:`FaithfulVisualGap` if the scene's leaf is not recovered yet — NO silent fallback,
+    so the missing visual work is named exactly. ``rs`` is the gameplay ``RendererState``; ``iris``
     (for ``IRIS``) is a duck-typed object carrying the iris compose inputs (``src_x``/``src_y``/
     ``scale``/``x_off``/``y_off``/``x_clamp``/``tbl_x``/``tbl_y``/``page``)."""
     if scene_kind == SceneKind.GAMEPLAY:
         render_frame(rs, planes, dac, rebuild=True)
-        return True
+        return
     if scene_kind == SceneKind.IRIS:
         render_frame(rs, planes, dac, rebuild=True)            # the base gameplay frame
         if iris is not None:                                  # clear everything outside the iris circle
             compose_iris(planes, iris.src_x, iris.src_y, iris.scale, iris.x_off, iris.y_off,
                          iris.x_clamp, iris.tbl_x, iris.tbl_y, iris.page)
-        return True
-    return False    # IMAGE / SCENE leaves not recovered yet -> caller falls back to the VM frame
+        return
+    raise FaithfulVisualGap(scene_kind)    # IMAGE / SCENE leaves not recovered yet — fail loud

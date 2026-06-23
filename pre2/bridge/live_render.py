@@ -67,9 +67,9 @@ def render_visual_planes(mem, dos, *, game_root):
     """Live FAITHFUL VISUAL dispatch: derive the scene kind and route to the recovered visual leaf.
 
     Returns ``(planes, page, scene_kind)`` for a faithfully-composed frame (GAMEPLAY or the end-level
-    IRIS over the gameplay frame), or ``(None, None, scene_kind)`` when the scene's leaf is not
-    recovered yet (IMAGE/SCENE) so the caller falls back to the VM's own frame. The recovered
-    dispatcher (:func:`pre2.recovered.faithful_visual.render_visual`) reuses the same leaves the
+    IRIS over the gameplay frame). For a scene whose leaf is not recovered yet (IMAGE/SCENE) it raises
+    :class:`~pre2.recovered.faithful_visual.FaithfulVisualGap` — NO silent fallback to the ASM frame,
+    so the missing visual work is named exactly. The recovered dispatcher reuses the same leaves the
     checkpoints verify — render_frame + compose_iris — no second copy."""
     from dataclasses import replace as _replace
     from pre2.bridge.scene_state import derive_scene_kind
@@ -77,9 +77,9 @@ def render_visual_planes(mem, dos, *, game_root):
     from pre2.recovered.faithful_visual import SceneKind, render_visual
 
     kind = derive_scene_kind(mem, dos)
+    planes = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]
     if kind not in (SceneKind.GAMEPLAY, SceneKind.IRIS):
-        return None, None, kind                       # leaf not recovered -> caller falls back
-
+        render_visual(kind, None, planes)             # raises FaithfulVisualGap — no silent fallback
     rs = read_renderer_state(mem, dos, game_root=game_root)
     page = rs.dest_page
     cam = rs.object_camera
@@ -88,6 +88,5 @@ def render_visual_planes(mem, dos, *, game_root):
     iris = None
     if kind == SceneKind.IRIS:
         iris = _replace(_tr.read_iris_inputs(mem), page=page)   # align the iris clear to our page
-    planes = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]
     render_visual(kind, rs, planes, iris=iris)
     return planes, page, kind

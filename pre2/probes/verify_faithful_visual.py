@@ -11,7 +11,7 @@ import sys; sys.path.insert(0, '.')
 from pre2.runtime import load_pre2_snapshot
 from pre2.bridge.scene_state import derive_scene_kind
 from pre2.bridge.live_render import render_visual_planes
-from pre2.recovered.faithful_visual import SceneKind
+from pre2.recovered.faithful_visual import SceneKind, FaithfulVisualGap
 
 _SNAPS = [
     ('gameplay', 'snapshot_pre2_gameplay_20260621_185902', SceneKind.GAMEPLAY),
@@ -32,11 +32,15 @@ def main():
         m, dos = rt.cpu.mem, rt.dos
         kind = derive_scene_kind(m, dos)
         composed = ''
-        if kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
+        try:
             planes, page, k2 = render_visual_planes(m, dos, game_root='assets')
-            composed = f' -> composed page={page:#06x}' if planes is not None else ' -> NONE!'
-            if planes is None:
-                ok = False
+            composed = f' -> composed page={page:#06x}'
+            if kind not in (SceneKind.GAMEPLAY, SceneKind.IRIS):
+                composed = ' -> rendered but expected a GAP!'; ok = False
+        except FaithfulVisualGap as gap:
+            composed = ' -> GAP (no fallback): ' + str(gap).split('— ')[-1][:60]
+            if kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
+                composed = ' -> unexpected GAP!'; ok = False
         note = ''
         if expect is not None and kind != expect:
             note = f'  (EXPECTED {expect.name})'; ok = False
