@@ -40,6 +40,36 @@ The **state-producing** side is the update/collision dispatch below.
 | `5CAC` | tile-collision response dispatch (`call [bx+0x7D95]`, idx=tile attr 2/4) | player tile reaction |
 | `5C9E`/`5CCE` | **PLAYER** per-frame orchestration (`call 0x62EC` gravity / `0x6333` input / `0x6374` collide / `0x638B` anim) | **NO** — player update |
 
+### GENERAL OBJECT-UPDATE SYSTEM — LOCATED (2026-06-23)
+
+Found empirically: a write-watcher on the active-list range during gameplay showed the position
+writers (`+0` X / `+2` Y) at `6869`/`6875` etc. — the walker entered from the main loop at ~`6822`.
+
+**The object-update walker (`~6840..690A`):**
+- base `si = 0x4FD0`, **count `bp = 0xC` (12 slots)**, **stride `0x12` (18 bytes)** (`690A add si,0x12`).
+- per slot (skip if `[si+4]==0xFFFF`): apply **Y velocity** `[si+2] += [si+0xA]>>4`, **X velocity**
+  `[si] += [si+8]>>4` (unless `[si+8]==0xFFFF`); advance the **animation script** `[si+0xC]` → write
+  the sprite id+frame `[si+4] = (id & 0x6000) | frame`; then **dispatch the per-type handler**.
+- **Object record (0x4FD0, 18 bytes):** `[+0]`X `[+2]`Y `[+4]`sprite-id|flags(0x6000)|anim-frame
+  `[+6]`→type-DEF pointer `[+8]`X-vel `[+0xA]`Y-vel `[+0xC]`anim-script ptr `[+0xE]`state/sub-timer
+  `[+9]/[+0xB]`aux `[+0x11]`life. (The player is the separate FSM; this list is enemies/objects/effects.)
+- **Type definition (at `[si+6]`):** `[+1]` = handler index, `[+4]` = behavior flags. The handler
+  dispatch is `68FC: call cs:[bx + 0x6AA9]` with `bx = [def+1]*2`.
+
+**Type catalogue — `CS:0x6AA9`, 24 handlers** (`0x75C4..0x7F6C`; most call the shared helper `0x8084`):
+types 0..23 → `7C90 7C8C 7C2D 7B91 7ADF 7A60 78EC 7898 77DE 773D 7665 760F 75C4 7F6C 7F26 7EE2 7ED8
+7EBF 7EB5(×4) 7E97 7D9B`. These are the enemy/object/effect AI handlers (read `[si+0xE]` state, set
+`[si+4]` sprite, check collision via `0x8022`/`0x8084`).
+
+**Second object list (`6913..`):** base `0x8489`, dispatch `6944: call cs:[bx + 0x6AC3]` (idx `[si+1]`)
+— a separate (≤0x32) list, likely effects/particles. To inspect when needed.
+
+NEXT (with the do-not-assume discipline): **identify the "500" score-popup's specific type/handler**
+by finding its live slot in a witness (its sprite renders as digits + it floats up = negative Y-vel
+`[si+0xA]`), confirm it is small + low-side-effect, then split spawn/init vs score-add vs float vs
+anim/blink vs expiry vs draw-entry and recover the update handler in shadow. Do NOT assume the score
+add is in the popup handler (likely at collect-time, in the collectible/collision handler).
+
 ### Map correction (2026-06-23): `0x7D9x` is the PLAYER state machine, NOT the object catalogue
 
 Enumerating `0x7D9B` and disassembling its cluster (`0x652C..0x6680`) showed these are **player**
@@ -120,10 +150,10 @@ render side effects**, not a hand-picked subset:
 
 1. ~~**Locate RNG + the input vector**~~ — **DONE** (2026-06-23): no RNG (deterministic); input
    vector = int 9 @ `1030:1820` → scancode `[0x2874]` + counter `[0x2877]`.
-2. ~~Enumerate `[0x7D9B]`~~ — **DONE, but it is the PLAYER FSM, not the object catalogue** (see the
-   map correction above). NEXT: **locate the general object-update system** that walks the active-sprite
-   list and updates enemies / pickups / the "500" popup (one of `6822`/`6210`/`60FE`/`4907`/`5850`),
-   and find its per-type dispatch — the real object-type catalogue.
+2. ~~Enumerate `[0x7D9B]`~~ (= PLAYER FSM) + ~~locate the general object-update system~~ — **DONE**
+   (see "GENERAL OBJECT-UPDATE SYSTEM — LOCATED" above): walker at `~6840` over the `0x4FD0` list (12
+   slots, stride 0x12) dispatching the 24-type catalogue at `CS:0x6AA9` by `[def+1]`. NEXT: identify
+   the "500" popup's specific type/handler in a witness, confirm it is the smallest safe one.
 3. **Recover one simple handler** (e.g. a static pickup or a popup like the "500" score sprite)
    pure, shadow-verify its record + SFX + render contract over a demo (the `advance_animation` /
    `camera_shake` ownership pattern), ASM still oracle.
