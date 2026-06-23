@@ -173,3 +173,39 @@ gives witnesses for the image present, the palette install, and the menu cursor.
   iris burned ~2.14M interpreted instructions (≈4.8s); the native block is ~17K (≈0.14s), a **34×**
   speed-up — and it is inert during gameplay (`31F4` is reached only at level end).
 * Menu cursor + scene state machine — contracts only, to be recovered in the order above.
+
+## Phase-A faithful-visual integration findings (2026-06-23)
+
+Routing all labeled scene witnesses through `render_visual` (the dispatcher) located the remaining
+scene work precisely (no silent fallback — each unrecovered scene raises `FaithfulVisualGap`):
+
+* **Black-curtains / cave transition = a DIAGONAL WIPE** (witness `transition_fade_003841`): a
+  gameplay frame revealed diagonally with black covering the rest; display-start non-page-aligned
+  (`ds=0x0013`, a CRTC pan), camera reset to 0. This is a **separate transition leaf** from the iris
+  (it currently routes to `SCENE` and correctly fails loud — the faithful path shows the diagnostic
+  frame, not the wipe). Needs its own recovery + a clean wipe witness.
+* **Palette fade** (witness `palette_fade_021225`) routes to `GAMEPLAY` and renders via `render_frame`;
+  the fade is a DAC effect carried by the live palette — visually present (bucket-3 orchestration, not
+  a visual gap).
+* **Mode-select MENU scene (`modeselect_075918`) — fully located, a bounded island like gameplay:**
+  - BACKGROUND: a scrolling tiled pattern (master segment `[0x2875]`) panned via CRTC + blitted
+    column-by-column — the recovered `pre2/recovered/present.py` (`compute_display_start`,
+    `scroll_blit_column`, `scroll_shift_frame`) + `bridge/present.py`. A **clean-framebuffer rebuild
+    path** (analogous to gameplay's `build_background_ring`) is the first sub-step.
+  - TEXT: a FIXED sequence of 4 `draw_string` (9886) calls at `1030:9920..99A7`, with string pointers
+    at `[0xB170]/[0xB175]/[0xB180]/[0xB185|0xB18E]`, pen positions as code immediates
+    (`0xC38`/`0xAF2`/`0x12C9`), advance `[0xB1AB]` (3/4), font `[0x2875]`, page `[0xB1A1]/[0xB1A3]`.
+    The **highlight** is a shade swap gated by `[0xB197]` (selected item redrawn at a different
+    `font_base`). Reuses the recovered `draw_string` (text.py) + `bridge/text.py` reader.
+  - PALETTE: a static 16-colour DAC.
+  - SceneState to build (bridge `read_scene_state`): background present inputs + the 4 text runs
+    (strings + pens + advances + highlight gate) + palette + page-flip bookkeeping.
+  - WITNESS GAP: the current menu snapshots are captured *post-draw* (the per-call pen/shade state is
+    final), so byte-exact TEXT verification needs a **mid-menu-draw witness** (like the gameplay
+    proofs) or driving the menu loop. The background rebuild can be verified from the post-draw page.
+
+NEXT (menu SCENE leaf, in order): (1) recover the menu-background clean rebuild (present-pattern) and
+verify it against the witness page; (2) build `read_scene_state` for the menu (background + 4 text
+runs + highlight + palette); (3) wire a `SceneKind.SCENE` menu render into `render_visual`; (4)
+verify byte-exact (text needs a mid-draw witness). The WIPE transition + the IMAGE (intro/title) +
+map/loading/tally/game-over scenes follow as separate leaves.
