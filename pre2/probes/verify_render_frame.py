@@ -45,7 +45,7 @@ CS = 0x1030
 ANIM_GRID_LOOP = 0x36B3   # grid-loop entry (throttle ran; [0x6BC2] advanced)
 SCROLL_ENTRY = 0x3A27     # after animgrid + grid, before the scroll copy
 BG_LO, BG_HI = 0x3F40, 0x5E00   # the scrolling tile ring buffer (renderer-owned)
-DEFAULT_SNAP = ROOT / "artifacts" / "snapshot_pre2_20260621_185902"
+DEFAULT_SNAP = ROOT / "artifacts" / "snapshot_pre2_gameplay_20260621_185902"
 LIMIT = 12
 
 

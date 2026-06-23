@@ -31,7 +31,7 @@ from pre2.runtime import load_pre2_snapshot
 CS = 0x1030
 TRACKER = 0x227C       # sequencer tick (once per audio block)
 MIX_CH = 0x218F        # per-channel mixer (3-4 calls per block)
-DEFAULT_SNAP = ROOT / "artifacts" / "snapshot_pre2_20260622_021225"
+DEFAULT_SNAP = ROOT / "artifacts" / "snapshot_pre2_palette_fade_20260622_021225"
 DET = 450000.0
 WARMUP_TICKS = 50          # let the SB double-buffer reach steady state after load
 LIMIT = 40

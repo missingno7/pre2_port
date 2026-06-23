@@ -18,7 +18,7 @@ from pre2.bridge import object_render as B
 from pre2.recovered.object_render import plan_sprite
 from pre2.runtime import load_pre2_snapshot
 
-SNAP = ROOT/"artifacts"/"snapshot_pre2_20260621_185902"
+SNAP = ROOT/"artifacts"/"snapshot_pre2_gameplay_20260621_185902"
 BLIT = (0x1030, 0x28BE)
 rt = load_pre2_snapshot(str(ROOT/"assets"/"pre2.exe"), str(SNAP), game_root=str(ROOT/"assets"),
                         native_replacements=True)

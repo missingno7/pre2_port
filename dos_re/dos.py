@@ -88,6 +88,13 @@ class DOSMachine:
     # wall-clock so the program's own vsync/timer waits pace it to real time; left
     # None for headless/deterministic runs (per-read toggle preserved).
     time_source: Callable[[], float] | None = None
+    # Fraction of each refresh period the vertical-retrace status bit reads *active*
+    # (only used with a wall-clock time_source).  Real VGA asserts it for a narrow
+    # vertical-blank/retrace pulse; a wide window lets a program's "wait until the
+    # retrace bit is set" half-wait slip more than one frame through per refresh on a
+    # fast host (PRE2's mode-select scroll runs ~2x fast at 0.28).  Default preserves
+    # the historical 0.28; lower it (~0.05-0.08) for a realistic narrow pulse.
+    vga_retrace_active_fraction: float = 0.28
     speaker_control: int = 0
     speaker_callback: Callable[[bool, float], None] | None = None
     adlib_callback: Callable[[int, int], None] | None = None
@@ -336,7 +343,7 @@ class DOSMachine:
             self.vga_status_reads += 1
             return retrace_bit if (self.vga_status_reads & 1) else 0x00
         phase = (ts() * self.display_refresh_hz()) % 1.0
-        return retrace_bit if phase >= 0.72 else 0x00
+        return retrace_bit if phase >= (1.0 - self.vga_retrace_active_fraction) else 0x00
 
     def port_read(self, cpu: CPU8086, port: int, bits: int) -> int:
         sb = self.sound_blaster

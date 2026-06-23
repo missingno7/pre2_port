@@ -10,10 +10,22 @@ from __future__ import annotations
 from pre2.bridge import frame as _frame
 from pre2.bridge import object_render as _obj
 from pre2.bridge import palette as _pal
-from pre2.recovered.render_frame import FadeStep, RendererState
+from pre2.recovered.animation import AnimStep
+from pre2.recovered.render_frame import FadeStep, IrisState, RendererState
+from pre2.recovered.render_model import CameraShakeState
 
 _DS = 0x1A0F
 _ANIM_FRAME_PTR = 0x6BC2   # [0x6BC2] = current animation-frame remap base
+_ANIM_THROTTLE = 0x6BD4    # [0x6BD4] = per-frame throttle counter
+_ANIM_ACTIVE = 0x6BBD      # [0x6BBD] = animated tiles present this frame
+_ANIM_SPEED = 0x6BF6       # [0x6BF6] = scroll speed (>=0x14 doubles the cycle rate)
+_SHAKE_MAG = 0x6BEA        # [0x6BEA] = camera-shake magnitude/timer (set 7/4 on landing, decays)
+_FRAME_CTR = 0x6BD5        # [0x6BD5] = frame counter (its parity gates the shake's alternation)
+_ROW_FACTOR = 0x6BF8       # [0x6BF8] = render row-stride factor; the shake apply (4C30) overwrites it
+                           # with the magnitude on odd parity / 0 on even -> the applied vertical offset
+_IRIS_RADIUS = 0x2DD0      # iris radius (low byte; shrinks each frame) — see bridge.transition
+_IRIS_X = 0x2DC6           # iris circle centre X (player)
+_IRIS_Y = 0x2DC8           # iris circle centre Y (player)
 
 
 def _rb(mem, off):
@@ -40,11 +52,50 @@ def _fade_step(mem):
     return FadeStep(a=a, b=b, amount=fi.fade_amt)
 
 
-def read_renderer_state(mem, *, frame_pre_inc: bool = True) -> RendererState:
+def _rws(mem, off):
+    v = _rw(mem, off)
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def _anim_step(mem) -> AnimStep:
+    """Read the animated-tile cycle inputs at redraw (1030:367D): remap pointer, throttle
+    counter, the animated-tiles-present gate, and the scroll speed."""
+    return AnimStep(frame_ptr=_rw(mem, _ANIM_FRAME_PTR), throttle=_rb(mem, _ANIM_THROTTLE),
+                    active=_rb(mem, _ANIM_ACTIVE) != 0, speed=_rw(mem, _ANIM_SPEED))
+
+
+def _shake_state(mem) -> CameraShakeState:
+    """Read the camera-shake-on-fall state. ``[0x6BEA]`` is the magnitude/timer and ``[0x6BD5]&1``
+    the frame parity its alternation rides on. The apply is CONFIRMED: 1030:4C30 overwrites the
+    render row-stride factor ``[0x6BF8]`` (== :attr:`RendererState.row_factor`, which ``render_frame``
+    already consumes) with the magnitude on odd parity / 0 on even — a vertical viewport jolt of
+    ``{0, magnitude}`` px (matched by pixel cross-correlation). ``applied_offset`` is that per-frame
+    offset (0 when no shake is active)."""
+    mag = _rb(mem, _SHAKE_MAG)
+    return CameraShakeState(magnitude=mag, active=mag > 0, phase=_rb(mem, _FRAME_CTR) & 1,
+                            applied_offset=(_rw(mem, _ROW_FACTOR) if mag > 0 else 0))
+
+
+def _iris_state(mem):
+    """Resolve the circular-iris transition state, or ``None`` if no iris is running.
+
+    Discriminator: the radius byte ``[0x2DD0]`` is 0 outside the transition and runs 0xE6->0
+    during it (the loop breaks at <=0). ``center_*`` are the signed circle centre the iris
+    builder reads ([0x2DC6]/[0x2DC8])."""
+    radius = _rb(mem, _IRIS_RADIUS)
+    if radius == 0:
+        return None
+    return IrisState(radius=radius, center_x=_rws(mem, _IRIS_X), center_y=_rws(mem, _IRIS_Y))
+
+
+def read_renderer_state(mem, dos=None, *, frame_pre_inc: bool = True) -> RendererState:
     """Snapshot every renderer input from VM memory into a plain :class:`RendererState`.
 
     ``frame_pre_inc`` matches the object renderer's +1 to [0x6BD5] applied at 26FA entry
-    (capture this state *before* that increment to see the value the engine will use)."""
+    (capture this state *before* that increment to see the value the engine will use).
+    Pass ``dos`` to also capture the full palette state machine (displayed DAC colours +
+    phase + base index) via :func:`pre2.bridge.palette.read_palette_state`; without it the
+    snapshot carries only the fade step (no displayed colours)."""
     tm = _frame.read_tilemap(mem)
     st = _frame.read_scroll_state(mem)
     c = st.camera
@@ -70,6 +121,10 @@ def read_renderer_state(mem, *, frame_pre_inc: bool = True) -> RendererState:
         dirty=st.dirty,
         dirty_rows=st.dirty_rows,
         fade=_fade_step(mem),
+        palette=(_pal.read_palette_state(mem, dos) if dos is not None else None),
+        iris=_iris_state(mem),
+        anim=_anim_step(mem),
+        shake=_shake_state(mem),
         object_camera=obj_cam,
         object_sprites=obj_sprites,
         object_attrs=obj_attrs,

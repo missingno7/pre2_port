@@ -96,7 +96,23 @@ into `render_scene`.
 1. **`draw_string` / text** — recovered; **verify** against a mid-draw witness, then wire as
    the `render_scene` text leaf. *(first concrete island — this change starts it.)*
 2. **Scene-present setup** — `9600` CRTC/sequencer + `9200` palette install: the page/palette
-   plumbing that frames a scene draw. Recover as the faithful present + the palette leaf.
+   plumbing that frames a scene draw. **Pan + page flip done** — `pre2/recovered/present.py`
+   (`present_pan_flip` / `compute_display_start`, `1030:9613..9639`): `display_start =
+   (scroll_x>>3 + scroll_y·0x28) & 0x1FFF`, `page_draw = display_start`, `page_clear = old
+   page_draw`. VERIFIED 321/321 live menu-scroll steps + a golden test (`tests/test_present.py`).
+   Note `9600` as a whole is the mode-select **scene controller** (the scroll loop + redraw +
+   background shift-copy + hold), i.e. the border — only its present arithmetic is the leaf.
+   **Menu background done too** — `scroll_blit_column` (`1030:965A..969C`): every 8 px of pan it
+   blits one fresh byte-column of the master pattern (segment `[0x2875]`) into all 4 EGA planes
+   (wrapping at the `0x2000` circular page), feeding the infinite scroll the CRTC pan reveals.
+   VERIFIED 79 blits / 553 skips / 0 divergence + a regression test. **Wired live too**
+   (`pre2/checkpoints/present.py` + `pre2/bridge/present.py`): the `965A..969C` block is the
+   map/menu scroll's hottest loop (~474 interpreted instr/call, ~half the scroll frame), so the
+   native blit lets the VM keep up with the present rate → the map scroll renders **smoothly**
+   (it's vsync-gated, so the scroll *speed* is unchanged — only the per-frame CPU cost drops).
+   Per-call whole-state lockstep on the map snapshot: all live memory byte-exact, only clobbered
+   scratch regs differ (reloaded at the `9613` loop top); verify-mode 246/0; inert in gameplay.
+   `9200` (a hardware DAC-readback fade loop) is still open.
 3. **Full-screen image present** — the SQZ-image → planes blit (intro/title/map backgrounds).
    Define the `SceneImage` asset + recover `present_image`.
 4. **Menu/title/map scene state** — the scene **state machine** + menu cursor/selection + the
@@ -126,7 +142,12 @@ gives witnesses for the image present, the palette install, and the menu cursor.
   pages** (`0x0`/`0x1FFF`, double-buffered); the **cursor highlight is a shade swap** — the
   selected item is re-drawn with `font_base 0x4200` (vs `0x0`), no separate cursor sprite. So the
   faithful highlight is just a `TextRun` with the highlight shade; `draw_cursor` is reserved for
-  the enhanced renderer's own style. Not yet wired live (no menu in the live gameplay path).
+  the enhanced renderer's own style. **Wired live** (`pre2/checkpoints/text.py` +
+  `pre2/bridge/text.py`): the native drawer writes planes 2|3 + the advanced pen, `bx` past the
+  terminator, `ds` restored to DGROUP. Proven by a **per-call whole-state lockstep** over 54 menu
+  draws — every byte at/above SP (all planes, pen, DGROUP, VRAM) matches the ASM; the only residue
+  is dead below-SP stack + the clobbered scratch registers, which all four call sites
+  (`9930/994b/9996/99a7`) reload or ignore. Inert in steady gameplay.
 * **Image present** — `SceneImage` (linear-13h + planar-0Dh) + `present_image` defined and
   validated on real extracted images; the exact ASM present routine still to be pinned.
 * **Scene transitions — already recovered.** The palette fade (`6772`) and the **end-level
@@ -134,6 +155,21 @@ gives witnesses for the image present, the palette install, and the menu cursor.
   long mis-labelled the "scale/zoom transition": `build_scaled_columns` reads a quarter-circle
   cos/sin table (`[0x7090]`/`[0x6F90]`, `src_x²+src_y²≈64²`) × a shrinking radius `[0x2DD0]`
   about the player (`[0x2DC6]`/`[0x2DC8]`); `draw_scale_frame` clears outside the circle via
-  `clear_span`. ASM_MATCHED byte-exact (40 frames / 0 div). So the gameplay→tally transition's
-  pixel work is done; only *when* it fires (scene logic) is the border.
+  `clear_span`. So the gameplay→tally transition's pixel work is done; only *when* it fires
+  (scene logic) is the border.
+* **Iris wired live (VERIFIED).** The whole per-frame block `1030:31F4..32B0` (build column
+  table → clear outside the circle) is replaced natively by `pre2/checkpoints/transition.py`
+  (bridge `pre2/bridge/transition.py`): read radius/centre/clamp/page + cos·sin tables, run the
+  recovered `build_scaled_columns` + `draw_scale_frame`, write the four EGA planes +
+  scaled-column tables back, continue at `32B0` (an inline fall-through block — only `ip`
+  advances, no stack change). The controller after `32B0` reads only `[0x2DC2]/[0x2DC0]/[0x2DD0]`
+  and re-renders + `fade_palette`; the planes are the only state it consumes, but the hook also
+  writes the block's terminal DGROUP scratch (`[0x2DCC]/[0x2DCE]/[0x2DCA]/[0x2DD2]`) so the
+  whole-memory oracle stays exact. Verified three ways: 47 live frames byte-exact
+  (`pre2/probes/verify_iris_block.py`); verify-mode lockstep 0 divergence; and a **foolproof
+  whole-state** check (hooks-on vs hooks-off stepped to the iris end, full `memcmp`) — identical
+  across all live memory + registers, the only residue being dead below-SP stack scratch (the
+  ASM's popped `push cx`), unreachable by construction. **It was the transition's slowness** — the
+  iris burned ~2.14M interpreted instructions (≈4.8s); the native block is ~17K (≈0.14s), a **34×**
+  speed-up — and it is inert during gameplay (`31F4` is reached only at level end).
 * Menu cursor + scene state machine — contracts only, to be recovered in the order above.

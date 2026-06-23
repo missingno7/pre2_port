@@ -23,11 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pre2.islands import oracle_link
+from pre2.recovered.render_model import BlitMode, SpriteDrawCmd
 
 __all__ = [
     "RECORD_BYTES", "LIST_TOP", "LIST_BASE", "SCREEN_W", "SCREEN_H",
     "Sprite", "SpriteAttr", "Camera", "SpriteDraw", "SpriteRecordUpdate",
-    "plan_sprite", "plan_frame", "plan_record_update",
+    "plan_sprite", "plan_sprite_command", "plan_frame", "plan_record_update",
 ]
 
 RECORD_BYTES = 0x12      # 18 bytes per active-sprite record [asm 2DE4: sub si,0x12]
@@ -134,50 +135,52 @@ def _s8(v: int) -> int:
     return v - 0x100 if v & 0x80 else v
 
 
-def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None:
-    """Plan one sprite's blit, or ``None`` if it is culled. [asm 271C..28BE]
+@dataclass(frozen=True)
+class _Placement:
+    """A sprite's resolved placement (the part of 271C..27F5 before the planar clip/blit),
+    shared by the faithful raster planner (:func:`plan_sprite`) and the semantic command
+    builder (:func:`plan_sprite_command`) so they can never drift."""
+    flipped: bool
+    mode: int
+    width: int
+    height: int
+    x_off: int
+    screen_x: int     # left edge on screen (px)
+    screen_y: int     # baseline (bottom) on screen (px)
+    top_row: int      # top edge on screen (px)
+    is_hud: bool
 
-    Faithful to the ASM: H-flip mirrors the X offset, position is camera-relative
-    (X in px, Y biased by ``row_factor`` and ``fine_scroll``), the sprite is culled
-    against [0,320)×(0,176) with a left-edge width test, and left/right/top/bottom
-    overruns clip the byte-width / rows / source-skip and shift the dest offset.
-    """
+
+def _placement(spr: Sprite, attr: SpriteAttr, cam: Camera):
+    """Resolve flip / blink mode / screen placement, or ``None`` if culled. [asm 271C..27F5]"""
     if spr.sprite_id == 0xFFFF:                         # [asm 2713: cmp [si+4],-1] empty slot
         return None
-    flipped = bool(spr.sprite_id & 0x8000)             # [asm 2739 shl / 273B rcl cs:[26e2]] H-flip = id bit15
-
-    # --- blink/anim mode [asm 2740..2761] ---
-    # The decremented life is a *local* used only for the blink/mode decision below; the
-    # actual [si+0x11] write-back is the checkpoint's record-mutation contract, not a
-    # field of the draw command.
-    life_after = (spr.life - 1) & 0xFF if spr.life else 0   # [asm 2742 sub/2746 adc] saturating dec
+    flipped = bool(spr.sprite_id & 0x8000)             # [asm 2739 shl / 273B rcl] H-flip = id bit15
+    # blink/anim mode [asm 2740..2761]: the decremented life is a local for the decision only;
+    # the [si+0x11] write-back is the checkpoint's record-mutation contract.
+    life_after = (spr.life - 1) & 0xFF if spr.life else 0   # [asm 2742/2746] saturating dec
     bit14 = bool(spr.sprite_id & 0x4000)               # [asm 2757 test bh,0x80] -> id bit14
     if life_after == 0 or (cam.frame & 3) == 0:        # expired, or blink "on" 1/4 frames
         mode = MODE_OPAQUE if bit14 else MODE_NORMAL
     else:                                              # [asm 2753] blink off
         mode = MODE_ERASE
-
     width, height = attr.width, attr.height
     x_off = attr.x_off
     if flipped:                                          # [asm 2775: al = width - x_off]
         x_off = width - x_off
-    if (spr.sprite_id & 0x1FFF) == 0x135:               # [asm 277E: cmp bx,0x26A] HUD/boss-meter
-        # The fixed-screen HUD sprite (id 0x135, e.g. a boss health-bar segment): drawn at
-        # a FIXED position with NO camera offset, and it SKIPS the off-screen-X culls and
-        # the screen_y<=0 cull (it jmps straight to the shared clip/blit at 27DE). It keeps
-        # only the top_row>=SCREEN_H cull below. [asm 2784-2790 jmp 27DE]
-        # RECOVERED from disassembly; VERIFY PENDING (NEEDS REPRO: a boss-fight snapshot).
+    is_hud = (spr.sprite_id & 0x1FFF) == 0x135           # [asm 277E: cmp bx,0x26A] HUD/boss-meter
+    if is_hud:
+        # Fixed-screen HUD sprite (id 0x135): FIXED position, NO camera, SKIPS the off-screen-X
+        # and screen_y<=0 culls [asm 2784-2790 jmp 27DE]. RECOVERED; VERIFY PENDING (NEEDS REPRO).
         screen_x = _s16(spr.x - x_off)                  # [asm 2784: no camera X]
         screen_y = _s16(spr.y + _s8(attr.y_off))        # [asm 2788-278D: no row_factor/camera]
     else:
-        # --- screen X (px) [asm 277A..27B5] ---
-        screen_x = _s16(spr.x - x_off - cam.cam_x * TILE_PX)
+        screen_x = _s16(spr.x - x_off - cam.cam_x * TILE_PX)   # [asm 277A..27B5]
         if screen_x >= SCREEN_W:                         # [asm 27A6] off right
             return None
         if _s16(screen_x + width) < 0:                   # [asm 27AE..27B3] off left
             return None
-        # --- screen Y: ``screen_y`` is the sprite's BASELINE (bottom); the top row is
-        # ``screen_y - height`` [asm 27B8..27F5; 27EB sub al,dh]. ---
+        # screen_y is the BASELINE (bottom); the top row is screen_y - height [asm 27B8..27F5].
         screen_y = _s16(spr.y + _s8(attr.y_off) + cam.row_factor
                         - (cam.cam_y * TILE_PX + cam.fine_scroll))
         if screen_y <= 0:                                # [asm 27D9: jg] baseline must be on-screen
@@ -185,6 +188,40 @@ def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None
     top_row = _s16(screen_y - height)                   # [asm 27EB] dest's top row
     if top_row >= SCREEN_H:                             # [asm 27F0: cmp ax,0xB0] entirely below
         return None
+    return _Placement(flipped, mode, width, height, x_off, screen_x, screen_y, top_row, is_hud)
+
+
+def plan_sprite_command(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDrawCmd | None:
+    """The sprite's **render intent** (semantic), or ``None`` if culled — what object, which
+    graphic, where in world/screen space, how (flip/blink). Decoupled from the planar
+    realisation (:func:`plan_sprite` is the faithful raster command). Same placement logic,
+    so the two never diverge."""
+    p = _placement(spr, attr, cam)
+    if p is None:
+        return None
+    return SpriteDrawCmd(
+        sprite_id=spr.sprite_id, base_id=spr.sprite_id & 0x1FFF, flip=p.flipped,
+        mode=BlitMode(p.mode), life=spr.life, world_x=spr.x, world_y=spr.y,
+        screen_x=p.screen_x, screen_y=p.top_row, width=p.width, height=p.height,
+        src_seg=attr.src_seg, src_off=attr.src_off, is_hud=p.is_hud,
+    )
+
+
+def plan_sprite(spr: Sprite, attr: SpriteAttr, cam: Camera) -> SpriteDraw | None:
+    """Plan one sprite's blit (the faithful raster command), or ``None`` if culled.
+    [asm 271C..28BE]
+
+    Faithful to the ASM: H-flip mirrors the X offset, position is camera-relative
+    (X in px, Y biased by ``row_factor`` and ``fine_scroll``), the sprite is culled
+    against [0,320)×(0,176) with a left-edge width test, and left/right/top/bottom
+    overruns clip the byte-width / rows / source-skip and shift the dest offset.
+    """
+    p = _placement(spr, attr, cam)
+    if p is None:
+        return None
+    flipped, mode = p.flipped, p.mode
+    width, height = p.width, p.height
+    screen_x, screen_y, top_row = p.screen_x, p.screen_y, p.top_row
 
     byte_width = width >> cam.global_shift               # [asm 27FC: shr dl,cs:[0]]
     rows = height                                       # [asm 26EC seed = dh]

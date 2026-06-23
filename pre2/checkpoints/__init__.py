@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from dos_re.hooks import registry
 
-from . import audio, blit, frame, object_render, palette, sprite_classify, sprite_decode, sqz, tracker  # noqa: F401 — import to register @registry.replace hooks
-from .common import HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
+from . import audio, blit, frame, object_render, palette, present, sprite_classify, sprite_decode, sqz, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
+from .common import HookTraceStats, HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
 from .sprite_decode import sprite_decode_local, sprite_decode_shared  # noqa: F401 — re-exported
 from .sqz import sqz_decompress  # noqa: F401 — re-exported
 
@@ -32,7 +32,9 @@ __all__ = [
     "install_pre2_replacements",
     "uninstall_pre2_replacements",
     "enable_pre2_hook_verification",
+    "enable_pre2_hook_trace",
     "HookVerifyStats",
+    "HookTraceStats",
     "Pre2HybridGap",
 ]
 
@@ -81,6 +83,10 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.pre2_object_pending = []
     cpu.pre2_classify_pending = []
     cpu.pre2_palette_pending = []
+    cpu.pre2_iris_pending = []
+    cpu.pre2_text_pending = []
+    cpu.pre2_scroll_pending = []
+    cpu.pre2_scroll_shift_pending = []
     stats = HookVerifyStats()
     sqz.register_verify(cpu, stats, on_result, raise_on_divergence)
     sprite_decode.register_verify(cpu, stats, on_result, raise_on_divergence)
@@ -91,4 +97,32 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     object_render.register_verify(cpu, stats, on_result, raise_on_divergence)
     sprite_classify.register_verify(cpu, stats, on_result, raise_on_divergence)
     palette.register_verify(cpu, stats, on_result, raise_on_divergence)
+    transition.register_verify(cpu, stats, on_result, raise_on_divergence)
+    text.register_verify(cpu, stats, on_result, raise_on_divergence)
+    present.register_verify(cpu, stats, on_result, raise_on_divergence)
+    return stats
+
+
+def enable_pre2_hook_trace(rt) -> HookTraceStats:
+    """Run the **live hybrid runtime** (replacement hooks running instead of the ASM) and
+    additionally count each hook's invocations by name — so you can watch which recovered
+    systems are actually live, and see where the game is still pure ASM (the hooks simply
+    never fire there). Unlike :func:`enable_pre2_hook_verification` there is no oracle and
+    no diff: the real hooks run, each wrapped in a tally. Returns a live :class:`HookTraceStats`.
+    """
+    cpu = rt.cpu
+    cpu.pre2_dos = rt.dos
+    registry.install(cpu)
+    stats = HookTraceStats()
+    for key in list(cpu.replacement_hooks):
+        fn = cpu.replacement_hooks[key]
+        name = cpu.hook_names.get(key) or "%04x:%04x" % key
+
+        def make(fn, name):
+            def wrapped(c):
+                stats.bump(name)
+                return fn(c)
+            return wrapped
+
+        cpu.replacement_hooks[key] = make(fn, name)
     return stats

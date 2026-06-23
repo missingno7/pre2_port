@@ -96,3 +96,26 @@ def read_dac16(dos) -> list[tuple[int, int, int]]:
 def read_fade_flags(mem) -> tuple[int, int, int]:
     """(``[6C01]``, ``[6C02]``, ``[6C03]``) — for verify-mode diffing."""
     return _rb(mem, _C01), _rb(mem, _C02), _rb(mem, _C03)
+
+
+def read_palette_state(mem, dos):
+    """Snapshot the renderer's **persistent palette state machine** as a semantic
+    :class:`pre2.recovered.render_model.PaletteState`.
+
+    The displayed palette (``dos`` DAC) plus, if a fade is running, its phase / progress /
+    endpoints — the renderer-owned state that keeps evolving while gameplay proceeds. The
+    fade is active iff ``[6C01]|[6C02] != 0``; ``[6C02]`` is the direction (0 = IN toward the
+    ``[0xACB7]`` target, 1 = OUT); ``[6C03]`` is the progress; ``[2D8A]`` selects the active
+    named palette. (Started/reversed/swapped by the controllers at 877x / 882A / 4CC4 — see
+    docs/pre2/render_model.md.)
+    """
+    from pre2.recovered.render_model import FadePhase, PaletteState
+    colors = tuple(tuple(dos.vga_palette[i]) for i in range(16))
+    base_index = _rb(mem, _SEL)
+    if not fade_active(mem):
+        return PaletteState(colors=colors, base_index=base_index, phase=FadePhase.NONE)
+    fi = read_fade_inputs(mem)
+    a, b = (fi.target, fi.src) if fi.direction != 0 else (fi.src, fi.target)
+    phase = FadePhase.OUT if fi.direction != 0 else FadePhase.IN
+    return PaletteState(colors=colors, base_index=base_index, phase=phase,
+                        fade_amount=fi.fade_amt, fade_from=a, fade_to=b)

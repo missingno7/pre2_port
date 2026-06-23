@@ -1,0 +1,132 @@
+{
+ "cases": [
+  {
+   "scroll_x": 8,
+   "scroll_y": 0,
+   "old_page_draw": 2318,
+   "display_start": 1,
+   "page_draw": 1,
+   "page_clear": 2318
+  },
+  {
+   "scroll_x": 10,
+   "scroll_y": 0,
+   "old_page_draw": 1,
+   "display_start": 1,
+   "page_draw": 1,
+   "page_clear": 1
+  },
+  {
+   "scroll_x": 12,
+   "scroll_y": 0,
+   "old_page_draw": 1,
+   "display_start": 1,
+   "page_draw": 1,
+   "page_clear": 1
+  },
+  {
+   "scroll_x": 14,
+   "scroll_y": 0,
+   "old_page_draw": 1,
+   "display_start": 1,
+   "page_draw": 1,
+   "page_clear": 1
+  },
+  {
+   "scroll_x": 16,
+   "scroll_y": 0,
+   "old_page_draw": 1,
+   "display_start": 2,
+   "page_draw": 2,
+   "page_clear": 1
+  },
+  {
+   "scroll_x": 18,
+   "scroll_y": 0,
+   "old_page_draw": 2,
+   "display_start": 2,
+   "page_draw": 2,
+   "page_clear": 2
+  },
+  {
+   "scroll_x": 20,
+   "scroll_y": 0,
+   "old_page_draw": 2,
+   "display_start": 2,
+   "page_draw": 2,
+   "page_clear": 2
+  },
+  {
+   "scroll_x": 22,
+   "scroll_y": 0,
+   "old_page_draw": 2,
+   "display_start": 2,
+   "page_draw": 2,
+   "page_clear": 2
+  },
+  {
+   "scroll_x": 24,
+   "scroll_y": 0,
+   "old_page_draw": 2,
+   "display_start": 3,
+   "page_draw": 3,
+   "page_clear": 2
+  },
+  {
+   "scroll_x": 26,
+   "scroll_y": 0,
+   "old_page_draw": 3,
+   "display_start": 3,
+   "page_draw": 3,
+   "page_clear": 3
+  },
+  {
+   "scroll_x": 28,
+   "scroll_y": 0,
+   "old_page_draw": 3,
+   "display_start": 3,
+   "page_draw": 3,
+   "page_clear": 3
+  },
+  {
+   "scroll_x": 30,
+   "scroll_y": 0,
+   "old_page_draw": 3,
+   "display_start": 3,
+   "page_draw": 3,
+   "page_clear": 3
+  },
+  {
+   "scroll_x": 32,
+   "scroll_y": 0,
+   "old_page_draw": 3,
+   "display_start": 4,
+   "page_draw": 4,
+   "page_clear": 3
+  },
+  {
+   "scroll_x": 34,
+   "scroll_y": 0,
+   "old_page_draw": 4,
+   "display_start": 4,
+   "page_draw": 4,
+   "page_clear": 4
+  },
+  {
+   "scroll_x": 36,
+   "scroll_y": 0,
+   "old_page_draw": 4,
+   "display_start": 4,
+   "page_draw": 4,
+   "page_clear": 4
+  },
+  {
+   "scroll_x": 38,
+   "scroll_y": 0,
+   "old_page_draw": 4,
+   "display_start": 4,
+   "page_draw": 4,
+   "page_clear": 4
+  }
+ ]
+}

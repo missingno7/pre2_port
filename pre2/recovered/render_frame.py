@@ -44,6 +44,17 @@ class FadeStep:
 
 
 @dataclass(frozen=True)
+class IrisState:
+    """The circular-iris transition's per-frame state (the ``1030:31D0`` end-level loop):
+    the shrinking ``radius`` and the circle centre (the player). ``None`` when no iris is
+    running. Grounded in the verified iris recovery — ``radius``/``center_*`` are exactly the
+    inputs ``pre2.bridge.transition.read_iris_inputs`` feeds ``build_scaled_columns``."""
+    radius: int       # [0x2DD0] low byte, shrinks 0xE6 -> 0 over the transition
+    center_x: int     # [0x2DC6] signed — circle centre X (player)
+    center_y: int     # [0x2DC8] signed — circle centre Y (player)
+
+
+@dataclass(frozen=True)
 class RendererState:
     """Stable, VM-independent input contract for one rendered frame.
 
@@ -70,6 +81,11 @@ class RendererState:
     dirty: int              # [0x2DF4]
     dirty_rows: int         # [0x2DF5]
     fade: FadeStep | None   # palette fade step, or None when inactive
+    palette: "PaletteState | None" = None  # full palette state machine (render_model.PaletteState:
+                            # displayed colours + base_index + IN/OUT phase), or None if not captured
+    iris: "IrisState | None" = None  # circular-iris transition state, or None when no iris ([0x2DD0]==0)
+    anim: "AnimStep | None" = None    # animated-tile cycle inputs (pre2.recovered.animation.AnimStep)
+    shake: "CameraShakeState | None" = None  # camera-shake-on-fall state (render_model.CameraShakeState)
     # --- moving-sprite pass (26FA); object_camera None => skip it ---
     object_camera: object = None     # object_render.Camera (frame counter post-incremented)
     object_sprites: tuple = ()       # the active-sprite list (object_render.Sprite records)

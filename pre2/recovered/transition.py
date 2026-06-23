@@ -44,7 +44,7 @@ ROW_STRIDE = 0x28       # 40 bytes per row
              "clear a horizontal pixel span [x, x+width) at screen row `row` across all "
              "4 EGA planes (partial-byte edge masks at both ends); VRAM byte = "
              "row*0x28 + page + x>>3",
-             "ASM_MATCHED", merge_target="render_frame")
+             "VERIFIED", merge_target="render_frame")
 def clear_span(planes, x: int, width: int, row: int, page: int,
                stride: int = ROW_STRIDE) -> None:
     """Recover ``1030:32DE`` — clear pixels ``[x, x+width)`` at ``row`` (all 4 planes).
@@ -82,7 +82,7 @@ def clear_span(planes, x: int, width: int, row: int, page: int,
              "for SCALE_COLUMNS source columns, scaled = (src*scale>>6)+offset; keep only "
              "columns whose scaled X is strictly decreasing AND below x_clamp. Returns "
              "(xs, ys) of the kept columns (the [0x6B14]/[0x6A88] tables + count bp).",
-             "ASM_MATCHED", merge_target="render_frame")
+             "VERIFIED", merge_target="render_frame")
 def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_clamp: int,
                          columns: int = SCALE_COLUMNS, running_init: int = 0x7D0):
     """Recover ``1030:31F4-3249`` — the per-frame iris-circle geometry.
@@ -118,9 +118,9 @@ def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_cla
              "row clear everything OUTSIDE the iris circle via clear_span, using the circle's "
              "4-fold symmetry (the row's left+right spans and their mirror about (x_off,y_off) "
              "= the player) and the iris-circle column table. Writes the 4 EGA planes.",
-             "ASM_MATCHED", merge_target="render_frame")
+             "VERIFIED", merge_target="render_frame")
 def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: int,
-                     x_clamp: int, page: int, stride: int = ROW_STRIDE) -> None:
+                     x_clamp: int, page: int, stride: int = ROW_STRIDE):
     """Recover ``1030:324B-32AE`` — clear the borders exposed at this scale step.
 
     ``table_x``/``table_y`` are the raw ``[0x6B14]``/``[0x6A88]`` words (pass the live
@@ -128,6 +128,9 @@ def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: in
     row and may step into stale tail entries exactly as the ASM does). The window is
     symmetric about ``(x_off, y_off)``; ``page`` is the destination CRTC page ``[0x2DD8]``.
     Caller has set SC map mask 0x0F (all planes) and reset the GC (1030:452B).
+
+    Returns the terminal ``(cur_y, cur_x)`` — the values the ASM leaves in ``[0x2DCA]``
+    /``[0x2DD2]`` at 32B0, so a live caller can write the DGROUP scratch back exactly.
     """
     cur_y = y_off                                  # [asm 324D: [2DCA]=[2DC8]]
     si = 0
@@ -150,6 +153,7 @@ def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: in
         cur_x = (cur_x - 1) & 0xFFFF                # [asm 32A8: dec [2DD2]]
         if cur_x == 0:                              # [asm 32AC: je 32B0]
             break
+    return cur_y & 0xFFFF, cur_x & 0xFFFF           # terminal [0x2DCA]/[0x2DD2]
 
 
 @oracle_link("1030:6772",
@@ -157,7 +161,7 @@ def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: in
              "components stepped from `a` toward `b` by `fade_amt`; returns (new 48-byte "
              "DAC palette, all_arrived). Caller swaps a/b for the reverse direction "
              "([0x6C02]) and stops (clears [0x6C01]/[0x6C02]) when all_arrived.",
-             "ASM_MATCHED", merge_target="render_frame")
+             "VERIFIED", merge_target="render_frame")
 def fade_palette(a: bytes, b: bytes, fade_amt: int) -> tuple[bytes, bool]:
     """Recover ``1030:6772`` — advance a DAC palette one fade step from ``a`` toward ``b``.
 

@@ -45,6 +45,37 @@ def _default_snapshot_dir(root: Path) -> Path:
     return root / f"snapshot_pre2_{stamp}"
 
 
+def _hook_group(name: str) -> str:
+    """Collapse high-cardinality hook families so a one-line summary stays readable:
+    per-asset SQZ decodes (MOTIF.SQZ, MAP.SQZ, ...) and per-type blits
+    (sprite_blit_type0/1/11/...)."""
+    import re
+    if name.endswith(".SQZ"):
+        return "sqz"
+    m = re.match(r"(sprite_blit)_type\d+$", name)
+    return m.group(1) if m else name
+
+
+def _install_hook_trace(rt, args: argparse.Namespace) -> None:
+    """For --trace-hooks: run the LIVE hybrid runtime and tally which recovered hooks fire,
+    so you can watch coverage (and see where the game is still pure ASM). No oracle/diff."""
+    if not getattr(args, "trace_hooks", False):
+        return
+    from pre2.checkpoints import enable_pre2_hook_trace
+    stats = enable_pre2_hook_trace(rt)
+    rt._trace_stats = stats
+
+    def _summary(tag: str = "") -> None:
+        # Cumulative per-hook totals — printed once at exit (the live view shows only the
+        # current window).
+        print(f"[hook-trace]{tag} total {stats.total()} fires | {stats.summary(group=_hook_group)}",
+              flush=True)
+
+    rt._verify_summary = _summary   # the loop prints a final summary on exit
+    print("[hook-trace] live hybrid runtime — counting recovered hook fires (no oracle). "
+          "Hooks absent here = still pure ASM.", flush=True)
+
+
 def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
     """Flip native replacement hooks into lockstep oracle mode for --verify-hooks.
 
@@ -77,20 +108,29 @@ def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
     counts: dict[str, list[int]] = {}        # name -> [ok, diverged]
     divergences = [0]
     last = [perf_counter()]
+    window_marker = [{}]                      # counts snapshot at the last periodic tick
 
-    def _summary(tag: str = "") -> None:
+    def _summary(tag: str = "", since: dict | None = None) -> None:
+        # With ``since`` (a prior counts snapshot) show only the hooks checked in THIS window
+        # — the live activity, not a growing cumulative list. Without it, the cumulative
+        # totals (printed once at exit).
         grouped: dict[str, list[int]] = {}
         for name, c in counts.items():
+            base = since.get(name, (0, 0)) if since is not None else (0, 0)
+            ok, dv = c[0] - base[0], c[1] - base[1]
+            if since is not None and ok == 0 and dv == 0:
+                continue
             g = grouped.setdefault(_group(name), [0, 0])
-            g[0] += c[0]
-            g[1] += c[1]
+            g[0] += ok
+            g[1] += dv
         parts = " ".join(
             f"{n}={c[0]}" + (f"✗{c[1]}" if c[1] else "")
             for n, c in sorted(grouped.items(), key=lambda kv: -sum(kv[1]))
-        )
-        total = sum(c[0] + c[1] for c in counts.values())
+        ) or ("(idle)" if since is not None else "(no checks)")
+        total = sum(c[0] + c[1] for c in grouped.values())
         flag = "OK" if divergences[0] == 0 else f"{divergences[0]} DIVERGENCE(S)"
-        print(f"[verify-hooks]{tag} {total} checks, {flag} | {parts}", flush=True)
+        label = "now" if since is not None else "total"
+        print(f"[verify-hooks]{tag} {label} {total} checks, {flag} | {parts}", flush=True)
 
     def _on_result(name: str, ok: bool, detail) -> None:
         c = counts.setdefault(name, [0, 0])
@@ -106,7 +146,8 @@ def _install_verification_hooks(rt, args: argparse.Namespace) -> None:
             now = perf_counter()
             if now - last[0] >= 1.5:
                 last[0] = now
-                _summary()
+                _summary(since=window_marker[0])
+                window_marker[0] = {k: tuple(v) for k, v in counts.items()}
 
     rt._verify_summary = _summary  # let the caller print a final summary on exit
     mode = "per-call OK stream" if verbose else "divergences + periodic summary"
@@ -178,6 +219,8 @@ def _demo_metadata(args: argparse.Namespace, *, fast_adlib: bool) -> dict[str, o
         "exe": str(Path(args.exe).name),
         "command_tail": args.dos_args,
         "chunk_steps": int(args.chunk_steps),
+        "present_hz": int(args.present_hz),
+        "retrace_pulse": float(args.retrace_pulse),
         "timer_irq": bool(args.timer_irq),
         "fast_adlib": bool(fast_adlib),
         "input_irq_steps": int(args.input_irq_steps),
@@ -285,6 +328,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # timer/vsync waits set the speed — no per-game constants.  Demo record/replay
     # keep the deterministic fixed-chunk clock so recordings stay reproducible.
     present_period = 1.0 / max(1, int(args.present_hz))
+    # Narrow/widen the emulated VGA vertical-retrace pulse (live only). A realistic narrow
+    # pulse gates the mode-select scroll's "wait until retrace set" half-wait to one frame
+    # per 70Hz refresh; the legacy 0.28 lets it run ~2x fast on a fast host.
+    rt.dos.vga_retrace_active_fraction = float(args.retrace_pulse)
+    # Optional era-style instruction-rate ceiling for live play (0 = unlimited). Capped per
+    # displayed frame; the VM stops stepping once it spends the budget and waits out the
+    # frame (still pumping audio), so an ungated busy-loop can't run away on a fast host.
+    live_cpu_budget = (int(args.cpu_hz) // max(1, int(args.present_hz))) if int(args.cpu_hz) > 0 else None
     realtime_batch = 2000  # demo sub_batch: IRQ-delivery boundary (fixed for replay determinism)
     # Live play services the emulated Sound Blaster's block IRQ only at batch
     # boundaries, so a large batch delivers IRQ7 late and stretches each ~20 ms DMA
@@ -365,6 +416,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # this only changes when we *draw*, never the VM advance.)
     sim_deadline = perf_counter()
     last_render = 0.0
+    last_trace = 0.0   # throttle for the --trace-hooks periodic per-hook tally
+    trace_marker = {}  # --trace-hooks window boundary: counts at the last periodic tick
     last_audio = 0.0   # throttle for in-loop audio pumping (live play)
 
     demo: dict[str, InputDemoRecorder | None] = {"rec": None}
@@ -512,11 +565,15 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     # boundaries* (not mid-instruction) so an ISR never interrupts a
                     # stateful EGA render sequence.
                     deadline = perf_counter() + present_period
+                    frame_steps = 0
                     while running and perf_counter() < deadline:
-                        _pump_and_step(rt, now=perf_counter(), pic=pic, sound_blaster=sound_blaster,
-                                       timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
-                                       tick_state=tick_state, n_steps=live_irq_batch)
-                        steps_done += live_irq_batch
+                        if live_cpu_budget is None or frame_steps < live_cpu_budget:
+                            _pump_and_step(rt, now=perf_counter(), pic=pic, sound_blaster=sound_blaster,
+                                           timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
+                                           tick_state=tick_state, n_steps=live_irq_batch)
+                            steps_done += live_irq_batch
+                            frame_steps += live_irq_batch
+                        # else: budget spent — wait out the frame (audio still pumped below)
                         # Feed the audio device *continuously* (throttled), not just once
                         # per rendered frame below: the render can stretch a frame past
                         # the mixer channel's buffered depth, leaving its queue slot empty
@@ -563,6 +620,17 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             if do_render:
                 render_current()
                 caption_extra = audio_status.get("text", "")
+                trace = getattr(rt, "_trace_stats", None)
+                if trace is not None:
+                    # Show only what is firing *now* (this window), not the growing cumulative
+                    # list. The full per-hook totals are printed once at exit (_verify_summary).
+                    caption_extra = ((caption_extra + " | ") if caption_extra else "") \
+                        + f"hooks now: {trace.summary(group=_hook_group, top=6, since=trace_marker)}"
+                    if now - last_trace >= 1.5:
+                        last_trace = now
+                        print(f"[hook-trace] now {trace.window_total(trace_marker)} fires | "
+                              f"{trace.summary(group=_hook_group, since=trace_marker)}", flush=True)
+                        trace_marker = trace.snapshot()
                 pygame.display.set_caption(
                     f"PRE2 VM | {status} | frame={frame} steps={steps_done:,} | "
                     f"CS:IP={rt.cpu.s.cs:04X}:{rt.cpu.s.ip:04X} | mode={rt.dos.video_mode & 0xFF:02X}h"
@@ -680,6 +748,11 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
             print(f"WARNING: this demo was recorded with chunk_steps={args.chunk_steps} "
                   "(old timing); under the current clock the game will run in slow "
                   "motion. Re-record the demo for correct speed.")
+    # Clock knobs that feed the deterministic frame timer: replay under the recorded
+    # values, falling back to the legacy defaults for demos recorded before they were
+    # stored (present_hz=30, retrace_pulse=0.28) so old demos stay byte-reproducible.
+    args.present_hz = int(meta.get("present_hz", 30))
+    args.retrace_pulse = float(meta.get("retrace_pulse", 0.28))
     if "timer_irq" in meta:
         args.timer_irq = bool(meta["timer_irq"])
     if "input_irq_steps" in meta:
@@ -712,7 +785,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
     p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
-    p.add_argument("--present-hz", type=int, default=30, help="live presents per second (also paces the VM to real time)")
+    p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
+    p.add_argument("--retrace-pulse", type=float, default=0.06, help="(live) fraction of each refresh the VGA vertical-retrace status bit reads active. ~0.06 = realistic narrow VGA pulse that gates PRE2's mode-select scroll half-wait to one frame per 70Hz retrace (matches DOSBox); 0.28 = legacy wide window (~2x fast scroll). Demos replay at their recorded value")
+    p.add_argument("--cpu-hz", type=int, default=0, help="(live) cap VM instructions/sec as an era-style ceiling (0 = unlimited, today's behavior). Caps ungated busy-loops + sets overall feel; tune by eye against DOSBox (our 'instruction' is not a real CPU cycle)")
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
@@ -720,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--verify-hooks", action="store_true", help="run the original ASM as the oracle and diff each recovered-native result against it; prints divergences immediately plus a compact periodic per-hook summary")
     p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
     p.add_argument("--full-verify", action="store_true", help="foolproof variant of --verify-hooks: diff the WHOLE machine state (all memory + return cs:ip:sp) after each recovered routine vs the ASM, so nothing can leak outside a hand-picked contract. ~10x slower; for offline snapshot/demo audits, not live play")
+    p.add_argument("--trace-hooks", action="store_true", help="run the LIVE hybrid runtime (hooks replacing ASM, NOT the oracle) and show which recovered hooks fire — a live coverage view in the title bar + a periodic/final per-hook tally. Hooks absent = that screen is still pure ASM")
     args = p.parse_args(argv)
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
@@ -746,12 +822,14 @@ def main(argv: list[str] | None = None) -> int:
         playback = InputDemoPlayback.load(args.play_demo)
         rt = _make_replay_runtime(args, playback)
         _install_verification_hooks(rt, args)
+        _install_hook_trace(rt, args)
         if args.view:
             return _run_view(rt, args, playback=playback)
         return _run_replay_headless(rt, args, playback)
 
     rt = _make_runtime(args)
     _install_verification_hooks(rt, args)
+    _install_hook_trace(rt, args)
     if args.view:
         return _run_view(rt, args)
 

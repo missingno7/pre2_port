@@ -15,8 +15,15 @@ lockstep — 24/24 menu text draws byte-exact, 0 divergence** ("MODE", "BEGINNER
 ``draw_string`` fires only on menu/score/tally **redraws**, never on cold boot or steady
 gameplay. Menu observations: each item is drawn to **both display pages** (page ``0x0`` and
 ``0x1FFF``, double-buffered); the **cursor highlight is a shade swap** — the selected item is
-re-drawn with a different ``font_base`` (``0x4200`` vs ``0x0``), not a separate marker. Not yet
-wired live (no menu in the live gameplay path), but trusted for the scene seam.
+re-drawn with a different ``font_base`` (``0x4200`` vs ``0x0``), not a separate marker.
+
+**Wired live** (``pre2/checkpoints/text.py`` + bridge ``pre2/bridge/text.py``): the native
+drawer writes planes 2|3 + the advanced pen, with ``bx`` past the terminator and ``ds`` restored
+to DGROUP. Proven by a **per-call whole-state lockstep** over 54 menu draws (the menu-navigating
+demo replay): every byte at/above SP — all planes, pen, DGROUP, VRAM — matches the ASM; the only
+residue is dead below-SP stack scratch + the clobbered ``ax/cx/dx/si/di/flags``, which all four
+call sites (``9930/994b/9996/99a7``) reload or ignore, so they are not part of the contract.
+Inert in steady gameplay (fires only on menu/score/tally redraws).
 
 Char mapping (`[asm 988F-989F]`): ``' '`` (0x20) -> glyph 0x2B; ``'0'..'9'`` -> 0..9;
 ``'A'..'Z'`` -> 0x0A.. (``ch - 0x37``). **Any other byte ends the string** (terminator):
@@ -94,7 +101,7 @@ def _blit_glyph(planes, font, src, di_draw, di_clear,
              "(space=0x2B, 0-9, A-Z), clear a 24x12 cell then copy the glyph's two plane "
              "blocks, advance the pen by `advance` bytes; any byte < '0' (not space) ends "
              "the string. Font glyph = font_base + idx*0x60 + 6.",
-             "RECOVERED", merge_target="text renderer")
+             "VERIFIED", merge_target="text renderer")
 def draw_string(planes, text, font, font_base, pen, advance,
                 page_draw, page_clear, wrap=WRAP_MASK, stride=ROW_STRIDE):
     """Recover ``1030:9886`` — draw a font string. Writes planes 2 and 3 only.
