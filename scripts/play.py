@@ -308,8 +308,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from time import perf_counter, sleep
     from sdl_view import (SoundBlasterAudio, render_planar_rgb, render_planar_rgb_from_planes,
                           render_text_rgb, render_vga_rgb)
-    from pre2.bridge.live_render import render_visual_planes
-    from pre2.recovered.faithful_visual import FaithfulVisualGap
+    from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
+    from pre2.bridge.scene_state import derive_scene_kind
+    from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
+    from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
@@ -474,38 +476,69 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     faithful_verify = getattr(args, "faithful_verify", False)
 
     gap_seen = [None]
+    boundary_capture = [None]  # (rgb, page, scene_kind_name, verify_Δ|None) from the last 6772 commit
+
+    if faithful:
+        # Capture the GameVisualState at the frame-commit boundary 1030:6772 (palette-fade entry, POST
+        # page-flip): there ega_display_start IS the just-committed frame and the scroll/camera state has
+        # not yet advanced, so render_frame(state)@display_start == display_start (proven Δ≈0). The viewer
+        # then mirrors the CAPTURED committed frame, not an ad-hoc live read (which describes the back
+        # buffer being built -> the camera/page mismatch). render_game_visual_state reuses render_visual
+        # -> the same recovered leaves (one-impl). Wrap the existing palette-fade hook at 6772.
+        rt.cpu.pre2_dos = rt.dos
+        _BND = (0x1030, 0x6772)
+        _orig6772 = rt.cpu.replacement_hooks.get(_BND)
+
+        def _capture_at_boundary(c):
+            try:
+                disp = rt.program.memory.ega_display_start
+                gvs = capture_game_visual_state(c.mem, c.pre2_dos, disp, game_root=args.game_root)
+                planes, page = render_game_visual_state(gvs)       # raises FaithfulVisualGap for scenes
+                d = None
+                if faithful_verify:
+                    data = rt.program.memory.data; d = 0
+                    for p in range(4):
+                        apb = EGA_APERTURE + p * EGA_PLANE_STRIDE
+                        for o in range(176 * 0x28):                # gameplay viewport (HUD verified separately)
+                            a = (page + o) & 0xFFFF
+                            if planes[p][a] != data[apb + a]:
+                                d += 1
+                boundary_capture[0] = (render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
+                                       page, gvs.scene_kind.name, d)
+            except FaithfulVisualGap:
+                boundary_capture[0] = None         # a SCENE/IMAGE frame at 6772 -> handled at present time
+            except Exception:
+                boundary_capture[0] = None
+            if _orig6772 is not None:
+                return _orig6772(c)
+            interpret_current_instruction_without_hook(c)          # no palette hook -> run the ASM instr
+
+        rt.cpu.replacement_hooks[_BND] = _capture_at_boundary
+        rt.cpu.hook_names[_BND] = "palette_fade+faithful_capture"
 
     def _faithful_planar(mem_bytes, ds):
-        """Faithful visual dispatch: derive the scene kind and render via the recovered visual leaf
-        (gameplay frame, or the end-level iris over it). For a scene whose leaf is not recovered yet
-        there is NO silent ASM fallback — it prints the exact missing-leaf hint and shows a diagnostic
-        frame, so the gap is glaring and we complete the renderer. Optionally diffs vs the VM page."""
-        try:
-            # display + verify the page actually ON SCREEN (ega_display_start), not the back buffer —
-            # they differ during a page-flip / curtain reveal, so the verify must compare what you see.
-            planes, page, kind = render_visual_planes(rt.cpu.mem, rt.dos, game_root=args.game_root,
-                                                      display_page=ds)
-        except FaithfulVisualGap as gap:
-            if gap_seen[0] != gap.scene_kind:            # print the precise hint once per scene kind
-                gap_seen[0] = gap.scene_kind
-                print(f"[faithful] {gap}", flush=True)
-            faithful_info[0] = f"FAITHFUL GAP: {gap.scene_kind.name} (see console)"
-            return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)   # diagnostic frame, NOT ASM VRAM
-        if faithful_verify:
-            d = 0
-            data = rt.program.memory.data
-            for p in range(4):
-                apb = EGA_APERTURE + p * EGA_PLANE_STRIDE
-                for row in range(176):                       # the gameplay viewport (HUD verified separately)
-                    base = (page + row * 0x28) & 0xFFFF
-                    for cb in range(0x28):
-                        a = (base + cb) & 0xFFFF
-                        if planes[p][a] != data[apb + a]:
-                            d += 1
-            faithful_info[0] = f"faithful[{kind.name}] Δ={d}" + ("" if d <= 96 else " !!")
-        else:
-            faithful_info[0] = f"faithful[{kind.name}]"
-        return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
+        """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
+        ad-hoc live read — that describes the back buffer being built). Gameplay/iris frames come from the
+        latest boundary capture; scenes whose leaf is not recovered yet fail LOUD (diagnostic frame +
+        console hint), never ASM VRAM."""
+        cur_kind = derive_scene_kind(rt.cpu.mem, rt.dos)
+        if cur_kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
+            cap = boundary_capture[0]
+            if cap is not None and cap[2] in ("GAMEPLAY", "IRIS"):
+                rgb, page, kindname, d = cap
+                if faithful_verify and d is not None:
+                    faithful_info[0] = f"faithful[{kindname}]@6772 Δ={d}" + ("" if d <= 96 else " !!")
+                else:
+                    faithful_info[0] = f"faithful[{kindname}]@6772"
+                return rgb
+            faithful_info[0] = "faithful: awaiting 6772 boundary capture"
+            return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
+        # SCENE / IMAGE: leaf not recovered yet -> fail loud (no ASM VRAM fallback)
+        if gap_seen[0] != cur_kind:
+            gap_seen[0] = cur_kind
+            print(f"[faithful] {FaithfulVisualGap(cur_kind)}", flush=True)
+        faithful_info[0] = f"FAITHFUL GAP: {cur_kind.name} (see console)"
+        return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
 
     def render_current():
         mem = bytes(rt.program.memory.data)

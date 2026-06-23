@@ -39,6 +39,48 @@ def _vdiff(m, planes, page):
     return d
 
 
+def _cave_witness():
+    """Regression for the cave-enter / fast-camera witness: at the 6772 boundary the captured
+    GameVisualState reproduces the displayed page byte-exact (was ~20000 at the non-boundary 44E4
+    capture the witness was taken at)."""
+    rt = load_pre2_snapshot('assets/pre2.exe', 'artifacts/snapshot_pre2_20260623_231731',
+                            game_root='assets', native_replacements=False)
+    cpu, dos, m = rt.cpu, rt.dos, rt.cpu.mem
+    cpu.trace_enabled = False
+    sb = enable_sound_blaster(rt, detection_only=True); pic = rt.dos.pic
+    clock = lambda: cpu.instruction_count / (6428 * 70); dos.time_source = clock  # noqa: E731
+    tick = {"next": clock()}
+
+    def pump():
+        now = clock(); tp = 1.0 / max(1.0, dos.pit_channel0_hz())
+        while now >= tick["next"]:
+            pic.raise_irq(0); tick["next"] += tp
+            if tick["next"] < now - 0.25:
+                tick["next"] = now + tp
+        if sb:
+            sb.service()
+        g = 0
+        while cpu.get_flag(IF) and g < 64:
+            nn = pic.acknowledge()
+            if nn is None:
+                break
+            deliver_interrupt(rt, (0x08 + nn) if nn < 8 else (0x70 + nn - 8), max_steps=2_000_000); g += 1
+    worst = 0
+    for _ in range(3):
+        for i in range(3_000_000):
+            if i % 1500 == 0:
+                pump()
+            if (cpu.s.cs, cpu.s.ip) == _BOUNDARY:
+                break
+            cpu.step()
+        gvs = capture_game_visual_state(m, dos, rt.program.memory.ega_display_start, game_root='assets')
+        planes, page = render_game_visual_state(gvs)
+        worst = max(worst, _vdiff(m, planes, page))
+        cpu.step()
+    print(f"  cave-enter witness 231731 @6772: worst viewport Δ={worst} (was ~20000 at the 44E4 capture)")
+    return worst
+
+
 def main():
     rt = load_pre2_snapshot('assets/pre2.exe', 'artifacts/snapshot_pre2_gameplay_20260621_185902',
                             game_root='assets', native_replacements=False)
@@ -95,8 +137,9 @@ def main():
         print(f"  f{f} page={page:#06x}  BOUNDARY(6772) Δ={d_boundary}   mid-frame(+600 instr) Δ={d_mid}")
 
     print(f"\nworst boundary Δ={worst_boundary} (<= {_TOL} = blink-phase) ; best mid-frame Δ={worst_midframe}")
-    ok = worst_boundary <= _TOL and worst_midframe > _TOL
-    print("FRAME-BOUNDARY CAPTURE:", "PASS (boundary reproduces displayed page; off-boundary does not)" if ok else "FAIL")
+    cave = _cave_witness()
+    ok = worst_boundary <= _TOL and worst_midframe > _TOL and cave <= _TOL
+    print("FRAME-BOUNDARY CAPTURE:", "PASS (boundary reproduces displayed page; off-boundary does not; cave Δ~0)" if ok else "FAIL")
     return 0 if ok else 1
 
 
