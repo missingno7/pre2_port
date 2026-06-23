@@ -129,4 +129,11 @@ gives witnesses for the image present, the palette install, and the menu cursor.
   the enhanced renderer's own style. Not yet wired live (no menu in the live gameplay path).
 * **Image present** — `SceneImage` (linear-13h + planar-0Dh) + `present_image` defined and
   validated on real extracted images; the exact ASM present routine still to be pinned.
+* **Scene transitions — already recovered.** The palette fade (`6772`) and the **end-level
+  circular iris/vignette** are both recovered in `pre2/recovered/transition.py`. The iris was
+  long mis-labelled the "scale/zoom transition": `build_scaled_columns` reads a quarter-circle
+  cos/sin table (`[0x7090]`/`[0x6F90]`, `src_x²+src_y²≈64²`) × a shrinking radius `[0x2DD0]`
+  about the player (`[0x2DC6]`/`[0x2DC8]`); `draw_scale_frame` clears outside the circle via
+  `clear_span`. ASM_MATCHED byte-exact (40 frames / 0 div). So the gameplay→tally transition's
+  pixel work is done; only *when* it fires (scene logic) is the border.
 * Menu cursor + scene state machine — contracts only, to be recovered in the order above.

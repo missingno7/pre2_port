@@ -1,15 +1,17 @@
 """Prehistorik 2 screen-transition primitives — recovered native logic (pure).
 
-The end-level effect (`1030:31D0` loop) zooms/scales the screen down over several
-frames while fading the palette. This module recovers its renderer primitives, one
-bounded routine at a time, so the transition's pixel work becomes clean recovered
-source (the multi-frame loop that *drives* them is a thin controller).
+The end-level effect (`1030:31D0` loop) is a **circular iris/vignette**: a circle of visible
+image around the player shrinks to a point over several frames (darkness closing in) while the
+palette fades. (The ledger long called this the "scale/zoom transition" — it is mathematically a
+circle, not an image rescale: :func:`build_scaled_columns` reads a quarter-circle cos/sin table
+× a shrinking radius; :func:`draw_scale_frame` clears everything *outside* that circle.) This
+module recovers its renderer primitives, one bounded routine at a time, so the transition's pixel
+work becomes clean recovered source (the multi-frame loop that *drives* them is a thin controller).
 
-First primitive recovered here:
+Primitives recovered here:
 
 * :func:`clear_span` (``1030:32DE``) — clear a horizontal pixel span across all four
-  EGA planes, with partial-byte edge masks. Used to wipe the borders exposed as the
-  image shrinks.
+  EGA planes, with partial-byte edge masks. Used to wipe the area outside the iris circle.
 * :func:`fade_palette` (``1030:6772``) — one step of a linear VGA DAC palette fade from
   a source palette toward a target, stepping every component by a growing amount until
   all arrive. Used by screen transitions (room/level/death fades).
@@ -83,12 +85,15 @@ def clear_span(planes, x: int, width: int, row: int, page: int,
              "ASM_MATCHED", merge_target="render_frame")
 def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_clamp: int,
                          columns: int = SCALE_COLUMNS, running_init: int = 0x7D0):
-    """Recover ``1030:31F4-3249`` — the per-frame scaled-column geometry.
+    """Recover ``1030:31F4-3249`` — the per-frame iris-circle geometry.
 
-    ``src_x``/``src_y`` are the per-column source tables (``[0x7090]``/``[0x6F90]``, one
-    byte per column). ``scale`` is ``[0x2DD0]`` (only its low byte is used — ``mul byte``).
-    The kept columns form a strictly-decreasing-X envelope clamped to ``x_clamp`` — the
-    visible outline of the image at this scale. Pure geometry; no VRAM writes.
+    ``src_x``/``src_y`` are a **quarter-circle cos/sin table** (``[0x7090]``/``[0x6F90]``,
+    one byte per column: ``src_x[i]=round(64·cos)``, ``src_y[i]=round(64·sin)``, so
+    ``src_x²+src_y²≈64²``). ``scale`` is ``[0x2DD0]`` — the iris **radius** (only the low byte
+    is used — ``mul byte``); it shrinks each frame. Each kept column is a point on the circle of
+    that radius about ``(x_off, y_off)`` (``[0x2DC6]``/``[0x2DC8]`` — the player). The kept
+    columns form a strictly-decreasing-X envelope clamped to ``x_clamp`` — one octant of the
+    iris outline (``draw_scale_frame`` mirrors it to the full circle). Pure geometry; no VRAM.
     """
     xs: list[int] = []
     ys: list[int] = []
@@ -109,10 +114,10 @@ def build_scaled_columns(src_x, src_y, scale: int, x_off: int, y_off: int, x_cla
 
 
 @oracle_link("1030:324B",
-             "one frame's border-clear pass of the scale transition: walk rows from "
-             "x_clamp inward; per row clear the 4 borders (left+right of the row and its "
-             "mirror about x_off) of a window whose half-extent follows the scaled-column "
-             "table, via clear_span. Writes the 4 EGA planes; pure geometry otherwise.",
+             "one frame's clear pass of the circular IRIS transition: walk rows inward; per "
+             "row clear everything OUTSIDE the iris circle via clear_span, using the circle's "
+             "4-fold symmetry (the row's left+right spans and their mirror about (x_off,y_off) "
+             "= the player) and the iris-circle column table. Writes the 4 EGA planes.",
              "ASM_MATCHED", merge_target="render_frame")
 def draw_scale_frame(planes, table_x, table_y, count: int, x_off: int, y_off: int,
                      x_clamp: int, page: int, stride: int = ROW_STRIDE) -> None:
