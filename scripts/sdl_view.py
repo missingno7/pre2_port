@@ -429,8 +429,16 @@ def render_planar_rgb(mem: bytes, display_start: int = 0,
     arr = np.frombuffer(mem, dtype=np.uint8)
     pal = np.array(palette if palette is not None else DEFAULT_VGA_PALETTE, dtype=np.uint8)
     start = display_start & 0xFFFF
-    rowbase = (start + np.arange(HEIGHT) * _PLANAR_ROW_BYTES) & 0xFFFF
-    off = (rowbase[:, None] + np.arange(_PLANAR_ROW_BYTES)[None, :]) & 0xFFFF   # (200,40)
+    # Page-wrap for the menu/title screens. PRE2's mode-select present (1030:9600 / the pan at
+    # ~97BE) masks the CRTC start with `and bh,0x1f` — it treats the display as a 0x2000-byte
+    # CIRCULAR page: the scrolling background (and a wrapped glyph at the page edge) must wrap at
+    # 0x2000, not read on into the next page. Detect such a single-page screen (start in page 0,
+    # no plane content beyond 0x2000) and wrap the scanline read there. Gameplay fills the plane
+    # with its scroll ring (content well past 0x2000) so it keeps the full 0x10000 wrap, unchanged.
+    plane0 = arr[EGA_APERTURE:EGA_APERTURE + EGA_PLANE_STRIDE]
+    wrap = 0x1FFF if (start < 0x2000 and not plane0[0x2000:].any()) else 0xFFFF
+    rowbase = (start + np.arange(HEIGHT) * _PLANAR_ROW_BYTES) & wrap
+    off = (rowbase[:, None] + np.arange(_PLANAR_ROW_BYTES)[None, :]) & wrap     # (200,40)
     color = np.zeros((HEIGHT, _PLANAR_ROW_BYTES, 8), dtype=np.uint8)
     for plane in range(4):
         plane_bytes = arr[EGA_APERTURE + plane * EGA_PLANE_STRIDE + off]        # (200,40)

@@ -28,6 +28,17 @@ repeat, text stays). Right = **linear** read (our VM): blank bottom, text scroll
 |---|---|
 | ![wrap](modesel_wrap2000.png) | ![linear](modesel_linear.png) |
 
-**Question for the DOSBox oracle:** does the left (wrap) image match how this screen looks in
-DOSBox? If so, the fix is in `dos_re` (key the EGA display read to wrap at the page for this
-screen's config), without touching gameplay (which uses the full 64 KB plane + scroll ring).
+## Fix (applied)
+
+`scripts/sdl_view.render_planar_rgb` now wraps the scanline read at `0x2000` for single-page
+screens — detected by *display-start in page 0 AND no plane content beyond `0x2000`*. Verified
+across all snapshots: only the 3 menu/title screens are flagged; every gameplay snapshot has
+23k–45k bytes past `0x2000` (the scroll ring) so it keeps the full `0x10000` wrap, unchanged.
+
+Result (the menu with the fix):
+
+![fixed](modesel_fixed.png)
+
+Open question: the "BEGINNER" **R** may still look off — its glyph in the font is *clean*, so if
+it's wrong it's a draw-placement effect (the last char's `di & 0x1FFF` wrapping at the page edge,
+same `0x2000` circular page). Check whether the R now reads correctly with the display wrap.
