@@ -346,6 +346,35 @@ So "renderer done" = the OPEN rows closed: curtain modeled+verified, the scene/i
 recovered+verified, the mirror frame-boundary-correct across movement/scene-changes. The whole-block
 collapse is explicitly OUT of this definition (it follows later, with state ownership).
 
+## One-implementation audit (2026-06-24) — one recovered leaf, many adapters
+
+Target: each visual behavior = ONE recovered fn, used by the runtime-hook adapter, the FaithfulVisual
+mirror (`render_frame`/`render_visual`), and the verify checkpoint/probe — differing only in adapters.
+
+| Leaf (CS:IP) | Shared recovered fn | Runtime hook (ASM skipped?) | FaithfulVisual mirror | Verify | One-impl status / missing adapter |
+|---|---|---|---|---|---|
+| draw_tile_row (3476) | `draw_tile_row` | `frame_tile_row` ✓ skip | yes (via grid + ring rebuild) | ✓ | **ONE-IMPL** ✓ |
+| scroll_copy (3A27) | `scroll_copy` | `frame_scroll_copy` ✓ skip | `render_frame` ✓ | ✓ | **ONE-IMPL** ✓ |
+| object/sprite (26FA) | `plan_frame`/`paint_sprite` | `object_render` ✓ skip | `render_frame` object pass ✓ | ✓ | **ONE-IMPL** ✓ |
+| sprite blit (2C00) | `blit_sprite` | `sprite_blit` ✓ skip | via `paint_sprite` ✓ | ✓ | **ONE-IMPL** ✓ |
+| iris (31F4) | `compose_iris` | `iris_transition` ✓ skip | `render_visual` IRIS ✓ | ✓ | **ONE-IMPL** ✓ |
+| scene present (965A/9804) | `scroll_blit_column`/`scroll_shift_frame` | `scroll_blit`/`scroll_shift` ✓ skip | (scene leaf not wired) | ✓ | runtime+verify ✓; **mirror pending** (scene) |
+| draw_string (9886) | `draw_string` | `draw_string_hook` ✓ skip | (scene leaf not wired) | ✓ | runtime+verify ✓; **mirror pending** (scene) |
+| **draw_grid (35A1)** | `draw_grid` (incremental) | `frame_grid` ✓ skip | mirror uses **`build_background_ring`** (full rebuild), NOT `draw_grid` | ✓ | **two ORCHESTRATIONS** of the same `draw_tile_row` leaf — incremental (runtime, needs ring history) vs full rebuild (mirror, clean FB has no history). Legit, but the grid-walk logic is expressed twice; lift the shared walk if it drifts. |
+| **palette fade (6772)** | `fade_palette` | `palette_fade` ✓ skip | mirror runs it only if `dac` passed — `live_render` passes `dac=None` → mirror uses the LIVE DAC, NOT `fade_palette` | ✓ | **mirror does not run the leaf** (DAC carries the fade) → run `fade_palette` in a VisualController for a single owner |
+| **HUD (45B8)** | `draw_hud`/`draw_status_bar`/`blit_hud_glyph` | **NO runtime hook** — the ASM still draws the HUD | `render_frame` rebuild ✓ | golden `test_hud_chrome` (no live checkpoint) | **MISSING runtime adapter** (hook 45B8) + missing live verify — mirror+golden only |
+| **curtain (3054)** | `panel_copy` (final copy) | `frame_panel_copy` **PASSTHROUGH** (ASM runs; vsync pacing) | **NOT in mirror** | ✓ (final planes) | **per-step reveal not modeled**; mirror missing; runtime passthrough |
+| scene render (render_scene) | `render_scene` (partial) | n/a | not wired (SCENE gap) | n/a | **mirror + SceneState reader missing** |
+| image (13h intro/title) | — | — | gap | — | **not recovered** |
+
+**Conclusion:** the one-impl rule HOLDS for the core gameplay leaves (tile_row/scroll/object/blit/iris).
+The real gaps/violations to close: (1) **HUD** has no runtime adapter (ASM draws it; recovered only in
+mirror+golden) — add a 45B8 hook; (2) **palette fade** mirror uses the live DAC, not `fade_palette` —
+run the leaf in a VisualController; (3) **draw_grid vs build_background_ring** are two orchestrations of
+the shared `draw_tile_row` — keep the walk shared; (4) **curtain/scenes/image** mirror integration is the
+remaining recovery. Frame-boundary `render_game_visual_state` already follows the rule (it reuses
+`render_visual` → the same leaves; no second copy).
+
 ## Relationship to the other phases
 
 This consolidation runs *alongside* the object-system recovery (state ownership): VisualControllers is
