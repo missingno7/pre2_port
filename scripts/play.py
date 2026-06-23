@@ -481,7 +481,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         there is NO silent ASM fallback — it prints the exact missing-leaf hint and shows a diagnostic
         frame, so the gap is glaring and we complete the renderer. Optionally diffs vs the VM page."""
         try:
-            planes, page, kind = render_visual_planes(rt.cpu.mem, rt.dos, game_root=args.game_root)
+            # display + verify the page actually ON SCREEN (ega_display_start), not the back buffer —
+            # they differ during a page-flip / curtain reveal, so the verify must compare what you see.
+            planes, page, kind = render_visual_planes(rt.cpu.mem, rt.dos, game_root=args.game_root,
+                                                      display_page=ds)
         except FaithfulVisualGap as gap:
             if gap_seen[0] != gap.scene_kind:            # print the precise hint once per scene kind
                 gap_seen[0] = gap.scene_kind
