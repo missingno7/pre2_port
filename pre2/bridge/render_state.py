@@ -10,8 +10,9 @@ from __future__ import annotations
 from pre2.bridge import frame as _frame
 from pre2.bridge import object_render as _obj
 from pre2.bridge import palette as _pal
+from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.recovered.animation import AnimStep
-from pre2.recovered.render_frame import FadeStep, IrisState, RendererState
+from pre2.recovered.render_frame import ASSET_HI, ASSET_LO, FadeStep, IrisState, RendererState
 from pre2.recovered.render_model import CameraShakeState, HudState
 
 _DS = 0x1A0F
@@ -72,6 +73,15 @@ def _hud_state(mem) -> HudState:
     a 32-bit count displayed *10), lives ([0x27D8]) and energy hearts ([0x27D6])."""
     score = (_rw(mem, _SCORE) | (_rw(mem, _SCORE + 2) << 16)) * 10
     return HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY))
+
+
+def _asset_planes(mem) -> tuple:
+    """Capture the planar ASSET region (tile cache + parallax base, ASSET_LO..ASSET_HI) from each of
+    the four EGA planes, so render_frame can render the background from a clean framebuffer. This is
+    level asset data (built at load), not per-frame render output."""
+    d = mem.data
+    return tuple(bytes(d[EGA_APERTURE + p * EGA_PLANE_STRIDE + ASSET_LO:
+                         EGA_APERTURE + p * EGA_PLANE_STRIDE + ASSET_HI]) for p in range(4))
 
 
 def _shake_state(mem) -> CameraShakeState:
@@ -136,6 +146,7 @@ def read_renderer_state(mem, dos=None, *, frame_pre_inc: bool = True) -> Rendere
         anim=_anim_step(mem),
         shake=_shake_state(mem),
         hud_state=_hud_state(mem),
+        asset_planes=_asset_planes(mem),
         object_camera=obj_cam,
         object_sprites=obj_sprites,
         object_attrs=obj_attrs,

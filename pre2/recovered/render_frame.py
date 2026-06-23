@@ -31,7 +31,13 @@ from pre2.recovered.frame_renderer import (
 from pre2.recovered.object_render import paint_sprite, plan_frame
 from pre2.recovered.transition import fade_palette
 
-__all__ = ["RendererState", "FadeStep", "render_frame"]
+__all__ = ["RendererState", "FadeStep", "render_frame", "ASSET_LO", "ASSET_HI"]
+
+# Planar ASSET region (per 64 KiB EGA plane): the tile-graphic cache (0x5E80) + the parallax base
+# layer (0x7E80) sit above the scroll ring (0x3F40..0x5E00). Everything from here to the end of the
+# plane is level asset data the tile draws read — captured as RendererState.asset_planes.
+ASSET_LO = 0x5E80
+ASSET_HI = 0x10000
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,12 @@ class RendererState:
     anim: "AnimStep | None" = None    # animated-tile cycle inputs (pre2.recovered.animation.AnimStep)
     shake: "CameraShakeState | None" = None  # camera-shake-on-fall state (render_model.CameraShakeState)
     hud_state: "HudState | None" = None  # status-bar values score/lives/energy (render_model.HudState)
+    # --- planar tile/sprite ASSET data (cache + parallax base) the tile draws read from VRAM ---
+    # The tile-graphic cache (0x5E80) and parallax base layer (0x7E80) live above the ring in each
+    # EGA plane. They are level ASSET data (built at load), not per-frame render output, so the bridge
+    # captures them here and render_frame restores them into the framebuffer before drawing — making
+    # the background a real recovered render from a CLEAN framebuffer (not ASM-populated VRAM).
+    asset_planes: tuple = ()   # 4x bytes of plane[ASSET_LO:0x10000], or () to use planes as-is
     # --- moving-sprite pass (26FA); object_camera None => skip it ---
     object_camera: object = None     # object_render.Camera (frame counter post-incremented)
     object_sprites: tuple = ()       # the active-sprite list (object_render.Sprite records)
@@ -109,6 +121,12 @@ def render_frame(state: RendererState, planes, dac=None):
     by the caller on top of this result (see the module docstring's border note).
     """
     s = state
+
+    # 0) restore the planar ASSET data (tile cache @ 0x5E80 + parallax base @ 0x7E80) into the
+    #    framebuffer, so the tile draws below find their graphics even on a clean framebuffer.
+    if s.asset_planes:
+        for p in range(4):
+            planes[p][ASSET_LO:ASSET_LO + len(s.asset_planes[p])] = s.asset_planes[p]
 
     # 1) palette fade — 6772 (DAC only; no plane effect)
     if s.fade is not None and dac is not None:
