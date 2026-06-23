@@ -168,6 +168,76 @@ the scene/transition dispatcher (Phase A) + locating the scene-mode variable + r
 leaves. The object/popup work (bucket 5) stays correctly queued — it is the *state-ownership* track, not
 the *visual-completion* track. Bucket 3 folds in alongside as the controllers become the live owners.
 
+## Island fusion — the merge target, not a parallel system (2026-06-23)
+
+The faithful renderer was bootstrapped somewhat as a parallel composer; it must now become the
+**merge target** that the existing rendering hooks/controllers/leaves collapse INTO — one large
+`FaithfulVisual` island, not "a renderer plus scattered visual hooks". Audit answers:
+
+**Q1 — Which recovered hooks/controllers absorb into FaithfulVisual?** The four persistent
+visual-state controllers — `fade_palette` (palette fade), the iris (`compose_iris`),
+`advance_animation` (anim cycle), `apply_camera_shake` (shake apply). They exist as recovered fns +
+verify checkpoints, but the LIVE faithful path still READS their ASM-evolved values via the bridge
+(`[0x6BC2]`/`[0x6BF8]`/fade/iris) instead of RUNNING them. Absorb them by a `VisualControllers.evolve`
+that runs the SAME fns to produce the evolving visual state (the iris is already absorbed into
+`render_visual`).
+
+**Q2 — Which functions are duplicated or parallel?** The controller LOGIC is already single-impl
+(`fade_palette`/`advance_animation`/`apply_camera_shake`/`compose_iris` each recovered once; the
+checkpoint and composer call the same fn — `compose_iris` was the last inline copy, now removed). The
+remaining PARALLELISM is structural: the **live faithful pipeline** (`render_visual → render_frame`)
+vs the **semantic pipeline** (`render_snapshot → GameFrameSnapshot → render_interp/enhanced`) — two
+pipelines off the same `RendererState`. Converge: both consume one `GameVisualState`.
+
+**Q3 — Which state models overlap?** `RendererState` (gameplay frame input) and `GameFrameSnapshot`
+(semantic projection, built FROM `RendererState`) overlap in palette/shake/anim/hud/camera — LAYERED,
+not independent, but those fields have NO single owner. Converge into one canonical
+`GameVisualState = { scene_kind, gameplay: RendererState, scene: SceneState|None, fx: VisualFxState }`
+where `VisualFxState` (palette/iris/shake/anim) is the ONE owner; `GameFrameSnapshot` becomes the
+SEMANTIC PROJECTION of `GameVisualState` for the enhanced renderer (no duplicated ownership).
+
+**Q4 — Which hook scaffolding can collapse?** As `VisualControllers.evolve` runs the controllers live
+(owning the visual state), the bridge READ paths in `read_renderer_state` (`[0x6BC2]`/`[0x6BF8]`/fade/
+iris reads) collapse — the controllers PRODUCE that state. The checkpoints shrink to thin verify-only
+diffs over the same recovered fns.
+
+**Q5 — Which pieces are only proof scaffolding?** `pre2/probes/verify_*.py` (lockstep proof harnesses)
+and the `pre2/checkpoints/*` in verify mode (the ASM oracle). These do NOT collapse into FaithfulVisual
+— they VERIFY it, and persist while the ASM is the oracle.
+
+**Q6 — Which pieces become canonical visual-controller modules?** NEW
+`pre2/recovered/visual_controllers.py` = `VisualControllers.evolve(prev_fx, inputs)` running the
+recovered controller leaves → next `VisualFxState` (the ONE place visual state evolves).
+`recovered/faithful_visual.py` = the dispatcher (island root). `recovered/render_model.py` =
+`GameVisualState` (canonical) + `GameFrameSnapshot` (its projection).
+
+**Q7 — Final module boundary for the large faithful visual island:**
+
+```
+pre2/recovered/   == the FaithfulVisual island (pure, byte-verifiable, ONE coherent subsystem)
+  faithful_visual.py     SceneKind + render_visual dispatcher           [ISLAND ROOT / merge target]
+  visual_controllers.py  VisualControllers.evolve (runs the controller leaves)        [NEW]
+  render_model.py        GameVisualState (canonical) + GameFrameSnapshot (projection)
+  render_frame.py        gameplay frame composer                         (leaf)
+  frame_renderer / object_render / object_draw / renderer / hud / sprite_*  composition leaves
+  transition.py          fade_palette · compose_iris · clear_span        (transition leaves)
+  scene.py · text.py     menu/map/intro/loading/tally scene leaves
+pre2/bridge/      == the ONLY place that reads VM memory -> feeds GameVisualState
+  scene_state · render_state · palette · transition · ...
+pre2/checkpoints/ == verify-only oracle (thin wrappers over the recovered fns; shrinks over time)
+pre2/probes/      == lockstep proof harnesses
+```
+
+The boundary: `recovered/` IS the island (one faithful visual subsystem); `bridge/` is the VM↔state
+seam; `checkpoints/`+`probes/` are verification scaffolding that prove the island, not part of it.
+
+**Fusion phases (non-breaking):** A — `render_visual` dispatcher (gameplay+iris done; scene/image
+leaves next; the loud no-fallback gap forces their completion). B — `VisualControllers.evolve`: run
+the recovered controllers, converging the bridge READ paths into controller RUNS (visual-state
+ownership). C — `GameVisualState` convergence (RendererState/SceneState as slices + VisualFxState as
+the single fx owner; GameFrameSnapshot as its projection). D — collapse the checkpoints to verify-only.
+Each phase keeps the lockstep-vs-ASM oracle and the one-impl rule.
+
 ## Relationship to the other phases
 
 This consolidation runs *alongside* the object-system recovery (state ownership): VisualControllers is
