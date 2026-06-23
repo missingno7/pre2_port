@@ -111,6 +111,50 @@ THAT fn. If a behavior is recovered as a checkpoint today, the faithful pipeline
 the same fn — it must never grow a second copy that drifts. `render_model`/`render_snapshot` stay the
 semantic projection of the same state, not a parallel implementation.
 
+## Completion audit (2026-06-23) — what is missing from the faithful visual body, by bucket
+
+Buckets: **1** renderer/composer can't draw it · **2** visual state not exported · **3** recovered
+controller not orchestrated (live flow reads ASM-evolved value instead of running the recovered fn) ·
+**4** scene/transition dispatcher incomplete · **5** gameplay/object producer gap.
+
+| Behavior | Evidence (current) | Bucket | Required state | Current source | Required fix | Blocks faithful? | Needs object recovery? |
+|---|---|---|---|---|---|---|---|
+| Gameplay bg/tiles/parallax/scroll | byte-exact live (verify_live_faithful) | — done | RendererState | bridge + render_frame | — | **No** | No |
+| Moving sprites | byte-exact (boss frame 0/28160) | — done | object_sprites/attrs/banks | bridge + object pass | — | **No** | No |
+| HUD chrome + overlay | 0/3680 (test_hud_chrome) | — done | HudState + HudChromeAsset | ALLFONTS asset + render_frame | — | **No** | No |
+| Boss meter | 0/640 (192126/192140) | — done | 0x135 sprites | object pass | — | **No** | No |
+| Palette application (static) | deplanarize via live DAC | — done | DAC | live vga_palette | — | **No** | No |
+| **Palette FADES** | shows via live DAC; `fade_palette` NOT run (live_render `dac=None`) | **3** | PaletteState (exported) | bridge-fed DAC | run `fade_palette` in a VisualController | No (displays) | No |
+| **Camera shake** | shows via `row_factor` [0x6BF8] bridge read; `apply_camera_shake` not run | **3** | CameraShakeState (exported) | bridge-fed `row_factor` | run `apply_camera_shake` | No (displays) | No |
+| **Animation advance** | shows via `anim_xlat` bridge read; `advance_animation` not run | **3** | AnimStep (exported) | bridge-fed `[0x6BC2]` slice | run `advance_animation` | No (displays) | No |
+| **Iris transition** | `render_frame` carries `s.iris` but never calls the iris leaf | **4** (+3 leaf) | IrisState (exported) | bridge-fed | transition dispatcher calls `build_scaled_columns`/`clear_span` over the frame | **YES** | No |
+| **Scene-change fades/transitions** | faithful path is gameplay-only; not composed | **4** | TransitionCmd/PaletteState | ASM fallback | FaithfulVisual scene+transition dispatch | **YES** | No |
+| **Scene switching (mode)** | `is_gameplay_frame` is a heuristic; no scene-mode var | **2 + 4** | `scene_kind` (NOT exported) | heuristic | locate the scene-mode var → `scene_kind` | **YES** | No |
+| **Menu/map/intro/loading/tally/game-over** | not rendered faithfully (ASM fallback); `scene.py` drafted, verify-pending | **4** (+1/2 leaves) | SceneState (partial) | ASM | recover+verify scene leaves + dispatcher | **YES** | No (scene logic ≠ objects) |
+| Particles / effects (`4b8e`) | NEEDS-REPRO; own-blit vs active-list unknown | **5 or 1 (OPEN)** | particle state (unknown) | ASM | get a witness → classify | Unknown | Maybe |
+| Blink residual on fast motion | ≤5px; object pass mutates `[+0x11]` mid-draw → live read off-phase | **5** (state timing) | pre-mutation records | bridge-fed at present instant | own the object update (deterministic phase) | No (cosmetic; boss frame is 0) | Yes |
+| Object state generally (positions/ids) | bridge-fed reads; renders correctly | **5** (on ownership) | object_sprites/attrs | bridge-fed | recover object update (state ownership) | No (displays) | Yes |
+
+### Conclusion — what actually blocks the faithful visual body
+
+- **Bucket 1 (renderer can't draw): essentially none** for gameplay — composition is complete. (Only
+  particles *might* be bucket 1, pending a witness.)
+- **Bucket 3 (fade / shake / animation controllers): NOT visual gaps** — they all DISPLAY correctly via
+  bridge-fed reads. They are *orchestration/cleanliness* (run the recovered fn instead of reading the
+  evolved value) = the consolidation plan, not visual completeness.
+- **Bucket 5 (object producer): does NOT block faithful visuals** — the object state is bridge-fed and
+  renders fine; the only visual symptom is the ≤5px blink residual (cosmetic). The "500" popup / object
+  recovery is about *owning* the state, not making the picture appear.
+- **Bucket 4 is the ONLY thing blocking faithful visual completion:** (a) **transition dispatch** (iris +
+  scene-change fades — the recovered leaves exist, they are just not orchestrated/composed), and (b)
+  **scene rendering** (menu / map / intro / loading / tally / game-over — needs a recovered `scene_kind`
+  + the scene leaves recovered & verified).
+
+**So: finishing the faithful visual body does NOT require object-system recovery.** The critical path is
+the scene/transition dispatcher (Phase A) + locating the scene-mode variable + recovering the scene
+leaves. The object/popup work (bucket 5) stays correctly queued — it is the *state-ownership* track, not
+the *visual-completion* track. Bucket 3 folds in alongside as the controllers become the live owners.
+
 ## Relationship to the other phases
 
 This consolidation runs *alongside* the object-system recovery (state ownership): VisualControllers is
