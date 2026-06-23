@@ -300,10 +300,51 @@ hybrid VRAM.
    *rendered* effect (viewer + enhanced) even if the live hook stays passthrough for timing.
 3. **Scene leaves (menu/map/intro/…):** recover + hook each (most of the menu is already mode-2 —
    bg scroll + draw_string; what's missing is the `SceneState` assembly + a clean-FB scene compose).
-4. **The collapse to one `FaithfulVisual.render` hook** is the end-state, gated on recovering the
-   interleaved game logic (state-ownership). Until then, the per-leaf mode-2 hooks ARE the canonical
-   render path; `render_frame`/`render_visual` is the whole-frame mirror that the collapse converges
-   onto. One-impl rule holds throughout (checkpoint + runtime hook + mirror call the same leaf).
+4. **The collapse to one `FaithfulVisual.render` hook is a SEPARATE, FUTURE milestone (#3 below) — NOT
+   the renderer-done bar.** It is gated on recovering the interleaved game logic (state-ownership).
+   Until then, the per-leaf mode-2 hooks ARE a valid canonical render path; `render_frame`/`render_visual`
+   is the whole-frame mirror it will later converge onto. One-impl rule holds throughout (checkpoint +
+   runtime hook + mirror call the same leaf). See "Renderer completion — definition + checklist" below.
+
+## Renderer completion — definition + checklist (NOT gated on whole-block collapse)
+
+Three SEPARATE milestones — do not conflate them:
+
+1. **Faithful visual completion (the renderer-done bar).** Every visual mode + effect is rendered by a
+   recovered `FaithfulVisual` leaf/controller from explicit visual state, verified against the oracle,
+   with NO ASM-VRAM fallback. The VM may still PRODUCE and SCHEDULE the visual state — but every visual
+   OPERATION is a recovered leaf, and the final frame is verified by the clean mirror.
+2. **Runtime leaf replacement.** Each render/transition/text/palette/scene leaf is hooked at its
+   original call site and skips the ASM body where safe (mode-2). Mostly already done (see the audit).
+3. **Whole-block collapse (FUTURE — a state-ownership milestone, NOT required for "renderer done").**
+   Replacing the entire interleaved main-loop render block (0214-0270) with one `FaithfulVisual.render`
+   call. Blocked by the interleaved game logic. Until the game tick / main-loop orchestration is
+   recovered, the **per-leaf mode-2 hooks ARE a valid canonical rendering path** — the original loop
+   may schedule the visual ops, but the ops themselves are recovered leaves.
+
+**Renderer boundary:** *the VM may produce + schedule visual state; every visual operation is a recovered
+FaithfulVisual leaf/controller; the final frame is verified by the clean FaithfulVisual mirror.*
+
+### Finite renderer-completion checklist + status (2026-06-23)
+
+| Item | Status |
+|---|---|
+| Gameplay composition verified | **DONE** (byte-exact offline at the 2DF9 boundary; bg+sprites+HUD+boss) |
+| Palette / DAC behaviour verified | **DONE** (`fade_palette` verified + runtime-replaced) |
+| Transitions: **iris** modeled + verified | **DONE** (`compose_iris`, verified, runtime-replaced) |
+| Transitions: **fade** | **DONE** (palette fade; DAC on the live palette) |
+| Transitions: **curtain** (`panel_copy`) modeled + verified | **OPEN** — recovered final copy; per-step vsync reveal not yet modeled/verified |
+| Text / present leaves verified | **PARTIAL** — `draw_string` + menu present runtime-replaced; verify-pending a mid-draw witness |
+| Scene leaves: menu/map | **OPEN** — menu located (bg present + 4 text runs + highlight); SceneState reader + verify pending |
+| Scene leaves: intro/title **IMAGE** (13h) | **OPEN** — not recovered (fails loud) |
+| Scene leaves: loading / tally / game-over | **OPEN** |
+| No silent ASM-VRAM fallback | **DONE** (`render_visual` raises `FaithfulVisualGap`) |
+| All visual call sites classified (replaced / lifted / frame-boundary-verified / verify-only+blocker) | **DONE** (runtime-integration audit table above) |
+| Whole-frame mirror matches oracle across scene changes + camera movement | **OPEN** — frame-boundary snapshot needed (see `camera_fidelity_bug.md`); curtain reveal |
+
+So "renderer done" = the OPEN rows closed: curtain modeled+verified, the scene/image leaves
+recovered+verified, the mirror frame-boundary-correct across movement/scene-changes. The whole-block
+collapse is explicitly OUT of this definition (it follows later, with state ownership).
 
 ## Relationship to the other phases
 
