@@ -86,6 +86,7 @@ class RendererState:
     iris: "IrisState | None" = None  # circular-iris transition state, or None when no iris ([0x2DD0]==0)
     anim: "AnimStep | None" = None    # animated-tile cycle inputs (pre2.recovered.animation.AnimStep)
     shake: "CameraShakeState | None" = None  # camera-shake-on-fall state (render_model.CameraShakeState)
+    hud_state: "HudState | None" = None  # status-bar values score/lives/energy (render_model.HudState)
     # --- moving-sprite pass (26FA); object_camera None => skip it ---
     object_camera: object = None     # object_render.Camera (frame counter post-incremented)
     object_sprites: tuple = ()       # the active-sprite list (object_render.Sprite records)

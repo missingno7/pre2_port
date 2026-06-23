@@ -59,9 +59,20 @@ def test_build_frame_snapshot_structure():
 def _state(**kw):
     base = dict(tiles=bytes(0x10000), blit_type=bytes(256), camera_x=0, camera_y=0,
                 fine_scroll=0, fade=None, palette=None, iris=None, anim=None, shake=None,
-                object_camera=None, object_sprites=(), object_attrs={})
+                hud_state=None, object_camera=None, object_sprites=(), object_attrs={})
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+def test_hud_state():
+    from pre2.recovered.render_model import HudState
+    hud = HudState(score=5300, lives=2, energy=3)
+    snap = build_frame_snapshot(_state(hud_state=hud))
+    assert snap.hud_state is hud
+    assert (snap.hud_state.score, snap.hud_state.lives, snap.hud_state.energy) == (5300, 2, 3)
+    # no hud captured -> empty default
+    s = build_frame_snapshot(_state(hud_state=None)).hud_state
+    assert s.score == 0 and s.lives == 0 and s.energy == 0
 
 
 def test_camera_shake_state():

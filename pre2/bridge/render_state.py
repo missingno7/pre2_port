@@ -12,7 +12,7 @@ from pre2.bridge import object_render as _obj
 from pre2.bridge import palette as _pal
 from pre2.recovered.animation import AnimStep
 from pre2.recovered.render_frame import FadeStep, IrisState, RendererState
-from pre2.recovered.render_model import CameraShakeState
+from pre2.recovered.render_model import CameraShakeState, HudState
 
 _DS = 0x1A0F
 _ANIM_FRAME_PTR = 0x6BC2   # [0x6BC2] = current animation-frame remap base
@@ -23,6 +23,9 @@ _SHAKE_MAG = 0x6BEA        # [0x6BEA] = camera-shake magnitude/timer (set 7/4 on
 _FRAME_CTR = 0x6BD5        # [0x6BD5] = frame counter (its parity gates the shake's alternation)
 _ROW_FACTOR = 0x6BF8       # [0x6BF8] = render row-stride factor; the shake apply (4C30) overwrites it
                            # with the magnitude on odd parity / 0 on even -> the applied vertical offset
+_SCORE = 0x6C0E            # [0x6C0E]/[0x6C10] = 32-bit internal score (HUD shows it *10)
+_LIVES = 0x27D8            # [0x27D8] = lives count
+_ENERGY = 0x27D6           # [0x27D6] = energy (hearts)
 _IRIS_RADIUS = 0x2DD0      # iris radius (low byte; shrinks each frame) — see bridge.transition
 _IRIS_X = 0x2DC6           # iris circle centre X (player)
 _IRIS_Y = 0x2DC8           # iris circle centre Y (player)
@@ -62,6 +65,13 @@ def _anim_step(mem) -> AnimStep:
     counter, the animated-tiles-present gate, and the scroll speed."""
     return AnimStep(frame_ptr=_rw(mem, _ANIM_FRAME_PTR), throttle=_rb(mem, _ANIM_THROTTLE),
                     active=_rb(mem, _ANIM_ACTIVE) != 0, speed=_rw(mem, _ANIM_SPEED))
+
+
+def _hud_state(mem) -> HudState:
+    """Read the status-bar values the HUD render (1030:45B8) draws: the score ([0x6C0E]/[0x6C10],
+    a 32-bit count displayed *10), lives ([0x27D8]) and energy hearts ([0x27D6])."""
+    score = (_rw(mem, _SCORE) | (_rw(mem, _SCORE + 2) << 16)) * 10
+    return HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY))
 
 
 def _shake_state(mem) -> CameraShakeState:
@@ -125,6 +135,7 @@ def read_renderer_state(mem, dos=None, *, frame_pre_inc: bool = True) -> Rendere
         iris=_iris_state(mem),
         anim=_anim_step(mem),
         shake=_shake_state(mem),
+        hud_state=_hud_state(mem),
         object_camera=obj_cam,
         object_sprites=obj_sprites,
         object_attrs=obj_attrs,

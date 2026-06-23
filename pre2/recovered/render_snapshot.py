@@ -17,8 +17,8 @@ from pre2.recovered.animation import throttle_period as _anim_throttle_period
 from pre2.recovered.animation import FRAME_COUNT as _ANIM_FRAME_COUNT
 from pre2.recovered.object_render import plan_sprite_command
 from pre2.recovered.render_model import (
-    TILE_PX, AnimationState, CameraShakeState, CameraState, GameFrameSnapshot, PaletteState,
-    TileDrawCmd, TransitionCmd, TransitionKind,
+    TILE_PX, AnimationState, CameraShakeState, CameraState, GameFrameSnapshot, HudState,
+    PaletteState, TileDrawCmd, TransitionCmd, TransitionKind,
 )
 
 TILEMAP_STRIDE = 0x100   # tile map is row-major, 0x100 stride [render_frame: tiles]
@@ -100,6 +100,11 @@ def _shake(state) -> CameraShakeState:
     return getattr(state, "shake", None) or CameraShakeState()
 
 
+def _hud(state) -> HudState:
+    """The status-bar values (score/lives/energy), or the empty default."""
+    return getattr(state, "hud_state", None) or HudState()
+
+
 def _transition(state) -> TransitionCmd:
     """The active screen transition as render state. Today: the circular IRIS (centre +
     shrinking radius); ``None`` iris -> NONE. The palette FADE is carried in PaletteState
@@ -129,5 +134,5 @@ def build_frame_snapshot(state) -> GameFrameSnapshot:
     return GameFrameSnapshot(
         camera=cam, palette=_palette(state), transition=_transition(state),
         sprites=sprites, tiles=plan_tiles(state), hud=hud, phase="gameplay",
-        animation=_animation(state), shake=_shake(state),
+        animation=_animation(state), shake=_shake(state), hud_state=_hud(state),
     )

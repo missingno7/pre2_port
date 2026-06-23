@@ -176,6 +176,22 @@ class CameraShakeState:
 
 
 @dataclass(frozen=True)
+class HudState:
+    """The fixed-screen status-bar layer (score / lives / energy) as renderer-visible semantic
+    state — it does not scroll with the world. Grounded in memory + drawn by the HUD render at
+    1030:45B8 (it formats the score to ASCII ``[0x6F52]`` and blits digit/heart glyphs into the
+    status bar). An enhanced renderer can lay the HUD out freely from these values.
+
+    ``score`` is the DISPLAYED score (the engine keeps it ÷10 in ``[0x6C0E]`` and appends a fixed
+    trailing 0, so display = internal*10). ``lives`` (``[0x27D8]``, the one-digit field is clamped
+    to 9 when drawn) and ``energy`` (``[0x27D6]`` hearts) are the raw counts.
+    """
+    score: int = 0          # displayed score (= internal [0x6C0E]/[0x6C10] * 10)
+    lives: int = 0          # [0x27D8]
+    energy: int = 0         # [0x27D6] (hearts)
+
+
+@dataclass(frozen=True)
 class GameFrameSnapshot:
     """One frame's complete render intent — the unit of verification and interpolation.
 
@@ -195,3 +211,4 @@ class GameFrameSnapshot:
     phase: str = "gameplay"    # gameplay | intro | title | menu | map | loading | tally
     animation: "AnimationState" = AnimationState()   # animated-tile cycle state
     shake: "CameraShakeState" = CameraShakeState()   # camera-shake-on-fall visual state
+    hud_state: "HudState" = HudState()               # status-bar values (score/lives/energy)
