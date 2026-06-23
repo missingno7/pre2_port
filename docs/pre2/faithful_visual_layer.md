@@ -88,7 +88,20 @@ VM  / (later) recovered game + scene logic
 ## Consolidation plan (phased, non-breaking, reuse-not-reimplement)
 
 - **Phase 0 — this audit + rule.** (done)
-- **Phase A — FaithfulVisual scene dispatcher.** One entry `render_visual(GameVisualState) -> planes`
+- **Phase A — FaithfulVisual scene dispatcher.** **STARTED (2026-06-23, commit cd11d64) — iris first.**
+  `scene_kind` discovery: PRE2 has **no global scene enum** (across labeled scene snapshots no DGROUP
+  byte enumerates gameplay/menu/map/tally; the game dispatches by routine), so it is DERIVED
+  (`bridge/scene_state.py`): IRIS if `[0x2DD0]!=0`, IMAGE if video 13h, GAMEPLAY if a level is loaded
+  with a non-origin camera `[0x2DE4]/[0x2DE6]` (the old `[0x6BC2]` gate was too loose — menus share
+  that range), else SCENE. `recovered/faithful_visual.py:render_visual(kind, rs, planes, iris)` routes
+  GAMEPLAY→`render_frame`, IRIS→`render_frame`+`compose_iris`, IMAGE/SCENE→fall back to the VM frame
+  (leaves not recovered yet). The iris compose is the single shared `recovered/transition.compose_iris`
+  (the checkpoint `_run` now calls it — one impl). Verified: routing PASS on all 7 scene witnesses;
+  faithful iris vs ASM = only the moving-sprite phase residual. `play.py --faithful` now routes via the
+  dispatcher (iris live; menu/map/intro correctly fall back). REMAINING in Phase A: recover the IMAGE
+  (intro/title) + SCENE (menu/map/loading/tally/game-over) leaves so they render faithfully too; and
+  the GAMEPLAY-vs-SCENE camera-origin edge (level-start frame) is a documented minor fallback.
+- ~~**Phase A — FaithfulVisual scene dispatcher.**~~ One entry `render_visual(GameVisualState) -> planes`
   that dispatches by `scene_kind`: gameplay → `render_frame`; transition → apply the recovered iris
   (`build_scaled_columns`/`clear_span`) + `fade_palette` over the composed frame; scene →
   `render_scene`. Wire the live viewer to it (replace the `is_gameplay_frame` heuristic with a
