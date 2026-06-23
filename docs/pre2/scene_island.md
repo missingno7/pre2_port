@@ -179,14 +179,24 @@ gives witnesses for the image present, the palette install, and the menu cursor.
 Routing all labeled scene witnesses through `render_visual` (the dispatcher) located the remaining
 scene work precisely (no silent fallback — each unrecovered scene raises `FaithfulVisualGap`):
 
-* **Black-curtains / cave transition = a DIAGONAL WIPE** (witness `transition_fade_003841`): a
-  gameplay frame revealed diagonally with black covering the rest; display-start non-page-aligned
-  (`ds=0x0013`, a CRTC pan), camera reset to 0. This is a **separate transition leaf** from the iris
-  (it currently routes to `SCENE` and correctly fails loud — the faithful path shows the diagnostic
-  frame, not the wipe). Needs its own recovery + a clean wipe witness.
-* **Palette fade** (witness `palette_fade_021225`) routes to `GAMEPLAY` and renders via `render_frame`;
-  the fade is a DAC effect carried by the live palette — visually present (bucket-3 orchestration, not
-  a visual gap).
+* **Curtain (room/cave-enter) transition = the ALREADY-RECOVERED `panel_copy` (1030:3054)** — an
+  INTEGRATION piece, not a new recovery (corrected 2026-06-23; my earlier "diagonal wipe" was wrong).
+  It copies 2-byte-wide × 0xB0-row **vertical strips** from the back page to the front at symmetric
+  columns `0x14±2k` (k=0..9), centre-outward, vsync-paced — that strip-by-strip reveal IS the curtain
+  (`frame_renderer.panel_copy` + the `checkpoints/frame.py:frame_panel_copy` hook, which already notes
+  the vsync pacing is the visible effect and a pure hook can't reproduce the wait without hanging the
+  det-clock). The user notes both vertical and horizontal curtains, so a horizontal-strip counterpart
+  likely exists too. INTEGRATION (island-fusion): wire `panel_copy` into `render_visual` as the curtain
+  transition leaf — FINAL frame = `panel_copy(src,dst)`; the per-step reveal needs a partial
+  `panel_copy(step)` keyed on the loop step. ARCHITECTURAL NUANCE: unlike the iris (a per-frame state
+  machine driven by radius `[0x2DD0]`), the curtain is a BLOCKING vsync-paced strip loop — its per-step
+  PIXELS are recoverable (partial panel_copy) but the step PACING is VM-/enhanced-clock-driven. Needs a
+  mid-curtain witness to verify the per-step reveal.
+* **`transition_fade_003841` = a PALETTE FADE-TO-BLACK** (captured at `1030:92C1`: `in al,dx; and
+  al,0x3f; out dx,al` DAC clamping), a scene-flow fade — NOT the curtain (earlier mislabeled a "diagonal
+  wipe"). It is the recovered `fade_palette` behavior on the live DAC. `palette_fade_021225` routes to
+  `GAMEPLAY` and renders via `render_frame` with the fade on the live palette — visually present
+  (bucket-3 orchestration, not a visual gap).
 * **Mode-select MENU scene (`modeselect_075918`) — fully located, a bounded island like gameplay:**
   - BACKGROUND: a scrolling tiled pattern (master segment `[0x2875]`) panned via CRTC + blitted
     column-by-column — the recovered `pre2/recovered/present.py` (`compute_display_start`,
