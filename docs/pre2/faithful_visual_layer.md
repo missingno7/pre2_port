@@ -209,8 +209,10 @@ VM  / (later) recovered game + scene logic
   (`bridge/scene_state.py`): IRIS if `[0x2DD0]!=0`, IMAGE if video 13h, GAMEPLAY if a level is loaded
   with a non-origin camera `[0x2DE4]/[0x2DE6]` (the old `[0x6BC2]` gate was too loose — menus share
   that range), else SCENE. `recovered/faithful_visual.py:render_visual(kind, rs, planes, iris)` routes
-  GAMEPLAY→`render_frame`, IRIS→`render_frame`+`compose_iris`, IMAGE/SCENE→fall back to the VM frame
-  (leaves not recovered yet). The iris compose is the single shared `recovered/transition.compose_iris`
+  GAMEPLAY→`render_frame`, IRIS→`render_frame`+`compose_iris`, recovered scenes (game-over/tally/OLDIES via
+  scene_capture, 13h IMAGE via `render_image_scene`)→their recovered source, and any UNRECOVERED scene
+  (the menu/map 0Dh compositions)→a LOUD `FaithfulVisualGap` (NOT a VM-framebuffer fallback — that earlier
+  "fall back to the VM frame" wording was stale). The iris compose is the single shared `recovered/transition.compose_iris`
   (the checkpoint `_run` now calls it — one impl). Verified: routing PASS on all 7 scene witnesses;
   faithful iris vs ASM = only the moving-sprite phase residual. `play.py --faithful` now routes via the
   dispatcher (iris live; menu/map/intro correctly fall back). REMAINING in Phase A: recover the IMAGE
