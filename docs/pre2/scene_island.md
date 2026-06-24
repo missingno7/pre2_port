@@ -15,11 +15,31 @@
 > composing a from-scratch renderer. (Proven shape: OLDIES = blit_char leaf → live hook 0C3E → FaithfulVisual
 > consumes it; game-over = 9C87; tally = 51A3.)
 >
+> **The nuance (both extremes are wrong) — CONVERGENCE, not a pile of either.** Hooks are *roots*: they
+> discover + verify the real original routines; they are NOT the final shape (don't keep a permanent pile of
+> tiny VGA hooks). FaithfulVisual is NOT a pile of hooks either, and NOT a place to invent visual intent.
+> The endpoint is **recovered high-level source** (leaves + controllers) that BOTH the hybrid runtime (via a
+> live hook) AND FaithfulVisual consume. Sequence: hook-first discovery → source-level recovery → runtime
+> replacement → FaithfulVisual composition → **later collapse into larger recovered islands**. COLLAPSE only
+> with EVIDENCE from the real original call graph (several hooks shown to belong to one real
+> routine/controller/compositor) — never collapse to an invented modern design.
+>
 > So the "0Dh background BLOCKED / from-scratch rebuild reaches ~11%" note below is the blocker for the WRONG
 > (faithful-first) approach. Hook-first reframe: ground the runtime PRODUCERS (scroll_blit / scroll_shift /
-> present) live and have FaithfulVisual consume them. The MENU's `scroll_shift` HISTORY is the genuine
-> remaining blocker (needs the buffer invariant or a replay — do not guess); the CARTE (scroll_blit +
-> objects, no scroll_shift) is groundable now and is the next target.
+> present) live and have FaithfulVisual consume them.
+>
+> CARTE status (corrected 2026-06-24 after a feasibility check): its RENDER LEAVES are grounded —
+> `scroll_blit` (965A) is live + `present_pan_flip` (9613) is recovered+verified; the heavy carte ASM is
+> JOYSTICK input (game-port 0x201 timing loop, 0D00-0F80) + controller/pacing (4500/1C65), NOT rendering;
+> no object/text producers fire. BUT the FaithfulVisual COMPOSITION is BLOCKED, same class as the menu: the
+> carte bg is a STATEFUL circular ring buffer (an initial full-page fill at carte load + per-frame
+> `scroll_blit` refills), so a from-scratch leaf-replay reproduces only ~37% of the page (diff 20260/32000).
+> A from-scratch carte compositor would be INVENTING — do not. The correct (evidence-based) path: (a) trace
+> + recover the carte's INITIAL FULL-PAGE FILL producer (runs once at carte load, like game-over's 9B66 —
+> currently UN-grounded, missed by the mid-scroll trace); (b) FaithfulVisual maintains a PERSISTENT page
+> seeded by that fill and updated each frame by `scroll_blit_column` (the real stateful model, matching the
+> game). The MENU then = the same persistent-page model + `scroll_shift`. Both stay BLOCKED on this
+> stateful-page seam until it is built; do not guess a from-scratch rebuild.
 
 > **★ 2026-06-24 — this is now THE remaining faithful-visual critical path.** Gameplay + all transitions
 > (iris, fade, curtain) + HUD are done and grounded (one leaf, many adapters — see
