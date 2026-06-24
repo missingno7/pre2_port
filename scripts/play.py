@@ -485,6 +485,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     particle_frame = [None]    # ParticleFrame snapshotted at 4b8e entry (one-shot; gone by 6772)
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
+    last_gp_ic = [0]           # instruction count when a GAMEPLAY/IRIS frame was last DISPLAYED
     _DSEG = 0x1A0F
     _HUD_OFF = 176 * 0x28      # HUD strip start within a page (row 176)
     _HUD_LEN = 24 * 0x28       # rows 176..199 (status bar + dynamic glyphs)
@@ -678,6 +679,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     # stale pre-death capture; also keep last_committed current as the vfade base.
                     boundary_capture[0] = (rgb, page, k.name, None)
                     last_committed[0] = (planes, page)
+                    last_gp_ic[0] = rt.cpu.instruction_count
                     faithful_info[0] = f"faithful[{k.name}]@spin(live)"
                     return rgb
                 except Exception:
@@ -689,10 +691,18 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     faithful_info[0] = f"faithful[{kindname}]@6772 Δ={d}" + ("" if d <= 96 else " !!")
                 else:
                     faithful_info[0] = f"faithful[{kindname}]@6772"
+                last_gp_ic[0] = rt.cpu.instruction_count
                 return rgb
             faithful_info[0] = "faithful: awaiting 6772 boundary capture"
             return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
-        # SCENE / IMAGE: leaf not recovered yet -> fail loud (no ASM VRAM fallback)
+        # SCENE / IMAGE. A brief blip to SCENE/IMAGE during a gameplay transition (e.g. the respawn frame
+        # where the camera is momentarily at origin -> the camera heuristic reads SCENE, or a mid-load
+        # frame) must NOT flash the diagnostic placeholder. Hold the last frame for a short grace period
+        # after the last gameplay display; only fail loud if the scene PERSISTS (a real unrecovered scene).
+        if (rt.cpu.instruction_count - last_gp_ic[0] < 90000 and boundary_capture[0] is not None):
+            faithful_info[0] = "faithful: holding (transition)"
+            return boundary_capture[0][0]
+        # persistent unrecovered scene -> fail loud (no ASM VRAM fallback)
         if gap_seen[0] != cur_kind:
             gap_seen[0] = cur_kind
             print(f"[faithful] {FaithfulVisualGap(cur_kind)}", flush=True)
