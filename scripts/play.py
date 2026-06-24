@@ -311,8 +311,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
     from pre2.bridge.live_render import compose_curtain_planes, compose_vfade_planes, render_visual_planes
     from pre2.bridge.particles import read_particles
+    from pre2.bridge.fireflies import read_fireflies
     from pre2.bridge.scene_state import derive_scene_kind
     from pre2.recovered.particles import draw_particles
+    from pre2.recovered.fireflies import draw_fireflies
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
@@ -519,6 +521,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     pf = particle_frame[0]                         # snapshotted pre-kill at 4b8e entry
                     draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
                                    page, pf.cos, pf.sin)
+                ff = read_fireflies(c.mem)                         # persistent swarm (54AB, 0x6EA9):
+                if ff.slots:                                       # slots at 6772 == drawn on committed page
+                    draw_fireflies(planes, ff.slots, ff.cam_col, ff.cam_row, page)
                 d = None
                 if faithful_verify:
                     data = rt.program.memory.data; d = 0
@@ -672,6 +677,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         pf = particle_frame[0]
                         draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
                                        page, pf.cos, pf.sin)
+                    ff = read_fireflies(rt.cpu.mem)
+                    if ff.slots:
+                        draw_fireflies(planes, ff.slots, ff.cam_col, ff.cam_row, page)
                     # The DISPLAYED HUD lags the live state: it only changes when the engine redraws it
                     # AND flips the buffer, which doesn't happen during the death gap (no 6772). So at the
                     # moment of death the live HUD already shows the post-death lives, but the screen still
