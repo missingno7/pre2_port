@@ -315,6 +315,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.gameplay_effects import apply_gameplay_effects, capture_gameplay_effects
     from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset
     from pre2.bridge.tally_scene import build_tally_scene
+    from pre2.bridge.oldies_scene import build_oldies_scene
     from pre2.bridge.tally_panel import read_tally_panel
     from pre2.bridge.image_scene import identify_image, render_image_scene
     from pre2.bridge.scene_state import derive_scene_kind
@@ -494,6 +495,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     gameover_pending = [None]  # (scroll, page) stashed at the 9C87 diorama present (scroll inc's after)
     tally_pending = [None]     # TallyPanelInputs stashed at the 51A3 driver (the % counts up before the flip)
     scene_capture = [None]     # (rgb, page, ic, label) of the last complete recovered SCENE frame (at the flip)
+    oldies_capture = [None]    # (planes, page) of the OLDIES easter-egg scene, captured at the 2417 draw
+                               #   (static screen -> stored as planes, rendered with the LIVE palette/fade)
     current_13h_image = [None]  # (asset name, has_logo) of the mode-13h image on screen; set at 91C0/9090
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
@@ -722,6 +725,28 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rt.cpu.replacement_hooks[_TALLY_DRIVER] = _mark_tally
         rt.cpu.hook_names[_TALLY_DRIVER] = "tally_driver_mark"
 
+        # OLDIES easter-egg screen (cold-boot, date-gated >= 1996): the 1030:2417 controller draws the
+        # 4 glyph-text lines once then returns (the caller holds it statically). Build the recovered
+        # scene from the same inputs (pre2.bridge.oldies_scene) and stash the PLANES; the faithful
+        # renderer shows them with the LIVE palette so the fade-in is reproduced. Passthrough capture —
+        # the ASM still draws (oracle / --view), this only feeds the faithful path.
+        _OLDIES = (0x1030, 0x2417)
+        _origold = rt.cpu.replacement_hooks.get(_OLDIES)
+
+        def _mark_oldies(c):
+            try:
+                page = c.mem.data[(0x1A0F << 4) + 0x2DD6] | (c.mem.data[(0x1A0F << 4) + 0x2DD7] << 8)
+                planes, _st = build_oldies_scene(c.mem, page=page)
+                oldies_capture[0] = (tuple(bytes(pl) for pl in planes), page)
+            except Exception:
+                pass
+            if _origold is not None:
+                return _origold(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_OLDIES] = _mark_oldies
+        rt.cpu.hook_names[_OLDIES] = "oldies_mark"
+
         _GO_FLIP = (0x1030, 0x44FB)
         _origflip = rt.cpu.replacement_hooks.get(_GO_FLIP)
 
@@ -862,6 +887,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         if (rt.cpu.instruction_count - last_gp_ic[0] < 90000 and boundary_capture[0] is not None):
             faithful_info[0] = "faithful: holding (transition)"
             return boundary_capture[0][0]
+        # OLDIES easter egg (static glyph-text, mode 0Dh, no scroll). ega_pan_active distinguishes it from
+        # the scrolling menu/map (which share mode 0Dh but pan). Render the captured planes with the LIVE
+        # palette so the fade-in is reproduced.
+        if oldies_capture[0] is not None and not rt.program.memory.ega_pan_active:
+            planes, page = oldies_capture[0]
+            faithful_info[0] = "faithful[OLDIES]"
+            return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
         # persistent unrecovered scene -> fail loud (no ASM VRAM fallback)
         if gap_seen[0] != cur_kind:
             gap_seen[0] = cur_kind
