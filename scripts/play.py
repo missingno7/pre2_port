@@ -571,6 +571,12 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     curtain_cache[0] = (nr, src, kind.name)
                 nr, csrc, kindname = curtain_cache[0]
                 planes, page = compose_curtain_planes(nr, csrc, dst, completed)
+                # The engine's curtain only copies the VIEWPORT rows, leaving the HUD strip on the dst
+                # page persisting from before (buffer persistence) -> the HUD does NOT go black during
+                # the reveal. compose_curtain_planes starts from a fully-black base, so restore the HUD
+                # strip from the last committed frame to match.
+                if last_hud[0] is not None:
+                    _overlay_hud(planes, page, last_hud[0])
                 boundary_capture[0] = (
                     render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
                     page, kindname, None)
