@@ -601,6 +601,9 @@ class DOSMachine:
             # express. Bit 5 of the index byte is the palette-address-source flag (ignored here).
             if not self._attr_flipflop:
                 self._attr_index = value & 0x1F
+                # Bit 5 = Palette Address Source: 1 = display on (palette locked), 0 = display blanked
+                # (palette being loaded). The program clears it to load a new palette, then sets it.
+                mem.ega_display_enabled = bool(value & 0x20)
                 self._attr_flipflop = True
             else:
                 self._attr_regs[self._attr_index] = value & 0xFF
@@ -937,6 +940,7 @@ class DOSMachine:
             cpu.mem.ega_pan_active = False
             cpu.mem.ega_pan_pel = 0
             cpu.mem.ega_h_display_end = 39   # BIOS graphics-mode default: 40 chars = 320px active
+            cpu.mem.ega_display_enabled = True   # BIOS mode-set re-enables the display (PAS=1)
             self._attr_flipflop = False
             # Maintain the BIOS data area CRTC base port at 0040:0063 the way a
             # real BIOS mode-set does (color 3D4h / mono 3B4h).  Programs read it to

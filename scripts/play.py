@@ -873,6 +873,12 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         mem = bytes(rt.program.memory.data)
         mode = rt.dos.video_mode & 0x7F
         faithful_info[0] = ""
+        if not rt.program.memory.ega_display_enabled:
+            # The attribute controller has the display blanked (PAS=0) while the program loads a new
+            # palette. Show black, exactly as real hardware / DOSBox do — never the incoming screen
+            # with the old/partial palette (a transient that otherwise flashes for ~1s on transitions).
+            faithful_info[0] = "display blanked (palette load)"
+            return np.zeros((200, 320, 3), dtype=np.uint8)
         if mode in (0, 1, 2, 3, 7):
             if faithful:
                 # The faithful renderer is a clean RECREATION of the GAME's visual output; it never reads

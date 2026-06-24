@@ -87,6 +87,11 @@ class Memory:
         # the sub-byte (0-7 px) horizontal scroll the CRTC start address cannot express. The
         # present applies it on top of ega_display_start so scrolling is smooth, not 8px-quantized.
         self.ega_pel_pan = 0
+        # Attribute-controller "Palette Address Source" (bit 5 of the 0x3C0 index): when 0 the display
+        # is BLANKED while the program loads the palette; the program re-enables it (bit 5 = 1) once the
+        # new palette is ready. Tracked so the present can blank during a palette load instead of showing
+        # the new screen with the old/partial palette (a transient DOSBox never displays).
+        self.ega_display_enabled = True
         # Active horizontal display width in characters-1 (CRTC Horizontal Display End, reg 0x01).
         # Default 39 -> (39+1)*8 = 320px. PRE2's carte narrows it to 38 -> 312px so the pel-pan's
         # overflow byte lands in the 8px border (off-screen) instead of wrapping into the active area.
