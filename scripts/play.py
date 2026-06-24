@@ -312,9 +312,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.live_render import compose_curtain_planes, compose_vfade_planes, render_visual_planes
     from pre2.bridge.particles import read_particles
     from pre2.bridge.fireflies import read_fireflies
+    from pre2.bridge.foreground_tiles import read_foreground_state
     from pre2.bridge.scene_state import derive_scene_kind
     from pre2.recovered.particles import draw_particles
     from pre2.recovered.fireflies import draw_fireflies
+    from pre2.recovered.foreground_tiles import render_foreground_tiles
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
@@ -485,6 +487,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     curtain_cache = [None]     # new-room planes (at src page) rendered once per curtain reveal (3054)
     last_committed = [None]    # (planes, page) of the last 6772 frame — base for the vertical fade-out
     particle_frame = [None]    # ParticleFrame snapshotted at 4b8e entry (one-shot; gone by 6772)
+    foreground_frame = [None]  # ForegroundState snapshotted at 3732 entry (active list cleared by 6772)
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
     last_gp_ic = [0]           # instruction count when a GAMEPLAY/IRIS frame was last DISPLAYED
@@ -521,6 +524,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     pf = particle_frame[0]                         # snapshotted pre-kill at 4b8e entry
                     draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
                                    page, pf.cos, pf.sin)
+                if foreground_frame[0] is not None:                # 3721: fg tiles redrawn OVER sprites,
+                    render_foreground_tiles(planes, foreground_frame[0])  # snapshotted at the 3732 pass
                 ff = read_fireflies(c.mem)                         # persistent swarm (54AB, 0x6EA9):
                 if ff.slots:                                       # slots at 6772 == drawn on committed page
                     draw_fireflies(planes, ff.slots, ff.cam_col, ff.cam_row, page)
@@ -544,6 +549,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 boundary_capture[0] = None
             curtain_cache[0] = None                # the per-frame boundary ends any curtain in progress
             particle_frame[0] = None               # consumed for this frame; 4b8e re-stashes next frame
+            foreground_frame[0] = None             # consumed; 3732 re-stashes next frame it runs
             if _orig6772 is not None:
                 return _orig6772(c)
             interpret_current_instruction_without_hook(c)          # no palette hook -> run the ASM instr
@@ -650,6 +656,26 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rt.cpu.replacement_hooks[_PARTS] = _capture_particles
         rt.cpu.hook_names[_PARTS] = "particles_capture"
 
+        # Foreground tiles (1030:3721 pass body 3732): the pass redraws flag-0x40 tiles OVER the sprites,
+        # but it reads the active sprite list [0x4F0A], which the object pass rebuilds each frame -> by the
+        # 6772 commit the list state no longer matches what was drawn. Snapshot the ForegroundState at the
+        # 3732 pass entry (active list still populated); the 6772 render replays render_foreground_tiles
+        # (proven byte-exact, pre2/probes/verify_foreground_tiles.py).
+        _FGTILES = (0x1030, 0x3732)
+        _origfg = rt.cpu.replacement_hooks.get(_FGTILES)
+
+        def _capture_foreground(c):
+            try:
+                foreground_frame[0] = read_foreground_state(c.mem)
+            except Exception:
+                foreground_frame[0] = None
+            if _origfg is not None:
+                return _origfg(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_FGTILES] = _capture_foreground
+        rt.cpu.hook_names[_FGTILES] = "foreground_capture"
+
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
         ad-hoc live read — that describes the back buffer being built). Gameplay/iris frames come from the
@@ -677,6 +703,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         pf = particle_frame[0]
                         draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
                                        page, pf.cos, pf.sin)
+                    if foreground_frame[0] is not None:
+                        render_foreground_tiles(planes, foreground_frame[0])
                     ff = read_fireflies(rt.cpu.mem)
                     if ff.slots:
                         draw_fireflies(planes, ff.slots, ff.cam_col, ff.cam_row, page)
