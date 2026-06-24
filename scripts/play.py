@@ -7,20 +7,23 @@ decode, gameplay frame, sprite/object draw, scroll, audio, iris, scene drawers, 
 see docs/pre2/recovered_islands.md). The original ASM runs ONLY in oracle/verify modes.
 Unrecovered behaviour fails LOUD (`Pre2HybridGap`) — never a silent fall-through to ASM.
 
-Execution modes (no silent fallbacks):
-  * ``--view`` (default = HYBRID)  live VGA/text viewer + digital audio; recovered
-                                   replacements run in place of the ASM.
-  * ``--no-replacements``          ORACLE mode: pure original ASM, no recovered hooks
-                                   (for reference output / observation).
-  * ``--verify-hooks``             VERIFY mode: the ASM oracle runs and each recovered
-                                   replacement is diffed against it at its contract
-                                   boundary (``--full-verify`` diffs the whole machine state).
-  * ``--faithful``                 display the recovered FAITHFUL renderer (render_frame /
-                                   render_visual + scene leaves, from explicit state + assets)
-                                   instead of the ASM-populated VRAM. The VM still runs as
-                                   oracle/state-producer; the faithful path NEVER reads the VM
-                                   framebuffer (an unrecovered scene fails loud).
+Two independent axes — EXECUTION MODE and VIDEO BACKEND.
+
+Execution mode (no silent fallbacks):
+  * ``--view`` (default = HYBRID)  hybrid runtime: recovered native replacements run in place of
+                                   the ASM. Live VGA/text viewer + digital audio.
+  * ``--no-replacements``          ORACLE mode: pure original ASM, no recovered hooks.
+  * ``--verify-hooks``             VERIFY mode: the ASM oracle runs and each recovered replacement is
+                                   diffed against it at its contract boundary (``--full-verify`` =
+                                   whole-machine-state diff).
   * ``--trace-hooks``              hybrid runtime + a live tally of which recovered hooks fire.
+
+Video backend (how frames are DISPLAYED; independent of the execution mode):
+  * ``--video vm`` (default)       the emulated VM/VGA framebuffer.
+  * ``--video faithful``           the recovered FaithfulVisual backend (render_frame / render_visual +
+                                   scene leaves from explicit state + assets); NEVER reads the VM
+                                   framebuffer, fails LOUD on an unrecovered scene.
+  * ``--video enhanced``           reserved future modern renderer — NOT IMPLEMENTED.
 
 PRE2 uses BIOS text, linear VGA, and a 320x200 16-colour planar path; the viewer renders those
 and plays the digital audio (MOD music + PCM SFX) via the emulated Sound Blaster DMA path (PRE2
@@ -492,8 +495,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
 
     last_rgb = [None]  # most recent rendered frame, for F10 screenshots
     faithful_info = [""]  # title-bar note for the live faithful renderer (gameplay only)
-    faithful = getattr(args, "faithful", False)
-    faithful_verify = getattr(args, "faithful_verify", False)
+    faithful = getattr(args, "video", "vm") == "faithful"   # video backend: 'vm' | 'faithful'
+    faithful_verify = getattr(args, "video_verify", False)   # --video-verify diagnostic
 
     gap_seen = [None]
     boundary_capture = [None]  # (rgb, page, scene_kind_name, verify_Δ|None) from the last 6772 commit
@@ -1280,8 +1283,16 @@ def main(argv: list[str] | None = None) -> int:
                         "(the recovered mixer's output); 'enhanced' = modern float mixer playing "
                         "the standard .TRK songs + SFX driven by the recovered audio commands; 'off'")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
-    p.add_argument("--faithful", action="store_true", help="(viewer) display the recovered faithful renderer (render_frame / render_visual + scene leaves, from explicit state + assets) instead of the ASM-populated VRAM. The VM still runs as oracle/state-producer. Recovered scenes (gameplay, iris, game-over, tally, OLDIES, 13h images) render from recovered source; the still-unrecovered 0Dh compositions (mode-select menu, map/carte) raise a LOUD gap. NEVER reads the VM framebuffer (no fallback)")
-    p.add_argument("--faithful-verify", action="store_true", help="(with --faithful) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
+    p.add_argument("--video", choices=["vm", "faithful", "enhanced"], default="vm",
+                   help="VIDEO BACKEND (a separate axis from the execution mode). "
+                        "'vm' (default): display the emulated VM/VGA framebuffer (the original video backend; "
+                        "still runs the hybrid native replacements unless --no-replacements). "
+                        "'faithful': display the recovered FaithfulVisual backend (render_frame / render_visual "
+                        "+ scene leaves, from explicit state + assets); consumes grounded recovered source, "
+                        "NEVER reads the VM framebuffer, fails LOUD on an unrecovered scene. "
+                        "'enhanced': future modern renderer (not implemented). "
+                        "Execution mode is the other axis: hybrid (default) / --no-replacements / --verify-hooks.")
+    p.add_argument("--video-verify", action="store_true", help="(with `--video faithful`) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
     p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
@@ -1296,6 +1307,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--full-verify", action="store_true", help="foolproof variant of --verify-hooks: diff the WHOLE machine state (all memory + return cs:ip:sp) after each recovered routine vs the ASM, so nothing can leak outside a hand-picked contract. ~10x slower; for offline snapshot/demo audits, not live play")
     p.add_argument("--trace-hooks", action="store_true", help="run the LIVE hybrid runtime (hooks replacing ASM, NOT the oracle) and show which recovered hooks fire — a live coverage view in the title bar + a periodic/final per-hook tally. Hooks absent = that screen is still pure ASM")
     args = p.parse_args(argv)
+    # VIDEO BACKEND (separate axis from execution mode; only selects how frames are DISPLAYED).
+    # 'enhanced' is a reserved future backend and is not implemented.
+    if args.video == "enhanced":
+        p.error("`--video enhanced` is not implemented yet - it is a reserved future modern renderer, "
+                "blocked until `--video faithful` renders the whole game without FaithfulVisual gaps. "
+                "Use `--video vm` or `--video faithful`.")
+
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
     # A demo replay overrides this from the manifest in _make_replay_runtime.

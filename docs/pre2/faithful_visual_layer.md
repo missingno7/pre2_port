@@ -3,7 +3,7 @@
 The faithful renderer composes a *gameplay frame* well, but the recovered visual logic is still
 spread across recovered leaves, bridge readers, checkpoints, probes, and a separate semantic model —
 and transitions / scene changes are **not yet part of the live faithful flow** (observed: the
-`--faithful` path renders gameplay but not the fades/iris/scene switches between frames). The end
+`--video faithful` path renders gameplay but not the fades/iris/scene switches between frames). The end
 state must be **one coherent faithful visual system**, not "scattered hooks + a separate frame
 composer + duplicated transition logic". This document audits what exists and proposes the
 consolidation. **Rule: do not duplicate recovered visual logic** — the live faithful pipeline must
@@ -175,7 +175,7 @@ interpolated by `render_interp.py`, presented by `enhanced/present.py`. This is 
    instead of RUNNING the controllers. The controller logic lives in checkpoints + as pure fns — not
    as the live source of the visual state.
 3. **Transitions/scenes are outside the faithful flow.** render_frame ignores the iris; scene-to-scene
-   fades and scene switching aren't orchestrated; the `--faithful` viewer handles only gameplay and
+   fades and scene switching aren't orchestrated; the `--video faithful` viewer handles only gameplay and
    falls back to ASM for everything else. So there is a faithful frame *composer*, not yet a faithful
    visual *layer* (whole visual behavior over time).
 
@@ -214,7 +214,7 @@ VM  / (later) recovered game + scene logic
   (the menu/map 0Dh compositions)→a LOUD `FaithfulVisualGap` (NOT a VM-framebuffer fallback — that earlier
   "fall back to the VM frame" wording was stale). The iris compose is the single shared `recovered/transition.compose_iris`
   (the checkpoint `_run` now calls it — one impl). Verified: routing PASS on all 7 scene witnesses;
-  faithful iris vs ASM = only the moving-sprite phase residual. `play.py --faithful` now routes via the
+  faithful iris vs ASM = only the moving-sprite phase residual. `play.py --video faithful` now routes via the
   dispatcher (iris live; menu/map/intro correctly fall back). REMAINING in Phase A: recover the IMAGE
   (intro/title) + SCENE (menu/map/loading/tally/game-over) leaves so they render faithfully too; and
   the GAMEPLAY-vs-SCENE camera-origin edge (level-start frame) is a documented minor fallback.
@@ -384,7 +384,7 @@ branch:
 | **camera-shake apply** | 4C30 | `apply_camera_shake` | **skips ASM** (write [0x6BF8]/[0x6BEA]/[0x4F1E]; pop) | **RUNTIME-REPLACED (mode-2, 2026-06-24)** — checkpoint stays the verify oracle |
 
 So the user's worry — "ASM renderer still runs and the viewer re-renders afterward" — is mostly NOT the
-case: the recovered leaves ARE the live render path (the ASM bodies are skipped). The `--faithful`
+case: the recovered leaves ARE the live render path (the ASM bodies are skipped). The `--video faithful`
 viewer is an *additional* mode-1 whole-frame re-compose (`render_frame`/`render_visual`) that shares
 those same leaves — useful as the clean-framebuffer proof, redundant with the (already recovered)
 hybrid VRAM.

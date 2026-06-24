@@ -1,7 +1,7 @@
 # Camera-movement / cave-enter faithful-verify mismatch — diagnosis (2026-06-23)
 
 Witness: `artifacts/snapshot_pre2_20260623_231731` (mid cave-enter curtain). With the on-screen-page
-verify fix (`96ebdbb`), `--faithful-verify` reports a large viewport mismatch during fast camera
+verify fix (`96ebdbb`), `--video-verify` reports a large viewport mismatch during fast camera
 movement / cave enter-exit. This is the evidence-based diagnosis (no fallback, no tolerance).
 
 ## Evidence
@@ -45,7 +45,7 @@ boundary** — not mix the live (back-buffer) scroll state with the displayed (f
    ad-hoc `read_renderer_state` into a frame-boundary capture. This is the canonical fix.
 2. **Until then, verify only at a frame-complete boundary** (the offline `verify_live_faithful` samples
    at the object-pass RET `2DF9`, where state↔page are phase-aligned, and gets byte-exact). The live
-   `--faithful-verify` samples at arbitrary wall-clock instants, so it WILL show this mismatch during
+   `--video-verify` samples at arbitrary wall-clock instants, so it WILL show this mismatch during
    movement — which is correct (it must not hide it); the title Δ is a true "state↔page out of phase"
    signal, not a renderer error.
 
@@ -68,11 +68,11 @@ the canonical verification substrate.
 PROOF (`pre2/probes/verify_frame_boundary.py`, driven gameplay, pure-ASM oracle): at the 6772 boundary
 the capture reproduces the displayed page **Δ≤58 (blink-phase only)**; a read ~600 instr OFF the
 boundary mismatches the displayed page **Δ=675–912** — so the boundary is necessary and sufficient
-(no tolerance, no fallback). The live `--faithful-verify` mismatch during movement was a TRUE
+(no tolerance, no fallback). The live `--video-verify` mismatch during movement was a TRUE
 state↔page out-of-phase signal; capturing at 6772 resolves it.
 
-VIEWER WIRED (2026-06-24, commit 462199e): `play.py --faithful` now mirrors the 6772-boundary capture
-(a hook wrapping the palette-fade hook at 6772 captures + renders + (with `--faithful-verify`) diffs vs
+VIEWER WIRED (2026-06-24, commit 462199e): `play.py --video faithful` now mirrors the 6772-boundary capture
+(a hook wrapping the palette-fade hook at 6772 captures + renders + (with `--video-verify`) diffs vs
 the displayed page; the viewer shows the latest capture for gameplay/iris). SCENE/IMAGE still fail loud
 (`FaithfulVisualGap` diagnostic + console), never ASM VRAM. Regression `verify_frame_boundary` covers the
 cave witness (231731 @6772 Δ=0). `render_game_visual_state` reuses `render_visual` → the same leaves

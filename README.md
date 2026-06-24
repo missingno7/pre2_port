@@ -20,7 +20,7 @@ recovered native code is now part of the normal runtime:
   the **sprite blit**, the **moving-sprite / object-list draw pass** (`26FA`), the
   **frame renderer** (tile-row / grid redraw / scroll-copy / page-flip), the **HUD**, the
   end-level **iris**, **fireflies / particles / foreground-tile z-order**, and the digital
-  **audio mixer + tracker**. The faithful renderer (`--faithful`) composes these SAME
+  **audio mixer + tracker**. The faithful renderer (`--video faithful`) composes these SAME
   recovered leaves into a clean framebuffer — it never reads the VM VRAM.
 - **Non-gameplay scenes are grounded hook-first too.** Live-grounded: **game-over** (`9C87`),
   **tally** (`51A3`), **OLDIES** glyph (`0C3E`), the menu/map **scroll** (`scroll_blit` /
