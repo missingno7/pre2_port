@@ -1,7 +1,6 @@
 # Scene island — the non-gameplay visual seam (`SceneState → render_scene`)
 
-> **★ GOVERNING ORDER — HOOK-FIRST (2026-06-24, supersedes any "build the seam first" / "recover
-> visual intent, not isolated VGA hooks" framing elsewhere in this file).** Every remaining
+> **★ GOVERNING ORDER — HOOK-FIRST (2026-06-24).** Every remaining
 > scene/rendering piece is recovered in THIS order, FaithfulVisual LAST:
 > ```
 > original ASM producer  ->  checkpoint/probe  ->  recovered leaf  ->  live replacement hook

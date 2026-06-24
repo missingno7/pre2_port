@@ -35,8 +35,9 @@ def is_gameplay_frame(mem) -> bool:
     have a scrolled camera — and the tally is caught earlier by the iris check, so among 0Dh non-iris
     frames a non-zero camera means gameplay. (The earlier ``[0x6BC2]`` anim-ptr gate was too loose —
     menu frames share that range.) No clean gameplay flag exists (see scene_state.py); this is the
-    best available signal. A gameplay frame exactly at camera origin (level start) would fall back to
-    the VM frame for that frame — acceptable."""
+    best available signal. A gameplay frame exactly at camera origin (level start) is briefly
+    mis-classified as a scene; the viewer's faithful path holds the last gameplay frame for that blip
+    (the transition grace window) — never a VM-framebuffer fallback."""
     return (_word(mem, _CAM_X) | _word(mem, _CAM_Y)) != 0
 
 
@@ -69,7 +70,7 @@ def render_visual_planes(mem, dos, *, game_root, display_page=None):
     checkpoints verify — render_frame + compose_iris — no second copy.
 
     Pass ``display_page`` (the CRTC ``ega_display_start``) to render to + return the page the user is
-    actually LOOKING AT — so the live viewer and --faithful-verify show/diff what is on screen, not the
+    actually LOOKING AT — so the live viewer and --video-verify show/diff what is on screen, not the
     back buffer ``[0x2DD8]`` (they differ during a page-flip / curtain reveal). Default ``None`` keeps
     the engine back page (for the byte-exact offline proof)."""
     from dataclasses import replace as _replace
