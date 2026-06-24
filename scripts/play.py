@@ -643,8 +643,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         pf = particle_frame[0]
                         draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
                                        page, pf.cos, pf.sin)
+                    rgb = render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
+                    # CACHE the live frame so off-governor refreshes (the death loop dips out of the
+                    # 1C6x spin) keep showing the latest live frame instead of flickering back to the
+                    # stale pre-death capture; also keep last_committed current as the vfade base.
+                    boundary_capture[0] = (rgb, page, k.name, None)
+                    last_committed[0] = (planes, page)
                     faithful_info[0] = f"faithful[{k.name}]@spin(live)"
-                    return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
+                    return rgb
                 except Exception:
                     pass
             cap = boundary_capture[0]
