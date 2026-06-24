@@ -35,12 +35,14 @@ class GameVisualState:
     renderer_state: object        # RendererState with dest_page == committed_page (the displayed page)
     committed_page: int           # ega_display_start at the boundary = the page actually on screen
     iris: object = None           # iris compose inputs when scene_kind==IRIS (else None)
+    effects: object = None        # GameplayEffects overlays (particles/foreground/fireflies) or None
 
 
-def capture_game_visual_state(mem, dos, display_page: int, *, game_root) -> GameVisualState:
+def capture_game_visual_state(mem, dos, display_page: int, *, game_root, effects=None) -> GameVisualState:
     """Capture the GameVisualState for the committed (displayed) page. Call ONLY at the frame-commit
     boundary (1030:6772) so the read is consistent with ``display_page``. ``display_page`` is the
-    CRTC ``ega_display_start`` at that instant (the page on screen)."""
+    CRTC ``ega_display_start`` at that instant (the page on screen). ``effects`` is the captured
+    :class:`~pre2.bridge.gameplay_effects.GameplayEffects` overlay bundle (drawn after the core frame)."""
     page = display_page & 0xFFFF
     kind = derive_scene_kind(mem, dos)
     iris = None
@@ -51,13 +53,19 @@ def capture_game_visual_state(mem, dos, display_page: int, *, game_root) -> Game
         if kind == SceneKind.IRIS:
             from pre2.bridge import transition as _tr
             iris = replace(_tr.read_iris_inputs(mem), page=page)
-    return GameVisualState(scene_kind=kind, renderer_state=rs, committed_page=page, iris=iris)
+    return GameVisualState(scene_kind=kind, renderer_state=rs, committed_page=page, iris=iris,
+                           effects=effects if kind == SceneKind.GAMEPLAY else None)
 
 
 def render_game_visual_state(gvs: GameVisualState):
     """Render a captured :class:`GameVisualState` into fresh clean planes; returns ``(planes, page)``.
-    Raises :class:`~pre2.recovered.faithful_visual.FaithfulVisualGap` for scenes whose leaf is not
-    recovered yet (no silent fallback). Reuses the SAME recovered leaves the checkpoints verify."""
+    Produces the COMPLETE displayed gameplay frame: the core ``render_frame`` (background+sprites+HUD)
+    PLUS the effect overlays (particles, foreground tiles, fireflies). Raises
+    :class:`~pre2.recovered.faithful_visual.FaithfulVisualGap` for scenes whose leaf is not recovered
+    yet (no silent fallback). Reuses the SAME recovered leaves the checkpoints verify."""
     planes = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]
     render_visual(gvs.scene_kind, gvs.renderer_state, planes, iris=gvs.iris)
+    if gvs.effects is not None:
+        from pre2.bridge.gameplay_effects import apply_gameplay_effects
+        apply_gameplay_effects(planes, gvs.committed_page, gvs.effects)
     return planes, gvs.committed_page

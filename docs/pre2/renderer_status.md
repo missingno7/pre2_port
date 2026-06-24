@@ -37,10 +37,37 @@ verified **byte-exact vs the ASM page on every current witness**:
 **The clean-framebuffer composition seam is closed for all observed systems.** Stop hunting for
 hidden normal-frame render pieces unless a *new visual witness* proves one.
 
-**Watch-list (NOT on the done list):** the **particle/effect system `4B8E`** remains **NEEDS-REPRO**.
-Open question = which side of the seam it's on: if particles spawn into the active-sprite list they
-are *already composed* (state-producer only); if `4B8E` has its own blit it is an open composition
-piece. One particle witness (dust/splash/hit-spark, `[0x7DE6] != -1`) settles it.
+**Watch-list (RESOLVED 2026-06-24):** the **effect systems are recovered + wired** — see the wrap-up
+below. `4B8E` (point particles), `54AB` (firefly swarm), and `3721`/`37F7` (foreground-tile z-order)
+all have their own blits and are now composed on top of the core frame via `GameplayEffects`.
+
+## ★ GAMEPLAY RENDERER WRAP-UP (2026-06-24) — core + effects complete, unified seam
+
+The gameplay renderer is **complete and byte-exact**. `render_game_visual_state(gvs)` now yields the
+WHOLE displayed gameplay frame in one call: the core `render_frame` (background + sprites + HUD + fade)
+PLUS the three effect overlays, all reusing the same recovered leaves the checkpoints verify.
+
+**Effect overlays** (drawn over the core frame; captured at their own hook instants because they have
+transient state) — unified in `bridge/gameplay_effects.py` (`GameplayEffects` bundle →
+`apply_gameplay_effects`), folded into `GameVisualState`, shared by both faithful render paths
+(the 6772 boundary capture and the governor-live death-gap path — no more duplicated draw code):
+
+| Overlay | ASM | Recovered | Capture point | Proof |
+|---|---|---|---|---|
+| Point particles | `4B8E` | `particles.draw_particles` | 4B8E entry (pre-kill stash) | `verify_particles.py` Δ=0; spider 102733 |
+| Foreground tiles (z-order) | `3721`+`37F7` | `foreground_tiles.render_foreground_tiles` | 3732 pass entry (stash) | `verify_foreground_tiles.py` Δ=0; bush 110346 (player behind bush) |
+| Firefly swarm | `54AB` | `fireflies.draw_fireflies` + `firefly_sim.step_fireflies` | read at 6772 (slots persist) | `verify_fireflies.py` / `verify_firefly_sim.py` Δ=0; 140330 |
+
+**Firefly perf replacement:** `54AB` is also a **native replacement** (`checkpoints/fireflies.py`) — the
+recovered `step_fireflies` owns the whole pass (RNG-driven flocking + draw), so the VM skips the
+interpreted routine (~3000 instr/frame). Byte-exact incl. the two SHARED RNGs (`26CF`/`39DF`).
+
+**Verification:** the unified `render_game_visual_state` with effects is Δ=0 over the gameplay viewport
+on every witness (140330 fireflies; 110346 moving = foreground tiles + fireflies). Suite 252; 34 islands.
+
+**Next milestone — NON-GAMEPLAY SCENES** (the remaining faithful-visual gaps): mode-select menu, map
+roll, game-over, level tally. These are the `SCENE`/`IMAGE` kinds that currently raise `FaithfulVisualGap`
+(see bug-table #3/#4 and `faithful_visual_layer.md`).
 
 ### LIVE FAITHFUL PATH (2026-06-23) — promoted from offline/test to a live authoritative renderer
 

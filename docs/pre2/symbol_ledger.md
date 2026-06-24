@@ -366,6 +366,33 @@ type table's 168 zeros / 88 ids — the table (in data seg `1A13`, intact) is th
 load-time truth; the cache is stale. **To verify decode/classify, capture at level
 load** (hook `4316`/`4232` with the asset live), not from a gameplay snapshot.
 
+## Gameplay effect overlays + shared RNG (VERIFIED — recovered 2026-06-24)
+
+The three effect passes that draw OVER the core `render_frame` output, plus the two
+RNGs the firefly swarm (and the rest of the game) shares. All wired through
+`bridge/gameplay_effects.py` (`GameplayEffects` bundle → `apply_gameplay_effects`)
+and folded into `render_game_visual_state`. See the manifest for full contracts.
+
+| location | name | conf | role | notes |
+|---|---|---|---|---|
+| `1030:4B8E` | point-particle draw | VERIFIED | leaf | one-shot points `[0x7DE6]` (20 slots); snapshot at entry (pre-kill). `recovered.particles.draw_particles` |
+| `1030:3721`/`3732` | foreground-tile pass | VERIFIED | leaf | redraw flag-`0x40` tiles OVER sprites; selection walks active list `[0x4F0A]` stride 0x12; `recovered.foreground_tiles` |
+| `1030:37F7` | masked tile blit | VERIFIED | leaf | color-0-keyed transparent blit; gfx seg `word[0x003b]` : `word[0x8167+tile*2]<<7`, plane-major; phase1 AND ~footprint, phase2 OR |
+| `1030:54AB` | firefly swarm | VERIFIED | leaf + **replacement** | persistent 20-slot swarm `[0x6EA9]` (stride 8, `0x55AA`=dead). `draw_fireflies` (draw) + `firefly_sim.step_fireflies` (full pass, live replacement `checkpoints/fireflies.py`) |
+| `1030:26CF` | RNG-A (LCG) | VERIFIED | data/leaf | 16-bit seed `[0x28C1]`: `s = ror((s+0x9248), 3)`; returns low byte. SHARED across the game |
+| `1030:39DF` | RNG-B (4-byte) | VERIFIED | data/leaf | state word `[0x2CEF]` + bytes `[0x2CEC]`/`[0x2CED]`/`[0x2CEE]`; returns `[0x2CED]`. SHARED |
+| `1030:452B` | GC reset helper | OBSERVED | data | sets GC mode(reg5)=0 + func(reg3)=0 (write-mode 0, replace) |
+
+Data: firefly target `[0x4F1C]`/`[0x4F1E]`; frame gate `[0x6BD5]`; firefly scratch
+`[0x6BC0]`/`[0x6BC1]`; foreground flag table `[0x805E + tile]` (bit 0x40); tile-gfx
+index `[0x8167 + tile*2]`; tilemap grid segment `word[0x2DDA]`.
+
+**dos_re EGA gap (reusable):** `memory._ega_wb` does NOT emulate the Set/Reset
+registers (GC index 0/1) — it writes CPU data to every map-masked plane. So the
+firefly even/odd color-14/15 flicker collapses to color 15 under the VM oracle; any
+future island that colors via Set/Reset will hit the same. Faithful matches the
+oracle; `fireflies.firefly_color()` keeps the true flicker for the enhanced renderer.
+
 ## Tooling notes
 
 - Disassembly truth: use **capstone on dumped bytes**, not the VM trace
