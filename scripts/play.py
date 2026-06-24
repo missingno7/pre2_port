@@ -313,7 +313,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.particles import read_particles
     from pre2.bridge.foreground_tiles import read_foreground_state
     from pre2.bridge.gameplay_effects import apply_gameplay_effects, capture_gameplay_effects
+    from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset
     from pre2.bridge.scene_state import derive_scene_kind
+    from pre2.recovered.gameover_background import render_gameover_background
+    from pre2.recovered.scene_compositor import RecoveredBackground
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
@@ -485,6 +488,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     last_committed = [None]    # (planes, page) of the last 6772 frame — base for the vertical fade-out
     particle_frame = [None]    # ParticleFrame snapshotted at 4b8e entry (one-shot; gone by 6772)
     foreground_frame = [None]  # ForegroundState snapshotted at 3732 entry (active list cleared by 6772)
+    gameover_pending = [None]  # (scroll, page) stashed at the 9C87 diorama present (scroll inc's after)
+    gameover_capture = [None]  # (rgb, page, ic) of the last complete game-over frame (captured at the flip)
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
     last_gp_ic = [0]           # instruction count when a GAMEPLAY/IRIS frame was last DISPLAYED
@@ -670,6 +675,56 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rt.cpu.replacement_hooks[_FGTILES] = _capture_foreground
         rt.cpu.hook_names[_FGTILES] = "foreground_capture"
 
+        # GAME-OVER scene (SCENE kind, no 6772 boundary). Its non-gameplay loop runs the diorama present
+        # (9C87) + object pass + page flip (44FB). Stash the scroll 9C87 used (the counter increments
+        # after, at 9CCD), then at the flip render the COMPLETE recovered scene (RecoveredBackground from
+        # GAMEOVER.SQZ + the object overlay), exactly the byte-exact path proven by verify_gameover_full.py.
+        try:
+            _go_asset = load_gameover_asset(args.game_root)
+        except Exception:
+            _go_asset = None
+        _GO_PRESENT = (0x1030, 0x9C87)
+        _origgo = rt.cpu.replacement_hooks.get(_GO_PRESENT)
+
+        def _capture_gameover_present(c):
+            try:
+                scroll = c.mem.data[(0x1A0F << 4) + 0x6BC4]
+                page = c.mem.data[(0x1A0F << 4) + 0x2DD8] | (c.mem.data[(0x1A0F << 4) + 0x2DD9] << 8)
+                gameover_pending[0] = (scroll, page)
+            except Exception:
+                gameover_pending[0] = None
+            if _origgo is not None:
+                return _origgo(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_GO_PRESENT] = _capture_gameover_present
+        rt.cpu.hook_names[_GO_PRESENT] = "gameover_present_capture"
+
+        _GO_FLIP = (0x1030, 0x44FB)
+        _origflip = rt.cpu.replacement_hooks.get(_GO_FLIP)
+
+        def _capture_gameover_flip(c):
+            if gameover_pending[0] is not None and _go_asset is not None:
+                try:
+                    scroll, page = gameover_pending[0]
+                    bg = RecoveredBackground(tuple(bytes(pl) for pl in
+                                                    render_gameover_background(_go_asset, scroll, page)))
+                    planes, _st = build_gameover_scene(c.mem, rt.dos, game_root=args.game_root,
+                                                       page=page, background=bg)
+                    if last_hud[0] is not None:        # the displayed game-over HUD is FROZEN at death
+                        _overlay_hud(planes, page, last_hud[0])
+                    rgb = render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette)
+                    gameover_capture[0] = (rgb, page, rt.cpu.instruction_count)
+                except Exception:
+                    pass
+                gameover_pending[0] = None
+            if _origflip is not None:
+                return _origflip(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_GO_FLIP] = _capture_gameover_flip
+        rt.cpu.hook_names[_GO_FLIP] = "gameover_flip_capture"
+
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
         ad-hoc live read — that describes the back buffer being built). Gameplay/iris frames come from the
@@ -725,6 +780,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 return rgb
             faithful_info[0] = "faithful: awaiting 6772 boundary capture"
             return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
+        # GAME-OVER scene: a fully recovered scene (RecoveredBackground from GAMEOVER.SQZ + object pass),
+        # captured at the page flip. Show it while its capture is fresh (the loop flips ~every frame).
+        if gameover_capture[0] is not None and rt.cpu.instruction_count - gameover_capture[0][2] < 200000:
+            faithful_info[0] = "faithful[GAMEOVER]@flip"
+            return gameover_capture[0][0]
         # SCENE / IMAGE. A brief blip to SCENE/IMAGE during a gameplay transition (e.g. the respawn frame
         # where the camera is momentarily at origin -> the camera heuristic reads SCENE, or a mid-load
         # frame) must NOT flash the diagnostic placeholder. Hold the last frame for a short grace period
