@@ -483,6 +483,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     curtain_cache = [None]     # new-room planes (at src page) rendered once per curtain reveal (3054)
     last_committed = [None]    # (planes, page) of the last 6772 frame — base for the vertical fade-out
     particle_frame = [None]    # ParticleFrame snapshotted at 4b8e entry (one-shot; gone by 6772)
+    last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     _DSEG = 0x1A0F
 
     if faithful:
@@ -517,6 +518,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 boundary_capture[0] = (render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
                                        page, gvs.scene_kind.name, d)
                 last_committed[0] = (planes, page)  # base for the vertical fade-out (the frame it clears)
+                last_capture_ic[0] = rt.cpu.instruction_count
             except FaithfulVisualGap:
                 boundary_capture[0] = None         # a SCENE/IMAGE frame at 6772 -> handled at present time
             except Exception:
@@ -624,6 +626,27 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         console hint), never ASM VRAM."""
         cur_kind = derive_scene_kind(rt.cpu.mem, rt.dos)
         if cur_kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
+            # Long gap with no 6772 commit (e.g. the player-death fall: a sub-loop that animates the
+            # player via the object system but never reaches 6772) would FREEZE the viewer on the last
+            # capture. When the VM is idling in the per-frame governor spin (1C6F-1C7E) the displayed
+            # frame IS committed + render-consistent (proven render_frame Δ=0 there), so render LIVE
+            # instead of freezing. Gated on staleness so normal gameplay (gaps << a frame) always uses
+            # the clean 6772 capture; the curtains idle in 3054/30C6 (handled by their own hooks), not here.
+            ip = rt.cpu.s.ip
+            if (rt.cpu.instruction_count - last_capture_ic[0] > 40000
+                    and (rt.cpu.s.cs & 0xFFFF) == 0x1030 and 0x1C6F <= ip <= 0x1C7E):
+                try:
+                    disp = rt.program.memory.ega_display_start
+                    planes, page, k = render_visual_planes(rt.cpu.mem, rt.dos,
+                                                           game_root=args.game_root, display_page=disp)
+                    if particle_frame[0] is not None:
+                        pf = particle_frame[0]
+                        draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
+                                       page, pf.cos, pf.sin)
+                    faithful_info[0] = f"faithful[{k.name}]@spin(live)"
+                    return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
+                except Exception:
+                    pass
             cap = boundary_capture[0]
             if cap is not None and cap[2] in ("GAMEPLAY", "IRIS"):
                 rgb, page, kindname, d = cap
