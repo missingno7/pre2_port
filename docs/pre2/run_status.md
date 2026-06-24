@@ -1,5 +1,35 @@
 # Prehistorik 2 run status
 
+## ★ COVERAGE AUDIT (2026-06-25) — FaithfulVisual vs hybrid live-replacement
+
+Two SEPARATE axes (a FaithfulVisual shadow update is NOT a hybrid live replacement):
+
+**FaithfulVisual (composition) — every game screen has a recovered faithful path; NO unrecovered SCENE leaf
+remains.** Composed from recovered leaves (never the VM VRAM): gameplay frame, iris/fade/curtain, HUD,
+particles, foreground tiles, fireflies, game-over, tally, OLDIES, 13h images, CARTE/map, mode-select menu.
+Remaining gaps are transient/by-design only: (a) a brief magenta gap placeholder on cleared/black transition
+frames or a mid-scene attach (no capture/seed yet) — on a true cold boot the capture hooks fire as each scene
+draws, so it does not persist; (b) by-design loud gaps: an unidentified 13h image, a snapshot attached
+mid-scene, DOS text mode. (Diagnosed via `--video faithful` cold-boot + demo replay; the demo's early
+oldies/black gaps are a mid-attract snapshot artifact, not a live regression. `PRE2_GAP_DUMP=1` saves the VM
+screen at each gap; the gap print now carries CS:IP/mode/scene-signal context.)
+
+**Hybrid live replacements — 25 recovered leaves run in place of the ASM** (sqz; sprite decode/blit;
+object_render 26FA; frame tile-row/grid/scroll/panel; anim_advance; camera_shake; iris; palette_fade;
+scroll_blit/scroll_shift/draw_string; gameover_scroll; tally_panel; oldies_glyph; firefly_sim; **particles
+(4B8E)**; **foreground tiles (3732)**; audio mix/tracker). Particles + foreground were promoted from
+faithful-capture-only to real ASM replacements 2026-06-25 (byte-exact whole-state: draw + the per-slot Y
+writeback/kill for particles; the EGA register exit state replicated; verify_particles_hook.py /
+verify_foreground_tiles_hook.py + verify-mode coverage). **Recovered+verified but intentionally NOT
+live-replaced** (documented, not gaps): vfade (30C6) — a BLOCKING multi-frame fade loop with internal vsync
+waits; live-replacing it gains nothing (trivial zero-writes, correct in the VM) and risks the fade timing, so
+it stays faithful-capture-only at 3111; HUD draw_hud (45B8) — verify-only checkpoint (incremental + dual-page
++ caches → low gain); present_pan_flip/pel (9613/9654) — the side effect is VM-PORT-EMULATED (CRTC/attr-ctrl
+OUTs), the recovered fn is the offline oracle; menu fill (9718) — one-shot copy. **ASM-only, not recovered (the state-ownership phase):** the object-system PRODUCER/dispatch (5C40) +
+map marker draw primitives (8900/8980/8600/83C0); the scene/attract + menu (991F) state machines; input /
+physics / collision / AI; the VGA retrace busy-waits (9900/990D/44CD — load-bearing pacing, see the busy-wait
+note, intentionally not replaced).
+
 ## ★ CURRENT STATUS (2026-06-24) — authoritative; everything under the ARCHIVE divider is historical
 
 **Phase:** hybrid recovered-source runtime + renderer recovery complete for gameplay/scenes;
@@ -15,9 +45,13 @@
 - **Scenes — grounded hook-first:** game-over (`9C87`), tally (`51A3`), OLDIES (`0C3E`), menu/map scroll
   (`scroll_blit` / `scroll_shift`), text (`draw_string`), and the title/intro 13h image (recovered +
   faithful path wired).
-- **Remaining faithful-renderer gaps:** the two 0Dh scrolling-scene **compositions** (mode-select menu,
-  map/carte) — **blocked on a history-dependent buffer** (recover the initial full-page-fill producer + a
-  persistent-page model; do NOT rebuild from scratch). See `renderer_bug_table.md` #3/#5.
+- **Map/CARTE scroll-in — DONE (2026-06-25):** `carte.build_carte_page` (carte enters black + the page is a
+  pure fn of scroll_x; byte-exact 8..639); FaithfulVisual composes it live, pixel-exact vs the VM screen.
+- **Mode-select MENU — DONE (2026-06-25):** `menu_scene.MenuScenePage` — a STATEFUL persistent page (initial
+  2-plane bg fill from `[0x2875]` + per-frame `scroll_shift_frame` self-copy + `draw_string` text), owned by
+  the recovered controller and driven by the runtime's leaf-call events; FaithfulVisual consumes it. Byte-exact
+  vs the VM page (300-frame evolution) + pixel-exact vs the screen (120 frames). **No faithful-visual scene
+  gaps remain.**
 - **Still ASM — the next phase (state ownership):** gameplay UPDATE — movement / physics / collision / AI
   and the object-list state machine that drives the recovered renderer.
 

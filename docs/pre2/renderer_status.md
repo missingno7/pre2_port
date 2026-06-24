@@ -18,10 +18,12 @@ Companion to `renderer_island.md` (the map/border) and `renderer_goal.md` (the p
 >   grounded hook-first:** game-over (9C87), tally (51A3), OLDIES glyph (0C3E) are **live-grounded** +
 >   composed by FaithfulVisual; the **title/intro 13h IMAGE is RESOLVED** (codec = `unpack_sqz`,
 >   `render_title_image` Δ=0, 13h faithful path wired — the old "source unidentified" gap was stale).
->   The ONLY remaining faithful-visual gaps are the two **0Dh scrolling-scene COMPOSITIONS — CARTE/map and
->   mode-select menu** — taxonomy **#5 blocked on a history-dependent buffer** (a stateful circular ring;
->   from-scratch rebuilds are WRONG — carte ≈37%, menu ≈11%). The grounded next step is the recovered
->   **initial full-page-fill producer** (a gap) + a persistent-page model, NOT a from-scratch compositor.
+>   The **CARTE/map scroll-in** (`carte.build_carte_page`, a pure fn of scroll_x) and the **mode-select MENU**
+>   (`menu_scene.MenuScenePage`, a stateful persistent page: initial 2-plane fill from `[0x2875]` + per-frame
+>   `scroll_shift_frame` + `draw_string`, owned by the recovered controller, driven by the runtime's leaf
+>   events, consumed by FaithfulVisual) are BOTH RESOLVED (2026-06-25) — live + pixel-exact vs the VM screen.
+>   The old "carte ≈37% / menu ≈11% from-scratch" numbers were the wrong (stateless) models. **No
+>   faithful-visual scene gaps remain.**
 >   Everything else is deferred cleanup (palette-fade ownership, `GameFrameSnapshot`→`GameVisualState` Phase C).
 >   See `AGENTS.md` (north star + status taxonomy + collapse rule).
 
@@ -73,10 +75,10 @@ on every witness (140330 fireflies; 110346 moving = foreground tiles + fireflies
 
 **NON-GAMEPLAY SCENES — mostly grounded (hook-first).** Done + live-grounded + composed by FaithfulVisual:
 game-over (9C87), tally (51A3), OLDIES (0C3E), title/intro 13h IMAGE (`render_title_image`, faithful path
-wired). **The ONLY remaining faithful-visual gaps are the two 0Dh scrolling COMPOSITIONS — mode-select menu
-and map/carte** — taxonomy **#5 blocked on a history-dependent buffer** (stateful circular ring; the grounded
-next step is the recovered initial-fill producer + a persistent-page model, NOT a from-scratch rebuild). See
-bug-table #3/#5 and `faithful_visual_layer.md`.
+wired), map/CARTE scroll-in (`carte.build_carte_page` — pure fn of scroll_x), and the mode-select MENU
+(`menu_scene.MenuScenePage` — a stateful persistent page owned by the recovered controller, driven by the
+runtime's `draw_string`/`scroll_shift_frame` events). Both live + pixel-exact vs the VM screen. **No
+faithful-visual scene gaps remain.** See bug-table #3 and `faithful_visual_layer.md`.
 
 ### LIVE FAITHFUL PATH (2026-06-23) — promoted from offline/test to a live authoritative renderer
 

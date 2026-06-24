@@ -27,29 +27,54 @@
 > (faithful-first) approach. Hook-first reframe: ground the runtime PRODUCERS (scroll_blit / scroll_shift /
 > present) live and have FaithfulVisual consume them.
 >
-> CARTE status (corrected 2026-06-24 after a feasibility check): its RENDER LEAVES are grounded —
-> `scroll_blit` (965A) is live + `present_pan_flip` (9613) is recovered+verified; the heavy carte ASM is
-> JOYSTICK input (game-port 0x201 timing loop, 0D00-0F80) + controller/pacing (4500/1C65), NOT rendering;
-> no object/text producers fire. BUT the FaithfulVisual COMPOSITION is BLOCKED, same class as the menu: the
-> carte bg is a STATEFUL circular ring buffer (an initial full-page fill at carte load + per-frame
-> `scroll_blit` refills), so a from-scratch leaf-replay reproduces only ~37% of the page (diff 20260/32000).
-> A from-scratch carte compositor would be INVENTING — do not. The correct (evidence-based) path: (a) trace
-> + recover the carte's INITIAL FULL-PAGE FILL producer (runs once at carte load, like game-over's 9B66 —
-> currently UN-grounded, missed by the mid-scroll trace); (b) FaithfulVisual maintains a PERSISTENT page
-> seeded by that fill and updated each frame by `scroll_blit_column` (the real stateful model, matching the
-> game). The MENU then = the same persistent-page model + `scroll_shift`. Both stay BLOCKED on this
-> stateful-page seam until it is built; do not guess a from-scratch rebuild.
+> CARTE status (RESOLVED 2026-06-25): its RENDER LEAVES are grounded — `scroll_blit` (965A) is live +
+> `present_pan_flip` (9613) is recovered+verified; the heavy carte ASM is JOYSTICK input (game-port 0x201
+> timing loop, 0D00-0F80) + controller/pacing (4500/1C65), NOT rendering; no object/text producers fire.
+> The FaithfulVisual COMPOSITION is now DONE: ground truth (driving snapshot_pre2_20260624_210538 into the
+> carte) showed there is NO separate initial full-page-fill producer — the carte enters on a CLEARED (black)
+> 0x2000 page (0 nonzero in all 4 planes at the first scroll iteration, scroll_x=8) and scrolls in from
+> black. The decisive finding: the page is a PURE, STATELESS function of `scroll_x` — `page(scroll_x) =
+> black ring + scroll_blit_column(asset[0x2875], k) for k in [8, scroll_x)` — proven byte-exact vs the VM
+> page across the WHOLE scroll (8..639, incl. ring wrap past 320px). So the earlier ~37% from-scratch number
+> was the WRONG model (it lacked the black seed + progressive blit replay), not real history-dependence.
+> Recovered as `pre2.recovered.carte.build_carte_page` (test_carte.py); FaithfulVisual consumes it live
+> (play.py: capture at 965A -> build_carte_page -> deplanarize with the live CRTC pan; pixel-exact vs the VM
+> screen). The MENU stays BLOCKED — it self-copies VRAM via `scroll_shift_frame` (9804), a genuinely
+> stateful A000->A000 move build_carte_page does not model (the carte path is gated OFF when 9804 fires).
 
 > **★ STATUS 2026-06-24 (reconciled).** Gameplay + transitions (iris, fade, curtain) + HUD: grounded.
 > Non-gameplay scenes grounded hook-first since: **game-over (9C87), tally (51A3), OLDIES (0C3E) are
 > live-grounded** + composed by FaithfulVisual; the **title/intro 13h IMAGE is RESOLVED** (codec =
 > `unpack_sqz`; `render_title_image` Δ=0; 13h faithful path wired — the old "source unidentified" claim was
 > stale). `render_visual` never falls back to ASM VRAM (an unrecovered scene = a LOUD `FaithfulVisualGap`).
-> The ONLY remaining faithful-visual gaps are the two **0Dh scrolling-scene COMPOSITIONS — mode-select menu
-> and map/carte** — taxonomy **#5 blocked on a history-dependent buffer** (stateful circular ring). Render
-> leaves are grounded; the grounded next step is the recovered **initial full-page-fill producer** (a #4
-> gap) + a persistent-page model — NOT a from-scratch rebuild (carte ≈37%, menu ≈11%; see #3/#5 in
-> `renderer_bug_table.md`). Do NOT guess a second theory.
+> The map/CARTE scroll-in is RESOLVED (`build_carte_page`, a pure fn of scroll_x; live + pixel-exact). The
+> mode-select MENU is now ALSO RESOLVED (2026-06-25): it is a STATEFUL persistent page (NOT a pure fn) —
+> recovered as `pre2.recovered.menu_scene.MenuScenePage`, which OWNS the evolving 4-plane page (seed planes
+> 0,1 from the bg asset `[0x2875]` at the 9718 fill; planes 2,3 black) and applies the already-recovered
+> leaves the controller runs each frame (`draw_string` text stamps + `scroll_shift_frame` A000->A000 pans).
+> Driven by the runtime's leaf-call events; FaithfulVisual is a pure CONSUMER. Proven byte-exact vs the VM
+> page (300-frame evolution + the seed) and pixel-exact vs the VM screen (120 frames). The old "≈11%
+> from-scratch" was the wrong (stateless) model. **No faithful-visual scene gaps remain** (a mid-menu attach
+> with no prior seed still fails loud — there is no VM-framebuffer fallback).
+
+### Mode-select menu — hybrid-integration audit (2026-06-25)
+
+A FaithfulVisual shadow update is NOT a hybrid live replacement. The recovered menu pieces split as follows
+(verified against a plain `native_replacements=True` runtime — the live replacements predate the menu work
+and are independent of `--video faithful`):
+
+| Component | ASM addr | Current state | Desired state | Notes |
+|---|---|---|---|---|
+| `draw_string` (text stamp) | 9886 | **live-replaced** (checkpoints/text.py: skips ASM, writes planes 2\|3 + pen, near-ret) | live-replaced | unchanged; faithful path CHAINS it + mirrors inputs into MenuScenePage |
+| `scroll_shift_frame` (pan self-copy) | 9804 | **live-replaced** (checkpoints/present.py: skips ASM, writes 4 planes, ip→9877) | live-replaced | unchanged; faithful path chains it (carte_shift_mark) + mirrors into MenuScenePage |
+| `scroll_blit_column` (carte/menu bg col) | 965A | **live-replaced** (checkpoints/present.py) | live-replaced | menu loop does not call it; carte does |
+| initial fill / seed | 9718 (hook 9725) | **ASM-only**; 9725 hook is a faithful-shadow PASSTHROUGH that only seeds MenuScenePage | ASM-only (not worth replacing) | one-shot `rep movsw` (2 planes); VM emulates it correctly, no hot loop → no replacement value |
+| `present_pan_flip` + pel-pan | 9613 / 9654 | **ASM-only (VM port-emulated)**: the `out` to CRTC 0x3D4 (display-start) + attr-ctrl 0x3C0 (pel) are emulated by the VM → `ega_(pan_)display_start`/`ega_pel_pan` | ASM-only (wiring is redundant) | recovered `present_pan_flip`/`pixel_pan` are the VERIFIED offline oracle; the live side effect already exists via port emulation |
+| `MenuScenePage` | — (1030:96D5) | **recovered faithful STATE** consumed by FaithfulVisual | stays recovered state | by design: not an ASM leaf; a mid-menu attach with no seed fails loud |
+
+So every menu rendering side-effect leaf that is worth replacing is ALREADY a real hybrid replacement; nothing
+exists only as a faithful-only shadow that could safely replace its ASM leaf. The faithful menu hooks are
+honest observers layered on top of the live replacements (seed) / chaining them (text, shift).
 
 The gameplay frame collapsed into a meaningful seam: `RendererState → render_frame(...)`.
 The startup / title / menu / map / loading / tally screens converge to the **same kind of target** —

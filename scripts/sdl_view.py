@@ -443,14 +443,18 @@ def render_planar_rgb(mem: bytes, display_start: int = 0,
 
 
 def render_planar_rgb_from_planes(planes, display_start: int = 0,
-                                  palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
-    """Decode four explicit 64 KiB EGA plane buffers (the recovered ``render_frame`` output) to RGB.
+                                  palette: list[tuple[int, int, int]] | None = None,
+                                  pel_pan: int = 0, active_width: int = WIDTH,
+                                  wrap: int = 0xFFFF) -> np.ndarray:
+    """Decode four explicit EGA plane buffers (the recovered renderer output) to RGB.
 
     The live-FAITHFUL viewer path: instead of reading the ASM-populated shadow aperture, this
     deplanarizes the planes the recovered renderer produced from a clean framebuffer. Gameplay fills
-    the plane past 0x2000 so the full 0x10000 scanline wrap applies (no menu single-page wrap)."""
+    the plane past 0x2000 so the full 0x10000 scanline wrap applies (default ``wrap``). The recovered
+    CARTE scroll-in passes a ``0x2000`` circular page (``wrap=0x1FFF``) with the fine ``pel_pan`` and the
+    narrowed ``active_width`` (carte = 312) — matching the live CRTC present."""
     parr = [np.frombuffer(bytes(p), dtype=np.uint8) for p in planes]
-    return _planar_to_rgb(lambda p: parr[p], display_start, palette, 0xFFFF)
+    return _planar_to_rgb(lambda p: parr[p], display_start, palette, wrap, pel_pan, active_width)
 
 
 def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: int = 0,

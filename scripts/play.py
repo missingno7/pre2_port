@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import os
 from pathlib import Path
 import sys
 
@@ -331,7 +332,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.tally_panel import read_tally_panel
     from pre2.bridge.image_scene import identify_image, render_image_scene
     from pre2.bridge.scene_state import derive_scene_kind
+    from pre2.bridge import present as _present_bridge
+    from pre2.bridge import text as _text_bridge
     from pre2.recovered.gameover_background import render_gameover_background
+    from pre2.recovered.carte import build_carte_page
+    from pre2.recovered.menu_scene import MenuScenePage
     from pre2.recovered.scene_compositor import RecoveredBackground
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
@@ -509,6 +514,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     scene_capture = [None]     # (rgb, page, ic, label) of the last complete recovered SCENE frame (at the flip)
     oldies_capture = [None]    # (planes, page) of the OLDIES easter-egg scene, captured at the 2417 draw
                                #   (static screen -> stored as planes, rendered with the LIVE palette/fade)
+    carte_capture = [None]     # (asset_bytes, scroll_x, ic) of the CARTE/map scroll-in, captured at scroll_blit
+                               #   (965A): the page is a pure fn of scroll_x -> faithful build_carte_page
+    scroll_shift_ic = [-1 << 30]  # ic when scroll_shift (9804, the menu A000->A000 self-copy) last fired;
+                               #   if recent, build_carte_page is invalid (stateful menu) -> carte path off
+    menu_page = [None]         # the recovered MenuScenePage (stateful), seeded at the 9718 menu fill and
+                               #   evolved each frame by the live draw_string/scroll_shift leaf events
+    menu_active = [False, -1 << 30]  # [is the menu controller running, ic of the last menu event]
     current_13h_image = [None]  # (asset name, has_logo) of the mode-13h image on screen; set at 91C0/9090
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
@@ -832,6 +844,98 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rt.cpu.replacement_hooks[_IMG_LOGO] = _mark_13h_logo
         rt.cpu.hook_names[_IMG_LOGO] = "image13h_logo"
 
+        # CARTE / map scroll-in (the 1030:9600 controller). The page is a PURE function of scroll_x
+        # (black 0x2000 ring + scroll_blit_column replay — proven byte-exact), so we only need the asset
+        # + scroll_x: capture them at the scroll-blit block (965A, fires every scroll frame) and let the
+        # faithful path rebuild the page via build_carte_page. Chain the existing scroll_blit replacement.
+        _CARTE_BLIT = (0x1030, 0x965A)
+        _origblit = rt.cpu.replacement_hooks.get(_CARTE_BLIT)
+
+        def _mark_carte(c):
+            try:
+                sx, source = _present_bridge.read_scroll_inputs(c.mem)
+                carte_capture[0] = (source, sx, rt.cpu.instruction_count)
+            except Exception:
+                pass
+            return _origblit(c)
+
+        if _origblit is not None:
+            rt.cpu.replacement_hooks[_CARTE_BLIT] = _mark_carte
+            rt.cpu.hook_names[_CARTE_BLIT] = "carte_blit_mark"
+
+        # MODE-SELECT MENU (the 1030:96D5 controller). Unlike the carte it is a STATEFUL page: it self-
+        # copies VRAM via scroll_shift_frame (9804) and never blits fresh columns. The recovered
+        # MenuScenePage OWNS the evolving page (faithful-only recovered STATE, consumed by FaithfulVisual);
+        # these hooks DRIVE it from the runtime's leaf-call events. NOTE the integration split (no observer
+        # masquerades as a live replacement):
+        #   * seed @9725 = a faithful-shadow PASSTHROUGH (the ASM rep-movsw fill still runs; this only seeds
+        #     the recovered page). The fill is a one-shot copy -> not a live-replacement target.
+        #   * draw_string @9886 / scroll_shift @9804 are ALREADY live ASM replacements (checkpoints/text.py,
+        #     checkpoints/present.py — they skip the ASM and write VRAM). Here we only CHAIN those live
+        #     replacements (call _orig) and additionally mirror the same inputs into the recovered page.
+        # The scroll_shift fire also marks the carte path OFF (build_carte_page does not model the self-copy).
+        _MENU_SEED = (0x1030, 0x9725)       # right after the 9718 rep movsw bg fill, before the asset preprocess
+        _MENU_EXIT = (0x1030, 0x9885)       # the menu controller's ret
+
+        def _menu_seed(c):
+            try:
+                seg = c.mem.data[(0x1A0F << 4) + 0x2875] | (c.mem.data[(0x1A0F << 4) + 0x2876] << 8)
+                asset = bytes(c.mem.data[seg << 4:(seg << 4) + 0x4000])
+                mp = MenuScenePage()
+                mp.seed(asset)
+                menu_page[0] = mp
+                menu_active[0] = True
+                menu_active[1] = rt.cpu.instruction_count
+            except Exception:
+                menu_page[0] = None
+            interpret_current_instruction_without_hook(c)
+
+        def _menu_exit(c):
+            menu_active[0] = False
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_MENU_SEED] = _menu_seed
+        rt.cpu.hook_names[_MENU_SEED] = "menu_seed"
+        rt.cpu.replacement_hooks[_MENU_EXIT] = _menu_exit
+        rt.cpu.hook_names[_MENU_EXIT] = "menu_exit"
+
+        _CARTE_SHIFT = (0x1030, 0x9804)
+        _origshift = rt.cpu.replacement_hooks.get(_CARTE_SHIFT)
+
+        def _mark_scroll_shift(c):
+            scroll_shift_ic[0] = rt.cpu.instruction_count
+            if menu_active[0] and menu_page[0] is not None:
+                try:
+                    b199, sx, sy, psy, pd = _present_bridge.read_scroll_shift_inputs(c.mem)
+                    menu_page[0].scroll_shift(b199, sx, sy, psy, pd, wrap=c.s.bp)
+                    menu_active[1] = rt.cpu.instruction_count
+                except Exception:
+                    pass
+            return _origshift(c)
+
+        if _origshift is not None:
+            rt.cpu.replacement_hooks[_CARTE_SHIFT] = _mark_scroll_shift
+            rt.cpu.hook_names[_CARTE_SHIFT] = "carte_shift_mark"
+
+        # draw_string (9886): when the menu controller is running, stamp the same text into the owned page.
+        _MENU_TEXT = (0x1030, 0x9886)
+        _origtext = rt.cpu.replacement_hooks.get(_MENU_TEXT)
+
+        def _menu_text(c):
+            if menu_active[0] and menu_page[0] is not None:
+                try:
+                    ti = _text_bridge.read_text_inputs(c.mem, c.s.ds, c.s.bx)
+                    menu_page[0].stamp_text(ti.text, ti.font, ti.font_base, ti.pen, ti.advance,
+                                            ti.page_draw, ti.page_clear)
+                    menu_active[1] = rt.cpu.instruction_count
+                except Exception:
+                    pass
+            return _origtext(c)
+
+        if _origtext is not None:
+            rt.cpu.replacement_hooks[_MENU_TEXT] = _menu_text
+            rt.cpu.hook_names[_MENU_TEXT] = "menu_text_mark"
+
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
         ad-hoc live read — that describes the back buffer being built). Gameplay/iris frames come from the
@@ -892,6 +996,34 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         if scene_capture[0] is not None and rt.cpu.instruction_count - scene_capture[0][2] < 200000:
             faithful_info[0] = f"faithful[{scene_capture[0][3]}]@flip"
             return scene_capture[0][0]
+        # MODE-SELECT MENU (0Dh, panning). The recovered MenuScenePage owns the stateful page (seeded at the
+        # menu fill, evolved by the live draw_string/scroll_shift events); deplanarize it with the live CRTC
+        # pan. NEVER the VM framebuffer. If the menu is reached without a seed (e.g. a mid-menu attach) this
+        # branch is skipped and the scene falls through to the loud gap below (no fallback).
+        if (menu_active[0] and menu_page[0] is not None and rt.program.memory.ega_pan_active
+                and rt.cpu.instruction_count - menu_active[1] < 60000):
+            pel = rt.program.memory.ega_pan_pel
+            active_w = (rt.program.memory.ega_h_display_end + 1) * 8
+            faithful_info[0] = "faithful[MENU]"
+            last_gp_ic[0] = rt.cpu.instruction_count
+            return render_planar_rgb_from_planes(menu_page[0].planes, ds, rt.dos.vga_palette,
+                                                 pel, active_w, wrap=0x1FFF)
+        # CARTE / map scroll-in (0Dh, panning). The page is rebuilt faithfully from the captured asset +
+        # scroll_x (build_carte_page) — NEVER the VM framebuffer. Gated on a FRESH scroll-blit capture (it
+        # fires every carte frame) AND no recent scroll_shift (that 9804 self-copy = the stateful menu,
+        # which build_carte_page does not model -> stays a loud gap). Deplanarize with the live CRTC pan
+        # (display_start ds + pel) over the 0x2000 circular page at the carte's 312px active width.
+        if (carte_capture[0] is not None and rt.program.memory.ega_pan_active
+                and rt.cpu.instruction_count - carte_capture[0][2] < 60000
+                and rt.cpu.instruction_count - scroll_shift_ic[0] > 60000):
+            asset, sx, _ic = carte_capture[0]
+            planes = build_carte_page(asset, sx)
+            pel = rt.program.memory.ega_pan_pel
+            active_w = (rt.program.memory.ega_h_display_end + 1) * 8
+            faithful_info[0] = f"faithful[CARTE]@{sx}"
+            last_gp_ic[0] = rt.cpu.instruction_count
+            return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette,
+                                                 pel, active_w, wrap=0x1FFF)
         # SCENE / IMAGE. A brief blip to SCENE/IMAGE during a gameplay transition (e.g. the respawn frame
         # where the camera is momentarily at origin -> the camera heuristic reads SCENE, or a mid-load
         # frame) must NOT flash the diagnostic placeholder. Hold the last frame for a short grace period
@@ -906,10 +1038,29 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             planes, page = oldies_capture[0]
             faithful_info[0] = "faithful[OLDIES]"
             return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
-        # persistent unrecovered scene -> fail loud (no ASM VRAM fallback)
-        if gap_seen[0] != cur_kind:
-            gap_seen[0] = cur_kind
-            print(f"[faithful] {FaithfulVisualGap(cur_kind)}", flush=True)
+        # persistent unrecovered scene -> fail loud (no ASM VRAM fallback). Key the dedup on a context
+        # signature (not just the kind) so distinct unrecovered scenes/transitions each report once with
+        # the state that identifies them (CS:IP, mode, pan/seed signals).
+        m = rt.program.memory
+        sig = (cur_kind, rt.cpu.s.cs, rt.cpu.s.ip & 0xFF00, m.ega_pan_active,
+               bool(menu_page[0]), menu_active[0])
+        if gap_seen[0] != sig:
+            gap_seen[0] = sig
+            ctx = (f"CS:IP={rt.cpu.s.cs:04X}:{rt.cpu.s.ip:04X} mode={rt.dos.video_mode & 0xFF:02X}h "
+                   f"pan_active={m.ega_pan_active} disp_en={m.ega_display_enabled} "
+                   f"menu_active={menu_active[0]} menu_seeded={bool(menu_page[0])} "
+                   f"carte_fresh={carte_capture[0] is not None and rt.cpu.instruction_count - carte_capture[0][2] < 60000}")
+            print(f"[faithful] {FaithfulVisualGap(cur_kind)}\n            context: {ctx}", flush=True)
+            if os.environ.get("PRE2_GAP_DUMP"):
+                try:
+                    from PIL import Image as _Img
+                    vm = render_planar_rgb(mem_bytes, ds, rt.dos.vga_palette, 0,
+                                           (m.ega_h_display_end + 1) * 8)
+                    fn = f"artifacts/gap_{cur_kind.name}_{rt.cpu.s.ip:04x}_{rt.cpu.instruction_count}.png"
+                    _Img.fromarray(vm).save(fn)
+                    print(f"            [gap-dump] wrote {fn} (the VM screen at this gap)", flush=True)
+                except Exception as _e:
+                    print(f"            [gap-dump] failed: {_e}", flush=True)
         faithful_info[0] = f"FAITHFUL GAP: {cur_kind.name} (see console)"
         return np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
 

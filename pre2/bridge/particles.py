@@ -38,6 +38,9 @@ class ParticleFrame:
     sin: bytes              # 256-byte signed sin slice ([0x7090])
 
 
+_PAGE_DRAW = 0x2DD8  # [0x2DD8] the EGA page 4B8E plots into (add di,[0x2DD8] at 4C12)
+
+
 def read_particles(mem) -> ParticleFrame:
     """Snapshot the active particle slots + camera/bias + the sin·cos tables. Call at 1030:4B8E entry
     (before the engine advances/kills the slots)."""
@@ -57,3 +60,32 @@ def read_particles(mem) -> ParticleFrame:
         cos=bytes(mem.data[base + COS_TABLE:base + COS_TABLE + 256]),
         sin=bytes(mem.data[base + SIN_TABLE:base + SIN_TABLE + 256]),
     )
+
+
+def read_particle_consume_inputs(mem):
+    """Inputs for the live ``consume_particles`` replacement: the active slots WITH their slot index
+    (needed for the writeback), the camera/bias/tables, and the draw page ``[0x2DD8]``. Returns
+    ``(slots, cam_col, cam_row, y_bias, page, cos, sin)`` where ``slots = [(index, x, y, angle, speed)]``."""
+    slots = []
+    for k in range(PARTICLE_COUNT):
+        b = PARTICLE_BASE + k * PARTICLE_STRIDE
+        x = _rw(mem, b)
+        if x == 0xFFFF:
+            continue
+        slots.append((k, x, _rw(mem, b + 2), _rb(mem, b + 4), _rb(mem, b + 5)))
+    base = (_DS << 4)
+    return (slots, _rw(mem, _CAM_COL), _rw(mem, _CAM_ROW), _rb(mem, _YBIAS), _rw(mem, _PAGE_DRAW),
+            bytes(mem.data[base + COS_TABLE:base + COS_TABLE + 256]),
+            bytes(mem.data[base + SIN_TABLE:base + SIN_TABLE + 256]))
+
+
+def apply_particle_writeback(mem, writeback) -> None:
+    """Apply the per-slot writeback the ASM leaves: ``[slot+2]=ny`` (the advanced Y persists) and
+    ``[slot]=0xFFFF`` (the kill). ``writeback`` = ``[(index, ny)]`` from ``consume_particles``."""
+    base = (_DS << 4)
+    for index, ny in writeback:
+        b = base + PARTICLE_BASE + index * PARTICLE_STRIDE
+        mem.data[b + 2] = ny & 0xFF
+        mem.data[b + 3] = (ny >> 8) & 0xFF
+        mem.data[b] = 0xFF
+        mem.data[b + 1] = 0xFF

@@ -66,7 +66,7 @@ second renderer. Convergence is **bidirectional**:
 | **HUD draw** | **45B8** | — (verify-only; ASM draws) | **✓ NEW (`checkpoints/hud.py`)** | ✓ (`draw_hud`) |
 | panel-flip / **curtain** | 3054 | passthrough (vsync pacing) | ✓ (final copy) | covered by render_frame (sub-frame) |
 | draw_string | 9886 | ✓ skip | ✓ | ✓ (scene text consumer) |
-| menu/map scroll_blit / shift | 965A / 9804 | ✓ skip | ✓ | leaf grounded; scene COMPOSITION blocked (taxonomy #5, history-dependent ring) |
+| menu/map scroll_blit / shift | 965A / 9804 | ✓ skip | ✓ | leaves grounded; CARTE composition RESOLVED (build_carte_page) + MENU composition RESOLVED (menu_scene.MenuScenePage, stateful persistent page) |
 | game-over bg scroll | 9C87 | ✓ skip (2026-06-24) | ✓ | ✓ (scene_capture) |
 | tally panel | 51A3 | ✓ skip (2026-06-24) | ✓ | ✓ (scene_capture) |
 | OLDIES glyph | 0C3E | ✓ skip (2026-06-24) | force-call probe (cold-boot; not in verify demos) | ✓ (build_oldies_scene) |
@@ -93,15 +93,19 @@ second renderer. Convergence is **bidirectional**:
 - **OLDIES** (0C3E glyph → blit_char; year via 0BEF/0C31 also route through 0C3E) — **#1 live-grounded**
   (verified by force-call probe — cold-boot screen, not in verify demos); FaithfulVisual via build_oldies_scene.
 - **scroll_blit / scroll_shift / draw_string / object_render / iris / palette fade** — **#1 live-grounded**.
-- **CARTE / map COMPOSITION** — render leaves grounded (scroll_blit live, present_pan_flip recovered;
-  the heavy carte ASM is joystick input + controller, not rendering), BUT the FaithfulVisual scene is
-  **#5 BLOCKED — history-dependent buffer**: the bg is a stateful circular ring (initial full-page fill at
-  load + per-frame scroll_blit refills); a from-scratch leaf-replay reaches only ~37% (diff 20260/32000).
-  Needs the recovered **initial-fill producer** (currently a **#4 gap** — runs once at carte load, missed by
-  the mid-scroll trace) + a persistent-page model. Do NOT build a from-scratch carte compositor.
-- **mode-select menu COMPOSITION** — **#5 BLOCKED — history-dependent buffer**: the same ring + the
-  `scroll_shift_frame` vertical-bounce self-copy. Unblocks together with the carte's persistent-page seam.
-  (see `renderer_bug_table.md` #3). Do NOT guess a from-scratch rebuild.
+- **CARTE / map COMPOSITION** — **#1 RESOLVED (2026-06-25)**: ground truth showed the carte enters on a
+  CLEARED (black) page and scrolls in — there is NO separate initial-fill producer — and the page is a PURE,
+  STATELESS function of scroll_x: `carte.build_carte_page` = black 0x2000 ring + `scroll_blit_column` replay
+  over `[8, scroll_x)`, byte-exact vs the VM page across the whole scroll (8..639, incl. ring wrap). The old
+  "~37%" was the wrong model, not real history-dependence. FaithfulVisual composes it live (capture at 965A →
+  build_carte_page → deplanarize with the live CRTC pan), pixel-exact vs the VM screen. `test_carte.py`.
+- **mode-select menu COMPOSITION** — **#1 RESOLVED (2026-06-25)**: a STATEFUL persistent page (unlike the
+  carte's pure fn). Recovered as `menu_scene.MenuScenePage`, which OWNS the evolving 4-plane page (seed planes
+  0,1 from `[0x2875]` at the 9718 fill; planes 2,3 black) and applies the verified leaves the controller runs
+  each frame (`draw_string` text into planes 2|3 + `scroll_shift_frame` A000->A000 pan). Driven by the
+  runtime's leaf-call events (seed@9725, draw_string@9886, scroll_shift@9804); FaithfulVisual is a pure
+  CONSUMER. Byte-exact vs the VM page (300-frame evolution) + pixel-exact vs the screen (120 frames);
+  `test_menu_scene.py`, `verify_menu_scene.py`. A mid-menu attach with no prior seed fails loud (no fallback).
 - **title / intro 13h IMAGE** — the asset IS codec-decoded (PRESENT.SQZ via the already-recovered
   `unpack_sqz` LZW) and the 13h faithful path is wired (`render_image_scene`, byte-exact vs the displayed
   framebuffer). The remaining hook-first work is the **logo / composition producers** (91A4 bg copy, 9090

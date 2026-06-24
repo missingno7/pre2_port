@@ -106,10 +106,16 @@ def _maybe(grid: bytes, flag: bytes, cell: int):
              "blit the tile (37F7) as a color-0-keyed transparent tile: phase1 AND ~footprint, phase2 OR "
              "the tile color, per plane. Graphic at seg[0x003b]:(word[0x8167+tile*2]<<7), plane-major.",
              "VERIFIED", merge_target="render_frame")
-def render_foreground_tiles(planes: Sequence[bytearray], fg: ForegroundState) -> None:
-    """Apply the foreground pass onto ``planes`` (4 EGA planes) — recover 3721 + 37F7 together."""
+def render_foreground_tiles(planes: Sequence[bytearray], fg: ForegroundState) -> int:
+    """Apply the foreground pass onto ``planes`` (4 EGA planes) — recover 3721 + 37F7 together.
+
+    Returns the number of tiles blitted (the live replacement uses it to pick the EGA exit state: the
+    37F7 blit leaves the sequencer map-mask / read-map at plane 3, so only when a blit ran)."""
+    n = 0
     for tile, cell in select_foreground_cells(fg):
         _blit_tile(planes, tile, cell, fg)
+        n += 1
+    return n
 
 
 def _blit_tile(planes: Sequence[bytearray], tile: int, cell: int, fg: ForegroundState) -> None:

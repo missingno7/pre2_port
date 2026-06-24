@@ -11,8 +11,10 @@ Pure: no ``cpu``/``mem`` imports. The bridge derives the :class:`SceneKind` + th
 ``IRIS`` from recovered leaves; for ``IMAGE``/``SCENE`` it raises :class:`FaithfulVisualGap`. The viewer's
 faithful path (``scripts/play.py``) catches that and composes the RECOVERED non-gameplay scenes from their
 own recovered leaves — 13h images (``bridge.image_scene.render_image_scene``), game-over / tally / OLDIES
-(``scene_capture`` from ``build_*_scene``) — and surfaces the gap LOUDLY only for the still-unrecovered
-0Dh scrolling compositions (mode-select menu, map/carte; blocked on a history-dependent buffer). There is
+(``scene_capture`` from ``build_*_scene``), map/carte (``build_carte_page`` from the captured asset +
+scroll_x), and the mode-select menu (the stateful ``MenuScenePage``, seeded at the menu fill + evolved by
+the live ``draw_string``/``scroll_shift_frame`` events) — and surfaces the gap LOUDLY only for a 0Dh scene
+with no recovered leaf (or a menu reached with no prior seed). There is
 **no VM-framebuffer fallback** anywhere on the faithful path. (Folding the recovered scene paths up into
 ``render_visual`` itself is a convergence TODO.)
 """
@@ -38,9 +40,11 @@ class SceneKind(IntEnum):
 _GAP_HINT = {
     SceneKind.IMAGE: "13h IMAGE — composed by the viewer's faithful 13h path (bridge.image_scene."
                      "render_image_scene); render_visual itself only does GAMEPLAY/IRIS (fold-in is a TODO)",
-    SceneKind.SCENE: "0Dh SCENE — game-over/tally/OLDIES are composed via scene_capture; the mode-select "
-                     "menu + map/carte COMPOSITIONS are BLOCKED on a history-dependent buffer (recover the "
-                     "initial full-page-fill producer + a persistent-page model; do NOT rebuild from scratch)",
+    SceneKind.SCENE: "0Dh SCENE — game-over/tally/OLDIES are composed via scene_capture; the map/CARTE "
+                     "scroll-in via build_carte_page (a pure fn of scroll_x); the mode-select MENU via the "
+                     "stateful MenuScenePage (seeded at the 9718 fill, evolved by the live draw_string/"
+                     "scroll_shift events). Reaching this gap now means a 0Dh scene with no recovered leaf "
+                     "(or a menu with no prior seed, e.g. a mid-menu attach).",
 }
 
 
