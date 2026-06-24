@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dos_re.hooks import registry
 
-from . import animation, audio, blit, camera_shake, fireflies, frame, gameover_scroll, hud, object_render, palette, present, sprite_classify, sprite_decode, sqz, tally_panel, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
+from . import animation, audio, blit, camera_shake, fireflies, frame, gameover_scroll, hud, object_render, oldies_text, palette, present, sprite_classify, sprite_decode, sqz, tally_panel, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
 from .common import HookTraceStats, HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
 from .sprite_decode import sprite_decode_local, sprite_decode_shared  # noqa: F401 — re-exported
 from .sqz import sqz_decompress  # noqa: F401 — re-exported
