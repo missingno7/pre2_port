@@ -917,7 +917,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 # Interim: PRE2's intro/menu currently runs in 16-colour planar mode
                 # 0Dh in the VM (the VGA mode-13h path is not yet taken).  Render it so
                 # the screens are visible/navigable; colours come from the live DAC.
-                rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette)
+                rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette, rt.program.memory.ega_pel_pan)
         else:
             screen.fill((0, 0, 0))
             pygame.display.flip()

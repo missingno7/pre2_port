@@ -83,6 +83,10 @@ class Memory:
         # live renderer must display the hardware-selected start offset, not
         # always shadow offset 0000h.
         self.ega_display_start = 0
+        # Attribute-controller fine horizontal pan (pel-panning register 0x13, low 4 bits):
+        # the sub-byte (0-7 px) horizontal scroll the CRTC start address cannot express. The
+        # present applies it on top of ega_display_start so scrolling is smooth, not 8px-quantized.
+        self.ega_pel_pan = 0
         # Optional write-watch callbacks used by runtime-code patch tracing.
         # The hot path only pays for one empty-list check per write.  Callbacks
         # receive (physical_20bit_addr, old_bytes, new_bytes).

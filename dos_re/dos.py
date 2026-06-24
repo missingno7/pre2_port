@@ -69,6 +69,12 @@ class DOSMachine:
     _gc_index: int = 0
     _gc_regs: dict[int, int] = field(default_factory=dict)
     _crtc_regs: dict[int, int] = field(default_factory=dict)
+    # Attribute controller (port 03C0h): a single port with an index/data flip-flop
+    # reset to index mode by reading the input-status register (03DAh/03BAh). PRE2 uses
+    # only the pel-panning register (0x13) for sub-byte horizontal scroll.
+    _attr_index: int = 0
+    _attr_flipflop: bool = False
+    _attr_regs: dict[int, int] = field(default_factory=dict)
     _misc_output: int = 0xA3  # VGA Misc Output Register (03C2h write / 03CCh read)
     _pit_channel2_access: int = 3
     _pit_channel2_latch: int = 0
@@ -334,6 +340,9 @@ class DOSMachine:
         return 70.0
 
     def _vga_status(self, retrace_bit: int) -> int:
+        # Reading the input-status register resets the attribute-controller flip-flop to
+        # index mode (the real hardware behaviour PRE2 relies on before writing the pel pan).
+        self._attr_flipflop = False
         # VGA input status register 1. The named bit reflects vertical retrace.
         # With a time source it advances at the display refresh rate (so the
         # program's own vsync waits run at real speed); otherwise it toggles per
@@ -585,6 +594,19 @@ class DOSMachine:
         if port == 0x3C2:
             # Miscellaneous Output Register (write side; read back at 03CCh).
             self._misc_output = value & 0xFF
+        elif port == 0x3C0:
+            # Attribute controller: index/data flip-flop on one port (reset to index mode
+            # by reading 03DAh). The only register PRE2 uses for scrolling is the pel-panning
+            # register (0x13) — the sub-byte (0-7 px) fine horizontal pan the CRTC start can't
+            # express. Bit 5 of the index byte is the palette-address-source flag (ignored here).
+            if not self._attr_flipflop:
+                self._attr_index = value & 0x1F
+                self._attr_flipflop = True
+            else:
+                self._attr_regs[self._attr_index] = value & 0xFF
+                if self._attr_index == 0x13:
+                    mem.ega_pel_pan = value & 0x0F
+                self._attr_flipflop = False
         elif port == 0x3C4:
             if planar_allowed:
                 mem.ega_planar = True
@@ -899,6 +921,10 @@ class DOSMachine:
             # shifted the level (the game relies on the BIOS reset and does not
             # re-write the start-address low byte for the play screen).
             cpu.mem.ega_display_start = 0
+            # A mode-set also clears the attribute-controller pel-panning register, so a
+            # stale fine-pan from a prior scrolling screen does not offset the new screen.
+            cpu.mem.ega_pel_pan = 0
+            self._attr_flipflop = False
             # Maintain the BIOS data area CRTC base port at 0040:0063 the way a
             # real BIOS mode-set does (color 3D4h / mono 3B4h).  Programs read it to
             # find the status port for retrace waits (e.g. via es=0, offset 0463h ==

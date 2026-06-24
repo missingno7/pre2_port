@@ -416,7 +416,8 @@ def render_vga_rgb(mem: bytes, palette: list[tuple[int, int, int]] | None = None
 
 
 def render_planar_rgb(mem: bytes, display_start: int = 0,
-                      palette: list[tuple[int, int, int]] | None = None) -> np.ndarray:
+                      palette: list[tuple[int, int, int]] | None = None,
+                      pel_pan: int = 0) -> np.ndarray:
     """Decode a 320x200 16-colour planar screen (mode 0Dh) to RGB.
 
     The VM stores the four bit-planes in its shadow aperture at ``EGA_APERTURE``.
@@ -438,7 +439,7 @@ def render_planar_rgb(mem: bytes, display_start: int = 0,
     wrap = 0x1FFF if (start < 0x2000 and not plane0[0x2000:].any()) else 0xFFFF
     return _planar_to_rgb(lambda p: arr[EGA_APERTURE + p * EGA_PLANE_STRIDE:
                                         EGA_APERTURE + (p + 1) * EGA_PLANE_STRIDE],
-                          display_start, palette, wrap)
+                          display_start, palette, wrap, pel_pan)
 
 
 def render_planar_rgb_from_planes(planes, display_start: int = 0,
@@ -452,16 +453,25 @@ def render_planar_rgb_from_planes(planes, display_start: int = 0,
     return _planar_to_rgb(lambda p: parr[p], display_start, palette, 0xFFFF)
 
 
-def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int) -> np.ndarray:
+def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: int = 0) -> np.ndarray:
     """Shared core: assemble the 4-bit colour index from four bit-planes (MSB-first) through the
-    DAC. ``get_plane(p)`` returns plane p as a uint8 array indexable up to ``wrap``."""
+    DAC. ``get_plane(p)`` returns plane p as a uint8 array indexable up to ``wrap``.
+
+    ``pel_pan`` (0-7) is the attribute-controller fine horizontal pan: the display starts ``pel_pan``
+    pixels into the first byte, so scrolling moves one pixel at a time instead of snapping to 8px
+    byte-column steps. When panning we fetch one extra byte-column per row and crop the 320px window."""
     pal = np.array(palette if palette is not None else DEFAULT_VGA_PALETTE, dtype=np.uint8)
     start = display_start & 0xFFFF
+    pel = pel_pan & 7
+    ncols = _PLANAR_ROW_BYTES + (1 if pel else 0)
     rowbase = (start + np.arange(HEIGHT) * _PLANAR_ROW_BYTES) & wrap
-    off = (rowbase[:, None] + np.arange(_PLANAR_ROW_BYTES)[None, :]) & wrap     # (200,40)
-    color = np.zeros((HEIGHT, _PLANAR_ROW_BYTES, 8), dtype=np.uint8)
+    off = (rowbase[:, None] + np.arange(ncols)[None, :]) & wrap                 # (200, ncols)
+    color = np.zeros((HEIGHT, ncols, 8), dtype=np.uint8)
     for plane in range(4):
-        plane_bytes = get_plane(plane)[off]                                    # (200,40)
-        bits = np.unpackbits(plane_bytes[..., None], axis=2)                    # (200,40,8) MSB-first
+        plane_bytes = get_plane(plane)[off]                                    # (200, ncols)
+        bits = np.unpackbits(plane_bytes[..., None], axis=2)                    # (200, ncols, 8) MSB-first
         color |= bits << plane
-    return pal[color.reshape(HEIGHT, WIDTH)]
+    idx = color.reshape(HEIGHT, ncols * 8)
+    if pel:
+        idx = idx[:, pel:pel + WIDTH]
+    return pal[idx]
