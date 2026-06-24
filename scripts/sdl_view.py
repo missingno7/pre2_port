@@ -417,7 +417,7 @@ def render_vga_rgb(mem: bytes, palette: list[tuple[int, int, int]] | None = None
 
 def render_planar_rgb(mem: bytes, display_start: int = 0,
                       palette: list[tuple[int, int, int]] | None = None,
-                      pel_pan: int = 0) -> np.ndarray:
+                      pel_pan: int = 0, active_width: int = WIDTH) -> np.ndarray:
     """Decode a 320x200 16-colour planar screen (mode 0Dh) to RGB.
 
     The VM stores the four bit-planes in its shadow aperture at ``EGA_APERTURE``.
@@ -439,7 +439,7 @@ def render_planar_rgb(mem: bytes, display_start: int = 0,
     wrap = 0x1FFF if (start < 0x2000 and not plane0[0x2000:].any()) else 0xFFFF
     return _planar_to_rgb(lambda p: arr[EGA_APERTURE + p * EGA_PLANE_STRIDE:
                                         EGA_APERTURE + (p + 1) * EGA_PLANE_STRIDE],
-                          display_start, palette, wrap, pel_pan)
+                          display_start, palette, wrap, pel_pan, active_width)
 
 
 def render_planar_rgb_from_planes(planes, display_start: int = 0,
@@ -453,19 +453,24 @@ def render_planar_rgb_from_planes(planes, display_start: int = 0,
     return _planar_to_rgb(lambda p: parr[p], display_start, palette, 0xFFFF)
 
 
-def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: int = 0) -> np.ndarray:
+def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: int = 0,
+                   active_width: int = WIDTH) -> np.ndarray:
     """Shared core: assemble the 4-bit colour index from four bit-planes (MSB-first) through the
     DAC. ``get_plane(p)`` returns plane p as a uint8 array indexable up to ``wrap``.
 
     ``pel_pan`` (0-7) is the attribute-controller fine horizontal pan: the display starts ``pel_pan``
     pixels into the first byte, so scrolling moves one pixel at a time instead of snapping to 8px
-    byte-column steps. When panning we fetch one extra byte-column per row (the genuine next byte in the
-    scanout) and crop the 320px window — this reveals the column that is scrolling in, matching the
-    content that becomes fully visible one byte-step later."""
+    byte-column steps.
+
+    ``active_width`` is the CRTC Horizontal Display End width in pixels (normally 320). PRE2's carte
+    narrows it to 312 so the pel-pan's overflow byte falls in the 8px overscan/border (off the active
+    area) instead of wrapping the next scanline's left edge into view. We render exactly ``active_width``
+    panned pixels and pad the remainder of the 320px frame with the border colour (black)."""
     pal = np.array(palette if palette is not None else DEFAULT_VGA_PALETTE, dtype=np.uint8)
     start = display_start & 0xFFFF
     pel = pel_pan & 7
-    ncols = _PLANAR_ROW_BYTES + (1 if pel else 0)
+    aw = min(active_width, WIDTH)
+    ncols = (pel + aw + 7) // 8                                                # bytes the panned window spans
     rowbase = (start + np.arange(HEIGHT) * _PLANAR_ROW_BYTES) & wrap
     off = (rowbase[:, None] + np.arange(ncols)[None, :]) & wrap                # (200, ncols)
     color = np.zeros((HEIGHT, ncols, 8), dtype=np.uint8)
@@ -473,7 +478,10 @@ def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: i
         plane_bytes = get_plane(plane)[off]                                    # (200, ncols)
         bits = np.unpackbits(plane_bytes[..., None], axis=2)                    # (200, ncols, 8) MSB-first
         color |= bits << plane
-    idx = color.reshape(HEIGHT, ncols * 8)
-    if pel:
-        idx = idx[:, pel:pel + WIDTH]
+    win = color.reshape(HEIGHT, ncols * 8)[:, pel:pel + aw]                     # (200, aw) active pixels
+    if aw < WIDTH:                                                             # pad border (black) to 320
+        idx = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+        idx[:, :aw] = win
+    else:
+        idx = win
     return pal[idx]

@@ -87,6 +87,10 @@ class Memory:
         # the sub-byte (0-7 px) horizontal scroll the CRTC start address cannot express. The
         # present applies it on top of ega_display_start so scrolling is smooth, not 8px-quantized.
         self.ega_pel_pan = 0
+        # Active horizontal display width in characters-1 (CRTC Horizontal Display End, reg 0x01).
+        # Default 39 -> (39+1)*8 = 320px. PRE2's carte narrows it to 38 -> 312px so the pel-pan's
+        # overflow byte lands in the 8px border (off-screen) instead of wrapping into the active area.
+        self.ega_h_display_end = 39
         # A consistent (display_start, pel) pair latched together when the pel pan is written.
         # PRE2's scene present writes the CRTC start BEFORE its per-frame vsync wait but the pel pan
         # AFTER it, so reading the two live mixes adjacent frames (an 8px hitch at byte boundaries).

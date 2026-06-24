@@ -665,6 +665,10 @@ class DOSMachine:
             mem.ega_display_start = ((value << 8) | (mem.ega_display_start & 0x00FF)) & 0xFFFF
         elif index == 0x0D:
             mem.ega_display_start = ((mem.ega_display_start & 0xFF00) | value) & 0xFFFF
+        elif index == 0x01:
+            # Horizontal Display End: last active character index. Active width = (value+1)*8 px.
+            # PRE2's carte sets 38 (312px) so the pel-pan overflow stays in the border.
+            mem.ega_h_display_end = value
 
     def interrupt(self, cpu: CPU8086, num: int) -> None:
         if num == 0x20:
@@ -932,6 +936,7 @@ class DOSMachine:
             cpu.mem.ega_pel_pan = 0
             cpu.mem.ega_pan_active = False
             cpu.mem.ega_pan_pel = 0
+            cpu.mem.ega_h_display_end = 39   # BIOS graphics-mode default: 40 chars = 320px active
             self._attr_flipflop = False
             # Maintain the BIOS data area CRTC base port at 0040:0063 the way a
             # real BIOS mode-set does (color 3D4h / mono 3B4h).  Programs read it to
