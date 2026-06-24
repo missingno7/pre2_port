@@ -459,13 +459,19 @@ def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: i
 
     ``pel_pan`` (0-7) is the attribute-controller fine horizontal pan: the display starts ``pel_pan``
     pixels into the first byte, so scrolling moves one pixel at a time instead of snapping to 8px
-    byte-column steps. When panning we fetch one extra byte-column per row and crop the 320px window."""
+    byte-column steps. When panning we fetch one extra byte-column per row and crop the 320px window.
+    That extra column is CLAMPED to the last visible column rather than read as the literal next byte:
+    on real VGA the next byte is the following scanline's first byte, shown only in the horizontal
+    overscan/border (off the active 320px) — but our viewer renders just the active area, so reading it
+    literally would smear the next row's left edge onto the right edge. Clamping keeps that reveal
+    off-screen, matching DOSBox."""
     pal = np.array(palette if palette is not None else DEFAULT_VGA_PALETTE, dtype=np.uint8)
     start = display_start & 0xFFFF
     pel = pel_pan & 7
     ncols = _PLANAR_ROW_BYTES + (1 if pel else 0)
     rowbase = (start + np.arange(HEIGHT) * _PLANAR_ROW_BYTES) & wrap
-    off = (rowbase[:, None] + np.arange(ncols)[None, :]) & wrap                 # (200, ncols)
+    cols = np.minimum(np.arange(ncols), _PLANAR_ROW_BYTES - 1)                  # clamp pan's extra col to col 39
+    off = (rowbase[:, None] + cols[None, :]) & wrap                            # (200, ncols)
     color = np.zeros((HEIGHT, ncols, 8), dtype=np.uint8)
     for plane in range(4):
         plane_bytes = get_plane(plane)[off]                                    # (200, ncols)
