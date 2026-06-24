@@ -484,7 +484,19 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     last_committed = [None]    # (planes, page) of the last 6772 frame — base for the vertical fade-out
     particle_frame = [None]    # ParticleFrame snapshotted at 4b8e entry (one-shot; gone by 6772)
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
+    last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
     _DSEG = 0x1A0F
+    _HUD_OFF = 176 * 0x28      # HUD strip start within a page (row 176)
+    _HUD_LEN = 24 * 0x28       # rows 176..199 (status bar + dynamic glyphs)
+
+    def _snapshot_hud(planes, page):
+        o = (page + _HUD_OFF) & 0xFFFF
+        return [bytes(planes[p][o:o + _HUD_LEN]) for p in range(4)]
+
+    def _overlay_hud(planes, page, hud):
+        o = (page + _HUD_OFF) & 0xFFFF
+        for p in range(4):
+            planes[p][o:o + _HUD_LEN] = hud[p]
 
     if faithful:
         # Capture the GameVisualState at the frame-commit boundary 1030:6772 (palette-fade entry, POST
@@ -519,6 +531,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                                        page, gvs.scene_kind.name, d)
                 last_committed[0] = (planes, page)  # base for the vertical fade-out (the frame it clears)
                 last_capture_ic[0] = rt.cpu.instruction_count
+                last_hud[0] = _snapshot_hud(planes, page)  # the DISPLAYED HUD (frozen between commits)
             except FaithfulVisualGap:
                 boundary_capture[0] = None         # a SCENE/IMAGE frame at 6772 -> handled at present time
             except Exception:
@@ -638,8 +651,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             # frame IS committed + render-consistent (proven render_frame Δ=0 there), so render LIVE
             # instead of freezing. Gated on staleness so normal gameplay (gaps << a frame) always uses
             # the clean 6772 capture; the curtains idle in 3054/30C6 (handled by their own hooks), not here.
+            # The threshold sits just above a normal per-frame gap (~17-24k) so it never fires in normal
+            # play (which would double-render), but trips quickly into a death/transition pause -> minimal
+            # initial freeze before the live render takes over.
             ip = rt.cpu.s.ip
-            if (rt.cpu.instruction_count - last_capture_ic[0] > 40000
+            if (rt.cpu.instruction_count - last_capture_ic[0] > 30000
                     and (rt.cpu.s.cs & 0xFFFF) == 0x1030 and 0x1C6F <= ip <= 0x1C7E):
                 try:
                     disp = rt.program.memory.ega_display_start
@@ -649,6 +665,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         pf = particle_frame[0]
                         draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
                                        page, pf.cos, pf.sin)
+                    # The DISPLAYED HUD lags the live state: it only changes when the engine redraws it
+                    # AND flips the buffer, which doesn't happen during the death gap (no 6772). So at the
+                    # moment of death the live HUD already shows the post-death lives, but the screen still
+                    # shows the pre-death HUD until respawn. Freeze the HUD strip at the last committed
+                    # value (instant death also doesn't reduce energy, so this matches).
+                    if last_hud[0] is not None:
+                        _overlay_hud(planes, page, last_hud[0])
                     rgb = render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette)
                     # CACHE the live frame so off-governor refreshes (the death loop dips out of the
                     # 1C6x spin) keep showing the latest live frame instead of flickering back to the
