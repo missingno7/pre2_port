@@ -309,6 +309,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from sdl_view import (SoundBlasterAudio, render_planar_rgb, render_planar_rgb_from_planes,
                           render_text_rgb, render_vga_rgb)
     from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
+    from pre2.bridge.live_render import compose_curtain_planes, compose_vfade_planes, render_visual_planes
     from pre2.bridge.scene_state import derive_scene_kind
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
@@ -477,6 +478,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
 
     gap_seen = [None]
     boundary_capture = [None]  # (rgb, page, scene_kind_name, verify_Δ|None) from the last 6772 commit
+    curtain_cache = [None]     # new-room planes (at src page) rendered once per curtain reveal (3054)
+    last_committed = [None]    # (planes, page) of the last 6772 frame — base for the vertical fade-out
+    _DSEG = 0x1A0F
 
     if faithful:
         # Capture the GameVisualState at the frame-commit boundary 1030:6772 (palette-fade entry, POST
@@ -505,16 +509,86 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                                 d += 1
                 boundary_capture[0] = (render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
                                        page, gvs.scene_kind.name, d)
+                last_committed[0] = (planes, page)  # base for the vertical fade-out (the frame it clears)
             except FaithfulVisualGap:
                 boundary_capture[0] = None         # a SCENE/IMAGE frame at 6772 -> handled at present time
             except Exception:
                 boundary_capture[0] = None
+            curtain_cache[0] = None                # the per-frame boundary ends any curtain in progress
             if _orig6772 is not None:
                 return _orig6772(c)
             interpret_current_instruction_without_hook(c)          # no palette hook -> run the ASM instr
 
         rt.cpu.replacement_hooks[_BND] = _capture_at_boundary
         rt.cpu.hook_names[_BND] = "palette_fade+faithful_capture"
+
+        # The page-flip CURTAIN (1030:3054) runs in a BLOCKING vsync-paced sub-loop that never reaches
+        # the 6772 boundary, so the viewer would freeze on the last capture and "teleport" past the
+        # reveal. Capture the partial reveal at each curtain step (307D, after both strips of the
+        # iteration): render the new room ONCE (cached), then reveal `completed_pairs` strip-pairs over
+        # black via the recovered panel_copy (compose_curtain_planes) — proven byte-exact vs the ASM
+        # displayed page (pre2/probes/verify_curtain.py). No ASM VRAM.
+        _CURTAIN = (0x1030, 0x307D)
+        _orig307d = rt.cpu.replacement_hooks.get(_CURTAIN)
+
+        def _rw(mem, off):
+            b = ((_DSEG << 4) + off) & 0xFFFFF
+            return mem.data[b] | (mem.data[b + 1] << 8)
+
+        def _capture_curtain_step(c):
+            try:
+                src = _rw(c.mem, 0x2DD8)
+                dst = _rw(c.mem, 0x2DD6)
+                step = c.mem.data[(0x1030 << 4) + 0x3050] | (c.mem.data[(0x1030 << 4) + 0x3051] << 8)
+                completed = step // 4 + 1                       # strip-pairs done by this 307D
+                if curtain_cache[0] is None:
+                    nr, _, kind = render_visual_planes(c.mem, c.pre2_dos, game_root=args.game_root,
+                                                       display_page=src)
+                    curtain_cache[0] = (nr, src, kind.name)
+                nr, csrc, kindname = curtain_cache[0]
+                planes, page = compose_curtain_planes(nr, csrc, dst, completed)
+                boundary_capture[0] = (
+                    render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
+                    page, kindname, None)
+            except Exception:
+                pass
+            if _orig307d is not None:
+                return _orig307d(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_CURTAIN] = _capture_curtain_step
+        rt.cpu.hook_names[_CURTAIN] = "curtain_step+faithful_capture"
+
+        # The VERTICAL fade-out (1030:30C6) is the other blocking vsync sub-loop: it clears the
+        # displayed page to black in two full-width 10-row bands converging top+bottom toward the
+        # middle. Capture each step (3111, after both bands of the iteration are cleared): take the LAST
+        # committed frame (the frame it clears — re-rendering would give the wrong frame, the state has
+        # moved on) and black the cleared rows via compose_vfade_planes — proven byte-exact vs the ASM
+        # displayed page (pre2/probes/verify_vfade.py). No ASM VRAM.
+        _VFADE = (0x1030, 0x3111)
+        _orig3111 = rt.cpu.replacement_hooks.get(_VFADE)
+
+        def _capture_vfade_step(c):
+            try:
+                if last_committed[0] is not None:
+                    bplanes, bpage = last_committed[0]
+                    page = _rw(c.mem, 0x2DD6)
+                    s52 = c.mem.data[(0x1030 << 4) + 0x3052] | (c.mem.data[(0x1030 << 4) + 0x3053] << 8)
+                    s50 = c.mem.data[(0x1030 << 4) + 0x3050] | (c.mem.data[(0x1030 << 4) + 0x3051] << 8)
+                    top = (s52 - page) // 0x28 + 10            # top band accumulated extent
+                    bot = (s52 + s50 - page) // 0x28           # bottom band start
+                    planes, pg = compose_vfade_planes(bplanes, bpage, top, bot)
+                    boundary_capture[0] = (
+                        render_planar_rgb_from_planes(planes, pg, c.pre2_dos.vga_palette),
+                        pg, "GAMEPLAY", None)
+            except Exception:
+                pass
+            if _orig3111 is not None:
+                return _orig3111(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_VFADE] = _capture_vfade_step
+        rt.cpu.hook_names[_VFADE] = "vfade_step+faithful_capture"
 
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an

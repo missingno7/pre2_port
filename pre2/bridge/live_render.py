@@ -89,3 +89,50 @@ def render_visual_planes(mem, dos, *, game_root, display_page=None):
         iris = _replace(_tr.read_iris_inputs(mem), page=page)   # align the iris clear to our page
     render_visual(kind, rs, planes, iris=iris)
     return planes, page, kind
+
+
+_VIEWPORT_BYTES = 0xB0 * 0x28   # the curtain copies 0xB0 rows x 0x28 (the gameplay viewport, no HUD)
+
+
+def compose_curtain_planes(new_room_planes, src_page, dst_page, completed_pairs):
+    """Compose one frame of the page-flip CURTAIN reveal, faithfully and with no ASM VRAM.
+
+    The original (1030:3054) reveals the just-rendered new frame (on the back page ``src_page`` =
+    ``[0x2DD8]``) center-out over the CLEARED (black) front page (``dst_page`` = ``[0x2DD6]``), copying
+    ``completed_pairs`` symmetric 2-byte strip-pairs per the verified :func:`panel_copy` leaf. Proven
+    byte-exact vs the ASM displayed page at every step (the unrevealed area is 100% black at curtain
+    start). Returns ``(planes, dst_page)`` to deplanarize.
+
+    ``new_room_planes`` holds the faithful new frame at ``src_page`` (e.g. from
+    :func:`render_visual_planes` with ``display_page=src_page``). Only the viewport rows are revealed;
+    the HUD band stays black during the curtain (the engine draws it after), matching the original."""
+    from pre2.recovered.frame_renderer import panel_copy
+    src_page &= 0xFFFF
+    dst_page &= 0xFFFF
+    combined = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]            # black base (= cleared dst)
+    for p in range(4):
+        combined[p][src_page:src_page + _VIEWPORT_BYTES] = \
+            new_room_planes[p][src_page:src_page + _VIEWPORT_BYTES]       # new frame at the back page
+    panel_copy(combined, src_page, dst_page, completed_pairs)            # reveal k strip-pairs onto dst
+    return combined, dst_page
+
+
+def compose_vfade_planes(base_planes, page, top_cleared, bot_start):
+    """Compose one frame of the VERTICAL fade-out curtain (1030:30C6), faithfully and with no ASM VRAM.
+
+    The original clears the displayed page to black in two full-width 10-row bands converging from the
+    top and bottom toward the middle (the ``3131`` strip clear, vsync-paced). At any step the cleared
+    region is rows ``[0, top_cleared)`` (the top band's accumulated extent) and ``[bot_start, 176)`` (the
+    bottom band's), where ``top_cleared = (cs:[0x3052]-page)//0x28 + 10`` and ``bot_start =
+    (cs:[0x3052]+cs:[0x3050]-page)//0x28``. So the faithful frame is the frame being cleared
+    (``base_planes``, e.g. the last committed gameplay frame) with those rows blacked. Proven byte-exact
+    vs the ASM displayed page at every step. Returns ``(planes, page)`` to deplanarize."""
+    page &= 0xFFFF
+    out = [bytearray(base_planes[p]) for p in range(4)]
+    black = b"\x00" * 0x28
+    for r in range(176):
+        if r < top_cleared or r >= bot_start:
+            o = (page + r * 0x28) & 0xFFFF
+            for p in range(4):
+                out[p][o:o + 0x28] = black
+    return out, page
