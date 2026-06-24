@@ -68,6 +68,32 @@ A hook is scaffolding, not the architecture, and never where game logic
 accumulates. See [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md)
 for the full posture and the memory-view ↔ dataclass bridge model.
 
+### One recovered leaf, many adapters — and what the Faithful renderer is
+
+The **recovered leaf** (a pure fn in `pre2/recovered/`) is the primary artifact. Each
+leaf has several thin **adapters over the ONE implementation** — never a second copy:
+
+1. **Live replacement — the source port; build this first.** The leaf takes over the
+   ASM path in the normal **hybrid** run: the game still *triggers* the routine but runs
+   recovered code, the ASM body is skipped, the runtime gets faster, and the
+   ASM↔recovered coastline shrinks. **This is the point — reconstruct high-level logic
+   that is hooked and replaces ASM behaviour in normal execution.**
+2. **Verify checkpoint** — the same leaf diffed against the ASM oracle at the boundary.
+3. **Faithful renderer** — composes the same leaves into the displayed frame.
+
+**The Faithful renderer (`play.py --faithful`) is just the one roof that connects all
+the rendering-related recovered leaves into a frame.** It is NOT a separate renderer, NOT
+a separate recovery track, and NOT where rendering logic is first written
+"faithful-only". It must **never read the VM framebuffer or run ASM** — it only composes
+recovered leaves; an unrecovered piece is an **explicit gap**, never an ASM-VRAM fallback.
+
+So the order is: **recover the leaf → make it replace the ASM live in the hybrid run (+ a
+verify checkpoint) → the Faithful renderer absorbs it.** Do **not** build a faithful-only
+renderer first and ground it later. A leaf the faithful renderer needs that has no
+live-replacement/checkpoint adapter yet is a **gap to close** (bidirectional grounding),
+not a reason to grow a faithful-only renderer. Full detail:
+[`docs/pre2/faithful_visual_layer.md`](docs/pre2/faithful_visual_layer.md).
+
 ## Sources of truth
 
 - [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md): the
