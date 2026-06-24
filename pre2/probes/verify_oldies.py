@@ -46,8 +46,7 @@ def main(snap=None):
         d[base:base + 0x10000] = bytes(0x10000)
 
     lines, font = read_oldies(cpu.mem)               # capture inputs BEFORE the ASM runs
-    _force_call(cpu, d, 0x2505)                       # ASM draws the names
-    _force_call(cpu, d, 0x244E)                       # ASM draws the header
+    _force_call(cpu, d, 0x2417)                       # the real OLDIES screen (YEAAA/working/programmed/enjoy)
     page = d[(_DATA << 4) + 0x2DD6] | (d[(_DATA << 4) + 0x2DD7] << 8)
     asm = [bytes(d[EGA_APERTURE + p * EGA_PLANE_STRIDE: EGA_APERTURE + p * EGA_PLANE_STRIDE + 0x10000])
            for p in range(4)]

@@ -874,7 +874,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         mode = rt.dos.video_mode & 0x7F
         faithful_info[0] = ""
         if mode in (0, 1, 2, 3, 7):
-            rgb = render_text_rgb(mem, rt.dos.video_mode & 0xFF, rt.dos.video_page)
+            if faithful:
+                # The faithful renderer is a clean RECREATION of the GAME's visual output; it never reads
+                # the VM framebuffer. A DOS text mode is not game content, so it shows an explicit marker
+                # (never the ASM text VRAM).
+                faithful_info[0] = "faithful: DOS text mode (not game content)"
+                rgb = np.full((200, 320, 3), (16, 16, 24), dtype=np.uint8)
+            else:
+                rgb = render_text_rgb(mem, rt.dos.video_mode & 0xFF, rt.dos.video_page)
         elif mode in (0x13, 0x19):
             if faithful:
                 # FAITHFUL 13h: re-render the recovered image (identified at the 91C0 copy) from the

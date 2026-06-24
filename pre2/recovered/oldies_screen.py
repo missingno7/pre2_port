@@ -34,6 +34,12 @@ def char_to_glyph(ch: int) -> int:
     return al if al <= 9 else (al - 2) & 0xFF
 
 
+def format_year(year: int) -> str:
+    """Format a year the way 0xBEF draws it: 5 digit places (10000s..1s) with leading zeros shown as
+    spaces. e.g. 2026 -> " 2026". Drawn inline in the OLDIES "MY GAME IS STILL WORKING IN <year>" line."""
+    return f"{year:5d}"
+
+
 def blit_char(planes: Sequence[bytearray], ch: int, di: int, font: bytes) -> None:
     """Blit (or clear, for space) one 8x12 4-plane char cell at ``di`` ([asm 0C57])."""
     if ch == 0x20:                                   # space: clear the cell on all planes

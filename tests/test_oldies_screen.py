@@ -11,7 +11,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pre2.recovered.oldies_screen import (  # noqa: E402
-    blit_char, char_to_glyph, draw_credit_line, render_oldies)
+    blit_char, char_to_glyph, draw_credit_line, format_year, render_oldies)
+
+
+def test_format_year_leading_zero_as_space():
+    # 0xBEF draws 5 digit places with leading zeros shown as spaces
+    assert format_year(2026) == " 2026"
+    assert format_year(96) == "   96"
+    assert format_year(12345) == "12345"
 
 
 def test_char_to_glyph_mapping():
