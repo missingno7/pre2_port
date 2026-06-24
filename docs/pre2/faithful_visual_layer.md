@@ -16,6 +16,15 @@ they conflict with this section, **this section wins**.
 
 ### The architecture (one leaf, many adapters — bidirectional convergence)
 
+> **ORDER MATTERS — HOOK-FIRST, FaithfulVisual LAST.** Adapters are not added in arbitrary order. For
+> any remaining piece: **original ASM producer → checkpoint/probe → recovered leaf → live replacement
+> hook (when the contract is stable) → FaithfulVisual consumer LAST.** FaithfulVisual is the umbrella
+> *over already-grounded leaves*; it is NEVER where a new rendering behavior is invented or first built.
+> Even when convergence is "top-down" (FaithfulVisual needs a leaf that lacks a hook), the work ENDS by
+> grounding the producer with a live hook + verifier — not by shipping a faithful-only composite and
+> grounding it "later". The aim is to shrink ASM responsibility in the hybrid runtime first. See
+> `AGENTS.md` ("One recovered leaf, many adapters") and `scene_island.md` (GOVERNING ORDER).
+
 Every visual behavior has **ONE recovered implementation** (a pure fn in `pre2/recovered/`) with
 multiple thin **adapters**, never a second copy:
 

@@ -1,5 +1,26 @@
 # Scene island — the non-gameplay visual seam (`SceneState → render_scene`)
 
+> **★ GOVERNING ORDER — HOOK-FIRST (2026-06-24, supersedes any "build the seam first" / "recover
+> visual intent, not isolated VGA hooks" framing elsewhere in this file).** Every remaining
+> scene/rendering piece is recovered in THIS order, FaithfulVisual LAST:
+> ```
+> original ASM producer  ->  checkpoint/probe  ->  recovered leaf  ->  live replacement hook
+>     (when the contract is stable)  ->  FaithfulVisual consumer (LAST, reuses the SAME leaf)
+> ```
+> The goal is to **reduce ASM responsibility in the hybrid runtime first**. One visual behavior = one
+> recovered leaf = many adapters (live hook + verify probe + FaithfulVisual + later enhanced). FaithfulVisual
+> is the **umbrella OVER already-grounded leaves**, NOT where new rendering behavior is invented. Do NOT
+> build a scene FaithfulVisual compositor first and ground it later. The `SceneState → render_scene` seam
+> below is the *shape* FaithfulVisual converges to, but it is reached by CONSUMING grounded leaves — not by
+> composing a from-scratch renderer. (Proven shape: OLDIES = blit_char leaf → live hook 0C3E → FaithfulVisual
+> consumes it; game-over = 9C87; tally = 51A3.)
+>
+> So the "0Dh background BLOCKED / from-scratch rebuild reaches ~11%" note below is the blocker for the WRONG
+> (faithful-first) approach. Hook-first reframe: ground the runtime PRODUCERS (scroll_blit / scroll_shift /
+> present) live and have FaithfulVisual consume them. The MENU's `scroll_shift` HISTORY is the genuine
+> remaining blocker (needs the buffer invariant or a replay — do not guess); the CARTE (scroll_blit +
+> objects, no scroll_shift) is groundable now and is the next target.
+
 > **★ 2026-06-24 — this is now THE remaining faithful-visual critical path.** Gameplay + all transitions
 > (iris, fade, curtain) + HUD are done and grounded (one leaf, many adapters — see
 > `faithful_visual_layer.md`). The only faithful-visual RECOVERY gaps left are the two scene leaves below,
@@ -13,8 +34,10 @@
 > `render_visual` raises `FaithfulVisualGap` for both (no silent fallback) — that loud gap is the to-do.
 
 The gameplay frame collapsed into a meaningful seam: `RendererState → render_frame(...)`.
-The startup / title / menu / map / loading / tally screens need the **same kind of target**
-so we recover their *visual intent*, not a pile of isolated VGA hooks:
+The startup / title / menu / map / loading / tally screens converge to the **same kind of target** —
+but per the GOVERNING ORDER above, that seam is reached by grounding the runtime producers as recovered
+leaves + live hooks FIRST, and having FaithfulVisual consume them LAST (NOT by composing a from-scratch
+renderer). The seam is the *shape*, not the starting point:
 
 ```
 scene logic / state machine        (BORDER — owns "which screen", input, transitions)
