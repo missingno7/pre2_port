@@ -5,6 +5,27 @@
 > blocker", or say `play.py --view` runs pure ASM, they are **superseded** by the
 > entry below.
 
+## 2026-06-24 — scene leaves grounded as live replacements (the recovered-leaf-first correction)
+
+Architectural correction (now also in `AGENTS.md`): a recovered *scene* leaf that maps
+to an original ASM draw routine must run **live in the hybrid runtime** (replace the ASM),
+not only serve as a faithful-renderer mirror. Two per-frame scene drawers were grounded:
+
+- **Game-over background scroll** — `pre2/checkpoints/gameover_scroll.py` replaces
+  `1030:9C87` (the per-frame diorama windowed scroll-copy) with the recovered
+  `window_scroll_copy`; EGA exit state write mode 1 / map mask 0x0F (453B). Verify Δ=0
+  (8 entries); live trace fires 450×.
+- **Tally panel** — `pre2/checkpoints/tally_panel.py` replaces `1030:51A3` (the per-frame
+  "SCORE" / "LEVEL COMPLETED %" panel driver) with the recovered `render_tally_panel`; EGA
+  exit state write mode 0 / map mask 0x08 (measured at a real 51DE ret). Verify Δ=0
+  (6 entries); live trace fires 398×.
+
+Each now follows the full shape: recovered leaf → live replacement hook → verify checkpoint
+→ FaithfulVisual composes the same leaf. Proofs: `pre2/probes/verify_{gameover_scroll,
+tally_panel}_hook.py`. One-shot image/copy paths (title/menu/oldies) deliberately stay
+faithful-compose-only — small coastline shrink, the SQZ decode is already a live replacement.
+Suite 281 passed.
+
 ## 2026-06-20 recovery phase — gameplay runs, hybrid runtime, SQZ island done
 
 The bootstrap phase is over. The VM **runs PRE2 gameplay correctly**, and recovered
