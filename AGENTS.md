@@ -68,31 +68,73 @@ A hook is scaffolding, not the architecture, and never where game logic
 accumulates. See [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md)
 for the full posture and the memory-view ↔ dataclass bridge model.
 
-### One recovered leaf, many adapters — and what the Faithful renderer is
+### North star — the hybrid recovered-source runtime (the convergence model)
 
-The **recovered leaf** (a pure fn in `pre2/recovered/`) is the primary artifact. Each
-leaf has several thin **adapters over the ONE implementation** — never a second copy:
+We are building a **hybrid recovered-source runtime**: the original `assets/pre2.exe`
+stays the behavioural **oracle**, while expensive/important ASM rendering/audio/timing
+routines are progressively **replaced by verified high-level recovered code**. The end
+goal is recovered high-level source that **both the hybrid runtime and the faithful video
+backend use**. Every visual/audio/timing behaviour converges along ONE chain:
 
-1. **Live replacement — the source port; build this first.** The leaf takes over the
-   ASM path in the normal **hybrid** run: the game still *triggers* the routine but runs
-   recovered code, the ASM body is skipped, the runtime gets faster, and the
-   ASM↔recovered coastline shrinks. **This is the point — reconstruct high-level logic
-   that is hooked and replaces ASM behaviour in normal execution.**
-2. **Verify checkpoint** — the same leaf diffed against the ASM oracle at the boundary.
-3. **Faithful renderer** — composes the same leaves into the displayed frame.
+```text
+original ASM producer
+  -> hook / checkpoint / probe              (discover + verify the REAL routine)
+  -> verified recovered high-level source   (pure fn in pre2/recovered/ or pre2/codecs/)
+  -> live replacement in the hybrid runtime (where the contract is stable/safe)
+  -> FaithfulVisual consumes the SAME recovered source (a faithful video backend)
+  -> later: enhanced renderer/audio backend consumes the same semantic model
+```
 
-**The Faithful renderer (`play.py --faithful`) is just the one roof that connects all
-the rendering-related recovered leaves into a frame.** It is NOT a separate renderer, NOT
-a separate recovery track, and NOT where rendering logic is first written
-"faithful-only". It must **never read the VM framebuffer or run ASM** — it only composes
-recovered leaves; an unrecovered piece is an **explicit gap**, never an ASM-VRAM fallback.
+**Why hook-first (practical + architectural):** the VM interpreter is too expensive if
+every draw/audio/timing routine stays interpreted ASM; live replacement moves the hot
+behaviour into recovered code; the verifier proves it matches the oracle; that same
+recovered code is then the foundation FaithfulVisual composes. **Hooks are the *roots* of
+recovery, not the final shape.**
 
-So the order is: **recover the leaf → make it replace the ASM live in the hybrid run (+ a
-verify checkpoint) → the Faithful renderer absorbs it.** Do **not** build a faithful-only
-renderer first and ground it later. A leaf the faithful renderer needs that has no
-live-replacement/checkpoint adapter yet is a **gap to close** (bidirectional grounding),
-not a reason to grow a faithful-only renderer. Full detail:
+**Convergence is bidirectional:**
+- *bottom-up* — hooks/checkpoints discover + verify real original behaviour and lift it to a leaf.
+- *top-down* — FaithfulVisual may reveal a missing visual behaviour, but that behaviour must be
+  pushed back DOWN into a hook/checkpoint/recovered leaf (grounded against the oracle) before it is
+  canonical. FaithfulVisual **never invents behaviour** and **never reads the VM framebuffer** — an
+  unrecovered piece is a LOUD gap, never an ASM-VRAM fallback.
+
+**Two wrong extremes — the docs and your work must make BOTH hard to fall into:**
+- ✗ build FaithfulVisual first by guessing visual intent from screenshots, ground it "later";
+- ✗ accumulate a permanent pile of tiny isolated hooks with no recovered-source structure.
+- ✓ **correct:** hook/checkpoint the real producers → extract verified recovered source → replace
+  ASM where safe → FaithfulVisual composes the SAME recovered source → collapse into larger islands
+  only when the real original structure supports it.
+
+> One sentence to remember: *FaithfulVisual is a faithful video backend over recovered source;
+> recovered source is grounded by hooks/checkpoints against the original runtime; hook-first does
+> not mean hook-pile-forever, and faithful-first does not mean inventing behaviour.*
+
+### One recovered leaf, many adapters
+
+The **recovered leaf** (a pure fn in `pre2/recovered/`) is the primary artifact; each leaf has
+thin **adapters over the ONE implementation**, never a second copy: **(1) live replacement** (the
+hybrid runtime skips the ASM body), **(2) verify checkpoint** (diff vs the oracle at the boundary),
+**(3) FaithfulVisual consumer** (composes the same leaf), **(4) later enhanced backend**. Order:
+ground the live hook + verifier FIRST; FaithfulVisual absorbs the grounded leaf LAST. Full detail:
 [`docs/pre2/faithful_visual_layer.md`](docs/pre2/faithful_visual_layer.md).
+
+### Status taxonomy — every rendering/audio piece is exactly one of these
+
+1. **recovered + live-grounded** — recovered leaf + live replacement hook + verifier (runs in hybrid).
+2. **recovered, verify-only** — recovered leaf + checkpoint diff, but the ASM still draws (no live skip).
+3. **faithful-only diagnostic/capture** — consumed by FaithfulVisual but NOT yet grounded by a live hook
+   (a transitional state to fix — NOT an endpoint, NOT "done").
+4. **known gap** — not recovered; FaithfulVisual fails loud here (no VM fallback).
+5. **blocked — history-dependent buffer state** — the real game keeps stateful VRAM (a circular
+   scroll-page ring, a `scroll_shift` self-copy, …); a from-scratch rebuild is WRONG. Needs the real
+   stateful model / replay, not a guess.
+6. **not worth hooking** — a pure controller / setup / present wrapper with no hot or reusable behaviour.
+
+### Collapse rule
+
+Collapsing several hook leaves into one larger recovered island/controller is desirable — but ONLY with
+**evidence from the real original call graph** (the leaves genuinely belong to one original
+routine/controller/compositor). **Never** collapse to a modern invented design.
 
 ## Sources of truth
 

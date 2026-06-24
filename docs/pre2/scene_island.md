@@ -41,17 +41,16 @@
 > game). The MENU then = the same persistent-page model + `scroll_shift`. Both stay BLOCKED on this
 > stateful-page seam until it is built; do not guess a from-scratch rebuild.
 
-> **★ 2026-06-24 — this is now THE remaining faithful-visual critical path.** Gameplay + all transitions
-> (iris, fade, curtain) + HUD are done and grounded (one leaf, many adapters — see
-> `faithful_visual_layer.md`). The only faithful-visual RECOVERY gaps left are the two scene leaves below,
-> and both need a recovered leaf, not just an adapter:
-> - **SCENE** (menu / map / loading / tally / game-over, 0Dh): text/palette/cursor located + `draw_string`/
->   `scroll_blit` runtime-replaced, but the **background is a history-dependent scroll buffer** — a
->   from-scratch page↔pattern rebuild reaches only ~11% (`renderer_bug_table.md` #3). **BLOCKED** on the
->   buffer invariant or a deterministic scroll-replay. Do NOT guess a second theory.
-> - **IMAGE** (intro / title, 13h): the displayed image is **not a direct `.SQZ` decode** — source
->   unidentified (`renderer_bug_table.md` #4). Find the source before writing `render_image`.
-> `render_visual` raises `FaithfulVisualGap` for both (no silent fallback) — that loud gap is the to-do.
+> **★ STATUS 2026-06-24 (reconciled).** Gameplay + transitions (iris, fade, curtain) + HUD: grounded.
+> Non-gameplay scenes grounded hook-first since: **game-over (9C87), tally (51A3), OLDIES (0C3E) are
+> live-grounded** + composed by FaithfulVisual; the **title/intro 13h IMAGE is RESOLVED** (codec =
+> `unpack_sqz`; `render_title_image` Δ=0; 13h faithful path wired — the old "source unidentified" claim was
+> stale). `render_visual` never falls back to ASM VRAM (an unrecovered scene = a LOUD `FaithfulVisualGap`).
+> The ONLY remaining faithful-visual gaps are the two **0Dh scrolling-scene COMPOSITIONS — mode-select menu
+> and map/carte** — taxonomy **#5 blocked on a history-dependent buffer** (stateful circular ring). Render
+> leaves are grounded; the grounded next step is the recovered **initial full-page-fill producer** (a #4
+> gap) + a persistent-page model — NOT a from-scratch rebuild (carte ≈37%, menu ≈11%; see #3/#5 in
+> `renderer_bug_table.md`). Do NOT guess a second theory.
 
 The gameplay frame collapsed into a meaningful seam: `RendererState → render_frame(...)`.
 The startup / title / menu / map / loading / tally screens converge to the **same kind of target** —

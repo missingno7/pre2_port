@@ -4,6 +4,22 @@ Built from the now-correct `--faithful-verify` signal (the 6772 frame-boundary `
 capture). At the boundary the camera/scroll false-positive is gone, so remaining diffs are real. Swept
 the gameplay/transition witness set; ranked by impact.
 
+> **★ STATUS RECONCILED 2026-06-24 — read this; several rows below are stale/superseded.** Per the
+> AGENTS.md status taxonomy (1 live-grounded … 6 not-worth-hooking):
+> - **#1 live-grounded:** game-over (9C87), tally (51A3), OLDIES glyph (0C3E), plus
+>   scroll_blit / scroll_shift / draw_string / object_render / iris / palette / all gameplay leaves.
+>   (So row #3's "game-over" mention is stale — game-over/tally are DONE, not blocked.)
+> - **#4 IMAGE — RESOLVED** (rows #4 / #4b are SUPERSEDED by #4c / #4d): the codec is the already-recovered
+>   `unpack_sqz` (the "14xx LZ codec to recover" and "source unidentified" lines were WRONG). The title is
+>   PRESENT.SQZ (bg@0x300 + logo-top@0x10300); `render_title_image` Δ=0; the 13h faithful path is wired
+>   (no ASM-VRAM fallback). Remaining = only the low-value live grounding of the 91A4/9090 copies (the slow
+>   SQZ decode is already a live replacement).
+> - **#5 BLOCKED — history-dependent buffer:** the CARTE and MENU scene COMPOSITION. Their render leaves
+>   are grounded, but the bg is a STATEFUL circular ring — carte: initial full-fill + per-frame scroll_blit
+>   refills (from-scratch replay ≈ 37%); menu: + the scroll_shift self-copy (≈ 11%). Needs the recovered
+>   **initial-fill producer** (a #4 gap, runs once at scene load, un-traced) + a persistent-page model.
+>   Do NOT guess a from-scratch rebuild (see the "don't invent" / collapse rule in AGENTS.md).
+
 | # | Witness / repro | Scene kind | Diff size / pattern | Affected layer | Classification | Root-cause hypothesis | Required fix | Type | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | boss 192126/192140; gp 003317/010021 | GAMEPLAY | HUD Δ 92–250, cols **272–304** | HUD (BONUS box) | **renderer bug — missing leaf** | `draw_hud` omitted the collected B/O/N/U/S letters (glyphs 0x0C–0x10, ASM 46AD), gated by `[0x6CA7]`/flash `[0x6C00]` | recover the 46AD loop into `draw_hud` (same `blit_hud_glyph` leaf) | renderer bug | **FIXED — HUD Δ=0 all witnesses (8604ba1)** |
@@ -21,16 +37,16 @@ the gameplay/transition witness set; ranked by impact.
 | 9 | firefly swarm `54AB` (witness `140330` 20 on-screen fireflies; also active in `110346`) | GAMEPLAY | viewport ≤~27 (the swarm pixels) | effects | **RESOLVED — recovered DRAW leaf** | the persistent firefly swarm (`[0x6EA9]`, 20 slots × 8, stride 8, `0x55AA` sentinel = dead) is animated **and** drawn each frame by `54AB`, OR-ing one flicker pixel per slot to the back page — a SEPARATE system from the one-shot `4b8e` points. The 6772 capture re-renders the page without it → fireflies vanish. **Key finding:** the even/odd color-14/15 flicker is set via the EGA **Set/Reset** registers (GC idx 0/1), which `dos_re._ega_wb` does NOT emulate → under the VM oracle every firefly collapses to color **15** (all 4 planes). | DONE 2026-06-24: recovered `pre2.recovered.fireflies.draw_fireflies` (Δ=0 vs the VM oracle) + `bridge.fireflies.read_fireflies` + wired into `--faithful` at the 6772 boundary (slots persist across the frame → no separate hook needed; captured directly). `verify_fireflies.py` Δ=0 over the page; `tests/test_fireflies.py`. The true 14/15 flicker is kept in `firefly_color()` for the enhanced renderer. **UPDATE 2026-06-24: the per-frame RNG ANIMATION is now also recovered + replaced live** — `pre2.recovered.firefly_sim.step_fireflies` (full 54AB: RNG-driven flocking + move + draw) runs as a native replacement (`pre2/checkpoints/fireflies.py` @ 1030:54AB), so the VM skips the interpreted pass (~3000 instr/frame). Byte-exact incl. both SHARED RNGs (26CF/39DF): `verify_firefly_sim.py` 40 frames Δ=0 (slots+seeds+scratch+VRAM); framework verify 0 divergences; `tests/test_firefly_sim.py`. | effect leaf + replacement | **CLOSED — fireflies render faithfully (Δ=0) AND animate via a native 54AB replacement (perf).** |
 
 ## Summary
-After the frame-boundary fix + the HUD BONUS fix, the **gameplay + iris visual output is byte-exact at
-the commit boundary** (viewport HUD Δ=0; the only viewport residual is the negligible object-blink
-phase, #2). The remaining faithful-renderer work is the **non-gameplay scene leaves** (#3 SCENE, #4 IMAGE)
-+ non-visual cleanup (#6 HUD adapter, #7 palette ownership) + the open #8 particle question. The curtain
-(#5) is CLOSED — it is a sub-frame page-flip effect already covered by `panel_copy` + `frame_panel_copy`
-+ `render_frame` (boundary frames Δ=0); iris is already reused by `render_visual` (`compose_iris`).
+Gameplay + iris are byte-exact at the commit boundary (viewport HUD Δ=0; only residual is the negligible
+object-blink phase, #2). Since then the non-gameplay scenes were grounded hook-first: **game-over (9C87),
+tally (51A3), and OLDIES (0C3E) are live-grounded** and composed by FaithfulVisual; the **title/intro 13h
+IMAGE is RESOLVED** (codec = `unpack_sqz`; `render_title_image` Δ=0; 13h faithful path wired — #4 SUPERSEDED).
+The curtain (#5) is CLOSED (sub-frame page-flip; boundary frames Δ=0); iris/palette are reused by
+`render_visual`.
 
-None of the remaining items is a gameplay/object-producer gap — the visual STATE exists and is exported;
-what's missing is recovered LEAVES for the non-gameplay scenes/transitions. So the renderer-completion
-track stays independent of state ownership (per the milestone separation).
-
-Highest-impact next: a **SCENE leaf** (menu/map, #3) — most witnesses, reuses the already-runtime-replaced
-`scroll_blit`/`draw_string` leaves; then IMAGE (#4).
+The ONLY remaining faithful-renderer work is the two **0Dh scrolling-scene compositions — CARTE/map and
+mode-select menu** (taxonomy **#5, blocked on history-dependent buffer state**). Their render leaves are
+grounded, but the bg is a stateful circular ring; from-scratch rebuilds are WRONG (carte ≈ 37%, menu ≈ 11%).
+The grounded next step is to recover the **initial full-page-fill producer** (a #4 gap, runs once at scene
+load) + a persistent-page model — NOT a from-scratch compositor. Everything else is non-visual cleanup
+(#7 palette ownership). None of the remaining items is a gameplay/object-producer gap.

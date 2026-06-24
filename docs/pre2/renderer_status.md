@@ -14,10 +14,16 @@ Companion to `renderer_island.md` (the map/border) and `renderer_goal.md` (the p
 > - **Curtain** = sub-frame page-flip → no faithful leaf needed (mirror reproduces boundary frames Δ=0).
 > - **HUD** grounded by a registered verify checkpoint (`checkpoints/hud.py`); `effective_bonus_mask` is
 >   now a recovered leaf (was bridge logic).
-> - **Every gameplay/transition leaf now has a registered checkpoint.** The only remaining faithful-visual
->   RECOVERY gaps are the **SCENE** (menu/map bg — blocked on the history-dependent scroll buffer) and
->   **IMAGE** (intro/title — source unidentified) leaves. Everything else is deferred cleanup
->   (palette-fade ownership, anim/shake mode-2 promotion, `GameFrameSnapshot`→`GameVisualState` Phase C).
+> - **Every gameplay/transition leaf has a registered checkpoint, and the non-gameplay scenes are now
+>   grounded hook-first:** game-over (9C87), tally (51A3), OLDIES glyph (0C3E) are **live-grounded** +
+>   composed by FaithfulVisual; the **title/intro 13h IMAGE is RESOLVED** (codec = `unpack_sqz`,
+>   `render_title_image` Δ=0, 13h faithful path wired — the old "source unidentified" gap was stale).
+>   The ONLY remaining faithful-visual gaps are the two **0Dh scrolling-scene COMPOSITIONS — CARTE/map and
+>   mode-select menu** — taxonomy **#5 blocked on a history-dependent buffer** (a stateful circular ring;
+>   from-scratch rebuilds are WRONG — carte ≈37%, menu ≈11%). The grounded next step is the recovered
+>   **initial full-page-fill producer** (a gap) + a persistent-page model, NOT a from-scratch compositor.
+>   Everything else is deferred cleanup (palette-fade ownership, `GameFrameSnapshot`→`GameVisualState` Phase C).
+>   See `AGENTS.md` (north star + status taxonomy + collapse rule).
 
 ## STATUS (2026-06-23): clean-framebuffer normal-gameplay composition COMPLETE
 
@@ -65,9 +71,12 @@ interpreted routine (~3000 instr/frame). Byte-exact incl. the two SHARED RNGs (`
 **Verification:** the unified `render_game_visual_state` with effects is Δ=0 over the gameplay viewport
 on every witness (140330 fireflies; 110346 moving = foreground tiles + fireflies). Suite 252; 34 islands.
 
-**Next milestone — NON-GAMEPLAY SCENES** (the remaining faithful-visual gaps): mode-select menu, map
-roll, game-over, level tally. These are the `SCENE`/`IMAGE` kinds that currently raise `FaithfulVisualGap`
-(see bug-table #3/#4 and `faithful_visual_layer.md`).
+**NON-GAMEPLAY SCENES — mostly grounded (hook-first).** Done + live-grounded + composed by FaithfulVisual:
+game-over (9C87), tally (51A3), OLDIES (0C3E), title/intro 13h IMAGE (`render_title_image`, faithful path
+wired). **The ONLY remaining faithful-visual gaps are the two 0Dh scrolling COMPOSITIONS — mode-select menu
+and map/carte** — taxonomy **#5 blocked on a history-dependent buffer** (stateful circular ring; the grounded
+next step is the recovered initial-fill producer + a persistent-page model, NOT a from-scratch rebuild). See
+bug-table #3/#5 and `faithful_visual_layer.md`.
 
 ### LIVE FAITHFUL PATH (2026-06-23) — promoted from offline/test to a live authoritative renderer
 
@@ -76,9 +85,11 @@ The gameplay renderer is no longer only an offline/snapshot/test island. `pre2/b
 each frame and renders the visible frame into a CLEAN framebuffer via `render_frame(rebuild=True)`,
 deplanarized by `sdl_view.render_planar_rgb_from_planes`. The viewer flag **`--faithful`** displays
 that recovered output instead of ASM-populated VRAM (the VM still runs as oracle/state-producer);
-**`--faithful-verify`** shows the per-frame divergence vs the VM page in the title bar. Non-gameplay
-scenes (menu/intro/map) fall back to the VM frame via the `is_gameplay_frame` gate (the other visual
-modes are not yet recovered — see `scene_island.md`).
+**`--faithful-verify`** shows the per-frame divergence vs the VM page in the title bar. The faithful path
+**never reads the VM framebuffer**: recovered scenes (gameplay, iris, game-over, tally, OLDIES, 13h images)
+render from recovered source; an unrecovered scene (the menu/map 0Dh compositions) raises a **LOUD
+`FaithfulVisualGap`** (a diagnostic frame), NOT a silent ASM-VRAM fallback. (The earlier "fall back to the
+VM frame" description was stale — there is no VM-framebuffer fallback in faithful mode.)
 
 PROOF (`pre2/probes/verify_live_faithful.py`, vs **pure ASM** = the true oracle, sampled at the
 object-pass RET 2DF9 where state↔page are phase-aligned): the gameplay viewport (rows 0–175) is

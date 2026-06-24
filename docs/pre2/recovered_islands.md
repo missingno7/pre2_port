@@ -4,6 +4,14 @@
      Source of truth = the @oracle_link metadata on each recovered function.
      tests/test_island_registry.py fails if this file drifts from the code. -->
 
+Each row is a recovered leaf/controller. See `AGENTS.md` for the north star (hybrid
+recovered-source runtime; original = oracle), the **one-leaf-many-adapters** rule, the **status
+taxonomy** (1 recovered+live-grounded / 2 recovered+verify-only / 3 faithful-only / 4 gap /
+5 blocked-history-dependent-buffer / 6 not-worth-hooking), and the **collapse rule** (collapse
+leaves into larger islands ONLY with evidence from the real original call graph). The `Status`
+column below is the oracle-link confidence (GUESS→OBSERVED→ASM_MATCHED→VERIFIED→CANONICAL); the
+live-grounded vs verify-only vs faithful-only adapter state is tracked in `faithful_visual_layer.md`.
+
 | ASM boundary | Function | Status | Merge target | Contract |
 |---|---|---|---|---|
 | `1030:107B` | `codecs.sqz.unpack_sqz` | VERIFIED | asset loader | decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance |

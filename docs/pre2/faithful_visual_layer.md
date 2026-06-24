@@ -65,8 +65,11 @@ second renderer. Convergence is **bidirectional**:
 | iris compose | 31F4 | ✓ skip | ✓ | ✓ (IRIS path) |
 | **HUD draw** | **45B8** | — (verify-only; ASM draws) | **✓ NEW (`checkpoints/hud.py`)** | ✓ (`draw_hud`) |
 | panel-flip / **curtain** | 3054 | passthrough (vsync pacing) | ✓ (final copy) | covered by render_frame (sub-frame) |
-| draw_string | 9886 | ✓ skip | ✓ | scene leaf pending |
-| menu scroll_blit / shift | 965A / 9804 | ✓ skip | ✓ | scene leaf pending |
+| draw_string | 9886 | ✓ skip | ✓ | ✓ (scene text consumer) |
+| menu/map scroll_blit / shift | 965A / 9804 | ✓ skip | ✓ | leaf grounded; scene COMPOSITION blocked (taxonomy #5, history-dependent ring) |
+| game-over bg scroll | 9C87 | ✓ skip (2026-06-24) | ✓ | ✓ (scene_capture) |
+| tally panel | 51A3 | ✓ skip (2026-06-24) | ✓ | ✓ (scene_capture) |
+| OLDIES glyph | 0C3E | ✓ skip (2026-06-24) | force-call probe (cold-boot; not in verify demos) | ✓ (build_oldies_scene) |
 
 ### Resolved this session (2026-06-24)
 - **Curtain CLOSED** (no faithful leaf needed). `3054` is the per-frame page-flip; the center-out strip
@@ -83,14 +86,28 @@ second renderer. Convergence is **bidirectional**:
   `render_state.retarget_page`. The BONUS flash-parity DECISION moved OUT of the bridge into the leaf
   `recovered/hud.effective_bonus_mask` (bridge = state-extraction only).
 
-### The ONLY remaining faithful-visual gaps (need RECOVERY, not just an adapter)
-1. **SCENE leaf** (menu / map / loading / tally / game-over, mode 0Dh) — `render_visual` raises
-   `FaithfulVisualGap`. Text/palette/cursor located + `draw_string`/`scroll_blit` leaves runtime-replaced,
-   but the **background is a history-dependent scroll buffer** (`scroll_shift_frame` self-copy) — a
-   from-scratch page↔pattern rebuild reaches only ~11%. **BLOCKED** on the buffer invariant or a
-   scroll-replay (see `renderer_bug_table.md` #3). Do NOT guess a second theory.
-2. **IMAGE leaf** (intro / title, mode 13h) — the displayed image is **not a direct `.SQZ` decode**;
-   source unidentified (`renderer_bug_table.md` #4). Needs the source found before a `render_image` leaf.
+### Scene status by the AGENTS.md taxonomy (1=live-grounded … 6=not-worth-hooking)
+
+- **game-over** (9C87 bg scroll + object overlay) — **#1 live-grounded**; FaithfulVisual via scene_capture.
+- **tally** (51A3 panel + object overlay) — **#1 live-grounded**; FaithfulVisual via scene_capture.
+- **OLDIES** (0C3E glyph → blit_char; year via 0BEF/0C31 also route through 0C3E) — **#1 live-grounded**
+  (verified by force-call probe — cold-boot screen, not in verify demos); FaithfulVisual via build_oldies_scene.
+- **scroll_blit / scroll_shift / draw_string / object_render / iris / palette fade** — **#1 live-grounded**.
+- **CARTE / map COMPOSITION** — render leaves grounded (scroll_blit live, present_pan_flip recovered;
+  the heavy carte ASM is joystick input + controller, not rendering), BUT the FaithfulVisual scene is
+  **#5 BLOCKED — history-dependent buffer**: the bg is a stateful circular ring (initial full-page fill at
+  load + per-frame scroll_blit refills); a from-scratch leaf-replay reaches only ~37% (diff 20260/32000).
+  Needs the recovered **initial-fill producer** (currently a **#4 gap** — runs once at carte load, missed by
+  the mid-scroll trace) + a persistent-page model. Do NOT build a from-scratch carte compositor.
+- **mode-select menu COMPOSITION** — **#5 BLOCKED — history-dependent buffer**: the same ring + the
+  `scroll_shift_frame` vertical-bounce self-copy. Unblocks together with the carte's persistent-page seam.
+  (see `renderer_bug_table.md` #3). Do NOT guess a from-scratch rebuild.
+- **title / intro 13h IMAGE** — the asset IS codec-decoded (PRESENT.SQZ via the already-recovered
+  `unpack_sqz` LZW) and the 13h faithful path is wired (`render_image_scene`, byte-exact vs the displayed
+  framebuffer). The remaining hook-first work is the **logo / composition producers** (91A4 bg copy, 9090
+  logo-top copy) — currently recovered+verified but the live-replacement grounding of those copies is
+  low-value (the slow SQZ decode is already a live replacement). NOT an "unidentified source" gap (that
+  claim was stale — see `renderer_bug_table.md` #4).
 
 ### Deferred (NOT gaps — explicitly out of scope until their trigger)
 - **Runtime *replacement* of HUD** (45B8 mode-2): the draw is incremental + dual-page + caches
