@@ -964,9 +964,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 ds, pel = mem_o.ega_display_start, 0
             active_w = (mem_o.ega_h_display_end + 1) * 8   # CRTC active width (carte = 312, else 320)
             if faithful:
-                # Live FAITHFUL VISUAL path: the displayed image comes from the recovered visual
-                # dispatcher (gameplay frame / iris transition), not ASM VRAM. Scenes whose leaf is
-                # not recovered yet fall back to the VM frame inside _faithful_planar.
+                # Live FAITHFUL VISUAL path: the displayed image comes from recovered leaves
+                # (gameplay frame / iris / game-over / tally / OLDIES), never ASM VRAM. An
+                # unrecovered scene (menu/map 0Dh composition) renders a LOUD gap frame inside
+                # _faithful_planar — there is no VM-framebuffer fallback.
                 rgb = _faithful_planar(mem, ds)
             else:
                 # Interim: PRE2's intro/menu currently runs in 16-colour planar mode
