@@ -907,7 +907,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             else:
                 rgb = render_vga_rgb(mem, rt.dos.vga_palette)
         elif rt.program.memory.ega_planar:
-            ds = rt.program.memory.ega_display_start
+            mem_o = rt.program.memory
+            # Fine-pan screens (menu/map) latch a consistent (display_start, pel) pair: the live values
+            # tear because the engine writes the CRTC start before its per-frame vsync wait but the pel
+            # pan after it, so sampling live mixes adjacent frames (an 8px hitch at byte boundaries).
+            if mem_o.ega_pan_active:
+                ds, pel = mem_o.ega_pan_display_start, mem_o.ega_pan_pel
+            else:
+                ds, pel = mem_o.ega_display_start, 0
             if faithful:
                 # Live FAITHFUL VISUAL path: the displayed image comes from the recovered visual
                 # dispatcher (gameplay frame / iris transition), not ASM VRAM. Scenes whose leaf is
@@ -917,7 +924,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 # Interim: PRE2's intro/menu currently runs in 16-colour planar mode
                 # 0Dh in the VM (the VGA mode-13h path is not yet taken).  Render it so
                 # the screens are visible/navigable; colours come from the live DAC.
-                rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette, rt.program.memory.ega_pel_pan)
+                rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette, pel)
         else:
             screen.fill((0, 0, 0))
             pygame.display.flip()

@@ -606,6 +606,12 @@ class DOSMachine:
                 self._attr_regs[self._attr_index] = value & 0xFF
                 if self._attr_index == 0x13:
                     mem.ega_pel_pan = value & 0x0F
+                    # Latch the display origin (start + pel) together. The program sets the CRTC
+                    # start, waits for vsync, then writes the pel pan, so at this instant both belong
+                    # to the same frame — snapshotting them here gives the present a tear-free pair.
+                    mem.ega_pan_display_start = mem.ega_display_start
+                    mem.ega_pan_pel = value & 0x0F
+                    mem.ega_pan_active = True
                 self._attr_flipflop = False
         elif port == 0x3C4:
             if planar_allowed:
@@ -924,6 +930,8 @@ class DOSMachine:
             # A mode-set also clears the attribute-controller pel-panning register, so a
             # stale fine-pan from a prior scrolling screen does not offset the new screen.
             cpu.mem.ega_pel_pan = 0
+            cpu.mem.ega_pan_active = False
+            cpu.mem.ega_pan_pel = 0
             self._attr_flipflop = False
             # Maintain the BIOS data area CRTC base port at 0040:0063 the way a
             # real BIOS mode-set does (color 3D4h / mono 3B4h).  Programs read it to

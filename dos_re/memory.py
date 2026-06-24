@@ -87,6 +87,14 @@ class Memory:
         # the sub-byte (0-7 px) horizontal scroll the CRTC start address cannot express. The
         # present applies it on top of ega_display_start so scrolling is smooth, not 8px-quantized.
         self.ega_pel_pan = 0
+        # A consistent (display_start, pel) pair latched together when the pel pan is written.
+        # PRE2's scene present writes the CRTC start BEFORE its per-frame vsync wait but the pel pan
+        # AFTER it, so reading the two live mixes adjacent frames (an 8px hitch at byte boundaries).
+        # Presenting from this latched pair is tear-free. ega_pan_active selects it (scrolling screens
+        # that use fine pan); when False the present uses the live start with no pan (e.g. gameplay).
+        self.ega_pan_active = False
+        self.ega_pan_display_start = 0
+        self.ega_pan_pel = 0
         # Optional write-watch callbacks used by runtime-code patch tracing.
         # The hot path only pays for one empty-list check per write.  Callbacks
         # receive (physical_20bit_addr, old_bytes, new_bytes).
