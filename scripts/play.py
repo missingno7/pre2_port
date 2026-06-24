@@ -310,7 +310,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                           render_text_rgb, render_vga_rgb)
     from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
     from pre2.bridge.live_render import compose_curtain_planes, compose_vfade_planes, render_visual_planes
+    from pre2.bridge.particles import read_particles
     from pre2.bridge.scene_state import derive_scene_kind
+    from pre2.recovered.particles import draw_particles
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
@@ -480,6 +482,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     boundary_capture = [None]  # (rgb, page, scene_kind_name, verify_Δ|None) from the last 6772 commit
     curtain_cache = [None]     # new-room planes (at src page) rendered once per curtain reveal (3054)
     last_committed = [None]    # (planes, page) of the last 6772 frame — base for the vertical fade-out
+    particle_frame = [None]    # ParticleFrame snapshotted at 4b8e entry (one-shot; gone by 6772)
     _DSEG = 0x1A0F
 
     if faithful:
@@ -498,6 +501,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 disp = rt.program.memory.ega_display_start
                 gvs = capture_game_visual_state(c.mem, c.pre2_dos, disp, game_root=args.game_root)
                 planes, page = render_game_visual_state(gvs)       # raises FaithfulVisualGap for scenes
+                if particle_frame[0] is not None:                  # one-shot point particles (4b8e),
+                    pf = particle_frame[0]                         # snapshotted pre-kill at 4b8e entry
+                    draw_particles(planes, pf.particles, pf.cam_col, pf.cam_row, pf.y_bias,
+                                   page, pf.cos, pf.sin)
                 d = None
                 if faithful_verify:
                     data = rt.program.memory.data; d = 0
@@ -515,6 +522,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             except Exception:
                 boundary_capture[0] = None
             curtain_cache[0] = None                # the per-frame boundary ends any curtain in progress
+            particle_frame[0] = None               # consumed for this frame; 4b8e re-stashes next frame
             if _orig6772 is not None:
                 return _orig6772(c)
             interpret_current_instruction_without_hook(c)          # no palette hook -> run the ASM instr
@@ -589,6 +597,25 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
 
         rt.cpu.replacement_hooks[_VFADE] = _capture_vfade_step
         rt.cpu.hook_names[_VFADE] = "vfade_step+faithful_capture"
+
+        # Point particles (1030:4B8E) are one-shot: 4b8e draws + KILLS each slot every frame, so the
+        # array is empty by the 6772 commit. Snapshot it here at 4b8e ENTRY (pre-kill); the 6772 render
+        # replays the draw via the recovered draw_particles (proven byte-exact, pre2/probes/verify_particles.py).
+        _PARTS = (0x1030, 0x4B8E)
+        _origparts = rt.cpu.replacement_hooks.get(_PARTS)
+
+        def _capture_particles(c):
+            try:
+                pf = read_particles(c.mem)
+                particle_frame[0] = pf if pf.particles else None
+            except Exception:
+                particle_frame[0] = None
+            if _origparts is not None:
+                return _origparts(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_PARTS] = _capture_particles
+        rt.cpu.hook_names[_PARTS] = "particles_capture"
 
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
