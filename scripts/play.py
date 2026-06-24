@@ -316,6 +316,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset
     from pre2.bridge.tally_scene import build_tally_scene
     from pre2.bridge.tally_panel import read_tally_panel
+    from pre2.bridge.image_scene import identify_image, render_image_scene
     from pre2.bridge.scene_state import derive_scene_kind
     from pre2.recovered.gameover_background import render_gameover_background
     from pre2.recovered.scene_compositor import RecoveredBackground
@@ -493,6 +494,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     gameover_pending = [None]  # (scroll, page) stashed at the 9C87 diorama present (scroll inc's after)
     tally_pending = [None]     # TallyPanelInputs stashed at the 51A3 driver (the % counts up before the flip)
     scene_capture = [None]     # (rgb, page, ic, label) of the last complete recovered SCENE frame (at the flip)
+    current_13h_image = [None]  # (asset name, has_logo) of the mode-13h image on screen; set at 91C0/9090
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
     last_gp_ic = [0]           # instruction count when a GAMEPLAY/IRIS frame was last DISPLAYED
@@ -754,6 +756,45 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rt.cpu.replacement_hooks[_GO_FLIP] = _capture_scene_flip
         rt.cpu.hook_names[_GO_FLIP] = "scene_flip_capture"
 
+        # Mode-13h IMAGE scenes (title/menu/titus/intro): identify which image is on screen at the 91C0
+        # copy (fingerprint its source) so the faithful 13h path can re-render it from the recovered asset
+        # instead of reading the A000 framebuffer.
+        _IMG_COPY = (0x1030, 0x91C0)
+        _origimg = rt.cpu.replacement_hooks.get(_IMG_COPY)
+
+        def _identify_13h(c):
+            try:
+                src = ((c.s.ds << 4) + c.s.si) & 0xFFFFF
+                name = identify_image(bytes(c.mem.data[src:src + 256]), args.game_root)
+                if name is not None:
+                    prev = current_13h_image[0]
+                    # only reset the logo state when a DIFFERENT image loads; the bg copy re-runs each
+                    # frame on the same title, but the logo (9090) is sticky on screen.
+                    if prev is None or prev[0] != name:
+                        current_13h_image[0] = (name, False)
+            except Exception:
+                pass
+            if _origimg is not None:
+                return _origimg(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_IMG_COPY] = _identify_13h
+        rt.cpu.hook_names[_IMG_COPY] = "image13h_identify"
+
+        # 90C0 = the title logo-top overlay copy (rep movsw, AFTER the background). Mark the logo present.
+        _IMG_LOGO = (0x1030, 0x90C0)
+        _origlogo = rt.cpu.replacement_hooks.get(_IMG_LOGO)
+
+        def _mark_13h_logo(c):
+            if current_13h_image[0] is not None:
+                current_13h_image[0] = (current_13h_image[0][0], True)
+            if _origlogo is not None:
+                return _origlogo(c)
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_IMG_LOGO] = _mark_13h_logo
+        rt.cpu.hook_names[_IMG_LOGO] = "image13h_logo"
+
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
         ad-hoc live read — that describes the back buffer being built). Gameplay/iris frames come from the
@@ -835,7 +876,29 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         if mode in (0, 1, 2, 3, 7):
             rgb = render_text_rgb(mem, rt.dos.video_mode & 0xFF, rt.dos.video_page)
         elif mode in (0x13, 0x19):
-            rgb = render_vga_rgb(mem, rt.dos.vga_palette)
+            if faithful:
+                # FAITHFUL 13h: re-render the recovered image (identified at the 91C0 copy) from the
+                # decoded asset + the live DAC palette — NEVER read the A000 framebuffer. An unidentified
+                # image fails LOUD (gap), never falls back to VM VRAM.
+                cur = current_13h_image[0]
+                rgb = None
+                if cur is not None:
+                    name, has_logo = cur
+                    try:
+                        img = render_image_scene(name, args.game_root, with_logo=has_logo)
+                        pal = np.array(rt.dos.vga_palette or [(0, 0, 0)] * 256, dtype=np.uint8)
+                        rgb = pal[np.frombuffer(img, dtype=np.uint8).reshape(200, 320)]
+                        faithful_info[0] = f"faithful[IMAGE:{name}]"
+                    except Exception:
+                        rgb = None
+                if rgb is None:
+                    if gap_seen[0] != "13h":
+                        gap_seen[0] = "13h"
+                        print("[faithful] mode-13h image not identified (no recovered leaf yet)", flush=True)
+                    faithful_info[0] = "FAITHFUL GAP: 13h image (see console)"
+                    rgb = np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
+            else:
+                rgb = render_vga_rgb(mem, rt.dos.vga_palette)
         elif rt.program.memory.ega_planar:
             ds = rt.program.memory.ega_display_start
             if faithful:
