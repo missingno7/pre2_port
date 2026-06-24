@@ -13,14 +13,39 @@ This bridge reads the VM state and produces:
 """
 from __future__ import annotations
 
+import os
+
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge.render_state import read_renderer_state, retarget_page
+from pre2.codecs.sqz import unpack_sqz
+from pre2.recovered.gameover_background import render_gameover_background
 from pre2.recovered.hud import draw_hud, draw_status_bar
 from pre2.recovered.object_render import paint_sprite, plan_frame
 from pre2.recovered.scene_compositor import (FixtureBackground, MissingBackgroundGap,
                                              RecoveredBackground, compose_scene)
 
 _GAMEOVER_BG = "gameover_diorama"
+_GAMEOVER_ASSET = "GAMEOVER.SQZ"
+_SCROLL = 0x6BC4         # [0x6BC4] vertical scroll offset (9C87)
+_BACK_PAGE = 0x2DD8      # [0x2DD8] dest page (9C87)
+_DATA = 0x1A0F
+
+_asset_cache: dict = {}
+
+
+def load_gameover_asset(game_root: str) -> bytes:
+    """Decode GAMEOVER.SQZ (the diorama image) via the recovered SQZ codec; cached per game_root."""
+    if game_root not in _asset_cache:
+        with open(os.path.join(game_root, _GAMEOVER_ASSET), "rb") as f:
+            _asset_cache[game_root] = unpack_sqz(f.read())
+    return _asset_cache[game_root]
+
+
+def gameover_background(mem, *, game_root, page) -> RecoveredBackground:
+    """The recovered diorama background: decode GAMEOVER.SQZ, compose the scrolled window for ``page``."""
+    scroll = mem.data[(_DATA << 4) + _SCROLL]
+    planes = render_gameover_background(load_gameover_asset(game_root), scroll, page)
+    return RecoveredBackground(planes=tuple(bytes(pl) for pl in planes))
 
 
 def _object_overlay(rs):
@@ -54,10 +79,10 @@ def build_gameover_overlays(mem, dos, *, game_root, page):
 
 
 def build_gameover_scene(mem, dos, *, game_root, page, background=None):
-    """Compose the game-over scene. Background defaults to the explicit MissingBackgroundGap; a recovered
-    or fixture background may be passed in (the latter only by diagnostics)."""
+    """Compose the game-over scene: the recovered diorama background (decoded from GAMEOVER.SQZ) +
+    the recovered object/HUD overlays. Pass ``background`` to override (e.g. a diagnostic fixture)."""
     if background is None:
-        background = MissingBackgroundGap(_GAMEOVER_BG)
+        background = gameover_background(mem, game_root=game_root, page=page)
     overlays = build_gameover_overlays(mem, dos, game_root=game_root, page=page)
     return compose_scene(background, overlays, page)
 

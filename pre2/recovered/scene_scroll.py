@@ -14,11 +14,18 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from pre2.islands import oracle_link
+
 _STRIDE = 0x28
 _COUNT = 0x1B80          # 176 rows * 0x28 = the viewport window
 _STAGING = 0x3F40        # the off-screen staging base in VRAM (9C87's source)
 
 
+@oracle_link("1030:9C87",
+             "windowed vertical-scroll copy (the game-over background present): with EGA write mode 1 "
+             "(latch copy, set by 453B) + map mask 0x0F, rep-movsb a 0x1B80-byte (176-row) window across "
+             "all 4 planes from the staging A000:(0x3F40 + 0x28*[0x6BC4]) to the back page [0x2DD8].",
+             "VERIFIED", merge_target="render_scene")
 def window_scroll_copy(dst_planes: Sequence[bytearray], src_planes: Sequence[bytes], scroll: int,
                        dest_page: int, *, src_base: int = _STAGING, count: int = _COUNT,
                        stride: int = _STRIDE) -> None:
