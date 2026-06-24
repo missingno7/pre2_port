@@ -591,6 +591,12 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     boundary_capture[0] = (
                         render_planar_rgb_from_planes(planes, pg, c.pre2_dos.vga_palette),
                         pg, "GAMEPLAY", None)
+                    # When the bands meet (top>=bot) the page is fully black. The death issues TWO
+                    # 30C6 clears on the SAME page; in the engine the 2nd clears an already-black page
+                    # (invisible). Promote the black result to the fade base so a repeated 30C6 stays
+                    # black instead of re-fading the (stale) level frame a second time.
+                    if top >= bot:
+                        last_committed[0] = (planes, pg)
             except Exception:
                 pass
             if _orig3111 is not None:
