@@ -1,9 +1,36 @@
 # Prehistorik 2 run status
 
-> The dated entries below `2026-06-20` are historical bring-up notes. Where they
-> describe the project as pre-gameplay, list SQZ decompression as the "next
-> blocker", or say `play.py --view` runs pure ASM, they are **superseded** by the
-> entry below.
+## ★ CURRENT STATUS (2026-06-24) — authoritative; everything under the ARCHIVE divider is historical
+
+**Phase:** hybrid recovered-source runtime + renderer recovery complete for gameplay/scenes;
+**next phase = state ownership**.
+
+- **Runtime:** `play.py --view` is the **HYBRID runtime by default** — recovered native replacements run
+  in place of the ASM. The original ASM runs ONLY in `--no-replacements` (oracle) or `--verify-hooks`
+  (verify) modes. Unrecovered behaviour fails loud (`Pre2HybridGap`), never a silent ASM fallback.
+- **Rendering — recovered + live-grounded:** SQZ asset decode; sprite/object decode + classify + blit;
+  the object-list draw pass (`26FA`); frame renderer (tile-row / grid / scroll / page-flip); HUD; iris;
+  fireflies / particles / foreground-tile z-order; digital audio mixer + tracker. The faithful renderer
+  (`--faithful`) composes these recovered leaves into a clean framebuffer — it **never reads the VM VRAM**.
+- **Scenes — grounded hook-first:** game-over (`9C87`), tally (`51A3`), OLDIES (`0C3E`), menu/map scroll
+  (`scroll_blit` / `scroll_shift`), text (`draw_string`), and the title/intro 13h image (recovered +
+  faithful path wired).
+- **Remaining faithful-renderer gaps:** the two 0Dh scrolling-scene **compositions** (mode-select menu,
+  map/carte) — **blocked on a history-dependent buffer** (recover the initial full-page-fill producer + a
+  persistent-page model; do NOT rebuild from scratch). See `renderer_bug_table.md` #3/#5.
+- **Still ASM — the next phase (state ownership):** gameplay UPDATE — movement / physics / collision / AI
+  and the object-list state machine that drives the recovered renderer.
+
+Canonical rules: `AGENTS.md` (north star + status taxonomy + collapse rule). Per-island status:
+`recovered_islands.md`. Renderer detail: `faithful_visual_layer.md`.
+
+---
+
+# ═══════ ARCHIVED LOG (dated; most recent first) — SUPERSEDED by the CURRENT STATUS above ═══════
+
+> These are dated work-log entries kept for provenance. Anything here that describes the project as
+> pre-gameplay, lists SQZ as the "next blocker", says `--view` runs pure ASM, or states a "current
+> limitation" is **superseded** — trust the CURRENT STATUS section above, not the entries below.
 
 ## 2026-06-24 — scene leaves grounded as live replacements (the recovered-leaf-first correction)
 
@@ -172,7 +199,10 @@ Interactive notes:
 - The oldies/date screen uses press-and-hold semantics. Pressing and immediately releasing a key before the loop observes it does not skip it. In the live viewer, normal physical key hold/release goes through INT 09h.
 - The title/menu screen is reached from original code and original `.sqz` assets; this is no longer a fake viewer or asset-only renderer.
 
-## Current limitation
+## (historical, 2026-06-19) Limitation as of that date — SUPERSEDED
+
+> Superseded: a clean frame boundary (`6772`), the recovered gameplay frame renderer, and the verified
+> hybrid runtime now exist (see CURRENT STATUS). Kept for provenance only.
 
 This is not yet a complete playable source port. The VM can launch to the PRE2 title/menu and proceeds through original asset loading, but there is no clean frame boundary, source-level gameplay model, or verified lifted game-loop yet. The next cut should be timer/frame/input pacing and stable snapshots around menu selection and level load.
 

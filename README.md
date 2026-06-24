@@ -14,19 +14,27 @@ recovered native code is now part of the normal runtime:
 - **The hybrid runtime is the default.** `pre2.runtime.create_pre2_runtime()`
   installs native **replacement** hooks that run *in place of* the original ASM.
   As coverage grows the game runs faster and more of it is clean source.
-- **The recovered asset + rendering pipeline is real, verified source.** Recovered
-  byte-for-byte vs the ASM and running live: **SQZ asset decode** (all three formats —
-  LZSS / LZW / Huffman+RLE; `pre2/codecs/sqz.py`), **sprite-sheet demux** into the
-  planar cache (`pre2/recovered/sprite_decode.py`), the **sprite blit** primitive
-  (`pre2/recovered/renderer.py`), and the **frame renderer** — tile-row fill, grid
-  redraw, scroll-copy, page-flip (`pre2/recovered/frame_renderer.py`), each composing
-  the verified blit directly and driven by `Camera`/`ScrollState`/`TileMap` views
-  (`pre2/bridge/frame.py`). The authoritative, code-generated list of recovered
-  islands (with status + ASM boundary + contract + merge target) is
+- **Gameplay rendering is recovered, verified source running live.** Byte-for-byte vs
+  the ASM and replacing it in the hybrid runtime: **SQZ asset decode** (LZSS / LZW /
+  Huffman+RLE; `pre2/codecs/sqz.py`), **sprite-sheet demux**, **sprite/object classify**,
+  the **sprite blit**, the **moving-sprite / object-list draw pass** (`26FA`), the
+  **frame renderer** (tile-row / grid redraw / scroll-copy / page-flip), the **HUD**, the
+  end-level **iris**, **fireflies / particles / foreground-tile z-order**, and the digital
+  **audio mixer + tracker**. The faithful renderer (`--faithful`) composes these SAME
+  recovered leaves into a clean framebuffer — it never reads the VM VRAM.
+- **Non-gameplay scenes are grounded hook-first too.** Live-grounded: **game-over** (`9C87`),
+  **tally** (`51A3`), **OLDIES** glyph (`0C3E`), the menu/map **scroll** (`scroll_blit` /
+  `scroll_shift`), **text** (`draw_string`); and the title/intro **13h image** is
+  codec-decoded + composited (`render_title_image`, faithful path wired). The only remaining
+  faithful-renderer gaps are the two **0Dh scrolling-scene compositions** (mode-select menu,
+  map/carte), blocked on a history-dependent buffer (see
+  [`docs/pre2/faithful_visual_layer.md`](docs/pre2/faithful_visual_layer.md)). The
+  code-generated island list is
   [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md).
-- **Still ASM (not yet recovered):** the moving-sprite / object-list draw loop, the
-  sprite classifier (`4232`, which produces the type/mask data the recovered blit
-  consumes), and all gameplay update (movement, physics, collision, objects/player).
+- **Still ASM — the *state-ownership* track, not rendering.** Gameplay UPDATE (player/object
+  movement, physics, collision, AI, and the object-list state machine that produces what the
+  recovered renderer draws) is still interpreted ASM; recovering those controllers is the
+  next phase. The rendering/audio output is recovered; the state that drives it is not yet.
 - **No silent fallbacks.** If the hybrid runtime reaches behaviour we have not
   recovered, it **fails loud** with a precise gap report (`Pre2HybridGap`) instead
   of secretly running the original ASM. Running the original ASM is allowed, but
