@@ -59,7 +59,7 @@ The bootstrap phase is over. The VM **runs PRE2 gameplay correctly**, and recove
 native code is now part of the normal runtime.
 
 - **Hybrid runtime is the default.** `create_pre2_runtime()` installs native
-  **replacement** hooks (`pre2/replacements.py`) that run in place of the original
+  **replacement** hooks (`pre2/checkpoints/`) that run in place of the original
   ASM. `play.py --view` is the hybrid runtime, not pure ASM. The earlier
   VM-correctness fixes (BIOS ROM write-protect, ADC/SBB + shift/rotate flags, CRTC
   display-start reset, EGA read-mode-1 colour compare) made gameplay render correctly.

@@ -177,12 +177,11 @@ dos_re/                 reusable, game-independent DOS RE environment
 
 pre2/                   Prehistorik 2-specific recovery layer
   runtime.py            PRE2 launch/snapshot wiring; installs hybrid replacements
-  replacements.py       active replacement adapters (thin hooks) + verify wiring
   bootstrap_hooks.py    bootstrap helpers only (LZEXE/AdLib), no gameplay
   codecs/               recovered VM-independent asset codecs (sqz.py)
-  recovered/            recovered VM-independent gameplay logic   [for next islands]
+  recovered/            recovered VM-independent gameplay/render logic (the leaves)
   bridge/               memory views: VM memory <-> recovered dataclasses [stateful]
-  checkpoints/          verification contact points               [grows from replacements]
+  checkpoints/          the replacement adapters (thin hooks) + verify wiring; one module per subsystem
   probes/               temporary observation/diagnostic tools    [as needed]
   launch.py / cli.py    PRE2 entry points
   analysis.py           PRE2 inspection helpers

@@ -197,7 +197,7 @@ needs validation, replay the demo in verify mode → diagnose the first divergen
 
 ## Slice 1 — asset decompression: complete
 
-The first recovered island. `pre2/replacements.py` hosts the SQZ decompressor
+The first recovered island. `pre2/checkpoints/` hosts the SQZ decompressor
 hook at `1030:107B` (role: *replacement adapter*, with a *verifier* at the
 decompressor RET sites; this island merges into the **asset loader**).
 
