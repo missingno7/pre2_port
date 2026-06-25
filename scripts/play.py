@@ -521,6 +521,12 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     menu_page = [None]         # the recovered MenuScenePage (stateful), seeded at the 9718 menu fill and
                                #   evolved each frame by the live draw_string/scroll_shift leaf events
     menu_active = [False, -1 << 30]  # [is the menu controller running, ic of the last menu event]
+    held_planes = [None]       # (planes, page, pel, active_w, wrap, tick) of the last pan-scene (menu/carte)
+                               #   faithful frame — re-deplanarized with the LIVE palette to ride the DAC
+                               #   fade-out/in between scenes (the planes are unchanged during a fade), so the
+                               #   inter-scene transition shows the scene fading instead of a magenta gap.
+    faithful_tick = [0]        # increments once per faithful planar render — a wall-clock-independent grace
+                               #   clock (the busy-wait instruction span differs live vs. deterministic)
     current_13h_image = [None]  # (asset name, has_logo) of the mode-13h image on screen; set at 91C0/9090
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
@@ -941,6 +947,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         ad-hoc live read — that describes the back buffer being built). Gameplay/iris frames come from the
         latest boundary capture; scenes whose leaf is not recovered yet fail LOUD (diagnostic frame +
         console hint), never ASM VRAM."""
+        faithful_tick[0] += 1
         cur_kind = derive_scene_kind(rt.cpu.mem, rt.dos)
         if cur_kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
             # Long gap with no 6772 commit (e.g. the player-death fall: a sub-loop that animates the
@@ -1000,12 +1007,17 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         # menu fill, evolved by the live draw_string/scroll_shift events); deplanarize it with the live CRTC
         # pan. NEVER the VM framebuffer. If the menu is reached without a seed (e.g. a mid-menu attach) this
         # branch is skipped and the scene falls through to the loud gap below (no fallback).
-        if (menu_active[0] and menu_page[0] is not None and rt.program.memory.ega_pan_active
-                and rt.cpu.instruction_count - menu_active[1] < 60000):
+        # Gate on the controller-active flag (seed 9725 -> ret 9885), NOT an instruction-count freshness:
+        # the menu's own fade-out (the 9286 DAC fade) runs WHILE menu_active is True, and during it the menu
+        # producers (draw_string/scroll_shift) pause — so an ic-freshness gate would wrongly drop to a gap
+        # there (the bug). menu_page is unchanged during the fade; deplanarizing it with the live (fading)
+        # palette is byte-exact.
+        if menu_active[0] and menu_page[0] is not None and rt.program.memory.ega_pan_active:
             pel = rt.program.memory.ega_pan_pel
             active_w = (rt.program.memory.ega_h_display_end + 1) * 8
             faithful_info[0] = "faithful[MENU]"
             last_gp_ic[0] = rt.cpu.instruction_count
+            held_planes[0] = (menu_page[0].planes, ds, pel, active_w, 0x1FFF, faithful_tick[0])
             return render_planar_rgb_from_planes(menu_page[0].planes, ds, rt.dos.vga_palette,
                                                  pel, active_w, wrap=0x1FFF)
         # CARTE / map scroll-in (0Dh, panning). The page is rebuilt faithfully from the captured asset +
@@ -1013,17 +1025,32 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         # fires every carte frame) AND no recent scroll_shift (that 9804 self-copy = the stateful menu,
         # which build_carte_page does not model -> stays a loud gap). Deplanarize with the live CRTC pan
         # (display_start ds + pel) over the 0x2000 circular page at the carte's 312px active width.
+        # The carte scroll-in fires scroll_blit (965A) once per frame, so its capture goes stale within a
+        # frame; in LIVE play one frame can be ~100k+ instructions (the retrace busy-waits), so the freshness
+        # window must span a few frames (200k), not 60k. The held-planes grace below rides its fades.
         if (carte_capture[0] is not None and rt.program.memory.ega_pan_active
-                and rt.cpu.instruction_count - carte_capture[0][2] < 60000
-                and rt.cpu.instruction_count - scroll_shift_ic[0] > 60000):
+                and rt.cpu.instruction_count - carte_capture[0][2] < 200000
+                and rt.cpu.instruction_count - scroll_shift_ic[0] > 200000):
             asset, sx, _ic = carte_capture[0]
             planes = build_carte_page(asset, sx)
             pel = rt.program.memory.ega_pan_pel
             active_w = (rt.program.memory.ega_h_display_end + 1) * 8
             faithful_info[0] = f"faithful[CARTE]@{sx}"
             last_gp_ic[0] = rt.cpu.instruction_count
+            held_planes[0] = (planes, ds, pel, active_w, 0x1FFF, faithful_tick[0])
             return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette,
                                                  pel, active_w, wrap=0x1FFF)
+        # Held pan-scene grace: between scenes the engine DAC-fades the outgoing page out / the incoming page
+        # in (the 1030:9286 / 92A3 palette-fade loop), during which the scene's producer pauses and the gates
+        # above drop. The planes are unchanged through a DAC fade, so re-deplanarize the last pan-scene planes
+        # with the LIVE (fading) palette — byte-exact for the fade, never the VM framebuffer. Bounded by a
+        # frame-tick grace (wall-clock independent) so a genuinely persistent unrecovered pan scene still
+        # fails loud.
+        if (rt.program.memory.ega_pan_active and held_planes[0] is not None
+                and faithful_tick[0] - held_planes[0][5] < 150):
+            hp, hpg, hppel, hpaw, hpwrap, _t = held_planes[0]
+            faithful_info[0] = "faithful: holding (scene fade)"
+            return render_planar_rgb_from_planes(hp, hpg, rt.dos.vga_palette, hppel, hpaw, wrap=hpwrap)
         # SCENE / IMAGE. A brief blip to SCENE/IMAGE during a gameplay transition (e.g. the respawn frame
         # where the camera is momentarily at origin -> the camera heuristic reads SCENE, or a mid-load
         # frame) must NOT flash the diagnostic placeholder. Hold the last frame for a short grace period

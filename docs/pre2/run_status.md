@@ -7,12 +7,15 @@ Two SEPARATE axes (a FaithfulVisual shadow update is NOT a hybrid live replaceme
 **FaithfulVisual (composition) — every game screen has a recovered faithful path; NO unrecovered SCENE leaf
 remains.** Composed from recovered leaves (never the VM VRAM): gameplay frame, iris/fade/curtain, HUD,
 particles, foreground tiles, fireflies, game-over, tally, OLDIES, 13h images, CARTE/map, mode-select menu.
-Remaining gaps are transient/by-design only: (a) a brief magenta gap placeholder on cleared/black transition
-frames or a mid-scene attach (no capture/seed yet) — on a true cold boot the capture hooks fire as each scene
-draws, so it does not persist; (b) by-design loud gaps: an unidentified 13h image, a snapshot attached
-mid-scene, DOS text mode. (Diagnosed via `--video faithful` cold-boot + demo replay; the demo's early
-oldies/black gaps are a mid-attract snapshot artifact, not a live regression. `PRE2_GAP_DUMP=1` saves the VM
-screen at each gap; the gap print now carries CS:IP/mode/scene-signal context.)
+Scene-to-scene TRANSITIONS are handled (fixed 2026-06-25): between scenes the engine DAC-fades the page
+out/in (the 1030:9286 / 92A3 palette-fade loop) while the scene's producer pauses; the planes are unchanged
+through a DAC fade, so the faithful path re-deplanarizes the last pan-scene planes with the LIVE (fading)
+palette — byte-exact for the fade, bounded by a frame-tick grace (the menu is gated on its controller-active
+flag, not an instruction-count freshness, since the live retrace busy-waits make one frame ~100k+
+instructions — the deterministic clock hid this). Remaining gaps are by-design only: an unidentified 13h
+image, a snapshot attached mid-scene, DOS text mode. (Diagnosed via `--video faithful` cold-boot + demo
+replay; `PRE2_GAP_DUMP=1` saves the VM screen at each gap; the gap print carries CS:IP/mode/scene-signal
+context.)
 
 **Hybrid live replacements — 25 recovered leaves run in place of the ASM** (sqz; sprite decode/blit;
 object_render 26FA; frame tile-row/grid/scroll/panel; anim_advance; camera_shake; iris; palette_fade;
