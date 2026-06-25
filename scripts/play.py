@@ -1556,6 +1556,15 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Status/summary lines use a few non-ASCII glyphs (e.g. the '✗' divergence marker in the verify-hooks
+    # summary). On a legacy Windows code page (cp1250) the default console encoding raises UnicodeEncodeError
+    # mid-print; switch to UTF-8 with a backslash fallback so output is correct on UTF-8 terminals and never
+    # crashes on the rest.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(description="Prehistorik 2 DOS VM bootstrap/source-port runner (VGA + digital audio)")
     p.add_argument("--exe", default=str(ROOT / "assets" / "pre2.exe"), help="path to original PRE2.EXE")
     p.add_argument("--game-root", default=str(ROOT / "assets"), help="directory containing PRE2 assets")

@@ -224,9 +224,12 @@ not a wait-loop replacement:
 - Audio must keep pumping during the sleep (the mixer thread is fed on a few-ms cadence today), and input
   must stay responsive (wake early on a key event).
 
-This is a scheduler/pacing redesign of the live outer loop, **out of scope for this pass**. It will get its
-own design note + review before any code. The deterministic/headless/verify speedup (the 86%-hot path for
-tests and tooling) is the first and separable target, now shipped (§8).
+This is a scheduler/pacing redesign of the live outer loop, **out of scope for this pass**. The full
+report-first design (why fast-forward is the wrong model for live; how the live waits pace the game today; the
+proposed park-instead-of-spin wait; interactions with `live_cpu_budget`/`--cpu-hz`/audio/input/SDL/deadline;
+why it is a CPU/battery win not a smoothness win; and explicit stop conditions) is written up in
+**`docs/pre2/live_view_timing_design.md`** — design only, no live code changed. The deterministic/headless/
+verify speedup (the 86%-hot path for tests and tooling) is the first and separable target, now shipped (§8).
 
 ## 8. As-built — the promoted recovered timing primitive (and why it differs from §5)
 
