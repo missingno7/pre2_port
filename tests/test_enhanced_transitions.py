@@ -82,13 +82,20 @@ def test_iris_transition_covered_is_black_then_releases():
 
 def test_apply_curtain_reveals_center_out():
     new = np.full((200, 320, 3), 200, np.uint8)
-    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 0)
-    assert (f == 0).all(), "completed_pairs=0 -> fully black"
-    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 1)
-    assert tuple(f[88, 160]) == (200, 200, 200), "centre strip revealed first"
-    assert tuple(f[88, 8]) == (0, 0, 0), "edges still black at one pair"
-    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 10)
-    assert tuple(f[88, 160]) == (200, 200, 200) and tuple(f[180, 160]) == (0, 0, 0), "HUD rows stay black"
+    assert (apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 0.0) == 0).all(), "progress 0 -> black"
+    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 0.5)   # continuous half-width centre band
+    assert tuple(f[88, 160]) == (200, 200, 200), "centre revealed first"
+    assert tuple(f[88, 8]) == (0, 0, 0), "edges still black at half progress"
+    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 1.0)
+    assert tuple(f[88, 0]) == (200, 200, 200) and tuple(f[88, 319]) == (200, 200, 200), "progress 1 -> full width"
+    assert tuple(f[180, 160]) == (0, 0, 0), "HUD rows stay black"
+
+
+def test_apply_curtain_is_monotonic_centre_out():
+    new = np.full((200, 320, 3), 200, np.uint8)
+    widths = [int((apply_curtain(np.zeros((200, 320, 3), np.uint8), new, p)[88] != 0).any(axis=1).sum())
+              for p in (0.2, 0.4, 0.6, 0.8, 1.0)]
+    assert widths == sorted(widths) and widths[0] > 0 and widths[-1] == 320, "reveal grows monotonically to full"
 
 
 def test_room_transition_covered_is_black_no_blink():

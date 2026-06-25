@@ -72,7 +72,7 @@ class EnhancedRenderer:
             if vfade_active:
                 tr.note_vfade(vf[0], vf[1])
             if curtain_active:
-                tr.note_curtain(now, cu[0], compose(cur, None, 1.0) if cur is not None else None)
+                tr.note_curtain(now, cu[0], cu[2])     # cu[2] = the NEW room rendered from the curtain page
             if not vfade_active and not curtain_active:
                 tr.note_ended(now)
         elif tr is not None:

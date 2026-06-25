@@ -33,10 +33,10 @@ _COVERED_RELEASE_S = 0.6   # max covered-black hold after the recovered effect e
 # Room/cave transition (close = vertical fade-out, then a center-out curtain reveal of the new room). Present
 # durations are the smooth driver; both phases are ANCHORED to the recovered progress (never less closed /
 # less revealed than the game) so they always finish in step with the game, never cut off or lagging.
-_VFADE_CLOSE_S = 0.5
-_CURTAIN_OPEN_S = 0.6
+_VFADE_CLOSE_S = 0.4
+_CURTAIN_OPEN_S = 0.4
 _VFADE_MID = 88           # the two fade bands meet here (fully closed)
-_CURTAIN_FULL = 10        # completed_pairs at a full reveal
+_CURTAIN_FULL = 10        # recovered completed_pairs at a full reveal
 
 
 class EnhancedTransition:
@@ -122,11 +122,13 @@ class EnhancedTransition:
             return frame
         if self.phase == "covered":        # black while the new room loads (never show it early -> no blink)
             return np.zeros_like(self.old_frame)
-        # open: center-out curtain reveal of the new room (present-time + anchor to the recovered progress)
-        p = min(1.0, max(0.0, (now - self._open_start) / _CURTAIN_OPEN_S))
-        pairs = max(_CURTAIN_FULL * p, self._curtain_anchor)
+        # open: smooth center-out reveal of the NEW room, driven by PRESENT-time progress (smooth like the
+        # iris), anchored to the recovered progress as a floor so it always reaches full as the game's curtain
+        # ends (never cut off mid-reveal). new_frame is the actual new room (rendered from the curtain page).
+        p_present = (now - self._open_start) / _CURTAIN_OPEN_S
+        p = max(p_present, self._curtain_anchor / _CURTAIN_FULL)
         base = self.new_frame if self.new_frame is not None else self.old_frame
-        return apply_curtain(np.zeros_like(base), base, pairs)
+        return apply_curtain(np.zeros_like(base), base, p)
 
     def _render_iris(self, now):
         if self.phase == "close":
