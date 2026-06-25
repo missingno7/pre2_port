@@ -40,6 +40,7 @@ from pre2.recovered.carte import build_carte_page
 from pre2.recovered.menu_scene import MenuScenePage
 from pre2.recovered.scene_compositor import RecoveredBackground
 from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
+from pre2.enhanced.extract import extract_enhanced_frame
 
 _DSEG = 0x1A0F
 _HUD_OFF = 176 * 0x28      # HUD strip start within a page (row 176)
@@ -88,6 +89,16 @@ class FaithfulSession:
             self._go_asset = load_gameover_asset(args.game_root)
         except Exception:
             self._go_asset = None
+        # --- enhanced (modern RGB/RGBA) source-snapshot seam (--video enhanced only) ---
+        # Captured ONLY at the gameplay source-frame commit (6772), kept as prev+cur for the enhanced
+        # compositor to interpolate. enh_clock() timestamps each commit (wall clock in live --view); when
+        # unset (deterministic/headless) enhanced capture is off.
+        self.enhanced_capture = False
+        self.enh_clock = None
+        self.enh_prev = None
+        self.enh_cur = None
+        self.enh_prev_time = 0.0
+        self.enh_cur_time = 0.0
 
     # -------------------------------------------------------------------- helpers
     def _rw(self, mem, off):
@@ -169,6 +180,17 @@ class FaithfulSession:
             self.last_capture_ic = rt.cpu.instruction_count
             self.planar_image_capture = None      # a committed gameplay frame -> the title image is gone
             self.last_hud = self._snapshot_hud(planes, page)  # the DISPLAYED HUD (frozen between commits)
+            if self.enhanced_capture and self.enh_clock is not None:
+                # Source-snapshot seam: extract the modern RGB/RGBA frame at THIS gameplay commit (the only
+                # place a new source frame is produced ~25 fps) and keep prev+cur for the enhanced compositor.
+                try:
+                    efs = extract_enhanced_frame(c.mem, self.dos, game_root=self.args.game_root,
+                                                 with_faithful=False)
+                    if efs is not None:
+                        self.enh_prev, self.enh_cur = self.enh_cur, efs
+                        self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, self.enh_clock()
+                except Exception:
+                    pass
         except FaithfulVisualGap:
             self.boundary_capture = None           # a SCENE/IMAGE frame at 6772 -> handled at present time
         except Exception:

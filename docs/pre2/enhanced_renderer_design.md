@@ -117,6 +117,27 @@ rasterizer per display subframe, and falls back to the faithful base for any lay
    loop to make the interpolation live.
 5. (Later) widen coverage; smooth camera policy; etc. — all deferred.
 
+## 2b. Live wiring (done)
+
+`--video enhanced` is wired into the live viewer (gameplay-only object interpolation, faithful passthrough
+everywhere else):
+- **Source-snapshot seam**: `FaithfulSession` captures an `EnhancedFrameState` at each gameplay commit (6772,
+  ~25 fps) and keeps `enh_prev`/`enh_cur` + wall-clock timestamps (`enh_clock`). Captured only on gameplay
+  commits; scenes never hit 6772, so the snapshot goes stale → passthrough.
+- **Present**: `EnhancedRenderer.present(now, faithful_frame)` computes `alpha = clamp((now − cur_time)/(cur
+  − prev), 0, 1)` and returns `compose(cur, prev, alpha)`; it returns the faithful frame unchanged when
+  interpolation is off (`--enhanced-no-interpolation`), no/stale/large-gap source snapshot, or non-gameplay.
+  One source-frame of display latency (true interpolation, no extrapolation).
+- **Native refresh** is achieved by presenting at the host refresh: run `--present-hz <monitor>` (e.g. 144 /
+  240); the live loop presents at that cadence and `present()` interpolates each display frame. The game
+  still advances at its own wall-clock rate (~25 fps source commits); enhanced never advances game state.
+- **Diagnostics** (`status()` / `active_enhancements()`): backend, alpha, #interpolated sprites, #unsupported,
+  and the faithful-passthrough reason.
+- **Known v1 gaps (reported, not faked):** OPAQUE/ERASE flash/blink sprites are non-interpolated (unsupported);
+  the particle (4B8E) / foreground-tile (3732) **effect layers** are not yet composited into the enhanced
+  frame, so they are absent during interpolation (present in faithful; absent in steady witnesses). These are
+  separate layers for a later pass — never invented, never pulled from the VM framebuffer.
+
 ## 3. Grounding rules (binding)
 
 - No invented game state; no VM-framebuffer fallback; no generic frame-blend presented as object-aware; no

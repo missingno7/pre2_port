@@ -58,9 +58,13 @@ def _extract_sprite_rgba(draw, src_bank, stride, page, palette):
     return rgba, int(x0), int(y0)
 
 
-def extract_enhanced_frame(mem, dos, *, game_root) -> EnhancedFrameState | None:
+def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
-    (i.e. not a gameplay frame -> the caller passes through faithful)."""
+    (i.e. not a gameplay frame -> the caller passes through faithful).
+
+    ``with_faithful`` renders the full faithful frame into ``faithful_rgb`` (for parity/standalone use); the
+    live viewer passes ``False`` since it already has the session's faithful frame (avoids a redundant render).
+    """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
     if cam is None:
@@ -72,9 +76,11 @@ def extract_enhanced_frame(mem, dos, *, game_root) -> EnhancedFrameState | None:
     render_frame(replace(rs, object_camera=None), bg_planes, palette, rebuild=True)
     background_rgb = render_planar_rgb_from_planes(bg_planes, page, palette)
 
-    full_planes = [bytearray(0x10000) for _ in range(4)]
-    render_frame(rs, full_planes, palette, rebuild=True)
-    faithful_rgb = render_planar_rgb_from_planes(full_planes, page, palette)
+    faithful_rgb = None
+    if with_faithful:
+        full_planes = [bytearray(0x10000) for _ in range(4)]
+        render_frame(rs, full_planes, palette, rebuild=True)
+        faithful_rgb = render_planar_rgb_from_planes(full_planes, page, palette)
 
     sprites, unsupported = [], []
     attrs = rs.object_attrs or {}

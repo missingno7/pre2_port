@@ -593,8 +593,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     if session is not None:
         session.install_hooks()
     # The enhanced renderer is a presentation layer ON TOP of the faithful session: it is handed the composed
-    # faithful frame (never mem/dos) and projects it. Milestone 2 = passthrough (returns it unchanged).
-    enhanced = EnhancedRenderer(session) if enhanced_mode else None
+    # faithful frame + the session's grounded source snapshots (never mem/dos) and projects it through the
+    # modern RGB/RGBA object-aware compositor. The session captures a source snapshot per gameplay commit.
+    enhanced = None
+    if enhanced_mode:
+        enhanced = EnhancedRenderer(session, interpolate=not getattr(args, "enhanced_no_interpolation", False))
+        session.enhanced_capture = True
+        session.enh_clock = perf_counter
 
     def render_current():
         # Faithful backend: FaithfulSession composes the frame from recovered leaves (never the VM
@@ -611,7 +616,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 pygame.display.flip()
                 return
             if enhanced is not None:        # project the faithful frame through the modern pipeline
-                rgb = enhanced.render(rgb, now=perf_counter())
+                rgb = enhanced.present(perf_counter(), rgb)
                 faithful_info[0] = f"{faithful_info[0]} | {enhanced.status()}"
         else:
             faithful_info[0] = ""
@@ -1015,6 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
                         "faithful frame; never reads the VM framebuffer); currently a passthrough baseline. "
                         "Execution mode is the other axis: hybrid (default) / --no-replacements / --verify-hooks.")
     p.add_argument("--video-verify", action="store_true", help="(with `--video faithful`) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
+    p.add_argument("--enhanced-no-interpolation", action="store_true", help="(with `--video enhanced`) disable object interpolation -> enhanced presents the faithful frame at each source commit (a faithful-equivalent baseline; useful to A/B the interpolation)")
     p.add_argument("--speed", type=int, default=150_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Default 150k ~= PRE2's native rate: its per-frame game work is only ~1.3-1.9k instr (measure_frame_work.py), so ~132k (p90 work x 70Hz) fills one retrace frame with minimal spin; higher values just inflate idle retrace spin (a 450k frame is ~99% spin) and overrun the host interpreter (~270k instr/s) so the demo loop falls behind real time and drops to the 4Hz render fallback. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
