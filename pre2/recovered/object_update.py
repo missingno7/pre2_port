@@ -20,7 +20,7 @@ from __future__ import annotations
 
 __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
-           "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check"]
+           "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -161,3 +161,21 @@ def despawn_check(obj_x: int, obj_y: int, state: int, flags5: int, old_id: int,
     if state >= _STATE_FREE_SLOT and not (new_def4 & 0x02):   # [asm 80B4 jb / 7D0F test 2] free spawn slot
         new_def2 = EMPTY_ID
     return DespawnResult(False, EMPTY_ID, new_def2, new_def4, 0)
+
+
+# -- on-screen tile-window check (1030:8022) ---------------------------------------------------------- #
+
+ONSCREEN_X = (-2, 0x16)   # [asm 802A/802F] tile X relative to camera must be in [-2, 22] inclusive
+ONSCREEN_Y = (-2, 0x0D)   # [asm 803A/803F] tile Y relative to camera must be in [-2, 13] inclusive
+
+
+def on_screen_tile(x: int, y: int, cam_x: int, cam_y: int) -> bool:
+    """Recover ``1030:8022`` — is the pixel ``(x, y)`` within the visible tile window around the camera?
+    Tile = ``pixel >> 4`` (arithmetic), then the SIGNED tile offset from the camera (``[0x2DE4]``/``[0x2DE6]``,
+    tiles) must satisfy ``-2 <= tx <= 22`` and ``-2 <= ty <= 13``. Returns True (the ASM's CF=0 path) when on
+    screen, False (CF=1) otherwise. Pure (the camera is passed in)."""
+    tx = _s16(((_s16(x) >> 4) - cam_x) & 0xFFFF)             # [asm 8024-8026]
+    if not (ONSCREEN_X[0] <= tx <= ONSCREEN_X[1]):           # [asm 802A-8032 signed jl/jg]
+        return False
+    ty = _s16(((_s16(y) >> 4) - cam_y) & 0xFFFF)             # [asm 8034-8036]
+    return ONSCREEN_Y[0] <= ty <= ONSCREEN_Y[1]              # [asm 803A-8042]

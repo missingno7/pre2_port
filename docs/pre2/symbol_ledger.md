@@ -232,7 +232,15 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   (0x140×0x12C) of player `[0x4F1C]/[0x4F1E]`; else despawn `[+4]=0xFFFF`, `[def+4]&=0xFB`, `[def+7]=0`, and a
   far `state>=0xA` object also frees its spawn slot `[def+2]=0xFFFF` (unless `[def+4]&2`). Shadow 770/770 +
   234/234 exact (incl. real despawns). The shared pre-check every AI handler calls first.
-- **`1030:698C` — object↔tile collision helper** (when `[def+4]&8`). OBSERVED. level map `es:[2DDA]`, xlat 7E5E.
+- **`1030:8022` — `on_screen_tile`. VERIFIED** (`object_update.on_screen_tile`, `tests/test_object_update.py`).
+  Pixel→tile (`>>4`), SIGNED offset from camera `[0x2DE4]/[0x2DE6]` must be in `[-2,22]×[-2,13]`; CF=0 on /
+  CF=1 off. Shadow 5530/5530 + 6745/6745 exact. The visible-window predicate the AI handlers use.
+- **`1030:698C` — object↔terrain COLLISION** (walker calls it at 687E when `[def+4]&8`; fires 141×). OBSERVED,
+  big: tile lookups via `es:[0x2DDA]` + property tables `0x7E5E`/`0x7F5E`, wall-bounce/floor/climb response
+  writing `[si]/[si+2]/[si+8]/[si+0xA]/[def+4]` + calls `8048`/`8058`. NEEDS A DEDICATED PASS (+ collision witness).
+- **Walker sub-helpers (OBSERVED):** `8001` saturating `[def+7]` counter vs `[def+6]` (0 fires here — needs a
+  witness); `8048`/`8058` anim-script rewind/forward to the loop marker; `806C` find-free-slot spawn allocator
+  (walks `0x4FD0`×12 for `[+4]==0xFFFF`).
 - **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
   `1→7C8C`, `2→7C2D`, `10→7665`. 24-entry catalogue at `CS:0x6AA9`. Handlers UNRECOVERED.
 - **Phase B (the blit) — full spec mapped, TODO implement.** Per sprite it is a **two-phase

@@ -23,7 +23,7 @@ from dos_re.interrupts import deliver_scancode
 from play import _advance_frame_deterministic, _make_replay_runtime
 from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW: routines under test
                                           ObjectScaleUnsupported, advance_animation, apply_velocity,
-                                          despawn_check)
+                                          despawn_check, on_screen_tile)
 
 SEG = 0x1030
 
@@ -67,6 +67,8 @@ def main():
     dsp = Counter()               # 'match' / 'mismatch' / 'kept' / 'despawn'
     dsp_pending = [None]          # (si, def_ptr, predicted DespawnResult); 8084 is atomic -> single slot
     dsp_mismatches = []
+    osc = Counter()               # on_screen_tile (8022): 'match' / 'mismatch'
+    osc_pending = [None]          # predicted on_screen bool
     handlers = defaultdict(Counter)   # handler_index -> Counter(target_addr -> n)
     handler_ids = defaultdict(Counter)  # handler_index -> Counter(base sprite id)
 
@@ -152,6 +154,19 @@ def main():
                 dsp_mismatches.append((si, "pred", repr(pred), "actual", repr(actual)))
         chain(c)
 
+    def h_onscreen_pre(c):
+        ds = c.s.ds
+        osc_pending[0] = on_screen_tile(c.s.ax, c.s.dx, rdw(ds, 0x2DE4), rdw(ds, 0x2DE6))
+        chain(c)
+
+    def h_onscreen_exit(actual):
+        def h(c):
+            if osc_pending[0] is not None:
+                osc["match" if osc_pending[0] == actual else "mismatch"] += 1
+                osc_pending[0] = None
+            chain(c)
+        return h
+
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
         target = rdw(cs, (bx + 0x6AA9) & 0xFFFF)
@@ -162,7 +177,8 @@ def main():
 
     for off, fn in ((0x6856, h_looptop), (0x6861, h_vel_pre), (0x6875, h_vel_post),
                     (0x6881, h_anim_pre), (0x68E9, h_anim_post), (0x68FC, h_dispatch),
-                    (0x8084, h_despawn_pre), (0x80CA, h_despawn_exit), (0x7D1A, h_despawn_exit)):
+                    (0x8084, h_despawn_pre), (0x80CA, h_despawn_exit), (0x7D1A, h_despawn_exit),
+                    (0x8022, h_onscreen_pre), (0x8044, h_onscreen_exit(True)), (0x8046, h_onscreen_exit(False))):
         cpu.replacement_hooks[(SEG, off)] = fn
         cpu.hook_names[(SEG, off)] = f"probe_{off:04x}"
 
@@ -210,6 +226,9 @@ def main():
           f"   (kept: {dsp['kept']}  despawn: {dsp['despawn']})")
     for m in dsp_mismatches:
         print(f"    MISMATCH {m}")
+    print(f"\n=== ON-SCREEN-TILE SHADOW (0x8022: pixel -> visible tile window vs camera) ===")
+    otot = osc["match"] + osc["mismatch"]
+    print(f"  checks: {otot}   match: {osc['match']}   MISMATCH: {osc['mismatch']}")
     print(f"\n=== AI HANDLER DISPATCH (0x68FC: call cs:[bx+0x6AA9]) ===")
     print(f"  {'idx':>4} {'handler@':>9} {'calls':>8}  base sprite-ids (top)")
     for idx in sorted(handlers):

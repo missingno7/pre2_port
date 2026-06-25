@@ -236,3 +236,17 @@ shadow-verify the whole tick, and live-hook the composed walker (not each tiny l
 Recovered object-update leaves so far: **apply_velocity ✓ (live) · advance_animation ✓ · despawn_check ✓**.
 Remaining for the walker lift: the collision helpers (`0x698C`/`0x8001`/`0x8022`) the handlers call, then the
 thin per-type handlers, then compose `object_tick` (684E..6913).
+
+## Stage 1 cont. (2026-06-26) — on_screen_tile + helper map
+
+- **`1030:8022` — `on_screen_tile`. VERIFIED** (the visible-window predicate the AI handlers use most —
+  5530 + 6745 fires). Pixel→tile `>>4`, SIGNED camera-relative offset in `[-2,22]×[-2,13]` → CF. Shadow
+  5530/5530 + 6745/6745 exact. tests +5.
+
+Fire census (demo 001513): `8022`=5530, handlers `7C8C`=310/`7C2D`=300/`7665`=160, `698C`=141, `8058`=7,
+`806C`=5, `8048`=2, `8001`=0. So `698C` (object↔terrain collision) and the per-type handlers are the
+remaining walker pieces with witnesses; `8001` needs a witness (its handler `7C90` doesn't run here).
+
+Recovered object-update leaves: **apply_velocity ✓(live) · advance_animation ✓ · despawn_check ✓ ·
+on_screen_tile ✓**. NEXT: `698C` is the big terrain-collision routine (own pass + a collision witness); then
+the per-type handlers `7C8C`/`7C2D`/`7665` (thin: despawn + on_screen + small logic) → compose the walker.

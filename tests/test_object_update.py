@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, ObjectScaleUnsupported,
-                                          advance_animation, apply_velocity, despawn_check)
+                                          advance_animation, apply_velocity, despawn_check, on_screen_tile)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -140,3 +140,30 @@ def test_despawn_distance_is_abs16_wrapping():
     r = despawn_check(0, 0x200, state=1, flags5=0, old_id=0,
                       player_x=0xFFF0, player_y=0, def2=0, def4=0, def7=0)
     assert not r.kept
+
+
+# -- on_screen_tile (1030:8022) --
+
+def test_onscreen_center_is_visible():
+    assert on_screen_tile(0x50, 0x50, cam_x=5, cam_y=5) is True   # 0x50>>4=5 ; 5-5=0 in range
+
+
+def test_onscreen_x_window_inclusive_bounds():
+    assert on_screen_tile((5 + 22) * 16, 0x50, cam_x=5, cam_y=0) is True    # tx=22 (max)
+    assert on_screen_tile((5 + 23) * 16, 0x50, cam_x=5, cam_y=0) is False   # tx=23 off-right
+    assert on_screen_tile((5 - 2) * 16, 0x50, cam_x=5, cam_y=0) is True     # tx=-2 (min)
+    assert on_screen_tile((5 - 3) * 16, 0x50, cam_x=5, cam_y=0) is False    # tx=-3 off-left
+
+
+def test_onscreen_y_window_inclusive_bounds():
+    assert on_screen_tile(0x50, 13 * 16, cam_x=0, cam_y=0) is True    # ty=13 (max)
+    assert on_screen_tile(0x50, 14 * 16, cam_x=0, cam_y=0) is False   # ty=14 off-bottom
+    assert on_screen_tile(0x50, (-3 * 16) & 0xFFFF, cam_x=0, cam_y=0) is False  # ty=-3 off-top
+    assert on_screen_tile(0x50, (-2 * 16) & 0xFFFF, cam_x=0, cam_y=0) is True   # ty=-2 (min)
+
+
+def test_onscreen_uses_arithmetic_shift_for_negative_pixel():
+    # x = -16 (0xFFF0) >> 4 (arithmetic) = -1 ; cam 0 -> tx=-1 in [-2,22]
+    assert on_screen_tile(0xFFF0, 0x50, cam_x=0, cam_y=0) is True
+    # x = -48 (0xFFD0) >> 4 = -3 -> off-left
+    assert on_screen_tile(0xFFD0, 0x50, cam_x=0, cam_y=0) is False
