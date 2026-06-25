@@ -527,6 +527,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                                #   inter-scene transition shows the scene fading instead of a magenta gap.
     faithful_tick = [0]        # increments once per faithful planar render — a wall-clock-independent grace
                                #   clock (the busy-wait instruction span differs live vs. deterministic)
+    planar_image_capture = [None]  # 4 EGA planes of a 0Dh PLANAR image (the Prehistorik-2 attract title etc.),
+                               #   captured at the 9153/9169 copy from the decoded asset (NOT the framebuffer);
+                               #   held + deplanarized with the live palette (rides the fade-in) until the next
+                               #   scene resets it
     current_13h_image = [None]  # (asset name, has_logo) of the mode-13h image on screen; set at 91C0/9090
     last_capture_ic = [0]      # instruction count at the last 6772 capture (staleness for the death spin)
     last_hud = [None]          # (4 HUD-strip plane slices) from the last 6772 commit — the DISPLAYED HUD
@@ -579,6 +583,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                                        page, gvs.scene_kind.name, d)
                 last_committed[0] = (planes, page)  # base for the vertical fade-out (the frame it clears)
                 last_capture_ic[0] = rt.cpu.instruction_count
+                planar_image_capture[0] = None      # a committed gameplay frame -> the title image is gone
                 last_hud[0] = _snapshot_hud(planes, page)  # the DISPLAYED HUD (frozen between commits)
             except FaithfulVisualGap:
                 boundary_capture[0] = None         # a SCENE/IMAGE frame at 6772 -> handled at present time
@@ -903,6 +908,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 menu_page[0] = mp
                 menu_active[0] = True
                 menu_active[1] = rt.cpu.instruction_count
+                planar_image_capture[0] = None  # the attract title image is gone once a menu seeds
                 oldies_capture[0] = None        # the cold-boot attract OLDIES is over once a menu seeds;
                 #                                 drop its stale capture so it can't resurface in a later
                 #                                 non-pan transition frame (with the wrong, fading palette)
@@ -955,6 +961,26 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         if _origtext is not None:
             rt.cpu.replacement_hooks[_MENU_TEXT] = _menu_text
             rt.cpu.hook_names[_MENU_TEXT] = "menu_text_mark"
+
+        # 0Dh PLANAR IMAGE (the Prehistorik-2 attract title etc.). 1030:9153 displays a full-screen planar
+        # image: clear the DAC to black, copy 4 planes (rep movsw 0xFA0/plane) from ds:si (a DECODED ASSET,
+        # not the framebuffer) to A000:0, then fade the palette in. Capture the source at 9169 (es=A000 set,
+        # ds:si = the source); the faithful path deplanarizes the captured planes with the LIVE palette so the
+        # fade-in renders. Fires once per image, so it is HELD until another scene resets it (below).
+        _PLANAR_IMG = (0x1030, 0x9169)
+
+        def _capture_planar_image(c):
+            try:
+                src = ((c.s.ds << 4) + c.s.si) & 0xFFFFF
+                raw = bytes(c.mem.data[src:src + 4 * 0x1F40])
+                planar_image_capture[0] = tuple(
+                    bytes(raw[p * 0x1F40:(p + 1) * 0x1F40]) for p in range(4))
+            except Exception:
+                planar_image_capture[0] = None
+            interpret_current_instruction_without_hook(c)
+
+        rt.cpu.replacement_hooks[_PLANAR_IMG] = _capture_planar_image
+        rt.cpu.hook_names[_PLANAR_IMG] = "planar_image_capture"
 
     def _faithful_planar(mem_bytes, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
@@ -1062,6 +1088,17 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             held_planes[0] = (planes, ds, pel, active_w, 0x1FFF, faithful_tick[0])
             return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette,
                                                  pel, active_w, wrap=0x1FFF)
+        # 0Dh PLANAR IMAGE (the Prehistorik-2 attract title). Captured at the 9153/9169 copy from the decoded
+        # asset (held until another scene resets it); deplanarize with the LIVE palette so the fade-in renders.
+        # NEVER the VM framebuffer. Sits after gameplay/menu/carte so they take precedence when active.
+        if planar_image_capture[0] is not None and rt.program.memory.ega_planar:
+            planes = [bytearray(0x2000) for _ in range(4)]
+            for p in range(4):
+                planes[p][0:0x1F40] = planar_image_capture[0][p]
+            faithful_info[0] = "faithful[TITLE]"
+            held_planes[0] = (planes, ds, 0, (rt.program.memory.ega_h_display_end + 1) * 8, 0xFFFF,
+                              faithful_tick[0])
+            return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette)
         # Held pan-scene grace: between scenes the engine DAC-fades the outgoing page out / the incoming page
         # in (the 1030:9286 / 92A3 palette-fade loop), during which the scene's producer pauses and the gates
         # above drop. The fade also drops ega_pan_active (no pel-pan writes once the scroll/menu loop exits),
@@ -1123,6 +1160,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             # loaded yet" (-> black while it loads) and re-identifies on its own 91C0 copy, instead of
             # briefly showing the previous title or flashing a gap during the mode switch.
             current_13h_image[0] = None
+        else:
+            planar_image_capture[0] = None   # left 0Dh -> the 0Dh planar title image is no longer on screen
         if not rt.program.memory.ega_display_enabled:
             # The attribute controller has the display blanked (PAS=0) while the program loads a new
             # palette. Show black, exactly as real hardware / DOSBox do — never the incoming screen

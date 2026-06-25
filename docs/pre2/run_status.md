@@ -5,8 +5,12 @@
 Two SEPARATE axes (a FaithfulVisual shadow update is NOT a hybrid live replacement):
 
 **FaithfulVisual (composition) — every game screen has a recovered faithful path; NO unrecovered SCENE leaf
-remains.** Composed from recovered leaves (never the VM VRAM): gameplay frame, iris/fade/curtain, HUD,
-particles, foreground tiles, fireflies, game-over, tally, OLDIES, 13h images, CARTE/map, mode-select menu.
+remains.** Composed from recovered leaves (never the VM VRAM): gameplay frame (incl. the attract AUTO-DEMO,
+which is plain gameplay — 6772 + object_render), iris/fade/curtain, HUD, particles, foreground tiles,
+fireflies, game-over, tally, OLDIES, 13h images, CARTE/map, mode-select menu, and the 0Dh PLANAR attract
+title (the "Prehistorik 2" logo screen: 1030:9153 copies a 4-plane image from a decoded asset to A000 then
+fades in; captured at 9169 from the asset and deplanarized with the live palette — pixel-exact incl. the
+fade-in; held until another scene resets it).
 Scene-to-scene TRANSITIONS are handled (fixed 2026-06-25): between scenes the engine DAC-fades the page
 out/in (the 1030:9286 / 92A3 palette-fade loop) while the scene's producer pauses; the planes are unchanged
 through a DAC fade, so the faithful path re-deplanarizes the last pan-scene planes with the LIVE (fading)
