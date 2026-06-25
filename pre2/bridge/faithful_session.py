@@ -185,7 +185,7 @@ class FaithfulSession:
                 # place a new source frame is produced ~25 fps) and keep prev+cur for the enhanced compositor.
                 try:
                     efs = extract_enhanced_frame(c.mem, self.dos, game_root=self.args.game_root,
-                                                 with_faithful=False)
+                                                 with_faithful=False, effects=fx)
                     if efs is not None:
                         self.enh_prev, self.enh_cur = self.enh_cur, efs
                         self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, self.enh_clock()

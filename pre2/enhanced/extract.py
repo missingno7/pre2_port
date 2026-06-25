@@ -17,6 +17,7 @@ from dataclasses import replace
 
 import numpy as np
 
+from pre2.bridge.gameplay_effects import apply_gameplay_effects
 from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
@@ -61,12 +62,15 @@ def _extract_sprite_rgba(draw, src_bank, stride, page, palette):
     return rgba, int(x0), int(y0)
 
 
-def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> EnhancedFrameState | None:
+def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
     ``with_faithful`` renders the full faithful frame into ``faithful_rgb`` (for parity/standalone use); the
     live viewer passes ``False`` since it already has the session's faithful frame (avoids a redundant render).
+    ``effects`` (a GameplayEffects from the session: point particles / foreground / fireflies) is drawn into
+    the background so the spider-web etc. appear and scroll with the camera (v1: in the bg layer, not yet
+    velocity-interpolated; absent in the static-snapshot parity path which passes effects=None).
     """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
@@ -77,6 +81,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
 
     bg_planes = [bytearray(0x10000) for _ in range(4)]
     render_frame(replace(rs, object_camera=None), bg_planes, palette, rebuild=True)
+    if effects is not None:
+        apply_gameplay_effects(bg_planes, page, effects)     # point particles / foreground / fireflies
     background_rgb = render_planar_rgb_from_planes(bg_planes, page, palette)
 
     faithful_rgb = None
