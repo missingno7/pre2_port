@@ -1532,14 +1532,15 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
     # recorded with, or the deterministic frame clock drifts.
     if "chunk_steps" in meta:
         args.chunk_steps = int(meta["chunk_steps"])
-        # Demos recorded before the faithful multi-tick clock baked in a small
-        # chunk (calibrated for the old 1-tick-per-frame timing).  Replayed under
-        # the current clock the game gets far too few instructions/frame and runs
-        # in slow motion — warn so it isn't mistaken for a performance problem.
-        if args.chunk_steps < 8000:
-            print(f"WARNING: this demo was recorded with chunk_steps={args.chunk_steps} "
-                  "(old timing); under the current clock the game will run in slow "
-                  "motion. Re-record the demo for correct speed.")
+    # The now-driven multi-tick demo clock stores its model knobs (present_hz/retrace_pulse) in the manifest.
+    # Demos recorded BEFORE it (no present_hz) used a chunk calibrated for the old 1-tick-per-frame timing and
+    # replay in slow motion under the current clock — warn so it isn't mistaken for a performance problem. A
+    # demo that carries present_hz replays at its own recorded speed (incl. the default --speed 150000 =>
+    # chunk_steps 2142) and must NOT warn — the chunk magnitude alone is not the discriminator, the clock
+    # model is.
+    if "chunk_steps" in meta and "present_hz" not in meta:
+        print("WARNING: this demo predates the now-driven demo clock (no present_hz in its manifest); under "
+              "the current clock it may run in slow motion. Re-record it for correct speed.")
     # Clock knobs that feed the deterministic frame timer: replay under the recorded
     # values, falling back to the legacy defaults for demos recorded before they were
     # stored (present_hz=30, retrace_pulse=0.28) so old demos stay byte-reproducible.
