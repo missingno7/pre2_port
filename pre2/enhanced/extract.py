@@ -87,16 +87,30 @@ def _indices_window(planes, page, x0, y0, w, h):
     return color.reshape(h, nbc * 8)[:, sx:sx + w]
 
 
-def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette):
+def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette, cache=None):
     """Lift one NORMAL sprite into (rgba H×W×4, anchor_x, anchor_y) via the dual-buffer paint trick, or None
     if it left no opaque pixels (fully clipped). Only the sprite's on-screen bbox (from ``cmd``) is
-    de-planarized, not the whole page."""
+    de-planarized, not the whole page.
+
+    ``cache`` (per-frame) de-dupes the (expensive) dual paint across sprites that share the same graphic. The
+    cropped texture is INDEPENDENT of the sub-byte shift (screen_x & 7) -- the shift only moves the sprite's
+    position, not its pixels -- so the key omits shift/position and the anchor is recomputed from screen_x.
+    Only FULLY-on-screen sprites are cached (a clipped sprite's crop depends on its position)."""
     x0 = max(0, cmd.screen_x)
     y0 = max(0, cmd.screen_y)
     w = min(WIDTH, cmd.screen_x + cmd.width) - x0
     h = min(HEIGHT, cmd.screen_y + cmd.height) - y0
     if w <= 0 or h <= 0:
         return None
+    key = None
+    if cache is not None and cmd.screen_x >= 0 and cmd.screen_y >= 0 \
+            and cmd.screen_x + cmd.width <= WIDTH and cmd.screen_y + cmd.height <= HEIGHT:
+        key = (draw.src_seg, draw.src_off, draw.byte_width, draw.rows, draw.left_skip, draw.right_skip,
+               draw.full_rows, draw.src_bw, draw.flipped, draw.clipped, draw.right_clipped)
+        hit = cache.get(key)
+        if hit is not None:
+            rgba, rx, ry = hit                          # texture is shift-independent; anchor from screen_x
+            return rgba, cmd.screen_x + rx, cmd.screen_y + ry
     lo = [bytearray(0x10000) for _ in range(4)]
     hi = [bytearray(b"\xff" * 0x10000) for _ in range(4)]
     size = draw.src_bw * draw.full_rows * 6 + 64
@@ -116,7 +130,10 @@ def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette):
     rgba = np.zeros((ay1 - ay0, ax1 - ax0, 4), dtype=np.uint8)
     rgba[..., :3] = pal[sub_idx]
     rgba[..., 3] = np.where(sub_mask, 255, 0).astype(np.uint8)
-    return rgba, x0 + int(ax0), y0 + int(ay0)
+    abs_x, abs_y = x0 + int(ax0), y0 + int(ay0)
+    if key is not None:
+        cache[key] = (rgba, abs_x - cmd.screen_x, abs_y - cmd.screen_y)
+    return rgba, abs_x, abs_y
 
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None) -> EnhancedFrameState | None:
@@ -186,6 +203,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     sprites, unsupported = [], []
     attrs = rs.object_attrs or {}
     banks = rs.object_src_banks or {}
+    sprite_cache = {}            # per-frame texture cache (see _extract_sprite_rgba): de-dupes the dual paint
     # camera in PIXELS, matching _placement: X = cam_x*16; Y = cam_y*16 + fine_scroll. Used to interpolate
     # the background scroll between source frames (objects stay glued to the scrolled bg).
     camera_px = (cam.cam_x * 16, cam.cam_y * 16 + cam.fine_scroll)
@@ -203,7 +221,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         draw = plan_sprite(spr, attr, cam)
         if draw is None:
             continue
-        got = _extract_sprite_rgba(draw, cmd, banks.get(draw.src_seg, b""), stride, page, palette)
+        got = _extract_sprite_rgba(draw, cmd, banks.get(draw.src_seg, b""), stride, page, palette, sprite_cache)
         if got is None:
             continue
         rgba, ax, ay = got
