@@ -20,12 +20,13 @@ import numpy as np
 from pre2.bridge.gameplay_effects import apply_gameplay_effects
 from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
+from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
 from pre2.recovered.fireflies import _sar
 from pre2.recovered.particles import advance_particle
 from pre2.recovered.render_frame import ASSET_LO, render_frame
-from sdl_view import HEIGHT, WIDTH, _PLANAR_ROW_BYTES, render_planar_rgb_from_planes
+from sdl_view import _PLANAR_ROW_BYTES, render_planar_rgb_from_planes
 
 _STRIDE = _PLANAR_ROW_BYTES       # 40 bytes/row (mode 0Dh planar), the page stride render_planar uses
 # The parallax base layer is stored in screen layout at 0x7E80, so de-planarizing it directly reproduces the
@@ -39,7 +40,6 @@ VIEWPORT_H = 176                         # gameplay viewport rows (the HUD strip
 _OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
-_TEX_CACHE_MAX = 4096    # persistent sprite-texture cache cap (cleared wholesale when exceeded — textures tiny)
 # identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
 _ID_PAL = [(i, 0, 0) for i in range(256)]
 
@@ -94,13 +94,14 @@ def _zero_base(asset_planes):
     return tuple(bytes(a[:_BASE_OFF]) + b"\x00" * (len(a) - _BASE_OFF) for a in asset_planes)
 
 
-def _indices_window(planes, page, x0, y0, w, h):
+def _indices_window(planes, page, x0, y0, w, h, stride=_STRIDE):
     """De-planarize ONLY the screen window [x0:x0+w, y0:y0+h] to EGA indices (h×w uint8). Same math as
-    render_planar (page stride 40, full-memory wrap), but over the sprite's tiny bbox instead of the whole
-    320×200 page — the sprite extraction's dominant cost was two full-page deplanarizes per sprite."""
+    render_planar (full-memory wrap), but over the sprite's tiny bbox instead of the whole 320×200 page — the
+    sprite extraction's dominant cost was two full-page deplanarizes per sprite. ``stride`` is the row byte
+    stride (40 for a real page; the canonical texture paint packs rows at ``src_bw``)."""
     bc0 = x0 >> 3                                    # first byte-column
     nbc = ((x0 + w + 7) >> 3) - bc0                  # byte-columns the window spans
-    rowbase = (page + np.arange(y0, y0 + h) * _STRIDE + bc0) & 0xFFFF
+    rowbase = (page + np.arange(y0, y0 + h) * stride + bc0) & 0xFFFF
     off = (rowbase[:, None] + np.arange(nbc)[None, :]) & 0xFFFF
     color = np.zeros((h, nbc, 8), dtype=np.uint8)
     for p in range(4):
@@ -110,65 +111,48 @@ def _indices_window(planes, page, x0, y0, w, h):
     return color.reshape(h, nbc * 8)[:, sx:sx + w]
 
 
-def _rgba_from_index(sub_idx, sub_mask, palette):
-    """Apply the (current) palette to a cached palette-INDEPENDENT index+mask texture -> RGBA. Cheap (a gather
-    + a where), so it runs per use; the expensive dual-paint/deplanarize that produced idx+mask is cached."""
-    pal = np.asarray(palette, dtype=np.uint8)
-    rgba = np.zeros((*sub_idx.shape, 4), dtype=np.uint8)
-    rgba[..., :3] = pal[sub_idx]
-    rgba[..., 3] = np.where(sub_mask, 255, 0).astype(np.uint8)
-    return rgba
+def _texture_key(draw, attr):
+    """The PALETTE- and POSITION-independent key for a sprite cel: only what changes its pixels -- cel
+    identity (src segment + the cel's source offset), the full (unclipped) decoded geometry, flip, and draw
+    mode. NOT screen/world position and NOT the off-screen clip (the cached texture is the full unclipped
+    sprite; the compositor crops it). ``attr.src_off`` is the cel offset (``draw.src_off`` would fold in the
+    top-clip skip -> position-dependent), ``draw.src_bw``/``full_rows`` are the full pre-clip dimensions."""
+    return (draw.src_seg, attr.src_off, draw.src_bw, draw.full_rows, draw.flipped, draw.mode)
 
 
-def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette, cache=None):
-    """Lift one NORMAL sprite into (rgba H×W×4, anchor_x, anchor_y) via the dual-buffer paint trick, or None
-    if it left no opaque pixels (fully clipped). Only the sprite's on-screen bbox (from ``cmd``) is
-    de-planarized, not the whole page.
+def _make_sprite_texture(draw, attr, src_bank):
+    """Paint the FULL UNCLIPPED sprite cel via the dual-buffer trick and lift it to a palette-independent
+    :class:`SpriteTexture` (the faithful cache-population path), or None if it has no opaque pixels.
 
-    ``cache`` de-dupes the (expensive) dual paint + deplanarize across sprites that share the same graphic.
-    What is cached is the PALETTE-INDEPENDENT (index, mask, anchor) -- the colour is applied per use via
-    :func:`_rgba_from_index` -- so the cache survives palette fades AND persists across source frames (the
-    session passes one persistent dict: layer A "cached RGBA textures, faithful extraction only as the
-    cache-population fallback"). The crop is INDEPENDENT of the sub-byte shift (screen_x & 7) and the page
-    (the relative bit pattern is the same; on-screen sprites don't wrap the 64 KiB plane), so the key omits
-    shift/position/page and the anchor is recomputed from screen_x. Only FULLY-on-screen sprites are cached
-    (a clipped sprite's crop depends on its position)."""
-    x0 = max(0, cmd.screen_x)
-    y0 = max(0, cmd.screen_y)
-    w = min(WIDTH, cmd.screen_x + cmd.width) - x0
-    h = min(HEIGHT, cmd.screen_y + cmd.height) - y0
-    if w <= 0 or h <= 0:
+    The sprite is painted at a CANONICAL position -- shift 0, rows packed at ``src_bw`` from offset 0 -- with
+    NO clipping (full ``src_bw``×``full_rows``). De-planarizing gives ABSOLUTE pixel values, so canonical pixel
+    ``k`` equals the on-screen pixel ``screen_x + k`` of the real (shifted, clipped) faithful paint -- i.e. the
+    texture is identical to the faithful extraction for the visible part, and the compositor's edge-clipping
+    ``_blit`` reproduces the clipped faithful exactly. ``off_x``/``off_y`` are the opaque bbox's top-left within
+    the cel, so the compositor blits at ``screen_x + off_x``/``screen_y + off_y``."""
+    src_bw, full_rows = draw.src_bw, draw.full_rows
+    if src_bw <= 0 or full_rows <= 0:
         return None
-    key = None
-    if cache is not None and cmd.screen_x >= 0 and cmd.screen_y >= 0 \
-            and cmd.screen_x + cmd.width <= WIDTH and cmd.screen_y + cmd.height <= HEIGHT:
-        key = (draw.src_seg, draw.src_off, draw.byte_width, draw.rows, draw.left_skip, draw.right_skip,
-               draw.full_rows, draw.src_bw, draw.flipped, draw.clipped, draw.right_clipped)
-        hit = cache.get(key)
-        if hit is not None:
-            sub_idx, sub_mask, rx, ry = hit             # palette-independent; colour + anchor applied here
-            return _rgba_from_index(sub_idx, sub_mask, palette), cmd.screen_x + rx, cmd.screen_y + ry
+    # An unclipped, canonical (shift 0, no top/left/right clip) copy of the draw -- identical pixels to a real
+    # fully-on-screen draw (the case the previous cache already proved 0px), but reusable for edge sprites too.
+    canon = replace(draw, dest_off=0, byte_width=src_bw, rows=full_rows, shift=0, clipped=False,
+                    left_skip=0, right_skip=0, right_clipped=False, src_off=attr.src_off)
     lo = [bytearray(0x10000) for _ in range(4)]
     hi = [bytearray(b"\xff" * 0x10000) for _ in range(4)]
-    size = draw.src_bw * draw.full_rows * 6 + 64
-    src = src_bank[draw.src_off:draw.src_off + size]
-    paint_sprite(lo, draw, src, stride)
-    paint_sprite(hi, draw, src, stride)
-    idx_lo = _indices_window(lo, page, x0, y0, w, h)
-    idx_hi = _indices_window(hi, page, x0, y0, w, h)
-    agree = idx_lo == idx_hi                       # opaque sprite pixels (bg-independent value)
+    size = src_bw * full_rows * 6 + 64
+    src = src_bank[attr.src_off:attr.src_off + size]
+    paint_sprite(lo, canon, src, src_bw)               # pack rows at src_bw (no overflow for any width)
+    paint_sprite(hi, canon, src, src_bw)
+    idx_lo = _indices_window(lo, 0, 0, 0, src_bw * 8, full_rows, stride=src_bw)
+    idx_hi = _indices_window(hi, 0, 0, 0, src_bw * 8, full_rows, stride=src_bw)
+    agree = idx_lo == idx_hi                            # opaque sprite pixels (bg-independent value)
     ys, xs = np.nonzero(agree)
     if ys.size == 0:
         return None
     ay0, ay1, ax0, ax1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    sub_idx = idx_lo[ay0:ay1, ax0:ax1].copy()      # copy: detach the small crop from the 64 KiB scratch buffers
-    sub_mask = agree[ay0:ay1, ax0:ax1].copy()
-    abs_x, abs_y = x0 + int(ax0), y0 + int(ay0)
-    if key is not None:
-        if len(cache) >= _TEX_CACHE_MAX:           # bound growth across levels (textures are tiny; clear simply)
-            cache.clear()
-        cache[key] = (sub_idx, sub_mask, abs_x - cmd.screen_x, abs_y - cmd.screen_y)
-    return _rgba_from_index(sub_idx, sub_mask, palette), abs_x, abs_y
+    return SpriteTexture(color_indices=idx_lo[ay0:ay1, ax0:ax1].copy(),
+                         alpha_mask=agree[ay0:ay1, ax0:ax1].copy(),
+                         off_x=int(ax0), off_y=int(ay0), mode=int(draw.mode))
 
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
@@ -181,6 +165,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     ``effects`` (a GameplayEffects from the session: point particles / foreground tiles / fireflies) becomes a
     separate OVERLAY layer (overlay_rgb/overlay_mask) the compositor draws OVER the sprites — foreground tiles
     must be in front of sprites, and particles/fireflies draw on top. Absent in the parity path (effects=None).
+    ``tex_cache`` (a :class:`~pre2.enhanced.sprite_cache.SpriteTextureCache`) persists cel textures across
+    source frames; a throwaway one is made when None (parity path) -> identical output, no cross-frame reuse.
     """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
@@ -246,10 +232,12 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     sprites, unsupported = [], []
     attrs = rs.object_attrs or {}
     banks = rs.object_src_banks or {}
-    # Sprite texture cache: persistent across source frames when the session passes ``tex_cache`` (layer A --
-    # most textures recur every frame, so steady gameplay re-extracts only the few that changed), else a
-    # per-call dict (the parity path -> identical output, just no cross-frame reuse).
-    sprite_cache = tex_cache if tex_cache is not None else {}
+    # Sprite texture cache (layer A): the palette-INDEPENDENT cel textures are reused across source frames when
+    # the session passes a persistent ``tex_cache`` (steady gameplay re-extracts only cels that actually
+    # changed), else a throwaway cache (the parity path -> identical output, just no cross-frame reuse). The
+    # palette is applied per frame, so fades never invalidate the cache.
+    cache = tex_cache if tex_cache is not None else SpriteTextureCache()
+    pversion = palette_version(palette)
     # camera in PIXELS, matching _placement: X = cam_x*16; Y = cam_y*16 + fine_scroll. Used to interpolate
     # the background scroll between source frames (objects stay glued to the scrolled bg).
     camera_px = (cam.cam_x * 16, cam.cam_y * 16 + cam.fine_scroll)
@@ -267,16 +255,20 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         draw = plan_sprite(spr, attr, cam)
         if draw is None:
             continue
-        got = _extract_sprite_rgba(draw, cmd, banks.get(draw.src_seg, b""), stride, page, palette, sprite_cache)
-        if got is None:
-            continue
-        rgba, ax, ay = got
+        key = _texture_key(draw, attr)
+        tex = cache.get(key)
+        if tex is None:                            # miss -> faithful paint/deplanarize POPULATES the cache
+            tex = _make_sprite_texture(draw, attr, banks.get(draw.src_seg, b""))
+            if tex is None:
+                continue                           # no opaque pixels (don't cache empties)
+            cache.put(key, tex)
+        rgba = cache.colorize(key, tex, palette, pversion)   # apply the current palette (memoised per version)
         rec = _OBJ_SEG + (LIST_TOP - slot * RECORD_BYTES)        # the object's persistent handle (pointer)
         handle = mem.data[rec + 6] | (mem.data[rec + 7] << 8)
         sprites.append(SpriteInstance(handle=handle, slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
                                       world_x=cmd.world_x, world_y=cmd.world_y,
                                       screen_x=cmd.screen_x, screen_y=cmd.screen_y,
-                                      tex_off_x=ax - cmd.screen_x, tex_off_y=ay - cmd.screen_y,
+                                      tex_off_x=tex.off_x, tex_off_y=tex.off_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,

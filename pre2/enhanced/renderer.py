@@ -125,5 +125,13 @@ class EnhancedRenderer:
         if d["passthrough"]:
             return f"enh:passthrough ({d['reason']})"
         u = d.get("unsupported", 0)
+        cache = getattr(self.src, "_sprite_tex_cache", None)
+        tex = f" tex={cache.hit_rate()*100:.0f}%" if cache is not None else ""
         return (f"enh:interp a={d['alpha']:.2f} sprites={d['interpolated_sprites']}"
-                + (f" unsupported={u}" if u else ""))
+                + (f" unsupported={u}" if u else "") + tex)
+
+    def sprite_cache_stats(self) -> dict:
+        """Layer-A sprite-texture cache diagnostics (hit rate, miss/eviction counts, colourisation cost, L2
+        RGBA hit rate) -- or ``None`` when no cache is attached."""
+        cache = getattr(self.src, "_sprite_tex_cache", None)
+        return dict(cache.stats, hit_rate=cache.hit_rate()) if cache is not None else None
