@@ -747,6 +747,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                         # The VM's own poll still exits at the same wall-clock instant, so pacing is unchanged.
                         kind = _live_wait_kind(rt)
                         safe_park = kind is not None and rt.cpu.get_flag(IF)
+                        if kind == "pit" and enhanced is not None:
+                            # parked in the governor spin: if the main loop is stalled (a death/animation
+                            # sub-loop that never hits 6772), snapshot this committed frame for the enhanced
+                            # worker so it gets extracted + interpolated instead of freezing on the last frame.
+                            session.maybe_capture_spin_frame()
                         if _wait_kind[0] is None and kind is not None:          # episode start
                             _wait_kind[0] = kind
                             _wait_start[0] = perf_counter()
