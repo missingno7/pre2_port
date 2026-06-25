@@ -20,10 +20,13 @@ import numpy as np
 from pre2.bridge.gameplay_effects import apply_gameplay_effects
 from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
+from pre2.recovered.frame_renderer import build_background_ring, scroll_copy
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
-from pre2.recovered.render_frame import render_frame
+from pre2.recovered.render_frame import ASSET_LO, _TileMapView, render_frame
 from sdl_view import render_planar_rgb_from_planes
+
+_ALL_RESTORE = bytes([1]) * 256   # force every tile -> type-1 restore_background (renders the backdrop only)
 
 _OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
 
@@ -85,6 +88,11 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         apply_gameplay_effects(bg_planes, page, effects)     # point particles / foreground / fireflies
     background_rgb = render_planar_rgb_from_planes(bg_planes, page, palette)
 
+    # Backdrop-only render (the FIXED parallax base layer): same camera/scroll walk but every tile forced to
+    # type-1 restore_background, so the visible page is purely the base layer showing through. The compositor
+    # holds this still and scrolls only the tile layer (background_rgb != backdrop_rgb) -> no backdrop shake.
+    backdrop_rgb = _render_backdrop(rs, page, palette)
+
     faithful_rgb = None
     if with_faithful:
         full_planes = [bytearray(0x10000) for _ in range(4)]
@@ -123,4 +131,20 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                                       tex_off_x=ax - cmd.screen_x, tex_off_y=ay - cmd.screen_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
-                              sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported)
+                              sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
+                              backdrop_rgb=backdrop_rgb)
+
+
+def _render_backdrop(rs, page, palette):
+    """Render the FIXED parallax base layer (sky/mountains) alone: replay the background-ring build + scroll
+    copy with every tile forced to type-1 (``restore_background``), so the visible page is purely the base
+    layer at 0x7E80. No animated/grid/sprite passes (the backdrop is the fixed layer those draw over)."""
+    planes = [bytearray(0x10000) for _ in range(4)]
+    if rs.asset_planes:                       # restore tile cache + parallax base into a clean framebuffer
+        for p in range(4):
+            planes[p][ASSET_LO:ASSET_LO + len(rs.asset_planes[p])] = rs.asset_planes[p]
+    build_background_ring(planes, _TileMapView(rs), rs.camera_x, rs.camera_y, rs.scroll_src,
+                          rs.col_ring, rs.fine_scroll, _ALL_RESTORE, rs.mask_region)
+    scroll_copy(planes, rs.scroll_src, rs.dest_page, rs.col_ring, rs.fine_scroll,
+                rs.row_ring, rs.row_factor)
+    return render_planar_rgb_from_planes(planes, page, palette)

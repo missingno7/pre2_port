@@ -1,9 +1,16 @@
 """Modern RGB/RGBA object compositor — the enhanced DISPLAY-time path.
 
 Composites a display subframe entirely in RGB/RGBA from two source-cadence :class:`EnhancedFrameState`s:
-start from the (cached) background, then for each sprite in draw order blit its RGBA texture at the
-position interpolated between the previous and current source frames by ``alpha``. No planar buffers, no
-deplanarize, no faithful rasterization at display time, no whole-frame blend — sprites move individually.
+start from the background, then for each sprite in draw order blit its RGBA texture at the position
+interpolated between the previous and current source frames by ``alpha``. No planar buffers, no deplanarize,
+no faithful rasterization at display time, no whole-frame blend — sprites move individually.
+
+CAMERA SCROLL is layered: the parallax BACKDROP (sky/mountains -- ``backdrop_rgb``, the fixed base layer) is
+held perfectly still, and only the scrolling TILE layer (``background_rgb != backdrop_rgb``) is moved to the
+interpolated camera. Moving the whole composited background uniformly would shake the fixed backdrop. The
+tile layer is moved two-source: the bulk from the current frame shifted back toward prev, the trailing edge
+exposed by the scroll filled from the PREVIOUS frame (real revealed content -- not an edge-replicated smear).
+When ``backdrop_rgb`` is absent the compositor falls back to a uniform whole-viewport shift.
 
 ``alpha`` in [0,1]: 0 = previous source placement, 1 (or ``prev is None``) = current verbatim. Object
 identity across frames is the persistent ``handle`` — stable across BOTH the walk/blink animation (which
@@ -28,9 +35,8 @@ VIEWPORT_H = 176   # gameplay viewport rows (SCROLL_HEIGHT 0xB0); the HUD strip 
 
 
 def _scroll_bg(bg, dx: int, dy: int):
-    """Return the background scrolled right/down by (dx, dy) px for camera interpolation, replicating the
-    exposed edge (the newly-revealed strip is a thin approximation -- the true content is one source frame
-    away). dx/dy are small (sub-source-frame camera deltas)."""
+    """Fallback (no backdrop layer): scroll the whole background right/down by (dx, dy), replicating the
+    exposed edge. Used only when ``backdrop_rgb`` is absent; the layered path below is preferred."""
     if dx == 0 and dy == 0:
         return bg
     out = np.roll(bg, (dy, dx), axis=(0, 1))
@@ -43,6 +49,27 @@ def _scroll_bg(bg, dx: int, dy: int):
     elif dy < 0:
         out[dy:, :] = out[dy - 1:dy, :]
     return out
+
+
+def _scroll_tile_layer(cur_bg, cur_mask, prev_bg, prev_mask, cdx, cdy, alpha):
+    """Scroll ONLY the foreground tile layer to the interpolated camera, two-source: the bulk comes from the
+    current frame shifted back toward prev by (1-alpha)*delta; pixels exposed at the trailing edge are filled
+    from the PREVIOUS frame (real content, not an edge-replicated smear). Returns (rgb, mask) of the tile
+    layer at the interp camera; the caller composites it over the FIXED backdrop. Inputs are viewport-height
+    slices; ``*_mask`` marks tile (non-backdrop) pixels."""
+    h, w = cur_bg.shape[:2]
+    inv = 1.0 - alpha
+    cy, cx = int(round(inv * cdy)), int(round(inv * cdx))     # cur sampled at index - (cy,cx)
+    ay, ax = int(round(alpha * cdy)), int(round(alpha * cdx))  # prev sampled at index + (ay,ax)
+    rr, cc = np.arange(h)[:, None], np.arange(w)[None, :]
+    inb_cur = (rr - cy >= 0) & (rr - cy < h) & (cc - cx >= 0) & (cc - cx < w)
+    inb_prev = (rr + ay >= 0) & (rr + ay < h) & (cc + ax >= 0) & (cc + ax < w)
+    cur_rgb = np.roll(cur_bg, (cy, cx), axis=(0, 1))
+    cur_on = np.roll(cur_mask, (cy, cx), axis=(0, 1)) & inb_cur
+    prev_rgb = np.roll(prev_bg, (-ay, -ax), axis=(0, 1))
+    prev_on = np.roll(prev_mask, (-ay, -ax), axis=(0, 1)) & inb_prev
+    rgb = np.where(cur_on[..., None], cur_rgb, prev_rgb)       # prefer current; fall back to previous
+    return rgb, (cur_on | prev_on)
 
 
 def _blit(frame, rgba, x: int, y: int) -> None:
@@ -62,17 +89,30 @@ def compose(cur, prev, alpha: float):
     """Render one display subframe (RGB) from ``cur`` (and ``prev`` for interpolation) at ``alpha``."""
     interp = prev is not None and alpha < 1.0
     inv = 1.0 - alpha
-    # Camera scroll: show the background at the interpolated camera (cur shifted back toward prev). Objects
-    # are then glued to it by the same camera shift; their own world motion is interpolated on top.
+    # Camera scroll: show the world at the interpolated camera. The PARALLAX BACKDROP (sky/mountains) is
+    # fixed-screen, so only the scrolling TILE layer is moved; objects are then glued to it by the same
+    # camera shift; their own world motion is interpolated on top. (bg_dx/bg_dy glue the world sprites.)
     bg_dx = bg_dy = 0
+    cdx = cdy = 0
     if interp:
         cdx, cdy = cur.camera[0] - prev.camera[0], cur.camera[1] - prev.camera[1]
         if abs(cdx) <= _MAX_CAM_SCROLL and abs(cdy) <= _MAX_CAM_SCROLL:
             bg_dx, bg_dy = round(inv * cdx), round(inv * cdy)
     frame = cur.background_rgb.copy()
     if bg_dx or bg_dy:
-        # Scroll only the gameplay VIEWPORT rows; the HUD strip (rows VIEWPORT_H..) is fixed-screen.
-        frame[:VIEWPORT_H] = _scroll_bg(cur.background_rgb[:VIEWPORT_H], bg_dx, bg_dy)
+        h = VIEWPORT_H
+        if cur.backdrop_rgb is not None and prev.backdrop_rgb is not None:
+            # Layered: hold the fixed backdrop still, scroll only the tile layer (bg != backdrop) over it.
+            cur_mask = np.any(cur.background_rgb[:h] != cur.backdrop_rgb[:h], axis=2)
+            prev_mask = np.any(prev.background_rgb[:h] != prev.backdrop_rgb[:h], axis=2)
+            tile_rgb, tile_mask = _scroll_tile_layer(cur.background_rgb[:h], cur_mask,
+                                                     prev.background_rgb[:h], prev_mask, cdx, cdy, alpha)
+            vp = cur.backdrop_rgb[:h].copy()
+            vp[tile_mask] = tile_rgb[tile_mask]
+            frame[:h] = vp
+        else:
+            # Fallback (no backdrop layer captured): uniform whole-viewport shift with edge replication.
+            frame[:h] = _scroll_bg(cur.background_rgb[:h], bg_dx, bg_dy)
     prev_by_handle = {inst.handle: inst for inst in prev.sprites} if interp else {}
     for inst in cur.sprites:
         if inst.interpolate:                          # world sprite -> glued to the scrolled background

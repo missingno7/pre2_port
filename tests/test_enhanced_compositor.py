@@ -29,10 +29,10 @@ def _spr(slot, x, y, rgba, *, world=None, handle=None, sprite_id=0x100, interpol
                           tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
 
-def _frame(sprites, bg=None, camera=(0, 0)):
+def _frame(sprites, bg=None, camera=(0, 0), backdrop=None):
     bg = np.zeros((16, 32, 3), np.uint8) if bg is None else bg
     return EnhancedFrameState(background_rgb=bg, camera=camera, sprites=sprites,
-                              faithful_rgb=bg, unsupported=[])
+                              faithful_rgb=bg, unsupported=[], backdrop_rgb=backdrop)
 
 
 def test_alpha1_places_sprite_at_current_position():
@@ -89,6 +89,22 @@ def test_camera_scroll_shifts_bg_and_glues_static_object():
     out = compose(cur, prev, 0.5)                      # bg_dx = round(0.5*10) = 5
     assert tuple(out[0, 9]) == (9, 9, 9), "background did not scroll-interpolate"
     assert tuple(out[0, 10]) == (7, 7, 7), "static object not glued to the scrolled background"
+
+
+def test_camera_scroll_holds_backdrop_fixed_and_scrolls_only_tile_layer():
+    # With a backdrop layer, the parallax backdrop (sky marker) must stay PUT while only the tile layer
+    # (pixels where background_rgb != backdrop) scrolls to the interpolated camera. Moving the whole bg
+    # would shake the fixed backdrop -- the bug this layering fixes.
+    backdrop = np.full((16, 32, 3), (50, 50, 50), np.uint8)
+    backdrop[2, 10] = (9, 9, 9)                        # a fixed backdrop feature (e.g. a cloud)
+    prev_bg = backdrop.copy(); prev_bg[8:10, 14:16] = (200, 0, 0)   # tile at col 14 (cam 0)
+    cur_bg = backdrop.copy(); cur_bg[8:10, 4:6] = (200, 0, 0)       # same world tile at col 4 (cam +10)
+    prev = _frame([], bg=prev_bg, camera=(0, 0), backdrop=backdrop)
+    cur = _frame([], bg=cur_bg, camera=(10, 0), backdrop=backdrop)
+    out = compose(cur, prev, 0.5)                      # interp cam +5 -> tile at col 9
+    assert tuple(out[2, 10]) == (9, 9, 9), "fixed backdrop feature must not move (no shake)"
+    assert tuple(out[8, 9]) == (200, 0, 0), "tile layer did not scroll to the interpolated position"
+    assert tuple(out[8, 14]) == (50, 50, 50) and tuple(out[8, 4]) == (50, 50, 50), "tile left stale copies"
 
 
 def test_fixed_hud_sprite_is_not_interpolated():

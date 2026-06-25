@@ -53,3 +53,8 @@ class EnhancedFrameState:
     sprites: list                       # SpriteInstance, in draw order
     faithful_rgb: np.ndarray            # the full faithful frame (fallback / alpha=1 parity oracle)
     unsupported: list = field(default_factory=list)   # [(base_id, mode_name)] sprites not interpolated (OPAQUE/ERASE)
+    backdrop_rgb: "np.ndarray | None" = None   # the FIXED-screen parallax base layer (sky/mountains), rendered
+                            # backdrop-only (all tiles forced type-1 restore_background). The scrolling tile
+                            # layer is then `background_rgb != backdrop_rgb`; the compositor holds the backdrop
+                            # still and scrolls only the tile layer (so the backdrop does NOT shake). None ->
+                            # compositor falls back to a uniform whole-bg shift.
