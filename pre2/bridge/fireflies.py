@@ -24,6 +24,9 @@ class FireflyState:
     cam_col: int
     cam_row: int
     page: int
+    slot_idx: List[int] = None    # physical slot index (0..19) parallel to `slots`; persistent per firefly,
+                                  # so the enhanced renderer matches prev/cur by it to interpolate the drift.
+                                  # The faithful draw ignores it.
 
 
 def _r16(mem, off: int) -> int:
@@ -37,16 +40,19 @@ def _s16(v: int) -> int:
 
 def read_fireflies(mem) -> FireflyState:
     slots: List[Firefly] = []
-    for off in range(_ARRAY, _END, _STRIDE):
+    slot_idx: List[int] = []
+    for i, off in enumerate(range(_ARRAY, _END, _STRIDE)):
         x = _r16(mem, off)
         if x == _DEAD:
             continue
         y = _r16(mem, off + 2)
         timer = mem.data[(_DATA_SEG << 4) + off + 6]
         slots.append((_s16(x), _s16(y), timer))
+        slot_idx.append(i)
     return FireflyState(
         slots=slots,
         cam_col=_s16(_r16(mem, 0x2DE4)),
         cam_row=_s16(_r16(mem, 0x2DE6)),
         page=_r16(mem, 0x2DD8),
+        slot_idx=slot_idx,
     )

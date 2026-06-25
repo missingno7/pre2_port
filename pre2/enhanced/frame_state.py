@@ -70,3 +70,8 @@ class EnhancedFrameState:
                             # frames (they have no cross-frame identity, so each is rewound along its own
                             # per-frame velocity). ``particle_rgb`` is their colour (15/white).
     particle_rgb: "tuple | None" = None
+    fireflies: list = field(default_factory=list)    # persistent firefly swarm as (slot, world_x, world_y,
+                            # screen_x, screen_y): drawn as points OVER the overlay (engine order: ...->fireflies),
+                            # interpolated by matching the persistent ``slot`` across frames (like sprites by
+                            # handle) and lerping world position. ``firefly_rgb`` is their colour.
+    firefly_rgb: "tuple | None" = None

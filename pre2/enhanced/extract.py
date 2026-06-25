@@ -22,6 +22,7 @@ from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
+from pre2.recovered.fireflies import _sar
 from pre2.recovered.particles import advance_particle
 from pre2.recovered.render_frame import ASSET_LO, render_frame
 from sdl_view import HEIGHT, WIDTH, _PLANAR_ROW_BYTES, render_planar_rgb_from_planes
@@ -62,6 +63,27 @@ def _extract_particles(pf):
         vx = ((nx - x + 0x8000) & 0xFFFF) - 0x8000      # signed per-frame delta
         vy = ((ny - y + 0x8000) & 0xFFFF) - 0x8000
         pts.append((sx, sy, vx, vy))
+    return pts
+
+
+def _extract_fireflies(ff):
+    """Lift the persistent firefly swarm (54AB) to interpolatable points: ``(slot, world_x, world_y,
+    screen_x, screen_y)`` for each on-screen firefly, matching draw_fireflies' screen mapping exactly
+    (so at alpha=1 the compositor plots the same pixel). ``slot`` is the persistent slot index used to
+    match prev/cur and lerp the world position; ``world = (x>>3, y>>3)`` (the camera-relative draw uses
+    those shifted coords)."""
+    cam_x = (ff.cam_col << 4) & 0xFFFF
+    cam_y = (ff.cam_row << 4) & 0xFFFF
+    pts = []
+    for idx, (x, y, _timer) in zip(ff.slot_idx or range(len(ff.slots)), ff.slots):
+        wx, wy = _sar(x, 3), _sar(y, 3)
+        sy = (wy - cam_y) & 0xFFFF
+        if sy >= 0xB0:
+            continue
+        sx = (wx - cam_x) & 0xFFFF
+        if sx >= 0x140:
+            continue
+        pts.append((idx, wx, wy, sx, sy))
     return pts
 
 
@@ -176,15 +198,19 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     # OR-white, so index!=0 is exact coverage). Composited OVER the sprites. One-shot point particles are
     # pulled OUT to a point list (below) so they can be velocity-interpolated; engine order is particles ->
     # foreground -> fireflies, so the compositor draws the particle points UNDER this overlay.
-    overlay_rgb = overlay_mask = particle_rgb = None
+    overlay_rgb = overlay_mask = particle_rgb = firefly_rgb = None
     particles = []
+    fireflies = []
     if effects is not None:
+        # Overlay = FOREGROUND TILES only. Particles + fireflies are pulled out to point lists so they can be
+        # interpolated (particles by velocity, fireflies by slot); the compositor draws them in engine order
+        # (particles UNDER the foreground overlay, fireflies OVER it).
         ov_planes = [bytearray(0x10000) for _ in range(4)]
-        ov_fx = replace(effects, particles=None)            # foreground + fireflies only
+        ov_fx = replace(effects, particles=None, fireflies=None)
         if ov_fx.foreground is not None and ov_fx.foreground.page != page:
             # The foreground state is snapshotted at the 3732 hook, whose page is the back page BEFORE the
             # per-frame flip; render it into the SAME page we de-planarize at (cam.dest_page) -- the camera is
-            # unchanged within the frame, so only the page base differs. (Fireflies already use this page.)
+            # unchanged within the frame, so only the page base differs.
             ov_fx = replace(ov_fx, foreground=replace(ov_fx.foreground, page=page))
         apply_gameplay_effects(ov_planes, page, ov_fx)
         idx_ov = render_planar_rgb_from_planes(ov_planes, page, _ID_PAL)[:, :, 0]
@@ -193,6 +219,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         if effects.particles is not None:
             particles = _extract_particles(effects.particles)
             particle_rgb = tuple(int(c) for c in pal_rgb[15])    # 4B8E plots colour 15 (white)
+        if effects.fireflies is not None:
+            fireflies = _extract_fireflies(effects.fireflies)
+            firefly_rgb = tuple(int(c) for c in pal_rgb[15])     # VM oracle collapses the 14/15 flicker to 15
 
     faithful_rgb = None
     if with_faithful:
@@ -236,7 +265,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
                               backdrop_rgb=backdrop_rgb, tile_mask=tile_mask,
                               overlay_rgb=overlay_rgb, overlay_mask=overlay_mask,
-                              particles=particles, particle_rgb=particle_rgb)
+                              particles=particles, particle_rgb=particle_rgb,
+                              fireflies=fireflies, firefly_rgb=firefly_rgb)
 
 
 def _render_backdrop(rs, page, palette):

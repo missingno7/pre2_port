@@ -29,11 +29,13 @@ def _spr(slot, x, y, rgba, *, world=None, handle=None, sprite_id=0x100, interpol
                           tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
 
-def _frame(sprites, bg=None, camera=(0, 0), backdrop=None, tile_mask=None, particles=None, particle_rgb=None):
+def _frame(sprites, bg=None, camera=(0, 0), backdrop=None, tile_mask=None, particles=None, particle_rgb=None,
+           fireflies=None, firefly_rgb=None):
     bg = np.zeros((16, 32, 3), np.uint8) if bg is None else bg
     return EnhancedFrameState(background_rgb=bg, camera=camera, sprites=sprites,
                               faithful_rgb=bg, unsupported=[], backdrop_rgb=backdrop, tile_mask=tile_mask,
-                              particles=particles or [], particle_rgb=particle_rgb)
+                              particles=particles or [], particle_rgb=particle_rgb,
+                              fireflies=fireflies or [], firefly_rgb=firefly_rgb)
 
 
 def test_alpha1_places_sprite_at_current_position():
@@ -136,6 +138,16 @@ def test_particle_velocity_interpolation():
                   prev, 0.5)
     assert tuple(out[8, 6]) == (255, 255, 255), "particle not rewound along its velocity"
     assert tuple(out[8, 10]) == (0, 0, 0), "particle left a stale copy at the drawn position"
+
+
+def test_firefly_slot_matched_interpolation():
+    # A firefly in persistent slot 3 drifts world (50,8)->(58,8); matched by slot, lerped half -> screen col 6.
+    prev = _frame([], fireflies=[(3, 50, 8, 2, 8)], firefly_rgb=(200, 200, 0), camera=(0, 0))
+    cur = _frame([], fireflies=[(3, 58, 8, 10, 8)], firefly_rgb=(200, 200, 0), camera=(0, 0))
+    assert tuple(compose(cur, None, 1.0)[8, 10]) == (200, 200, 0)        # alpha=1 -> drawn pos
+    out = compose(cur, prev, 0.5)                                         # lerp world by 8 -> col 10-4=6
+    assert tuple(out[8, 6]) == (200, 200, 0), "firefly not lerped toward its previous slot position"
+    assert tuple(out[8, 10]) == (0, 0, 0), "firefly left a stale copy at the drawn position"
 
 
 def test_fixed_hud_sprite_is_not_interpolated():

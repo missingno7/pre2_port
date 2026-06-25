@@ -163,4 +163,22 @@ def compose(cur, prev, alpha: float):
         else:
             ov_rgb, ov_mask = cur.overlay_rgb[:h], cur.overlay_mask[:h]
         frame[:h][ov_mask] = ov_rgb[ov_mask]
+
+    # Fireflies (persistent swarm) OVER the foreground overlay (engine order: ...->fireflies). Matched by the
+    # persistent slot index across frames and lerped in WORLD position (like sprites by handle), glued to the
+    # scrolled world by the camera shift; a large jump (slot reuse) snaps.
+    if cur.fireflies:
+        fr = cur.firefly_rgb
+        fh, fw = frame.shape[:2]
+        prev_ff = {f[0]: f for f in prev.fireflies} if interp else {}
+        for (idx, wx, wy, sx, sy) in cur.fireflies:
+            px, py = sx + bg_dx, sy + bg_dy
+            p = prev_ff.get(idx) if interp else None
+            if p is not None:
+                dwx, dwy = wx - p[1], wy - p[2]
+                if abs(dwx) <= _MAX_INTERP_MOVE and abs(dwy) <= _MAX_INTERP_MOVE:
+                    px -= round(inv * dwx)
+                    py -= round(inv * dwy)
+            if 0 <= px < fw and 0 <= py < VIEWPORT_H:
+                frame[py, px] = fr
     return frame
