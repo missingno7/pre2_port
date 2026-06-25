@@ -39,6 +39,7 @@ VIEWPORT_H = 176                         # gameplay viewport rows (the HUD strip
 _OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
+_TEX_CACHE_MAX = 4096    # persistent sprite-texture cache cap (cleared wholesale when exceeded — textures tiny)
 # identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
 _ID_PAL = [(i, 0, 0) for i in range(256)]
 
@@ -109,15 +110,29 @@ def _indices_window(planes, page, x0, y0, w, h):
     return color.reshape(h, nbc * 8)[:, sx:sx + w]
 
 
+def _rgba_from_index(sub_idx, sub_mask, palette):
+    """Apply the (current) palette to a cached palette-INDEPENDENT index+mask texture -> RGBA. Cheap (a gather
+    + a where), so it runs per use; the expensive dual-paint/deplanarize that produced idx+mask is cached."""
+    pal = np.asarray(palette, dtype=np.uint8)
+    rgba = np.zeros((*sub_idx.shape, 4), dtype=np.uint8)
+    rgba[..., :3] = pal[sub_idx]
+    rgba[..., 3] = np.where(sub_mask, 255, 0).astype(np.uint8)
+    return rgba
+
+
 def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette, cache=None):
     """Lift one NORMAL sprite into (rgba H×W×4, anchor_x, anchor_y) via the dual-buffer paint trick, or None
     if it left no opaque pixels (fully clipped). Only the sprite's on-screen bbox (from ``cmd``) is
     de-planarized, not the whole page.
 
-    ``cache`` (per-frame) de-dupes the (expensive) dual paint across sprites that share the same graphic. The
-    cropped texture is INDEPENDENT of the sub-byte shift (screen_x & 7) -- the shift only moves the sprite's
-    position, not its pixels -- so the key omits shift/position and the anchor is recomputed from screen_x.
-    Only FULLY-on-screen sprites are cached (a clipped sprite's crop depends on its position)."""
+    ``cache`` de-dupes the (expensive) dual paint + deplanarize across sprites that share the same graphic.
+    What is cached is the PALETTE-INDEPENDENT (index, mask, anchor) -- the colour is applied per use via
+    :func:`_rgba_from_index` -- so the cache survives palette fades AND persists across source frames (the
+    session passes one persistent dict: layer A "cached RGBA textures, faithful extraction only as the
+    cache-population fallback"). The crop is INDEPENDENT of the sub-byte shift (screen_x & 7) and the page
+    (the relative bit pattern is the same; on-screen sprites don't wrap the 64 KiB plane), so the key omits
+    shift/position/page and the anchor is recomputed from screen_x. Only FULLY-on-screen sprites are cached
+    (a clipped sprite's crop depends on its position)."""
     x0 = max(0, cmd.screen_x)
     y0 = max(0, cmd.screen_y)
     w = min(WIDTH, cmd.screen_x + cmd.width) - x0
@@ -131,8 +146,8 @@ def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette, cache=None)
                draw.full_rows, draw.src_bw, draw.flipped, draw.clipped, draw.right_clipped)
         hit = cache.get(key)
         if hit is not None:
-            rgba, rx, ry = hit                          # texture is shift-independent; anchor from screen_x
-            return rgba, cmd.screen_x + rx, cmd.screen_y + ry
+            sub_idx, sub_mask, rx, ry = hit             # palette-independent; colour + anchor applied here
+            return _rgba_from_index(sub_idx, sub_mask, palette), cmd.screen_x + rx, cmd.screen_y + ry
     lo = [bytearray(0x10000) for _ in range(4)]
     hi = [bytearray(b"\xff" * 0x10000) for _ in range(4)]
     size = draw.src_bw * draw.full_rows * 6 + 64
@@ -146,19 +161,18 @@ def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette, cache=None)
     if ys.size == 0:
         return None
     ay0, ay1, ax0, ax1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    sub_idx = idx_lo[ay0:ay1, ax0:ax1]
-    sub_mask = agree[ay0:ay1, ax0:ax1]
-    pal = np.asarray(palette, dtype=np.uint8)
-    rgba = np.zeros((ay1 - ay0, ax1 - ax0, 4), dtype=np.uint8)
-    rgba[..., :3] = pal[sub_idx]
-    rgba[..., 3] = np.where(sub_mask, 255, 0).astype(np.uint8)
+    sub_idx = idx_lo[ay0:ay1, ax0:ax1].copy()      # copy: detach the small crop from the 64 KiB scratch buffers
+    sub_mask = agree[ay0:ay1, ax0:ax1].copy()
     abs_x, abs_y = x0 + int(ax0), y0 + int(ay0)
     if key is not None:
-        cache[key] = (rgba, abs_x - cmd.screen_x, abs_y - cmd.screen_y)
-    return rgba, abs_x, abs_y
+        if len(cache) >= _TEX_CACHE_MAX:           # bound growth across levels (textures are tiny; clear simply)
+            cache.clear()
+        cache[key] = (sub_idx, sub_mask, abs_x - cmd.screen_x, abs_y - cmd.screen_y)
+    return _rgba_from_index(sub_idx, sub_mask, palette), abs_x, abs_y
 
 
-def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None) -> EnhancedFrameState | None:
+def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
+                           tex_cache=None) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -232,7 +246,10 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     sprites, unsupported = [], []
     attrs = rs.object_attrs or {}
     banks = rs.object_src_banks or {}
-    sprite_cache = {}            # per-frame texture cache (see _extract_sprite_rgba): de-dupes the dual paint
+    # Sprite texture cache: persistent across source frames when the session passes ``tex_cache`` (layer A --
+    # most textures recur every frame, so steady gameplay re-extracts only the few that changed), else a
+    # per-call dict (the parity path -> identical output, just no cross-frame reuse).
+    sprite_cache = tex_cache if tex_cache is not None else {}
     # camera in PIXELS, matching _placement: X = cam_x*16; Y = cam_y*16 + fine_scroll. Used to interpolate
     # the background scroll between source frames (objects stay glued to the scrolled bg).
     camera_px = (cam.cam_x * 16, cam.cam_y * 16 + cam.fine_scroll)

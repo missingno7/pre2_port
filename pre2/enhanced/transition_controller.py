@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from pre2.enhanced.compositor import _blit
-from pre2.enhanced.transitions import apply_curtain, apply_iris, apply_vfade
+from pre2.enhanced.transitions import VIEWPORT_H, apply_curtain, apply_iris, apply_vfade
 
 # Close durations in PRESENT seconds, grounded by the recovered effect's natural length (the iris closes
 # 0xE6->0 over ~48 source frames). The enhanced renders at the display rate from present-time progress, but is
@@ -119,16 +119,21 @@ class EnhancedTransition:
             bot = min(int(2 * _VFADE_MID - _VFADE_MID * p), int(self._vf_anchor[1]))
             frame = self.old_frame.copy()
             apply_vfade(frame, top, bot)
-            return frame
-        if self.phase == "covered":        # black while the new room loads (never show it early -> no blink)
-            return np.zeros_like(self.old_frame)
-        # open: smooth center-out reveal of the NEW room, driven by PRESENT-time progress (smooth like the
-        # iris), anchored to the recovered progress as a floor so it always reaches full as the game's curtain
-        # ends (never cut off mid-reveal). new_frame is the actual new room (rendered from the curtain page).
-        p_present = (now - self._open_start) / _CURTAIN_OPEN_S
-        p = max(p_present, self._curtain_anchor / _CURTAIN_FULL)
-        base = self.new_frame if self.new_frame is not None else self.old_frame
-        return apply_curtain(np.zeros_like(base), base, p)
+        elif self.phase == "covered":      # black while the new room loads (never show it early -> no blink)
+            frame = np.zeros_like(self.old_frame)
+        else:
+            # open: smooth center-out reveal of the NEW room, driven by PRESENT-time progress (smooth like the
+            # iris), anchored to the recovered progress as a floor so it always reaches full as the game's
+            # curtain ends (never cut off mid-reveal). new_frame is the new room (rendered from the curtain page).
+            p_present = (now - self._open_start) / _CURTAIN_OPEN_S
+            p = max(p_present, self._curtain_anchor / _CURTAIN_FULL)
+            base = self.new_frame if self.new_frame is not None else self.old_frame
+            frame = apply_curtain(np.zeros_like(base), base, p)
+        # The HUD strip stays visible (frozen at the old room's HUD) for the whole transition -- the faithful
+        # curtain overlays the held HUD too; only the viewport fades/wipes. (vfade already leaves it; restore
+        # it for the covered-black + curtain-reveal phases, which zero the whole frame.)
+        frame[VIEWPORT_H:] = self.old_frame[VIEWPORT_H:]
+        return frame
 
     def _render_iris(self, now):
         if self.phase == "close":

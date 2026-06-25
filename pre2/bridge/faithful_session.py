@@ -118,6 +118,8 @@ class FaithfulSession:
         self.enh_cur = None
         self.enh_prev_time = 0.0
         self.enh_cur_time = 0.0
+        self._sprite_tex_cache = {}    # persistent sprite-texture cache (layer A): reused across source frames
+                                       # so steady gameplay re-extracts only textures that actually changed.
         # Async extraction (live --view enhanced only): the ~17ms extract runs on a WORKER thread fed a memory
         # snapshot at the boundary, so the VM + present loop on the main thread never block on it (like audio).
         # enh_prev/cur/times are then shared -> guarded by _enh_lock. Off (None thread) in headless/demo/faithful.
@@ -235,7 +237,8 @@ class FaithfulSession:
             mem_bytes, palette, fx = snap
             try:
                 efs = extract_enhanced_frame(_SnapMem(mem_bytes), _SnapDos(palette),
-                                             game_root=self.args.game_root, with_faithful=False, effects=fx)
+                                             game_root=self.args.game_root, with_faithful=False, effects=fx,
+                                             tex_cache=self._sprite_tex_cache)
             except Exception:
                 efs = None
             if efs is None:
@@ -323,7 +326,8 @@ class FaithfulSession:
             if self.enhanced_capture and self.enh_clock is not None:
                 try:
                     efs = extract_enhanced_frame(c.mem, self.dos, game_root=self.args.game_root,
-                                                 with_faithful=False, effects=fx)
+                                                 with_faithful=False, effects=fx,
+                                                 tex_cache=self._sprite_tex_cache)
                 except Exception:
                     efs = None
                 if efs is not None:

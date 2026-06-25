@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from pre2.enhanced.transition_controller import EnhancedTransition
-from pre2.enhanced.transitions import apply_curtain, apply_iris, apply_vfade
+from pre2.enhanced.transitions import VIEWPORT_H, apply_curtain, apply_iris, apply_vfade
 
 
 def test_apply_vfade_blacks_converging_bands():
@@ -98,13 +98,17 @@ def test_apply_curtain_is_monotonic_centre_out():
     assert widths == sorted(widths) and widths[0] > 0 and widths[-1] == 320, "reveal grows monotonically to full"
 
 
-def test_room_transition_covered_is_black_no_blink():
-    # The blink bug: between close and open the new room is already loaded (fresh), but COVERED must stay black.
+def test_room_transition_covered_viewport_black_hud_kept_no_blink():
+    # The blink bug: between close and open the new room is already loaded (fresh), but the COVERED viewport
+    # must stay black. The HUD strip is intentionally KEPT visible (frozen at the old room) through the whole
+    # transition -- the faithful curtain overlays the held HUD too.
     old = np.full((200, 320, 3), 200, np.uint8)
     tr = EnhancedTransition("room", 100.0, old_frame=old)
     tr.note_ended(100.5)                                  # vfade ended, no curtain yet -> covered
     assert tr.phase == "covered"
-    assert (tr.render(100.6) == 0).all(), "covered must be black (never the fresh new room -> no blink)"
+    out = tr.render(100.6)
+    assert (out[:VIEWPORT_H] == 0).all(), "covered viewport must be black (never the fresh new room -> no blink)"
+    assert (out[VIEWPORT_H:] == 200).all(), "the HUD strip stays visible (frozen) through the transition"
 
 
 def test_room_transition_open_reveals_new_frame():
