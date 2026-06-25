@@ -20,6 +20,22 @@ So a *new gameplay frame* is produced ~25×/sec (every ~3 retraces), matching th
 governor. The 70 Hz retrace and the page flip are **display/oracle timing**, NOT the enhanced renderer's
 drawing model.
 
+**What changes per source frame** (`measure_source_cadence.py` `characterize`, moving witnesses), i.e. what
+the interpolation rides on:
+
+| Witness | objects moved | max screen Δ/frame | animation step | fade |
+|---|---|---|---|---|
+| Spiders (active) | 119/119 frames (~4.4 objs) | 107 px (sprite motion) | ~25% of frames | 0 |
+| Player-death | 57/119 | 9 px | ~25% | 0 |
+| Gameplay + scroll | 85/119 | 175 px (camera scroll) | ~25% | 0 |
+| Shake | 14/119 | 8 px | 0 | 0 |
+
+Takeaways: in active play **objects move nearly every source frame** (so per-object interpolation is the real
+win, not just camera), screen deltas are large enough to see stepping (up to ~107 px sprite / ~175 px with
+scroll), the tile **animation cycle** steps ~1/4 of frames (interpolate as a discrete swap, do NOT lerp tile
+ids), and **palette fades are transition-only** (0 during steady gameplay — fade projection is a separate,
+infrequent concern). Live objects/frame ≈ 2–10.
+
 **Consequence (feasibility).** The expensive faithful render is **9.26 ms** (full planar rebuild + sprite
 pass + deplanarize). Re-running it per *display* subframe is infeasible (240 Hz → 2.2 cores). But it only has
 to run per **source** frame: 25 × 9.26 ms ≈ **23% of one core**. The display subframes (the 3× / 6× / 10×
