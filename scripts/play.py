@@ -600,6 +600,12 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         enhanced = EnhancedRenderer(session, interpolate=not getattr(args, "enhanced_no_interpolation", False))
         session.enhanced_capture = True
         session.enh_clock = perf_counter
+        # Threaded present: run the heavy ~17ms extraction on a worker thread (like audio) so the main thread's
+        # VM stepping + compose + present never block on it. LIVE only -- demo record/replay stay synchronous
+        # (single-threaded, deterministic); async_extract is toggled with `realtime` in the loop below.
+        if not replaying:
+            session.start_async_extraction()
+            session.async_extract = False   # enabled once we confirm we're running live (realtime) below
 
     def render_current():
         # Faithful backend: FaithfulSession composes the frame from recovered leaves (never the VM
@@ -719,6 +725,10 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 sim_deadline = now0          # restart demo pacing from now
                 last_render = 0.0            # force a render on the first demo frame
                 prev_realtime = realtime
+                # Async extraction only while LIVE; a recording (realtime False) uses the synchronous path so
+                # the demo stays deterministic (the worker thread idles, fed no snapshots).
+                if enhanced is not None and session._extract_thread is not None:
+                    session.async_extract = realtime
             rt.dos.time_source = perf_counter if realtime else det_now
             pic = rt.dos.pic
             try:
@@ -856,6 +866,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     finally:
         if not replaying:
             stop_recording()
+        if enhanced is not None:
+            session.stop_async_extraction()
         if sb_audio is not None:
             sb_audio.close()
         if getattr(rt, "_verify_summary", None) is not None:

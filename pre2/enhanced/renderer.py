@@ -38,7 +38,8 @@ class EnhancedRenderer:
         """Return the display frame at wall time ``now``: an interpolated gameplay composite when the
         grounded source snapshots support it, else the faithful frame unchanged."""
         s = self.src
-        cur, prev = s.enh_cur, s.enh_prev
+        # Read prev/cur atomically: in live --view the worker thread swaps them under this lock.
+        prev, cur, prev_time, cur_time = s.read_enh_state()
         reason = None
         if not self.interpolate:
             reason = "interpolation disabled"
@@ -48,18 +49,18 @@ class EnhancedRenderer:
             # The circular-iris level-end transition isn't projected by the compositor yet; the session keeps
             # rendering it faithfully, so pass that through (otherwise compose would show the un-irised frame).
             reason = "iris transition (faithful passthrough)"
-        elif (now - s.enh_cur_time) > _MAX_SOURCE_GAP:
+        elif (now - cur_time) > _MAX_SOURCE_GAP:
             reason = "source snapshot stale (non-gameplay / paused)"
         if reason is not None:
             self._diag = {"interpolated_sprites": 0, "passthrough": True, "alpha": 1.0, "reason": reason}
             return faithful_frame
-        period = s.enh_cur_time - s.enh_prev_time
+        period = cur_time - prev_time
         if prev is None or period <= 0.0 or period > _MAX_SOURCE_GAP:
             # first gameplay frame, or a large gap (scene->gameplay resume): show current, don't interpolate
             self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
                           "reason": "no prior source frame to interpolate from", "unsupported": len(cur.unsupported)}
             return compose(cur, None, 1.0)
-        alpha = (now - s.enh_cur_time) / period
+        alpha = (now - cur_time) / period
         alpha = 0.0 if alpha < 0.0 else 1.0 if alpha > 1.0 else alpha
         frame = compose(cur, prev, alpha)
         self._diag = {"interpolated_sprites": sum(1 for sp in cur.sprites if sp.interpolate),

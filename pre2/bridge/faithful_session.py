@@ -15,8 +15,26 @@ Imported lazily from ``_run_view`` (it pulls ``scripts/sdl_view``, kept out of m
 from __future__ import annotations
 
 import os
+import queue
+import threading
 
 import numpy as np
+
+
+class _SnapMem:
+    """A read-only memory view for the async extraction worker: a copy of the VM's ``mem.data`` taken at the
+    source-frame boundary, so the worker extracts a CONSISTENT frame while the main thread runs the VM."""
+    __slots__ = ("data",)
+
+    def __init__(self, data):
+        self.data = data
+
+
+class _SnapDos:
+    __slots__ = ("vga_palette",)
+
+    def __init__(self, palette):
+        self.vga_palette = palette
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
@@ -100,6 +118,14 @@ class FaithfulSession:
         self.enh_cur = None
         self.enh_prev_time = 0.0
         self.enh_cur_time = 0.0
+        # Async extraction (live --view enhanced only): the ~17ms extract runs on a WORKER thread fed a memory
+        # snapshot at the boundary, so the VM + present loop on the main thread never block on it (like audio).
+        # enh_prev/cur/times are then shared -> guarded by _enh_lock. Off (None thread) in headless/demo/faithful.
+        self.async_extract = False
+        self._enh_lock = threading.Lock()
+        self._extract_q = None
+        self._extract_thread = None
+        self._extract_stop = False
         self._lazy_pc = None           # (ic, (planes,page)|None): faithful planes rendered ON DEMAND for a
                                        # transition base when the per-frame faithful render was skipped (enhanced
                                        # steady gameplay). Cached per instruction_count.
@@ -152,6 +178,75 @@ class FaithfulSession:
                 self.last_hud = self._snapshot_hud(*base)
         return self.last_hud
 
+    # ------------------------------------------------------ async extraction (live --view enhanced)
+    def start_async_extraction(self):
+        """Start the worker thread that runs the heavy extract off the main (VM + present) thread."""
+        self._extract_q = queue.Queue(maxsize=1)
+        self._extract_stop = False
+        self.async_extract = True
+        self._extract_thread = threading.Thread(target=self._extraction_worker, name="enh-extract", daemon=True)
+        self._extract_thread.start()
+
+    def stop_async_extraction(self):
+        self._extract_stop = True
+        self.async_extract = False
+        if self._extract_q is not None:
+            try:
+                self._extract_q.put_nowait(None)
+            except queue.Full:
+                pass
+        if self._extract_thread is not None:
+            self._extract_thread.join(timeout=1.0)
+            self._extract_thread = None
+
+    def _push_snapshot(self, snap):
+        """Hand a boundary snapshot to the worker, dropping any stale pending one (keep only the freshest)."""
+        q = self._extract_q
+        if q is None:
+            return
+        try:
+            q.put_nowait(snap)
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(snap)
+            except queue.Full:
+                pass
+
+    def _extraction_worker(self):
+        """Pop boundary snapshots and extract EnhancedFrameStates off-thread; publish prev/cur under the lock.
+        ``enh_cur_time`` is the PUBLISH time (extraction-complete), so the main thread interpolates between
+        publish instants -> smooth, the display simply running ~one extraction behind real time."""
+        while not self._extract_stop:
+            try:
+                snap = self._extract_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if snap is None:
+                break
+            mem_bytes, palette, fx = snap
+            try:
+                efs = extract_enhanced_frame(_SnapMem(mem_bytes), _SnapDos(palette),
+                                             game_root=self.args.game_root, with_faithful=False, effects=fx)
+            except Exception:
+                efs = None
+            if efs is None:
+                continue
+            now = self.enh_clock() if self.enh_clock is not None else 0.0
+            with self._enh_lock:
+                self.enh_prev, self.enh_cur = self.enh_cur, efs
+                self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, now
+                if efs.iris is None:   # keep a fresh faithful-equivalent gameplay frame for transition holds
+                    self.boundary_capture = (compose(efs, None, 1.0), efs.page, "GAMEPLAY", None)
+
+    def read_enh_state(self):
+        """(prev, cur, prev_time, cur_time) read atomically (the worker swaps them under the same lock)."""
+        with self._enh_lock:
+            return self.enh_prev, self.enh_cur, self.enh_prev_time, self.enh_cur_time
+
     # -------------------------------------------------------------------- hook install
     def install_hooks(self):
         """Register all faithful capture hooks on the CPU (faithful mode only). Each captures its existing
@@ -200,6 +295,20 @@ class FaithfulSession:
             disp = rt.program.memory.ega_display_start
             fx = capture_gameplay_effects(c.mem, particle_frame=self.particle_frame,
                                           foreground_frame=self.foreground_frame)
+            # THREADED enhanced: hand the heavy extract to the worker thread (snapshot the VM memory at this
+            # consistent boundary so it stays valid while the VM runs on). The iris transition still needs the
+            # main-thread faithful render (passthrough), so it falls through to the synchronous path.
+            if self.async_extract and not self.verify and c.mem.data[(_DSEG << 4) + 0x2DD0] == 0:
+                self._push_snapshot((bytes(c.mem.data), list(self.dos.vga_palette or []), fx))
+                self.last_committed = None
+                self.last_hud = None
+                self.last_capture_ic = rt.cpu.instruction_count
+                self.planar_image_capture = None
+                self.curtain_cache = None
+                self.particle_frame = None
+                self.foreground_frame = None
+                orig = self._orig[0x6772]
+                return orig(c) if orig is not None else interpret_current_instruction_without_hook(c)
             # ENHANCED source-snapshot seam: extract the modern frame at this gameplay commit (the only place a
             # new ~25 fps source frame is produced) and keep prev+cur for the compositor.
             efs = None
@@ -210,8 +319,9 @@ class FaithfulSession:
                 except Exception:
                     efs = None
                 if efs is not None:
-                    self.enh_prev, self.enh_cur = self.enh_cur, efs
-                    self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, self.enh_clock()
+                    with self._enh_lock:
+                        self.enh_prev, self.enh_cur = self.enh_cur, efs
+                        self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, self.enh_clock()
             if efs is not None and efs.iris is None and not self.verify:
                 # STEADY enhanced gameplay: the compositor OWNS the display, and compose(efs, None, 1.0)
                 # reproduces the faithful frame parity-exact (~0.2 ms) -> SKIP the ~10 ms faithful planar
