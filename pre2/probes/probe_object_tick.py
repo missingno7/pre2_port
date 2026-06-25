@@ -21,7 +21,8 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
 from play import _advance_frame_deterministic, _make_replay_runtime
-from pre2.recovered.object_update import apply_velocity   # SHADOW: the recovered routine under test
+from pre2.recovered.object_update import (AnimResult, ObjectScaleUnsupported,   # SHADOW: routines under test
+                                          advance_animation, apply_velocity)
 
 SEG = 0x1030
 
@@ -56,6 +57,9 @@ def main():
     vel_moving = Counter()        # among objects with a nonzero predicted delta
     vel_static = Counter()        # among objects with zero predicted delta
     mismatches = []
+    anim = Counter()              # 'match' / 'mismatch' / 'scale_skip'
+    anim_pending = {}             # si -> predicted AnimResult from 6881
+    anim_mismatches = []
     handlers = defaultdict(Counter)   # handler_index -> Counter(target_addr -> n)
     handler_ids = defaultdict(Counter)  # handler_index -> Counter(base sprite id)
 
@@ -93,6 +97,33 @@ def main():
                 mismatches.append((si, (ox, oy), "pred", (nx, ny), "actual", (ax, ay)))
         chain(c)
 
+    def h_anim_pre(c):
+        ds, si = c.s.ds, c.s.si
+        script_ptr = rdw(ds, si + 0xC)
+        old_id = rdw(ds, si + 4)
+        flip = cpu.mem.data[((ds << 4) + ((si + 9) & 0xFFFF)) & 0xFFFFF]
+        scale = rdw(ds, 0x6BE2)
+        try:
+            anim_pending[si] = advance_animation(script_ptr, lambda o: rdw(ds, o), old_id, flip, scale)
+        except ObjectScaleUnsupported:
+            anim_pending[si] = "scale"
+            anim["scale_skip"] += 1
+        chain(c)
+
+    def h_anim_post(c):
+        ds, si = c.s.ds, c.s.si
+        if si in anim_pending:
+            pred = anim_pending.pop(si)
+            if pred == "scale":
+                return chain(c)
+            actual = AnimResult(sprite_id=rdw(ds, si + 4), script_ptr=rdw(ds, si + 0xC),
+                                attr_a340=cpu.mem.data[((ds << 4) + 0xA340) & 0xFFFFF])
+            ok = (pred == actual)
+            anim["match" if ok else "mismatch"] += 1
+            if not ok and len(anim_mismatches) < 10:
+                anim_mismatches.append((si, "pred", repr(pred), "actual", repr(actual)))
+        chain(c)
+
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
         target = rdw(cs, (bx + 0x6AA9) & 0xFFFF)
@@ -101,7 +132,8 @@ def main():
         handler_ids[idx][rdw(ds, si + 4) & 0x1FFF] += 1
         chain(c)
 
-    for off, fn in ((0x6856, h_looptop), (0x6861, h_vel_pre), (0x6875, h_vel_post), (0x68FC, h_dispatch)):
+    for off, fn in ((0x6856, h_looptop), (0x6861, h_vel_pre), (0x6875, h_vel_post),
+                    (0x6881, h_anim_pre), (0x68E9, h_anim_post), (0x68FC, h_dispatch)):
         cpu.replacement_hooks[(SEG, off)] = fn
         cpu.hook_names[(SEG, off)] = f"probe_{off:04x}"
 
@@ -136,6 +168,12 @@ def main():
     print(f"  among MOVING objects: match={vel_moving['match']} mismatch={vel_moving['mismatch']}")
     print(f"  among STATIC objects: match={vel_static['match']} mismatch={vel_static['mismatch']}")
     for m in mismatches:
+        print(f"    MISMATCH {m}")
+    print(f"\n=== ANIM-ADVANCE SHADOW (0x6881..0x68E6: script walk -> [si+4] frame, [si+0xC] ptr, [0xA340]) ===")
+    atot = anim["match"] + anim["mismatch"]
+    print(f"  checks: {atot}   match: {anim['match']}   MISMATCH: {anim['mismatch']}"
+          f"   scale-skip([0x6BE2]!=0): {anim['scale_skip']}")
+    for m in anim_mismatches:
         print(f"    MISMATCH {m}")
     print(f"\n=== AI HANDLER DISPATCH (0x68FC: call cs:[bx+0x6AA9]) ===")
     print(f"  {'idx':>4} {'handler@':>9} {'calls':>8}  base sprite-ids (top)")

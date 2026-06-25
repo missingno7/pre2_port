@@ -199,3 +199,27 @@ sprite-id|frame, `[+0xC]` anim ptr (anim advance). **Read-as-input:** `[+6]` def
 (reads `[+8]/[+0xA]`, writes `[+0]/[+2]`), has NO other side effects, and is proven 770+453/453 exact. A live
 hook there is the lowest-risk first authoritative object-system routine. Anim-advance (`6881..68E6`) is the
 next leaf (more state: the script-pointer walk + `[0x6BE2]/[0xA801]` reads), recover in shadow before live.
+
+## Stage 1 cont. (2026-06-26) — anim-advance recovered + handler substructure mapped
+
+- **`1030:6881..68E6` — `advance_animation`. VERIFIED** (`object_update.advance_animation`,
+  `tests/test_object_update.py`). Walk the script ptr `[si+0xC]` (a DS-relative offset list of frame words;
+  a NEGATIVE word is a relative back-jump = animation loop); `frame = ((raw & 0x1FFF) + 0x138) & 0x1FFF`;
+  `[si+4] = (old & 0x6000) | frame | (flip<<15)` (flip from `[si+9]` bit7); advance ptr +2; write the
+  `[0xA340]` scratch byte `((raw>>8)&0xE0)|scale`. Shadow-proven 770/770 + 447/447 exact (two demos, incl. the
+  `[0xA340]` side effect). The `scale` ([0x6BE2]) region-remap (boss zoom, 0xA801 table) is GUARDED
+  (ObjectScaleUnsupported) — never fired in normal-gameplay demos (0 skips).
+
+Handler substructure mapped (disasm), charting the path to lifting the whole walker:
+- **`0x8084` — the keystone "despawn-if-far-from-player" pre-check** every handler calls first: `|obj.x −
+  player[0x4F1C]| > 0x140` or `|obj.y − player[0x4F1E]| > 0x12C` → despawn (`[si+4]=0xFFFF`, `[def+4]&=0xFB`,
+  `[def+7]=0`); a state `[si+0xE]>=0xA` far object jumps to `0x7CFF` instead. Recover next.
+- **`0x698C` — object-vs-tile collision helper** (called when `[def+4]&8`): `tileY=[si+2]>>4`, `tileX=[si]>>4`,
+  index the level map `es:[0x2DDA]` at the object tile + the tile in the X-vel direction, xlat table `0x7E5E`.
+- **handlers (`CS:0x6AA9`) are thin**: idx1 `7C8C` = `call 0x8084; ret`; idx0 `7C90` = `call 0x8084` +
+  pickup logic (sets collide flag `[def+4]|=8`, state `[si+0xE]`). Most delegate to `0x8084`/`0x8001`/`0x8022`.
+
+LIFT PATH (toward a high-level `object_tick` in real source): velocity ✓ + anim ✓ recovered; next the shared
+helpers `0x8084` (despawn) → `0x698C`/`0x8001`/`0x8022` (collision) → the thin per-type handlers → then
+compose the walker loop (684E..6913) as one function with the recovered leaves (handlers as a dispatch table),
+shadow-verify the whole tick, and live-hook the composed walker (not each tiny leaf — coastline upward).

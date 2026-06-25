@@ -223,8 +223,13 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   `0xFFFF` sentinel (unrepresentable). LIVE hook reproduces the block's regs + FLAGS + instruction count
   (byte-transparent except at a mid-block IRQ — the atomic-block-swap limit on the instruction-granular clock).
   Suite 334; enhanced parity unregressed.
-- **`1030:6881..68E6` — anim advance.** OBSERVED (writes `[+4]` frame from script ptr `[+0xC]`; reads
-  `[0x6BE2]`/`[0xA801]`). Next shadow-recovery candidate.
+- **`1030:6881..68E6` — `advance_animation`. VERIFIED** (`object_update.advance_animation`,
+  `tests/test_object_update.py`). Script-ptr `[+0xC]` walk (negative word = back-jump loop); `frame =
+  ((raw&0x1FFF)+0x138)&0x1FFF`; `[+4] = (old&0x6000)|frame|(flip<<15)`; `[0xA340]` scratch. Shadow 770/770 +
+  447/447 exact. Scale path ([0x6BE2]!=0, 0xA801 boss-zoom remap) GUARDED (never fires in normal gameplay).
+- **`1030:8084` — despawn-if-far-from-player** (keystone; every handler calls it). OBSERVED. `|x-[4F1C]|>0x140
+  || |y-[4F1E]|>0x12C` → despawn `[+4]=0xFFFF`. Recover next (unlocks the thin handlers).
+- **`1030:698C` — object↔tile collision helper** (when `[def+4]&8`). OBSERVED. level map `es:[2DDA]`, xlat 7E5E.
 - **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
   `1→7C8C`, `2→7C2D`, `10→7665`. 24-entry catalogue at `CS:0x6AA9`. Handlers UNRECOVERED.
 - **Phase B (the blit) — full spec mapped, TODO implement.** Per sprite it is a **two-phase
