@@ -306,6 +306,31 @@ def _advance_demo_frame(rt, *, chunk_steps, sub_batch, clock, pic,
         remaining -= n
 
 
+def _advance_frame_deterministic(rt, args, *, chunk_steps, sub_batch, clock, pic, sound_blaster,
+                                 timer_irq, input_irq_steps, tick_state, det_speed, base=0.0):
+    """Advance one deterministic frame, fast-forwarding the recovered VGA retrace-wait timing primitive when
+    the hybrid runtime is active (the default). This is the single decision point shared by every
+    deterministic stepping path (headless replay, in-view demo replay, verify/oracle).
+
+    The fast path (``pre2.bridge.timing_fastforward.advance_frame_fast``) is a recovered timing hook: it
+    collapses the long runs of identical 9900/990D/44CD retrace polls in closed form but is BYTE-EQUIVALENT
+    to the interpreted ``_advance_demo_frame`` on the deterministic clock (it mirrors the same sub_batch IRQ
+    cadence and reproduces every register/flag/memory/port side effect). It is disabled — falling back to the
+    pure interpreted ASM loops — under ``--no-replacements`` (pure oracle) or ``--no-fast-retrace-waits`` (so
+    the original ASM timing path stays available for comparison)."""
+    use_fast = getattr(args, "fast_retrace_waits", True) and not getattr(args, "no_replacements", False)
+    if use_fast:
+        from pre2.bridge.timing_fastforward import advance_frame_fast
+        advance_frame_fast(rt, chunk_steps=chunk_steps, sub_batch=sub_batch, clock=clock, pic=pic,
+                           sound_blaster=sound_blaster, timer_irq=timer_irq, input_irq_steps=input_irq_steps,
+                           tick_state=tick_state, det_speed=det_speed,
+                           active_fraction=rt.dos.vga_retrace_active_fraction, base=base)
+    else:
+        _advance_demo_frame(rt, chunk_steps=chunk_steps, sub_batch=sub_batch, clock=clock, pic=pic,
+                            sound_blaster=sound_blaster, timer_irq=timer_irq,
+                            input_irq_steps=input_irq_steps, tick_state=tick_state)
+
+
 def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | None = None) -> int:
     """Live VGA/text viewer for PRE2 bring-up, with digital audio and demo record/replay.
 
@@ -1348,10 +1373,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                             last_audio = nowp
                 else:
                     chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
-                    _advance_demo_frame(rt, chunk_steps=chunk, sub_batch=realtime_batch,
-                                        clock=det_now, pic=pic, sound_blaster=sound_blaster,
-                                        timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
-                                        tick_state=tick_state)
+                    # Deterministic (demo-replay) clock has a non-zero base here (vclock anchors det_now to
+                    # the wall clock at mode switches); pass it so the retrace sampling matches _vga_status.
+                    _advance_frame_deterministic(rt, args, chunk_steps=chunk, sub_batch=realtime_batch,
+                                                 clock=det_now, pic=pic, sound_blaster=sound_blaster,
+                                                 timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
+                                                 tick_state=tick_state, det_speed=det_speed,
+                                                 base=vclock["base"])
                     steps_done += chunk
             except ConsoleInputWouldBlock:
                 status = "waiting for DOS key"
@@ -1466,10 +1494,10 @@ def _run_replay_headless(rt, args: argparse.Namespace, playback: InputDemoPlayba
         playback.apply_to_runtime(frame, rt, deliver=replay_deliver)
         chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
         try:
-            _advance_demo_frame(rt, chunk_steps=chunk, sub_batch=realtime_batch,
-                                clock=det_now, pic=pic, sound_blaster=sound_blaster,
-                                timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
-                                tick_state=tick_state)
+            _advance_frame_deterministic(rt, args, chunk_steps=chunk, sub_batch=realtime_batch,
+                                         clock=det_now, pic=pic, sound_blaster=sound_blaster,
+                                         timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
+                                         tick_state=tick_state, det_speed=det_speed)
             steps_done += chunk
             if sound_blaster is not None and sound_blaster.pcm_out:
                 sound_blaster.pcm_out.clear()
@@ -1557,7 +1585,7 @@ def main(argv: list[str] | None = None) -> int:
                         "'enhanced': future modern renderer (not implemented). "
                         "Execution mode is the other axis: hybrid (default) / --no-replacements / --verify-hooks.")
     p.add_argument("--video-verify", action="store_true", help="(with `--video faithful`) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
-    p.add_argument("--speed", type=int, default=450_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Live --view ignores this and self-paces on the wall clock")
+    p.add_argument("--speed", type=int, default=150_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Default 150k ~= PRE2's native rate: its per-frame game work is only ~1.3-1.9k instr (measure_frame_work.py), so ~132k (p90 work x 70Hz) fills one retrace frame with minimal spin; higher values just inflate idle retrace spin (a 450k frame is ~99% spin) and overrun the host interpreter (~270k instr/s) so the demo loop falls behind real time and drops to the 4Hz render fallback. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
     p.add_argument("--retrace-pulse", type=float, default=0.06, help="(live) fraction of each refresh the VGA vertical-retrace status bit reads active. ~0.06 = realistic narrow VGA pulse that gates PRE2's mode-select scroll half-wait to one frame per 70Hz retrace (matches DOSBox); 0.28 = legacy wide window (~2x fast scroll). Demos replay at their recorded value")
@@ -1570,6 +1598,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
     p.add_argument("--full-verify", action="store_true", help="foolproof variant of --verify-hooks: diff the WHOLE machine state (all memory + return cs:ip:sp) after each recovered routine vs the ASM, so nothing can leak outside a hand-picked contract. ~10x slower; for offline snapshot/demo audits, not live play")
     p.add_argument("--trace-hooks", action="store_true", help="run the LIVE hybrid runtime (hooks replacing ASM, NOT the oracle) and show which recovered hooks fire — a live coverage view in the title bar + a periodic/final per-hook tally. Hooks absent = that screen is still pure ASM")
+    p.add_argument("--fast-retrace-waits", action=argparse.BooleanOptionalAction, default=True, help="recovered timing primitive (deterministic paths: headless replay, in-view demo replay, verify/oracle): collapse the classified VGA retrace busy-waits (9900/990D/44CD) in closed form, byte-equivalent to the interpreted stepper (~6-15x faster on wait-heavy scenes). On by default with the hybrid runtime; --no-fast-retrace-waits forces the pure interpreted ASM loops (and it is off under --no-replacements). Does NOT affect live --view wall-clock pacing")
     args = p.parse_args(argv)
     # VIDEO BACKEND (separate axis from execution mode; only selects how frames are DISPLAYED).
     # 'enhanced' is a reserved future backend and is not implemented.

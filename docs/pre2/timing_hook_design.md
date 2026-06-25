@@ -1,10 +1,18 @@
 # Timing-hook design note — recovered VGA retrace / busy-wait primitives
 
-> Status: **Stage A (design only).** No loop is live-hooked yet. This note reconfirms the timing model,
-> classifies the target loops, defines the per-loop contract, and explains exactly why a naive skip is
-> wrong. The contract being recovered here is **emulated time**, not pixels: the game must not run faster,
-> the emulated timeline must not advance differently, and demo/replay/full-verify determinism must stay
-> byte-intact.
+> Status: **PROMOTED — a recovered timing primitive, ON BY DEFAULT in the deterministic hybrid runtime.**
+> The classified VGA retrace waits (9900/990D/44CD) are now collapsed in closed form by
+> `pre2/bridge/timing_fastforward.advance_frame_fast`, the default deterministic stepper for headless
+> replay, in-view demo replay, and verify/oracle runs. It is **byte-equivalent** to the interpreted ASM
+> loops (whole memory + all registers + instruction_count identical at every frame boundary; full 1 MB
+> snapshot identical end-to-end; identical `--full-verify` divergence set), ~6–15× faster on wait-heavy
+> scenes (~2× end-to-end on a mixed demo). It falls back to the pure interpreted loops under
+> `--no-replacements` (pure oracle) or `--no-fast-retrace-waits` (keeps the ASM timing path available for
+> comparison). **Live `--view` is intentionally untouched** (§7). The canonical timing model is the existing
+> `sub_batch` cadence (§8) — deliberately *not* a new exact-tick model, so no second timing model exists and
+> nothing is reinterpreted. The contract recovered here is **emulated time**, not pixels: the game must not
+> run faster, the emulated timeline must not advance differently, and demo/replay/full-verify determinism
+> stays byte-intact. See §8 for the as-built design and §9 for the canonical-model decision.
 
 ## 0. Target loops (this pass) and the one we do NOT touch
 
@@ -197,10 +205,135 @@ be redesigned (it must — that is itself a reported decision point); mid-spin I
 isolated; live wall-clock pacing needs a rewrite; full-verify diverges; or the work starts spreading into
 renderer/audio code. No silent fallback, no approximate timing, no shims.
 
-## 7. Live `--view` is separate
+## 7. Live `--view` is separate — design required before any code
 
-In live mode the spin is the wall-clock pacing within a frame, and the outer loop already busy-waits to the
-present deadline. A correct live replacement does not fast-forward game logic; it must yield/wait until the
-same wall-clock retrace phase while keeping audio pumping and input responsive without pinning a core — which
-is an outer-loop pacing change. If live mode requires that rewrite, STOP and report before coding it; the
-deterministic/headless/verify speedup (the 86%-hot path for tests) is the first and separable target.
+In live mode the spin is the wall-clock pacing *within* a frame, and the outer loop already busy-waits to the
+present deadline. Fast-forwarding the retrace polls there would make the game run **faster in game time**
+(the opposite of the invariant) — so the deterministic fast-forward is, correctly, NOT applied to live
+`--view` (the realtime branch never routes through `_advance_frame_deterministic`). The live goal is
+different: *don't burn a core while waiting*, without changing pacing. That needs an **outer-loop** change,
+not a wait-loop replacement:
+
+- Detect that the VM is parked in a classified retrace wait (`cpu.s.ip in ALL_NODES`) with no input/audio
+  work pending, and instead of spinning the interpreter, `sleep`/yield until either the next present
+  deadline or the wall-clock instant the retrace phase next flips — then resume the VM exactly where it was.
+- The VM's emulated clock is wall-clock (`perf_counter`) in live mode, so "where the retrace bit flips" is a
+  real future timestamp; the game-time advance must be identical to having spun (same number of emulated
+  instructions would have run), i.e. the sleep must be accounted into the per-frame instruction budget so we
+  do not under- or over-run game time.
+- Audio must keep pumping during the sleep (the mixer thread is fed on a few-ms cadence today), and input
+  must stay responsive (wake early on a key event).
+
+This is a scheduler/pacing redesign of the live outer loop, **out of scope for this pass**. It will get its
+own design note + review before any code. The deterministic/headless/verify speedup (the 86%-hot path for
+tests and tooling) is the first and separable target, now shipped (§8).
+
+## 8. As-built — the promoted recovered timing primitive (and why it differs from §5)
+
+The shipped design is **simpler and strictly safer** than the §5 "instruction_count-delta budget + deliver
+IRQ0 at the exact tick due-ic" sketch, and was chosen because §5 would have produced a *different* (if more
+physically-accurate) timeline that reinterprets the existing deterministic execution for no behavioural gain.
+Two deliberate departures:
+
+1. **Keep the existing IRQ cadence; do not change the budget basis.** `pre2/bridge/timing_fastforward.py`
+   `advance_frame_fast` mirrors `play._advance_demo_frame` exactly: the same `sub_batch` (2000-instruction)
+   boundaries, the same per-boundary pump (`_pump`, a verbatim copy of `_pump_and_step`'s tick/SB/PIC half).
+   IRQs are still delivered only at those boundaries — *not* at exact PIT-tick due-ic. The fast-forward only
+   collapses poll iterations **between** boundaries, where the interpreted model delivers no IRQ anyway. So
+   the result is byte-identical to the current stepper — **no new timeline, no demo re-recording** (resolves
+   constraint #8). The "mid-spin IRQ" of §5/§5b is handled trivially: a spin longer than 2000 instructions
+   simply spans several sub_batches, and the pump runs (delivering the timer ISR for real) at each boundary,
+   exactly as today.
+
+2. **Interpret boundaries for real; bulk-skip only provably-identical poll runs.** Rather than reconstruct
+   the loop's mid-spin register/flag state in closed form (fragile — the ISR pushes FLAGS/CS/IP, and `in
+   al,dx` / `test` / `cmp` flag bits would all have to be re-derived), `_fast_forward_wait` runs every
+   boundary instruction with the real `cpu.step()` (entry setup, each loop's first iteration, loop-to-loop
+   transitions, the `pop/pop/ret` exit). It collapses *only* a run of identical poll iterations: on arriving
+   at a loop-top via its back-edge (`_POLL_BACKEDGE`), where flags are known to be `test(continue_bit)`, it
+   advances `instruction_count` by `3·k` over the `k` consecutive same-condition iterations that fit before
+   the boundary. Each skipped iteration returns to the same loop-top with identical ip/registers/flags — only
+   the deterministic clock (hence the next sampled retrace bit) moves — so the skip is exact by construction.
+   `pre2/recovered/vga_timing.py` keeps only the loop CFG tables (`LOOP_GRAPHS` → `ALL_NODES`, the
+   membership test) and the Stage-C entry simulators; the generalized `walk_loop` was removed as unused.
+
+**Retrace sampling.** `make_sample(det_speed, base, active_fraction)` reproduces `dos._vga_status`'s SET test
+(`(base + ic/det_speed)·70 mod 1 ≥ 1 − active_fraction`). `active_fraction` is read from
+`dos.vga_retrace_active_fraction` at the call site so it always matches the VM; `base=0` on the headless
+deterministic clock.
+
+**Verification gates.**
+- `tests/test_timing_fastforward.py` (committed, snapshot-free): a mock CPU interpreting `ALL_NODES` proves
+  the bulk-skip leaves the identical `(instruction_count, ip)` as naive single-stepping across a sweep of
+  clock phases and budgets, and that a full-frame budget always exits the loop. Guards the skip arithmetic.
+- `pre2/probes/verify_fast_retrace.py` (snapshot-based, manual — snapshots are gitignored): drives two
+  runtimes from the same snapshot, one with `play._advance_demo_frame`, one with `advance_frame_fast`, and
+  asserts whole-memory + all-registers + instruction_count identical at every frame boundary for 80 frames
+  across carte (990D) / menu (9900) / gameplay (44CD). PASS, speedups 14.6× / 6.0× / 1.0×.
+- End-to-end `--play-demo` (default fast) vs `--no-fast-retrace-waits` → identical `memory_1mb.bin`,
+  `state.json`, `trace_tail.txt` at 800k and 4M instructions; 24.0 s → 13.3 s wall on the 4M replay.
+- `--full-verify` (whole-machine ASM-oracle diff after every recovered routine) with fast on vs off →
+  **identical divergence set** (the only divergences are the pre-existing known mixer "channel-state"
+  recovered-vs-oracle bug at `1A0F:0B60/0B62/10B9/10BA` — unrelated to retrace timing; see
+  [[pre2-renderer-effect-bugs]]). The fast path introduces no new divergence; audio/tracker/timer-visible
+  state matches. (Check *counts* differ only because full-verify's oracle re-execution inflates
+  `instruction_count`, so a fixed `--steps` budget covers a different program distance — not a divergence.)
+
+## 9. Canonical timing model & integration (the promotion decision)
+
+**Decision: the canonical deterministic timing model is the existing `sub_batch` cadence; we did NOT switch
+to an exact-tick instruction_count-delta model.** Rationale:
+- It is already the *single* model every deterministic path uses; `advance_frame_fast` is byte-equivalent to
+  it, so promoting introduces **no second model** and changes **no** captured checkpoint/oracle baseline.
+- `1 cpu.step() == 1 instruction_count` already, so the "budget basis" is instruction-count; `sub_batch=2000`
+  is only the IRQ-pump granularity. An exact-tick model would change the timeline for *all* deterministic
+  runs and invalidate every golden for zero behavioural gain (the retrace waits self-synchronise to vsync
+  regardless of where in a 2000-instruction window the timer IRQ lands).
+- Consequence for demos: existing recordings **replay byte-identically** under the promoted model, so no
+  re-recording is forced and no compatibility shim exists. (If we ever deliberately move to exact-tick later,
+  that is the moment to delete/re-record demos — not now.)
+
+**Integration.** `_advance_frame_deterministic(rt, args, …)` in `scripts/play.py` is the single decision
+point shared by every deterministic stepping path (headless replay, in-view demo replay, verify/oracle). It
+uses `advance_frame_fast` (the recovered primitive) when the hybrid runtime is active — the **default** — and
+falls back to the interpreted `_advance_demo_frame` (pure-ASM retrace loops) under `--no-replacements` (pure
+oracle) or `--no-fast-retrace-waits` (keeps the original timing path available for comparison, like every
+other recovered island keeps its ASM oracle). There is **no experimental flag**; the feature is on by
+default and proven. Live `--view` realtime is the one path that never routes through this dispatcher (§7).
+
+**Scope held.** All *deterministic* stepping paths (headless replay `_run_replay_headless`, the in-view demo
+replay/record branch, verify/oracle) — routed through `_advance_frame_deterministic`. Live `--view` realtime
+is untouched (§7 still applies — it would need the outer-loop pacing rewrite). No renderer / audio-mixer /
+gameplay logic changed; the only side effects are the very instructions the interpreted loop runs. `44CD` is
+encoded for the COLOR (`0x3DA`) path only; the mono `0x3BA` path is deliberately not fast-forwarded.
+
+## 10. The demo-clock `--speed` default (PRE2's native CPU rate) — `--speed 150000`
+
+Measured with `pre2/probes/measure_frame_work.py` (splits each game-frame at the 44CD present-wait into
+*work* = instructions between presents and *spin* = the retrace busy-wait):
+
+| Scene | per-frame WORK (instr) | present SPIN @ speed 450k | "fills a 70 Hz frame" speed = work·70 |
+|---|---|---|---|
+| Gameplay (185902) | mean 1320, p90 1889, max 20318 | mean 5454, p90 6428 | mean 92k, **p90 ≈ 132k** |
+
+PRE2 is **frame-locked to the 70 Hz VGA retrace** (one 44CD present-wait per frame), so its *game* speed is a
+constant 70 fps in emulated time regardless of `--speed`; `--speed` only sets how many instructions the demo
+clock packs into each retrace period, i.e. how much *idle spin* pads the ~1.3–1.9 k of real work. At the old
+default `--speed 450000` a gameplay frame is **~99 % spin** (6428-instr chunk, ~1.3 k work). Two independent
+ceilings both point at ~150 k:
+- **Game-native rate.** `p90_work · 70 ≈ 132 k` is the rate at which the real per-frame work nearly fills one
+  70 Hz frame with minimal spin — i.e. roughly the effective speed of PRE2's ~1993 target CPU (a fast
+  286/386). `--speed 150000` sits just above it (headroom for busier frames; truly heavy frames, e.g. a level
+  load spiking to ~20 k instr, *should* slow down — that is faithful to the original on period-correct
+  hardware).
+- **Host interpreter throughput.** The Python VM sustains ~270 k emulated-instr/s for this workload, so the
+  demo loop keeps up with real time (smooth ~70 Hz present) only while `--speed ≲ 270 k`. At 450 k it runs at
+  ~0.6× real time and trips the deliberate 4 Hz render fallback (`render_gap = 0.25`, [play.py] §1409) — the
+  "4 fps, huge frameskip" symptom. At 150 k it runs ~1.8× real time → smooth, for both record and replay
+  (both use the deterministic clock; recording sets `realtime=False`).
+
+So `--speed 150000` is the new default: near PRE2's native rate, comfortably under the host ceiling, minimal
+wasted spin. (Note: this is *orthogonal* to fast-retrace — fast-forwarding makes the spin cheap on the host,
+but the spin still consumes *emulated* time, so a too-high `--speed` still maps fewer presented frames to each
+host-second. Lowering `--speed` to the native rate removes the spin from emulated time itself.) Existing demos
+carry their own recorded speed in the manifest and are unaffected; new recordings use 150 k.

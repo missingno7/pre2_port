@@ -117,3 +117,50 @@ SIMULATORS = {
     0x990D: ("wait_for_retrace_edge", simulate_retrace_edge),
     0x44CD: ("wait_for_present_edge", simulate_present_edge),
 }
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Table-driven loop instruction graphs — the set of CS:IP a fast-forward must recognize as "inside a
+# classified retrace wait" (the bridge's `ALL_NODES` membership test) and the control flow within them.
+#
+# Each loop is a tiny instruction graph keyed by IP. Node kinds:
+#   ("op",  next)            a normal instruction (push/pop/mov/test/cmp/...) — +1 instruction, go to next
+#   ("in",  next)            an `in al,dx` — +1 instruction, SAMPLE the retrace bit, go to next
+#   ("br",  set_ip, clr_ip)  a je/jne on the last sample — +1 instruction, go to set_ip if SET else clr_ip
+#   ("ret",)                 the near ret (loop exit)
+#
+# 44CD is encoded for the COLOR (0x3DA) path only (cs:[1]!=0 on the GOG build); the je at 44D5 is baked as a
+# fall-through. The mono (0x3BA) path is intentionally NOT in the table (do not fast-forward it).
+# ---------------------------------------------------------------------------------------------------------
+
+_TAIL_9905 = {
+    0x9905: ("in", 0x9906), 0x9906: ("op", 0x9908), 0x9908: ("br", 0x990A, 0x9905),
+    0x990A: ("op", 0x990B), 0x990B: ("op", 0x990C), 0x990C: ("ret",),
+}
+
+LOOP_GRAPHS = {
+    0x9900: {
+        0x9900: ("op", 0x9901), 0x9901: ("op", 0x9902), 0x9902: ("op", 0x9905),
+        **_TAIL_9905,
+    },
+    0x990D: {
+        0x990D: ("op", 0x990E), 0x990E: ("op", 0x990F), 0x990F: ("op", 0x9912),
+        0x9912: ("in", 0x9913), 0x9913: ("op", 0x9915), 0x9915: ("br", 0x9912, 0x9917),
+        0x9917: ("in", 0x9918), 0x9918: ("op", 0x991A), 0x991A: ("br", 0x991C, 0x9905),
+        0x991C: ("op", 0x991D), 0x991D: ("op", 0x991E), 0x991E: ("ret",),
+        **_TAIL_9905,
+    },
+    0x44CD: {
+        0x44CD: ("op", 0x44CE), 0x44CE: ("op", 0x44CF), 0x44CF: ("op", 0x44D5),
+        0x44D5: ("op", 0x44D7),                                    # je 44E9 NOT taken (color) -> fall
+        0x44D7: ("op", 0x44DA), 0x44DA: ("op", 0x44DC),
+        0x44DC: ("in", 0x44DD), 0x44DD: ("op", 0x44DF), 0x44DF: ("br", 0x44DC, 0x44E1),
+        0x44E1: ("in", 0x44E2), 0x44E2: ("op", 0x44E4), 0x44E4: ("br", 0x44E6, 0x44E1),
+        0x44E6: ("op", 0x44E7), 0x44E7: ("op", 0x44E8), 0x44E8: ("ret",),
+    },
+}
+
+# All loop nodes merged (the 9905 tail is identical in 9900 and 990D, so there is no conflict). The
+# fast-forward tests `cpu.s.ip in ALL_NODES` to know the CPU is inside a classified wait — true whether it
+# is at a loop entry (fresh CALL) or resuming on a poll instruction after a mid-spin IRQ returned into it.
+ALL_NODES = {**LOOP_GRAPHS[0x9900], **LOOP_GRAPHS[0x990D], **LOOP_GRAPHS[0x44CD]}

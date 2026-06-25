@@ -42,8 +42,11 @@ it stays faithful-capture-only at 3111; HUD draw_hud (45B8) — verify-only chec
 + caches → low gain); present_pan_flip/pel (9613/9654) — the side effect is VM-PORT-EMULATED (CRTC/attr-ctrl
 OUTs), the recovered fn is the offline oracle; menu fill (9718) — one-shot copy. **ASM-only, not recovered (the state-ownership phase):** the object-system PRODUCER/dispatch (5C40) +
 map marker draw primitives (8900/8980/8600/83C0); the scene/attract + menu (991F) state machines; input /
-physics / collision / AI; the VGA retrace busy-waits (9900/990D/44CD — load-bearing pacing, see the busy-wait
-note, intentionally not replaced).
+physics / collision / AI. The VGA retrace busy-waits (9900/990D/44CD) are now a **recovered timing
+primitive** — `pre2/bridge/timing_fastforward.advance_frame_fast`, the default deterministic stepper
+(headless replay / in-view demo / verify/oracle), collapses their poll spins in closed form byte-equivalently
+(~6-15x faster; off under `--no-replacements` / `--no-fast-retrace-waits`; live `--view` untouched). See
+`docs/pre2/timing_hook_design.md` §8-9.
 
 ## ★ CURRENT STATUS (2026-06-24) — authoritative; everything under the ARCHIVE divider is historical
 
