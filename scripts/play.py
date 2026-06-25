@@ -326,7 +326,8 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.particles import read_particles
     from pre2.bridge.foreground_tiles import read_foreground_state
     from pre2.bridge.gameplay_effects import apply_gameplay_effects, capture_gameplay_effects
-    from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset
+    from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset, _object_overlay
+    from pre2.bridge.render_state import read_renderer_state, retarget_page
     from pre2.bridge.tally_scene import build_tally_scene
     from pre2.bridge.oldies_scene import build_oldies_scene
     from pre2.bridge.tally_panel import read_tally_panel
@@ -1092,16 +1093,22 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         # asset (held until another scene resets it); deplanarize with the LIVE palette so the fade-in renders.
         # NEVER the VM framebuffer. Sits after gameplay/menu/carte so they take precedence when active.
         if planar_image_capture[0] is not None and rt.program.memory.ega_planar:
-            planes = [bytearray(0x2000) for _ in range(4)]
+            # Place the planar background at the displayed page (the attract title rides the gameplay engine,
+            # which page-flips to >=0x2000) and overlay the object sprites — the running characters, drawn from
+            # the live object state via the same recovered object pass game-over/tally use. Proven px_diff=0.
+            page = ds & 0xFFFF
+            planes = [bytearray(0x10000) for _ in range(4)]
             for p in range(4):
-                planes[p][0:0x1F40] = planar_image_capture[0][p]
+                planes[p][page:page + 0x1F40] = planar_image_capture[0][p]
+            try:
+                rs = retarget_page(read_renderer_state(rt.cpu.mem, rt.dos, game_root=args.game_root), page)
+                _object_overlay(rs)(planes, page)
+            except Exception:
+                pass            # no/!ready object state -> just the background (e.g. the title before chars)
             active_w = (rt.program.memory.ega_h_display_end + 1) * 8
             faithful_info[0] = "faithful[TITLE]"
-            # The image is a single 0x2000 page (copied to A000:0); deplanarize it as a 0x2000 circular page
-            # (wrap=0x1FFF) so a transition frame where display_start has already moved to another page can't
-            # read past the buffer (and just wraps back to the held image) instead of crashing.
-            held_planes[0] = (planes, ds, 0, active_w, 0x1FFF, faithful_tick[0])
-            return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette, 0, active_w, wrap=0x1FFF)
+            held_planes[0] = (planes, page, 0, active_w, 0xFFFF, faithful_tick[0])
+            return render_planar_rgb_from_planes(planes, page, rt.dos.vga_palette, 0, active_w)
         # Held pan-scene grace: between scenes the engine DAC-fades the outgoing page out / the incoming page
         # in (the 1030:9286 / 92A3 palette-fade loop), during which the scene's producer pauses and the gates
         # above drop. The fade also drops ega_pan_active (no pel-pan writes once the scroll/menu loop exits),

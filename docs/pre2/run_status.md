@@ -10,7 +10,10 @@ which is plain gameplay — 6772 + object_render), iris/fade/curtain, HUD, parti
 fireflies, game-over, tally, OLDIES, 13h images, CARTE/map, mode-select menu, and the 0Dh PLANAR attract
 title (the "Prehistorik 2" logo screen: 1030:9153 copies a 4-plane image from a decoded asset to A000 then
 fades in; captured at 9169 from the asset and deplanarized with the live palette — pixel-exact incl. the
-fade-in; held until another scene resets it).
+fade-in; held until another scene resets it). The attract AUTO-DEMO runs the gameplay engine over that
+planar title (camera stays at the origin, so it reads as SCENE and the 6772 gameplay capture skips it): its
+title branch places the planar background at the displayed page and overlays the OBJECT SPRITES (the running
+characters) via the same recovered object pass game-over/tally use — pixel-exact incl. the moving sprites.
 Scene-to-scene TRANSITIONS are handled (fixed 2026-06-25): between scenes the engine DAC-fades the page
 out/in (the 1030:9286 / 92A3 palette-fade loop) while the scene's producer pauses; the planes are unchanged
 through a DAC fade, so the faithful path re-deplanarizes the last pan-scene planes with the LIVE (fading)
