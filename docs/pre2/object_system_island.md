@@ -167,3 +167,35 @@ render side effects**, not a hand-picked subset:
 The faithful layer stays byte/state-verifiable against the oracle at every phase. Do not wire the
 renderer to a half-recovered object layer and call it faithful — recover + verify each handler
 *before* it feeds the renderer. (Standing rule: shorten the coastline upward; never grow a guess.)
+
+## Stage 0/1 results (2026-06-26) — boundary CONFIRMED + first leaf recovered
+
+Boundary disasm-confirmed (capstone on dumped bytes) + dynamic probe `pre2/probes/probe_object_tick.py`
+(observe-only, chaining hooks; replays a demo). **The object-update walker `1030:684E..6913`:**
+
+- `684E` init: `si=0x4FD0`, `bp=0xC` (12 slots), `cl=4` (velocity shift). `6856` loop top: `ax=[si+4]`;
+  `0xFFFF` → skip to `690A`. `690A`: `si+=0x12`, `dec bp`, loop to `6856`; exit `6913`.
+- **velocity apply `6861..6873`** — `[si+2] += sar([si+0xA],4)` (Y, always); `[si+8]!=0xFFFF` → `[si] +=
+  sar([si+8],4)` (X). RECOVERED `object_update.apply_velocity`, **VERIFIED 770/770 + 453/453 exact** vs ASM
+  across two demos (moving + static). Note: X-vel `-1`==`0xFFFF`==the sentinel (X-vel -1 is unrepresentable).
+- **anim advance `6881..68E6`** — walk script ptr `[si+0xC]` (negative entry = relative back-jump = loop);
+  `dx+=0x138` frame base; `[0x6BE2]`/`[0xA801]` scale-region adjust; store advanced ptr `[si+0xC]`; write
+  `[si+4] = ([si+4]&0x6000) | (frame | flip-bit from [si+9]&0x80)`. (next recovery candidate)
+- **handler dispatch `68FC`** — `bx=[def@[si+6] +1]<<1`; push 9 regs; `call cs:[bx+0x6AA9]`; pop. Per-type AI.
+
+**LIVE vs STALE slots** (demo 001513): only **slots 0 & 1** live (non-empty + moving: 470/132 and 300/297
+ticks); slots 2..11 always empty (`[+4]==0xFFFF`). The walker self-marks empties — a slot is valid IFF
+`[+4]!=0xFFFF`. (This is why static-snapshot reads of the *renderer's* list showed garbage: never trust a
+slot without the live `0xFFFF` check.)
+
+**CONFIRMED-LIVE fields** (written by the walker, observed): `[+0]`X, `[+2]`Y (velocity apply); `[+4]`
+sprite-id|frame, `[+0xC]` anim ptr (anim advance). **Read-as-input:** `[+6]` def ptr, `[+8]`/`[+0xA]` vel,
+`[+9]` flip. **Do not name yet** (not observed written here): `[+0xE]`, `[+0x11]`, `[+9]/[+0xB]` aux.
+
+**Handler dispatch map** (demo 001513, idx = `[def+1]`): `1→7C8C` (id 0x13d), `2→7C2D` (0x13e/f),
+`10→7665` (0x187..0x18a) — matches the `CS:0x6AA9` catalogue. Other demos will surface more types.
+
+**Recommendation — first safe live replacement:** `apply_velocity` (6861..6873). It is tiny, isolated, pure
+(reads `[+8]/[+0xA]`, writes `[+0]/[+2]`), has NO other side effects, and is proven 770+453/453 exact. A live
+hook there is the lowest-risk first authoritative object-system routine. Anim-advance (`6881..68E6`) is the
+next leaf (more state: the script-pointer walk + `[0x6BE2]/[0xA801]` reads), recover in shadow before live.
