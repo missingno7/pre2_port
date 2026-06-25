@@ -64,11 +64,6 @@ from pre2.enhanced.extract import extract_enhanced_frame
 _DSEG = 0x1A0F
 _HUD_OFF = 176 * 0x28      # HUD strip start within a page (row 176)
 _HUD_LEN = 24 * 0x28       # rows 176..199 (status bar + dynamic glyphs)
-# Governor-spin sub-loop capture (death/animation loops that render frames but never hit the 6772 boundary):
-# snapshot for the enhanced worker only once the main loop is clearly stale (well past a normal frame gap),
-# throttled so we capture ~each sub-loop frame without over-copying.
-_SPIN_STALE_IC = 30000
-_SPIN_MIN_IC = 8000
 
 # frame() return sentinel: the display is BLANKED (palette load) -> the caller must NOT present (it keeps the
 # previous frame on screen), exactly as the original render_current did (it returned early before presenting).
@@ -135,7 +130,6 @@ class FaithfulSession:
         self._extract_q = None
         self._extract_thread = None
         self._extract_stop = False
-        self._last_spin_snap_ic = 0    # ic of the last governor-spin sub-loop snapshot (animation sub-loops)
         self._lazy_pc = None           # (ic, (planes,page)|None): faithful planes rendered ON DEMAND for a
                                        # transition base when the per-frame faithful render was skipped (enhanced
                                        # steady gameplay). Cached per instruction_count.
@@ -256,27 +250,6 @@ class FaithfulSession:
         """(prev, cur, prev_time, cur_time) read atomically (the worker swaps them under the same lock)."""
         with self._enh_lock:
             return self.enh_prev, self.enh_cur, self.enh_prev_time, self.enh_cur_time
-
-    def maybe_capture_spin_frame(self):
-        """Snapshot a frame for the enhanced worker during a NO-6772 sub-loop (death/animation), so it gets
-        extracted + interpolated like normal gameplay instead of freezing on the last 6772 frame. Called from
-        the live loop while parked in the governor spin (a committed-frame point). A no-op outside live enhanced
-        and during normal gameplay (6772 recent). The faithful live-spin path already renders these frames."""
-        if not self.async_extract or self.enh_clock is None:
-            return
-        ic = self.rt.cpu.instruction_count
-        if ic - self.last_capture_ic < _SPIN_STALE_IC:      # 6772 fired recently -> normal gameplay, skip
-            return
-        if ic - self._last_spin_snap_ic < _SPIN_MIN_IC:     # throttle to ~one per sub-loop frame
-            return
-        try:
-            mem = self.rt.cpu.mem
-            fx = capture_gameplay_effects(mem, particle_frame=self.particle_frame,
-                                          foreground_frame=self.foreground_frame)
-            self._push_snapshot((bytes(mem.data), list(self.dos.vga_palette or []), fx))
-            self._last_spin_snap_ic = ic
-        except Exception:
-            pass
 
     # -------------------------------------------------------------------- hook install
     def install_hooks(self):
