@@ -102,11 +102,19 @@ rasterizer per display subframe, and falls back to the faithful base for any lay
    interpolated camera delta (grounded in `CameraState`; gameplay scroll + CARTE/menu pans). A viewport
    translation, **not** a cross-fade blend. Honest where the motion is camera-only; sprites still step at the
    source rate (camera-aware, not yet per-object).
-4. **Minimal native sprite-compositing layer** — the first real object-aware layer: cache the background
-   (from the faithful/recovered source frame), and per display subframe blit each sprite at its interpolated
-   position (from `GameFrameSnapshot` via `interpolate_frame`, object identity by `base_id`) using native
-   RGB/pygame sprite surfaces/masks built from the captured sprite graphics. HUD / menu / transitions stay
-   faithful passthrough. This is **the first native enhanced sprite layer, NOT a full modern renderer**.
+4. **Minimal native sprite-compositing layer** — BUILT + PROVEN (compositor, not yet live-wired). The first
+   real object-aware layer, modern RGB/RGBA: `pre2/enhanced/{frame_state,extract,compositor}.py`. Per source
+   frame, `extract_enhanced_frame` renders the background (`object_camera=None`) + the faithful base via the
+   verified `render_frame`, and lifts each NORMAL sprite into a **bg-independent RGBA texture** via the
+   dual-buffer `paint_sprite` trick (paint onto all-0x00 + all-0xFF clean buffers; agree=opaque,
+   differ=transparent). Per display subframe, `compose` blits sprites at `base_id`-matched interpolated
+   positions over the cached background — pure RGB/RGBA, no planar. **Proven: `compose(alpha=1) == faithful`
+   at 0 px** over spiders/player-death/gameplay/boss (`verify_enhanced_parity.py`); compositor logic tests in
+   `tests/test_enhanced_compositor.py`. `OPAQUE`/`ERASE` (flash/blink, bg-dependent blends) are reported as
+   `unsupported` and NOT faked; `is_hud` sprites (boss meter) are composited but not interpolated. HUD strip /
+   menu / transitions stay faithful passthrough. This is **the first native enhanced sprite layer, NOT a full
+   modern renderer**. NEXT: source-snapshot seam (prev/cur in FaithfulSession) + the native-refresh present
+   loop to make the interpolation live.
 5. (Later) widen coverage; smooth camera policy; etc. — all deferred.
 
 ## 3. Grounding rules (binding)
