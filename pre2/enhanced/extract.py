@@ -163,7 +163,13 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     particles = []
     if effects is not None:
         ov_planes = [bytearray(0x10000) for _ in range(4)]
-        apply_gameplay_effects(ov_planes, page, replace(effects, particles=None))   # foreground + fireflies
+        ov_fx = replace(effects, particles=None)            # foreground + fireflies only
+        if ov_fx.foreground is not None and ov_fx.foreground.page != page:
+            # The foreground state is snapshotted at the 3732 hook, whose page is the back page BEFORE the
+            # per-frame flip; render it into the SAME page we de-planarize at (cam.dest_page) -- the camera is
+            # unchanged within the frame, so only the page base differs. (Fireflies already use this page.)
+            ov_fx = replace(ov_fx, foreground=replace(ov_fx.foreground, page=page))
+        apply_gameplay_effects(ov_planes, page, ov_fx)
         idx_ov = render_planar_rgb_from_planes(ov_planes, page, _ID_PAL)[:, :, 0]
         overlay_mask = idx_ov != 0
         overlay_rgb = pal_rgb[idx_ov]
