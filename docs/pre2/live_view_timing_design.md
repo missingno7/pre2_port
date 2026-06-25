@@ -1,9 +1,11 @@
-# Live `--view` retrace-wait timing — design note (report-first, NOT implemented)
+# Live `--view` retrace-wait timing — design + as-built
 
-> Status: **design only.** No live-mode code is changed by this note. This is the "report the design first"
-> deliverable promised by `timing_hook_design.md` §7. The deterministic/headless fast-forward (shipped, §8 of
-> that note) is **not** applied to live `--view` and this note explains why, and what a correct live change
-> would look like, before any of it is written.
+> Status: **IMPLEMENTED** for the three classified retrace waits (9900/990D/44CD), on by default in live
+> `--view` (`--no-live-cheap-waits` disables). Sections 1–6 are the original report-first design; **§11 is the
+> as-built** with measurements and one important scope finding (live *gameplay* idles in the PIT-tick spin
+> `1C6F`, which is out of the classified-retrace scope and is therefore **not** parked — reported, not
+> changed). The deterministic/headless fast-forward (shipped, `timing_hook_design.md` §8) remains separate
+> and unchanged.
 
 The deterministic and live paths share the same *symptom* (the VGA retrace busy-waits 9900/990D/44CD burn
 host CPU) but need **opposite** solutions. Conflating them is the trap this note exists to prevent.
@@ -169,7 +171,52 @@ native-rate default — see `timing_hook_design.md` §10.)
 ---
 
 ### Relationship to the shipped work
-`pre2/recovered/vga_timing.ALL_NODES` (the classified-wait membership set) and the `_POLL_BACKEDGE` phase
-knowledge are reusable here for "are we in a wait, and what phase is it polling for." Everything else is new
-and live-specific. Nothing in this note is implemented; `_advance_frame_deterministic` and
-`advance_frame_fast` remain deterministic-only, and the live realtime branch is unchanged.
+`pre2/recovered/vga_timing.ALL_NODES` (the classified-wait membership set) is reused here for "are we in a
+classified wait." Everything else is live-specific. `_advance_frame_deterministic` and `advance_frame_fast`
+remain deterministic-only and unchanged.
+
+---
+
+## 11. As-built (live retrace park)
+
+**Where it lives.** `scripts/play._run_view`, the realtime branch only. Per inner iteration: if
+`cpu.cs:ip ∈ ALL_NODES` and `IF` is set (so PIT/SB ISRs can still fire), step a small `_LIVE_POLL_BATCH=32`
+re-poll batch instead of the 256-batch, then — bounded by `_time_to_next_retrace_edge(now) − _LIVE_PARK_MARGIN`
+(1.5 ms), the audio-pump cadence, and the frame deadline — `time.sleep()` the safe interior of the current
+retrace phase. The VM's own `in al,dx` still reads the bit and exits the loop at the same wall-clock instant;
+we never touch `ip`/`instruction_count`. `_time_to_next_retrace_edge` mirrors `dos._vga_status`
+(`phase = (now·70) mod 1`; SET while `phase ≥ 1−active_fraction`; edges at `1−active_fraction` and the period
+wrap). The 1.5 ms margin + busy-poll of the final approach guarantees we never sleep *across* the edge the VM
+waits for (which would skip a frame → slow). Toggle: `--live-cheap-waits` / `--no-live-cheap-waits` (default
+on). Diagnostics printed at exit: parks, total slept, % of wall yielded, avg/max wait, `unsafe_skipped`.
+
+**Measured (headless, dummy SDL, `pre2/probes/measure_live_park_speed.py` + `--view` smokes):**
+- Menu (9900) and carte/map (990D): **~63–76 % of wall-clock time yielded** (the core sleeps instead of
+  spinning), `unsafe_skipped=0`, wait avg ≈ one 70 Hz period (~14 ms) — i.e. waits are **not** stretched.
+- **Pacing preserved:** retrace-frame rate park-vs-spin drift **+0.8 %** (noise) at equal poll granularity.
+  (A naïve comparison showed a spurious +21 % — an artifact of counting wait-exits at different batch sizes,
+  not a real speed change.)
+- `--video vm` and `--video faithful` both run with parking on (no crash, no `FaithfulVisualGap`).
+
+**Scope finding — live GAMEPLAY is NOT retrace-bound (reported, not changed).**
+`pre2/probes/measure_live_waits.py` histograms where live wall-clock execution actually sits:
+
+| Scene | dominant live busy-wait | parked by this pass? |
+|---|---|---|
+| Menu | retrace `9900` — 96.5 % | ✅ yes |
+| Carte / map | retrace `990D` — 97.7 % | ✅ yes |
+| **Gameplay** | **PIT-tick spin `1C6F` — 52.4 %** (retrace ~0 %) | ❌ no — out of the classified-retrace scope |
+
+So this pass cheapens the **menu / carte / map / intro / loading** waits (retrace-dominated) but is a
+**no-op for gameplay**, whose idle is the `1C6F` PIT-tick spin (`while [0x27ee] unchanged`). `1C6F` was
+deliberately excluded from the classified retrace set (constraint: "only 9900/990D/44CD") and from the
+deterministic pass too. Parking `1C6F` in live mode would be the same shape of fix keyed on the PIT tick
+(`sleep until tick_state["next"]`, pump the ISR which advances `[0x27ee]`, resume), and would deliver the
+live-gameplay CPU win — but it is a **scope extension** beyond the named loops and is left for an explicit
+go-ahead. Because gameplay never enters a classified retrace wait, this pass does not change gameplay
+behavior at all (it just doesn't help it yet).
+
+**Not verifiable headless (needs a real display):** visual smoothness, audio underrun, and input latency
+under the park are inherent to live `--view`. The design keeps audio pumping every ~4 ms and input at the
+existing per-frame cadence (bounded by the frame deadline), but a human check on a real display is the final
+gate — same as the user's own earlier `--view` testing.

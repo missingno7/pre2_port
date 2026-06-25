@@ -224,12 +224,14 @@ not a wait-loop replacement:
 - Audio must keep pumping during the sleep (the mixer thread is fed on a few-ms cadence today), and input
   must stay responsive (wake early on a key event).
 
-This is a scheduler/pacing redesign of the live outer loop, **out of scope for this pass**. The full
-report-first design (why fast-forward is the wrong model for live; how the live waits pace the game today; the
-proposed park-instead-of-spin wait; interactions with `live_cpu_budget`/`--cpu-hz`/audio/input/SDL/deadline;
-why it is a CPU/battery win not a smoothness win; and explicit stop conditions) is written up in
-**`docs/pre2/live_view_timing_design.md`** — design only, no live code changed. The deterministic/headless/
-verify speedup (the 86%-hot path for tests and tooling) is the first and separable target, now shipped (§8).
+This was the separately-scoped live pass, now **implemented** for the three classified retrace waits (on by
+default, `--no-live-cheap-waits` to disable): while parked in 9900/990D/44CD the live loop sleeps through the
+safe interior of the retrace phase and busy-polls only the last ~1.5 ms before an edge, so the VM's own poll
+exits at the same wall-clock instant — same pacing (+0.8 % drift), ~63–76 % of wall yielded on menu/carte.
+Full design + as-built + the key scope finding (live *gameplay* idles in the `1C6F` PIT-tick spin, which is
+outside the classified-retrace scope and is **not** parked — reported for a go/no-go) are in
+**`docs/pre2/live_view_timing_design.md`** (§11). The deterministic/headless/verify speedup (the 86%-hot path
+for tests and tooling) was the first and separable target, shipped (§8).
 
 ## 8. As-built — the promoted recovered timing primitive (and why it differs from §5)
 

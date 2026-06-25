@@ -331,6 +331,29 @@ def _advance_frame_deterministic(rt, args, *, chunk_steps, sub_batch, clock, pic
                             input_irq_steps=input_irq_steps, tick_state=tick_state)
 
 
+# --- Live --view scheduler-friendly retrace waits ------------------------------------------------------
+# Live mode is wall-clock paced (time_source = perf_counter), so the deterministic instruction-count
+# fast-forward does NOT apply — fast-forwarding would advance game time early. Instead, while the VM is parked
+# in a classified retrace wait (1030:9900/990D/44CD), we YIELD the core (sleep) during the *safe interior* of
+# the current retrace phase and busy-poll only the last ~1.5 ms before any phase edge, so the VM's own poll
+# still exits at the same wall-clock instant. Same pacing / game timing / exit condition; just less CPU burn.
+_LIVE_CS = 0x1030
+_LIVE_POLL_BATCH = 32          # instructions per re-poll while parked (a few poll iterations + any due ISR)
+_LIVE_PARK_MARGIN = 0.0015     # stop sleeping this long before a retrace edge (covers OS sleep overshoot)
+_LIVE_PARK_MIN_SLICE = 0.0004  # don't bother sleeping for less than this (busy-poll instead)
+_LIVE_PARK_MAX_SLICE = 0.004   # re-check at least this often (also the audio-pump cadence)
+
+
+def _time_to_next_retrace_edge(now: float, active_fraction: float, refresh_hz: float = 70.0) -> float:
+    """Seconds until the emulated VGA retrace bit next changes state, under the live wall clock — matching
+    ``dos._vga_status`` (phase = (now*refresh_hz) % 1; SET while phase >= 1-active_fraction). The bit toggles
+    at phase ``1-active_fraction`` (CLEAR->SET) and at the period wrap ``1.0`` (SET->CLEAR)."""
+    phase = (now * refresh_hz) % 1.0
+    thr = 1.0 - active_fraction
+    next_edge_phase = thr if phase < thr else 1.0
+    return (next_edge_phase - phase) / refresh_hz
+
+
 def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | None = None) -> int:
     """Live VGA/text viewer for PRE2 bring-up, with digital audio and demo record/replay.
 
@@ -404,6 +427,15 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     # on time (~97%) with no measurable cost to the game frame-rate.  Demo replay is
     # unaffected: it keeps `realtime_batch` above so recordings stay reproducible.
     live_irq_batch = 256
+    # Live cheap waits: yield the core while parked in a classified retrace wait (live only). On by default;
+    # --no-live-cheap-waits forces the original full-spin behavior (a safety/debug switch, not a shim).
+    from pre2.recovered.vga_timing import ALL_NODES as _LIVE_WAIT_NODES
+    live_cheap_waits = getattr(args, "live_cheap_waits", True)
+    live_active_fraction = float(args.retrace_pulse)
+    live_wait_stats = {"parks": 0, "slept": 0.0, "wait_total": 0.0, "wait_max": 0.0, "unsafe": 0}
+    _wait_active = [False]        # episode edge-detect state (loop-carried)
+    _wait_start = [0.0]
+    _view_start = perf_counter()  # wall-clock anchor for the CPU-yield estimate
     status = "replaying" if replaying else "running"
     rt.cpu.trace_enabled = False
     rt.dos.console_input_fallback = None
@@ -1355,13 +1387,35 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     deadline = perf_counter() + present_period
                     frame_steps = 0
                     while running and perf_counter() < deadline:
+                        # Cheap live waits: if the VM is parked in a classified retrace busy-wait and
+                        # interrupts are enabled (so the PIT/SB ISRs can still fire while we yield), poll it
+                        # with a SMALL batch and sleep through the safe interior of the retrace phase instead
+                        # of spinning thousands of `in al,dx`. The VM's own poll still exits at the same
+                        # wall-clock instant, so game pacing/timing is unchanged.
+                        in_wait = (live_cheap_waits and rt.cpu.s.cs == _LIVE_CS
+                                   and rt.cpu.s.ip in _LIVE_WAIT_NODES)
+                        safe_park = in_wait and rt.cpu.get_flag(IF)
+                        if not _wait_active[0] and in_wait:          # episode start
+                            _wait_active[0] = True
+                            _wait_start[0] = perf_counter()
+                            live_wait_stats["parks"] += 1
+                            if not safe_park:
+                                live_wait_stats["unsafe"] += 1
                         if live_cpu_budget is None or frame_steps < live_cpu_budget:
+                            n = _LIVE_POLL_BATCH if safe_park else live_irq_batch
                             _pump_and_step(rt, now=perf_counter(), pic=pic, sound_blaster=sound_blaster,
                                            timer_irq=args.timer_irq, input_irq_steps=args.input_irq_steps,
-                                           tick_state=tick_state, n_steps=live_irq_batch)
-                            steps_done += live_irq_batch
-                            frame_steps += live_irq_batch
-                        # else: budget spent — wait out the frame (audio still pumped below)
+                                           tick_state=tick_state, n_steps=n)
+                            steps_done += n
+                            frame_steps += n
+                        # else: budget spent — wait out the frame (audio still pumped + yielded below)
+                        if _wait_active[0] and not (rt.cpu.s.cs == _LIVE_CS
+                                                    and rt.cpu.s.ip in _LIVE_WAIT_NODES):   # episode end
+                            _wait_active[0] = False
+                            dur = perf_counter() - _wait_start[0]
+                            live_wait_stats["wait_total"] += dur
+                            if dur > live_wait_stats["wait_max"]:
+                                live_wait_stats["wait_max"] = dur
                         # Feed the audio device *continuously* (throttled), not just once
                         # per rendered frame below: the render can stretch a frame past
                         # the mixer channel's buffered depth, leaving its queue slot empty
@@ -1371,6 +1425,20 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                             if sb_audio is not None:
                                 sb_audio.pump()
                             last_audio = nowp
+                        # Yield the core while parked: sleep up to the next retrace edge (minus a margin for
+                        # OS sleep overshoot), bounded by the audio-pump cadence and the frame deadline, so we
+                        # never sleep across the edge the VM is waiting for (which would skip a frame -> slow).
+                        if safe_park or (live_cpu_budget is not None and frame_steps >= live_cpu_budget):
+                            nowp = perf_counter()
+                            slice_s = min(
+                                _time_to_next_retrace_edge(nowp, live_active_fraction) - _LIVE_PARK_MARGIN,
+                                (last_audio + 0.004) - nowp,
+                                deadline - nowp,
+                                _LIVE_PARK_MAX_SLICE,
+                            )
+                            if slice_s >= _LIVE_PARK_MIN_SLICE:
+                                sleep(slice_s)
+                                live_wait_stats["slept"] += slice_s
                 else:
                     chunk = args.chunk_steps if args.steps is None else min(args.chunk_steps, args.steps - steps_done)
                     # Deterministic (demo-replay) clock has a non-zero base here (vclock anchors det_now to
@@ -1453,6 +1521,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     print(f"frames: {frame}  steps: {steps_done:,}")
     print(f"cpu: {rt.cpu.s.snapshot()}")
     print(f"video: mode={rt.dos.video_mode:02X}h text={rt.dos.text_mode_active} page={rt.dos.video_page}")
+    if live_cheap_waits and live_wait_stats["parks"]:
+        s = live_wait_stats
+        avg = s["wait_total"] / s["parks"]
+        run_s = max(1e-6, perf_counter() - _view_start)
+        print(f"live-cheap-waits: parks={s['parks']} slept={s['slept']:.2f}s "
+              f"(~{100.0 * s['slept'] / run_s:.0f}% of {run_s:.1f}s wall yielded) "
+              f"wait avg={avg * 1000:.1f}ms max={s['wait_max'] * 1000:.1f}ms unsafe_skipped={s['unsafe']}")
     if args.save_snapshot:
         out = _default_snapshot_dir(ROOT / "artifacts") if args.save_snapshot == "auto" else Path(args.save_snapshot)
         write_snapshot(rt, out, status=status, steps=steps_done)
@@ -1600,6 +1675,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
     p.add_argument("--retrace-pulse", type=float, default=0.06, help="(live) fraction of each refresh the VGA vertical-retrace status bit reads active. ~0.06 = realistic narrow VGA pulse that gates PRE2's mode-select scroll half-wait to one frame per 70Hz retrace (matches DOSBox); 0.28 = legacy wide window (~2x fast scroll). Demos replay at their recorded value")
     p.add_argument("--cpu-hz", type=int, default=0, help="(live) cap VM instructions/sec as an era-style ceiling (0 = unlimited, today's behavior). Caps ungated busy-loops + sets overall feel; tune by eye against DOSBox (our 'instruction' is not a real CPU cycle)")
+    p.add_argument("--live-cheap-waits", action=argparse.BooleanOptionalAction, default=True, help="(live --view) yield the CPU while the VM is parked in a classified VGA retrace busy-wait (9900/990D/44CD): sleep through the safe interior of each retrace phase and busy-poll only the last ~1.5ms before an edge, so the wait still exits at the same wall-clock instant. Same pacing/game timing, less CPU burn/fan/battery. --no-live-cheap-waits forces the original full-spin (safety/debug). Does NOT affect deterministic/headless/verify timing")
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
