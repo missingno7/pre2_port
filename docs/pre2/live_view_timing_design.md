@@ -1,11 +1,10 @@
-# Live `--view` retrace-wait timing — design + as-built
+# Live `--view` wait timing — design + as-built
 
-> Status: **IMPLEMENTED** for the three classified retrace waits (9900/990D/44CD), on by default in live
-> `--view` (`--no-live-cheap-waits` disables). Sections 1–6 are the original report-first design; **§11 is the
-> as-built** with measurements and one important scope finding (live *gameplay* idles in the PIT-tick spin
-> `1C6F`, which is out of the classified-retrace scope and is therefore **not** parked — reported, not
-> changed). The deterministic/headless fast-forward (shipped, `timing_hook_design.md` §8) remains separate
-> and unchanged.
+> Status: **IMPLEMENTED** and on by default in live `--view` (`--no-live-cheap-waits` disables), for BOTH
+> wait families: the three VGA retrace waits (9900/990D/44CD, retrace-phase waits) AND the PIT-tick delay
+> `1C6F` (a `[0x27ee]` timer-counter wait). Sections 1–6 are the original report-first design (written for the
+> retrace waits); **§11 is the as-built** for both, with measurements. The deterministic/headless fast-forward
+> (shipped, `timing_hook_design.md` §8) remains separate and unchanged — live mode never fast-forwards.
 
 The deterministic and live paths share the same *symptom* (the VGA retrace busy-waits 9900/990D/44CD burn
 host CPU) but need **opposite** solutions. Conflating them is the trap this note exists to prevent.
@@ -198,23 +197,49 @@ on). Diagnostics printed at exit: parks, total slept, % of wall yielded, avg/max
   not a real speed change.)
 - `--video vm` and `--video faithful` both run with parking on (no crash, no `FaithfulVisualGap`).
 
-**Scope finding — live GAMEPLAY is NOT retrace-bound (reported, not changed).**
-`pre2/probes/measure_live_waits.py` histograms where live wall-clock execution actually sits:
+**Where the live idle actually is** (`pre2/probes/measure_live_waits.py`):
 
-| Scene | dominant live busy-wait | parked by this pass? |
+| Scene | dominant live busy-wait | parked? |
 |---|---|---|
-| Menu | retrace `9900` — 96.5 % | ✅ yes |
-| Carte / map | retrace `990D` — 97.7 % | ✅ yes |
-| **Gameplay** | **PIT-tick spin `1C6F` — 52.4 %** (retrace ~0 %) | ❌ no — out of the classified-retrace scope |
+| Menu | retrace `9900` — 96.5 % | ✅ retrace |
+| Carte / map | retrace `990D` — 97.7 % | ✅ retrace |
+| **Gameplay** | **PIT-tick spin `1C6F` — 52.4 %** (retrace ~0 %) | ✅ pit |
 
-So this pass cheapens the **menu / carte / map / intro / loading** waits (retrace-dominated) but is a
-**no-op for gameplay**, whose idle is the `1C6F` PIT-tick spin (`while [0x27ee] unchanged`). `1C6F` was
-deliberately excluded from the classified retrace set (constraint: "only 9900/990D/44CD") and from the
-deterministic pass too. Parking `1C6F` in live mode would be the same shape of fix keyed on the PIT tick
-(`sleep until tick_state["next"]`, pump the ISR which advances `[0x27ee]`, resume), and would deliver the
-live-gameplay CPU win — but it is a **scope extension** beyond the named loops and is left for an explicit
-go-ahead. Because gameplay never enters a classified retrace wait, this pass does not change gameplay
-behavior at all (it just doesn't help it yet).
+So the retrace park alone cheapened menu/carte/map/intro but was a **no-op for gameplay**, whose idle is the
+`1C6F` PIT-tick spin. That finding drove the PIT extension below.
+
+## 12. As-built — the 1C6F PIT-tick park
+
+`1030:1C6F` (disasm-confirmed) is a *different kind of wait* from the retrace loops — it polls a **memory**
+counter, not a port:
+
+```text
+1C6F: mov ax,[0x27ee]      ; timer counter, advanced ONLY by the INT 08 timer ISR
+1C72: sub ax, cs:[0x1d67]  ; - saved target
+1C77: jns 1C7B / 1C79: neg ax   ; ax = abs(counter - target)
+1C7B: cmp ax,3 / 1C7E: jb 1C6F  ; loop while abs(delta) < 3  -> wait until ~3 PIT ticks elapse
+```
+
+So it is a **wall-clock wait** keyed on the PIT tick, handled exactly as the design (§7) prescribed for live:
+while parked in the loop body (`_LIVE_PIT_NODES = {1C6F,1C72,1C77,1C79,1C7B,1C7E}`) with `IF` set, sleep until
+the next PIT tick is due (`tick_state["next"]` minus a small `_LIVE_PIT_MARGIN`), bounded by the audio cadence
+and frame deadline; the **normal IRQ pump** then delivers IRQ0, the game's INT 08 ISR advances `[0x27ee]`, and
+the loop re-checks and exits on its own. We **never write `[0x27ee]`** from the park — only the timer ISR does
+(verified: the loop drains and exits during a park where the *only* thing executing is that ISR). Ticks stay
+on schedule because `tick_state["next"]` advances by exactly one period per delivery (no `now`-rebasing unless
+it fell >0.25 s behind), so there is no drift and no catch-up.
+
+**Measured:**
+- Live gameplay yields ~26–45 % of wall (`--view` smoke vs the isolated `measure_live_park_speed.py` probe;
+  gameplay also does ~48 % real work, so the wait is the only part that can be yielded). `unsafe_skipped=0`.
+- **Pacing exact:** PIT-wait completion rate park-vs-spin drift **+0.0 %** (identical) — the timer-IRQ
+  schedule is wall-clock-driven and untouched by parking, so the loop exits at the same instant either way.
+- `--video vm` and `--video faithful` gameplay both run with PIT parking on (no crash).
+
+**Combined result.** Menu/carte: retrace park (~60–76 % yielded). Gameplay: PIT park (~26–45 % yielded). Game
+timing unchanged in both (drift ≤ +3 %, PIT = 0 %). Deterministic suite unchanged (287). `--no-live-cheap-waits`
+disables **both** families. Diagnostics report retrace vs pit parks separately plus total wall yielded. This
+completes the live cheap-wait timing branch.
 
 **Not verifiable headless (needs a real display):** visual smoothness, audio underrun, and input latency
 under the park are inherent to live `--view`. The design keeps audio pumping every ~4 ms and input at the

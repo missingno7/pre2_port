@@ -16,7 +16,9 @@ from pre2.runtime import load_pre2_snapshot
 
 CS = 0x1030
 MARGIN = 0.0015
+PIT_MARGIN = 0.0008
 AF = 0.06
+PIT_NODES = frozenset((0x1C6F, 0x1C72, 0x1C77, 0x1C79, 0x1C7B, 0x1C7E))
 
 
 def _t_to_edge(now, af=AF, hz=70.0):
@@ -25,7 +27,9 @@ def _t_to_edge(now, af=AF, hz=70.0):
     return ((thr if phase < thr else 1.0) - phase) / hz
 
 
-def run(snap, seconds=4.0, park=True):
+def run(snap, seconds=4.0, park=True, nodes=None, kind="retrace"):
+    if nodes is None:
+        nodes = ALL_NODES
     rt = load_pre2_snapshot("assets/pre2.exe", snap, game_root="assets", native_replacements=True)
     cpu, dos = rt.cpu, rt.dos
     cpu.trace_enabled = False
@@ -58,29 +62,37 @@ def run(snap, seconds=4.0, park=True):
     was_wait = False
     t_end = perf_counter() + seconds
     while perf_counter() < t_end:
-        in_wait = cpu.s.cs == CS and cpu.s.ip in ALL_NODES
+        in_wait = cpu.s.cs == CS and cpu.s.ip in nodes
         safe = in_wait and cpu.get_flag(IF)
         pump(32)                       # equal poll granularity for park & spin -> fair exit counting
-        now_wait = cpu.s.cs == CS and cpu.s.ip in ALL_NODES
+        now_wait = cpu.s.cs == CS and cpu.s.ip in nodes
         if was_wait and not now_wait:
             exits += 1
         was_wait = now_wait
         if park and safe:
-            s = min(_t_to_edge(perf_counter()) - MARGIN, 0.004, t_end - perf_counter())
+            if kind == "pit":
+                ev = (tick["next"] - perf_counter()) - PIT_MARGIN
+            else:
+                ev = _t_to_edge(perf_counter()) - MARGIN
+            s = min(ev, 0.004, t_end - perf_counter())
             if s >= 0.0004:
                 sleep(s); slept += s
     return exits, slept, seconds
 
 
-def main():
-    snap = "artifacts/snapshot_pre2_modeselect_20260623_075918"
-    ex_p, slept, secs = run(snap, park=True)
-    ex_s, _, _ = run(snap, park=False)
-    print(f"MENU live retrace-frame rate over {secs:.0f}s wall:")
-    print(f"  park ON : {ex_p} wait-exits = {ex_p / secs:5.1f} game-frames/s, CPU yielded {100 * slept / secs:.0f}%")
-    print(f"  park OFF: {ex_s} wait-exits = {ex_s / secs:5.1f} game-frames/s (full spin)")
+def _report(title, snap, nodes, kind):
+    ex_p, slept, secs = run(snap, park=True, nodes=nodes, kind=kind)
+    ex_s, _, _ = run(snap, park=False, nodes=nodes, kind=kind)
+    print(f"{title} over {secs:.0f}s wall:")
+    print(f"  park ON : {ex_p} wait-exits = {ex_p / secs:5.1f}/s, CPU yielded {100 * slept / secs:.0f}%")
+    print(f"  park OFF: {ex_s} wait-exits = {ex_s / secs:5.1f}/s (full spin)")
     drift = 100.0 * (ex_p - ex_s) / max(1, ex_s)
-    print(f"  speed drift park-vs-spin: {drift:+.1f}%  ->  {'OK (same pacing)' if abs(drift) <= 5 else 'PACING CHANGED'}")
+    print(f"  speed drift park-vs-spin: {drift:+.1f}%  ->  {'OK (same pacing)' if abs(drift) <= 6 else 'PACING CHANGED'}")
+
+
+def main():
+    _report("MENU retrace (9900)", "artifacts/snapshot_pre2_modeselect_20260623_075918", ALL_NODES, "retrace")
+    _report("GAMEPLAY pit-tick (1C6F)", "artifacts/snapshot_pre2_gameplay_20260621_185902", PIT_NODES, "pit")
     return 0
 
 

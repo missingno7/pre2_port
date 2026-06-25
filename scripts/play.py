@@ -343,6 +343,13 @@ _LIVE_PARK_MARGIN = 0.0015     # stop sleeping this long before a retrace edge (
 _LIVE_PARK_MIN_SLICE = 0.0004  # don't bother sleeping for less than this (busy-poll instead)
 _LIVE_PARK_MAX_SLICE = 0.004   # re-check at least this often (also the audio-pump cadence)
 
+# The 1030:1C6F PIT-tick delay loop body (disasm-confirmed): `mov ax,[0x27ee]; sub ax,cs:[0x1d67];
+# jns; (neg ax); cmp ax,3; jb 1C6F` — busy-waits until the timer counter [0x27ee] (advanced ONLY by the
+# INT 08 timer ISR) has moved >=3 ticks. In live mode we park it as a WALL-CLOCK wait: sleep until the next
+# PIT tick is due (tick_state["next"]) and let the normal IRQ pump advance [0x27ee]; never mutate it here.
+_LIVE_PIT_NODES = frozenset((0x1C6F, 0x1C72, 0x1C77, 0x1C79, 0x1C7B, 0x1C7E))
+_LIVE_PIT_MARGIN = 0.0008      # wake ~this long before the tick is due (the next pump delivers it on time)
+
 
 def _time_to_next_retrace_edge(now: float, active_fraction: float, refresh_hz: float = 70.0) -> float:
     """Seconds until the emulated VGA retrace bit next changes state, under the live wall clock — matching
@@ -429,13 +436,26 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     live_irq_batch = 256
     # Live cheap waits: yield the core while parked in a classified retrace wait (live only). On by default;
     # --no-live-cheap-waits forces the original full-spin behavior (a safety/debug switch, not a shim).
-    from pre2.recovered.vga_timing import ALL_NODES as _LIVE_WAIT_NODES
+    from pre2.recovered.vga_timing import ALL_NODES as _LIVE_RETRACE_NODES
     live_cheap_waits = getattr(args, "live_cheap_waits", True)
     live_active_fraction = float(args.retrace_pulse)
-    live_wait_stats = {"parks": 0, "slept": 0.0, "wait_total": 0.0, "wait_max": 0.0, "unsafe": 0}
-    _wait_active = [False]        # episode edge-detect state (loop-carried)
+    # Per-kind park diagnostics: "retrace" (9900/990D/44CD) and "pit" (1C6F). `slept`/`unsafe` are shared.
+    live_wait_stats = {"retrace": {"parks": 0, "wait_total": 0.0, "wait_max": 0.0},
+                       "pit": {"parks": 0, "wait_total": 0.0, "wait_max": 0.0},
+                       "slept": 0.0, "unsafe": 0}
+    _wait_kind = [None]           # current episode kind ("retrace"/"pit"/None), loop-carried
     _wait_start = [0.0]
     _view_start = perf_counter()  # wall-clock anchor for the CPU-yield estimate
+
+    def _live_wait_kind(rt):      # which classified live wait (if any) the VM is parked in
+        if not live_cheap_waits or rt.cpu.s.cs != _LIVE_CS:
+            return None
+        ip = rt.cpu.s.ip
+        if ip in _LIVE_RETRACE_NODES:
+            return "retrace"
+        if ip in _LIVE_PIT_NODES:
+            return "pit"
+        return None
     status = "replaying" if replaying else "running"
     rt.cpu.trace_enabled = False
     rt.dos.console_input_fallback = None
@@ -1387,18 +1407,18 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     deadline = perf_counter() + present_period
                     frame_steps = 0
                     while running and perf_counter() < deadline:
-                        # Cheap live waits: if the VM is parked in a classified retrace busy-wait and
-                        # interrupts are enabled (so the PIT/SB ISRs can still fire while we yield), poll it
-                        # with a SMALL batch and sleep through the safe interior of the retrace phase instead
-                        # of spinning thousands of `in al,dx`. The VM's own poll still exits at the same
-                        # wall-clock instant, so game pacing/timing is unchanged.
-                        in_wait = (live_cheap_waits and rt.cpu.s.cs == _LIVE_CS
-                                   and rt.cpu.s.ip in _LIVE_WAIT_NODES)
-                        safe_park = in_wait and rt.cpu.get_flag(IF)
-                        if not _wait_active[0] and in_wait:          # episode start
-                            _wait_active[0] = True
+                        # Cheap live waits: if the VM is parked in a classified busy-wait and interrupts are
+                        # enabled (so the PIT/SB ISRs can still fire while we yield), poll it with a SMALL
+                        # batch and SLEEP instead of spinning. Two kinds, both wall-clock waits in live mode:
+                        #   retrace (9900/990D/44CD) -> sleep through the safe interior of the VGA retrace phase
+                        #   pit     (1C6F)           -> sleep until the next PIT tick is due (advances [0x27ee])
+                        # The VM's own poll still exits at the same wall-clock instant, so pacing is unchanged.
+                        kind = _live_wait_kind(rt)
+                        safe_park = kind is not None and rt.cpu.get_flag(IF)
+                        if _wait_kind[0] is None and kind is not None:          # episode start
+                            _wait_kind[0] = kind
                             _wait_start[0] = perf_counter()
-                            live_wait_stats["parks"] += 1
+                            live_wait_stats[kind]["parks"] += 1
                             if not safe_park:
                                 live_wait_stats["unsafe"] += 1
                         if live_cpu_budget is None or frame_steps < live_cpu_budget:
@@ -1409,13 +1429,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                             steps_done += n
                             frame_steps += n
                         # else: budget spent — wait out the frame (audio still pumped + yielded below)
-                        if _wait_active[0] and not (rt.cpu.s.cs == _LIVE_CS
-                                                    and rt.cpu.s.ip in _LIVE_WAIT_NODES):   # episode end
-                            _wait_active[0] = False
+                        if _wait_kind[0] is not None and _live_wait_kind(rt) is None:   # episode end
                             dur = perf_counter() - _wait_start[0]
-                            live_wait_stats["wait_total"] += dur
-                            if dur > live_wait_stats["wait_max"]:
-                                live_wait_stats["wait_max"] = dur
+                            st = live_wait_stats[_wait_kind[0]]
+                            st["wait_total"] += dur
+                            if dur > st["wait_max"]:
+                                st["wait_max"] = dur
+                            _wait_kind[0] = None
                         # Feed the audio device *continuously* (throttled), not just once
                         # per rendered frame below: the render can stretch a frame past
                         # the mixer channel's buffered depth, leaving its queue slot empty
@@ -1425,17 +1445,18 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                             if sb_audio is not None:
                                 sb_audio.pump()
                             last_audio = nowp
-                        # Yield the core while parked: sleep up to the next retrace edge (minus a margin for
-                        # OS sleep overshoot), bounded by the audio-pump cadence and the frame deadline, so we
-                        # never sleep across the edge the VM is waiting for (which would skip a frame -> slow).
+                        # Yield the core while parked: sleep up to the wait's next wall-clock event (a VGA
+                        # retrace edge, or the next PIT tick), minus a margin for OS sleep overshoot, bounded
+                        # by the audio-pump cadence and the frame deadline — never sleeping past the event the
+                        # VM is waiting for (which would delay it -> change game speed).
                         if safe_park or (live_cpu_budget is not None and frame_steps >= live_cpu_budget):
                             nowp = perf_counter()
-                            slice_s = min(
-                                _time_to_next_retrace_edge(nowp, live_active_fraction) - _LIVE_PARK_MARGIN,
-                                (last_audio + 0.004) - nowp,
-                                deadline - nowp,
-                                _LIVE_PARK_MAX_SLICE,
-                            )
+                            if kind == "pit":
+                                event_dt = (tick_state["next"] - nowp) - _LIVE_PIT_MARGIN
+                            else:   # retrace (or budget-exhausted wait-out: use the retrace cadence)
+                                event_dt = _time_to_next_retrace_edge(nowp, live_active_fraction) - _LIVE_PARK_MARGIN
+                            slice_s = min(event_dt, (last_audio + 0.004) - nowp, deadline - nowp,
+                                          _LIVE_PARK_MAX_SLICE)
                             if slice_s >= _LIVE_PARK_MIN_SLICE:
                                 sleep(slice_s)
                                 live_wait_stats["slept"] += slice_s
@@ -1521,13 +1542,17 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     print(f"frames: {frame}  steps: {steps_done:,}")
     print(f"cpu: {rt.cpu.s.snapshot()}")
     print(f"video: mode={rt.dos.video_mode:02X}h text={rt.dos.text_mode_active} page={rt.dos.video_page}")
-    if live_cheap_waits and live_wait_stats["parks"]:
+    if live_cheap_waits and (live_wait_stats["retrace"]["parks"] or live_wait_stats["pit"]["parks"]):
         s = live_wait_stats
-        avg = s["wait_total"] / s["parks"]
         run_s = max(1e-6, perf_counter() - _view_start)
-        print(f"live-cheap-waits: parks={s['parks']} slept={s['slept']:.2f}s "
-              f"(~{100.0 * s['slept'] / run_s:.0f}% of {run_s:.1f}s wall yielded) "
-              f"wait avg={avg * 1000:.1f}ms max={s['wait_max'] * 1000:.1f}ms unsafe_skipped={s['unsafe']}")
+        print(f"live-cheap-waits: slept={s['slept']:.2f}s (~{100.0 * s['slept'] / run_s:.0f}% of "
+              f"{run_s:.1f}s wall yielded) unsafe_skipped={s['unsafe']}")
+        for kind in ("retrace", "pit"):
+            k = s[kind]
+            if k["parks"]:
+                avg = k["wait_total"] / k["parks"]
+                print(f"  {kind:7s} parks={k['parks']} wait avg={avg * 1000:.1f}ms "
+                      f"max={k['wait_max'] * 1000:.1f}ms")
     if args.save_snapshot:
         out = _default_snapshot_dir(ROOT / "artifacts") if args.save_snapshot == "auto" else Path(args.save_snapshot)
         write_snapshot(rt, out, status=status, steps=steps_done)

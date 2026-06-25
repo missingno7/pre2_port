@@ -224,14 +224,14 @@ not a wait-loop replacement:
 - Audio must keep pumping during the sleep (the mixer thread is fed on a few-ms cadence today), and input
   must stay responsive (wake early on a key event).
 
-This was the separately-scoped live pass, now **implemented** for the three classified retrace waits (on by
-default, `--no-live-cheap-waits` to disable): while parked in 9900/990D/44CD the live loop sleeps through the
-safe interior of the retrace phase and busy-polls only the last ~1.5 ms before an edge, so the VM's own poll
-exits at the same wall-clock instant — same pacing (+0.8 % drift), ~63–76 % of wall yielded on menu/carte.
-Full design + as-built + the key scope finding (live *gameplay* idles in the `1C6F` PIT-tick spin, which is
-outside the classified-retrace scope and is **not** parked — reported for a go/no-go) are in
-**`docs/pre2/live_view_timing_design.md`** (§11). The deterministic/headless/verify speedup (the 86%-hot path
-for tests and tooling) was the first and separable target, shipped (§8).
+This was the separately-scoped live pass, now **implemented** and on by default (`--no-live-cheap-waits` to
+disable) for BOTH live wait families: the three retrace waits (9900/990D/44CD — sleep through the safe interior
+of the VGA retrace phase, busy-poll the last ~1.5 ms before an edge) AND the `1C6F` PIT-tick delay (sleep until
+the next PIT tick is due; the normal IRQ pump advances `[0x27ee]`). The VM's own poll always exits at the same
+wall-clock instant, so pacing is unchanged (retrace drift ≤ +3 %, PIT drift 0 %); menu/carte yield ~60–76 %
+of wall, gameplay ~26–45 %. Live mode never fast-forwards game time. Full design + as-built are in
+**`docs/pre2/live_view_timing_design.md`** (§11 retrace, §12 PIT). The deterministic/headless/verify speedup
+(the 86%-hot path for tests and tooling) was the first and separable target, shipped (§8).
 
 ## 8. As-built — the promoted recovered timing primitive (and why it differs from §5)
 
