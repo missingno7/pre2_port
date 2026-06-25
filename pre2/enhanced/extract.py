@@ -20,49 +20,69 @@ import numpy as np
 from pre2.bridge.gameplay_effects import apply_gameplay_effects
 from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
-from pre2.recovered.frame_renderer import build_background_ring, scroll_copy
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
-from pre2.recovered.render_frame import ASSET_LO, _TileMapView, render_frame
-from sdl_view import render_planar_rgb_from_planes
+from pre2.recovered.render_frame import ASSET_LO, render_frame
+from sdl_view import HEIGHT, WIDTH, _PLANAR_ROW_BYTES, render_planar_rgb_from_planes
 
-_ALL_RESTORE = bytes([1]) * 256   # force every tile -> type-1 restore_background (renders the backdrop only)
+_STRIDE = _PLANAR_ROW_BYTES       # 40 bytes/row (mode 0Dh planar), the page stride render_planar uses
+# The parallax base layer is stored in screen layout at 0x7E80, so de-planarizing it directly reproduces the
+# backdrop over the gameplay viewport: the ring-rebuild round-trip cancels fine_scroll (build_background_ring
+# subtracts ROW_STRIDE*fine, scroll_copy adds SCREEN_ROW*fine back, both 0x28) -> net = the raw base. Verified
+# viewport-exact across cameras / fine_scroll values. (Rows below the viewport are HUD and unused.)
+_BACKDROP_BASE = 0x7E80
 
 _OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
-# identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
-_ID_PAL = [(i, 0, 0) for i in range(256)]
 
 
-def _indices(planes, page):
-    """De-planarize a page to its EGA pixel indices (H×W uint8) using the fast RGB path + identity palette."""
-    return render_planar_rgb_from_planes(planes, page, _ID_PAL)[:, :, 0]
+def _indices_window(planes, page, x0, y0, w, h):
+    """De-planarize ONLY the screen window [x0:x0+w, y0:y0+h] to EGA indices (h×w uint8). Same math as
+    render_planar (page stride 40, full-memory wrap), but over the sprite's tiny bbox instead of the whole
+    320×200 page — the sprite extraction's dominant cost was two full-page deplanarizes per sprite."""
+    bc0 = x0 >> 3                                    # first byte-column
+    nbc = ((x0 + w + 7) >> 3) - bc0                  # byte-columns the window spans
+    rowbase = (page + np.arange(y0, y0 + h) * _STRIDE + bc0) & 0xFFFF
+    off = (rowbase[:, None] + np.arange(nbc)[None, :]) & 0xFFFF
+    color = np.zeros((h, nbc, 8), dtype=np.uint8)
+    for p in range(4):
+        pb = np.frombuffer(planes[p], dtype=np.uint8)[off]   # bytearray view (no full-buffer copy); off gathers
+        color |= np.unpackbits(pb[..., None], axis=2) << p   # only the window. MSB-first, exactly as render_planar
+    sx = x0 - bc0 * 8                                # pixel x0 within the byte-aligned window
+    return color.reshape(h, nbc * 8)[:, sx:sx + w]
 
 
-def _extract_sprite_rgba(draw, src_bank, stride, page, palette):
+def _extract_sprite_rgba(draw, cmd, src_bank, stride, page, palette):
     """Lift one NORMAL sprite into (rgba H×W×4, anchor_x, anchor_y) via the dual-buffer paint trick, or None
-    if it left no opaque pixels (fully clipped)."""
+    if it left no opaque pixels (fully clipped). Only the sprite's on-screen bbox (from ``cmd``) is
+    de-planarized, not the whole page."""
+    x0 = max(0, cmd.screen_x)
+    y0 = max(0, cmd.screen_y)
+    w = min(WIDTH, cmd.screen_x + cmd.width) - x0
+    h = min(HEIGHT, cmd.screen_y + cmd.height) - y0
+    if w <= 0 or h <= 0:
+        return None
     lo = [bytearray(0x10000) for _ in range(4)]
     hi = [bytearray(b"\xff" * 0x10000) for _ in range(4)]
     size = draw.src_bw * draw.full_rows * 6 + 64
     src = src_bank[draw.src_off:draw.src_off + size]
     paint_sprite(lo, draw, src, stride)
     paint_sprite(hi, draw, src, stride)
-    idx_lo = _indices(lo, page)
-    idx_hi = _indices(hi, page)
+    idx_lo = _indices_window(lo, page, x0, y0, w, h)
+    idx_hi = _indices_window(hi, page, x0, y0, w, h)
     agree = idx_lo == idx_hi                       # opaque sprite pixels (bg-independent value)
     ys, xs = np.nonzero(agree)
     if ys.size == 0:
         return None
-    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    sub_idx = idx_lo[y0:y1, x0:x1]
-    sub_mask = agree[y0:y1, x0:x1]
+    ay0, ay1, ax0, ax1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    sub_idx = idx_lo[ay0:ay1, ax0:ax1]
+    sub_mask = agree[ay0:ay1, ax0:ax1]
     pal = np.asarray(palette, dtype=np.uint8)
-    rgba = np.zeros((y1 - y0, x1 - x0, 4), dtype=np.uint8)
+    rgba = np.zeros((ay1 - ay0, ax1 - ax0, 4), dtype=np.uint8)
     rgba[..., :3] = pal[sub_idx]
     rgba[..., 3] = np.where(sub_mask, 255, 0).astype(np.uint8)
-    return rgba, int(x0), int(y0)
+    return rgba, x0 + int(ax0), y0 + int(ay0)
 
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None) -> EnhancedFrameState | None:
@@ -119,7 +139,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         draw = plan_sprite(spr, attr, cam)
         if draw is None:
             continue
-        got = _extract_sprite_rgba(draw, banks.get(draw.src_seg, b""), stride, page, palette)
+        got = _extract_sprite_rgba(draw, cmd, banks.get(draw.src_seg, b""), stride, page, palette)
         if got is None:
             continue
         rgba, ax, ay = got
@@ -136,15 +156,10 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
 
 
 def _render_backdrop(rs, page, palette):
-    """Render the FIXED parallax base layer (sky/mountains) alone: replay the background-ring build + scroll
-    copy with every tile forced to type-1 (``restore_background``), so the visible page is purely the base
-    layer at 0x7E80. No animated/grid/sprite passes (the backdrop is the fixed layer those draw over)."""
+    """The FIXED parallax base layer (sky/mountains) over the gameplay viewport, by de-planarizing the base
+    region (0x7E80) directly — see ``_BACKDROP_BASE``. ``page`` is unused (the base is screen-fixed)."""
     planes = [bytearray(0x10000) for _ in range(4)]
-    if rs.asset_planes:                       # restore tile cache + parallax base into a clean framebuffer
+    if rs.asset_planes:                       # restore the parallax base into a clean framebuffer
         for p in range(4):
             planes[p][ASSET_LO:ASSET_LO + len(rs.asset_planes[p])] = rs.asset_planes[p]
-    build_background_ring(planes, _TileMapView(rs), rs.camera_x, rs.camera_y, rs.scroll_src,
-                          rs.col_ring, rs.fine_scroll, _ALL_RESTORE, rs.mask_region)
-    scroll_copy(planes, rs.scroll_src, rs.dest_page, rs.col_ring, rs.fine_scroll,
-                rs.row_ring, rs.row_factor)
-    return render_planar_rgb_from_planes(planes, page, palette)
+    return render_planar_rgb_from_planes(planes, _BACKDROP_BASE, palette)

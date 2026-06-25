@@ -60,7 +60,9 @@ def _scroll_tile_layer(cur_bg, cur_mask, prev_bg, prev_mask, cdx, cdy, alpha):
     h, w = cur_bg.shape[:2]
     inv = 1.0 - alpha
     cy, cx = int(round(inv * cdy)), int(round(inv * cdx))     # cur sampled at index - (cy,cx)
-    ay, ax = int(round(alpha * cdy)), int(round(alpha * cdx))  # prev sampled at index + (ay,ax)
+    # prev's offset is the EXACT integer complement (ay = cdy - cy), so a world point maps to the same
+    # output pixel from cur and prev -> the two layers meet seamlessly (no 1px gap showing the backdrop).
+    ay, ax = cdy - cy, cdx - cx                                # prev sampled at index + (ay,ax)
     rr, cc = np.arange(h)[:, None], np.arange(w)[None, :]
     inb_cur = (rr - cy >= 0) & (rr - cy < h) & (cc - cx >= 0) & (cc - cx < w)
     inb_prev = (rr + ay >= 0) & (rr + ay < h) & (cc + ax >= 0) & (cc + ax < w)
