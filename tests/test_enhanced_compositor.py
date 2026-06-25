@@ -2,8 +2,9 @@
 
 The witness alpha=1 PARITY (composite == faithful for spiders / player-death / gameplay / boss) is proven by
 ``pre2/probes/verify_enhanced_parity.py`` (snapshot-based; snapshots are gitignored). These committed tests
-cover the compositor's interpolation + blit logic: alpha endpoints, SLOT-based identity (stable across the
-walk/blink animation that changes sprite_id/base_id every frame), fixed HUD sprites, draw order, clipping.
+cover the compositor's interpolation + blit logic: SLOT-based identity (stable across the walk/blink animation
+that changes sprite_id/base_id every frame), WORLD-position interpolation (so the per-animation-frame screen
+offset does NOT inject shake), alpha endpoints, fixed HUD sprites, draw order, clipping.
 """
 from __future__ import annotations
 
@@ -20,10 +21,11 @@ def _solid(w, h, rgb):
     return s
 
 
-def _spr(slot, x, y, rgba, *, sprite_id=0x100, interpolate=True):
+def _spr(slot, x, y, rgba, *, world=None, sprite_id=0x100, interpolate=True):
+    wx, wy = world if world is not None else (x, y)
     return SpriteInstance(slot=slot, base_id=sprite_id & 0x1FFF, sprite_id=sprite_id,
-                          screen_x=x, screen_y=y, tex_off_x=0, tex_off_y=0,
-                          rgba=rgba, interpolate=interpolate)
+                          world_x=wx, world_y=wy, screen_x=x, screen_y=y,
+                          tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
 
 def _frame(sprites, bg=None):
@@ -33,37 +35,36 @@ def _frame(sprites, bg=None):
 
 
 def test_alpha1_places_sprite_at_current_position():
-    cur = _frame([_spr(1, 5, 4, _solid(3, 2, (10, 20, 30)))])
-    out = compose(cur, None, 1.0)
+    out = compose(_frame([_spr(1, 5, 4, _solid(3, 2, (10, 20, 30)))]), None, 1.0)
     assert tuple(out[4, 5]) == (10, 20, 30) and tuple(out[5, 7]) == (10, 20, 30)
     assert tuple(out[0, 0]) == (0, 0, 0)
 
 
-def test_interpolation_lerps_matched_slot():
+def test_world_interpolation_lerps_matched_slot():
     prev = _frame([_spr(7, 0, 0, _solid(2, 2, (9, 9, 9)))])
     cur = _frame([_spr(7, 10, 0, _solid(2, 2, (9, 9, 9)))])
-    assert tuple(compose(cur, prev, 0.5)[0, 5]) == (9, 9, 9)        # lerped to x=5
-    assert tuple(compose(cur, prev, 0.0)[0, 0]) == (9, 9, 9)        # alpha=0 -> prev
+    assert tuple(compose(cur, prev, 0.5)[0, 5]) == (9, 9, 9)        # midpoint of the world move
+    assert tuple(compose(cur, prev, 0.0)[0, 0]) == (9, 9, 9)        # alpha=0 -> prev world pos
     assert tuple(compose(cur, prev, 1.0)[0, 10]) == (9, 9, 9)       # alpha=1 -> cur
 
 
 def test_animation_changes_id_but_slot_is_stable_so_still_interpolates():
-    # The regression we fixed: an animating object's sprite_id/base_id change EVERY source frame
-    # (0x213a -> 0x213b), but its active-list slot is stable -> it must still match + interpolate.
+    # sprite_id/base_id change every source frame (0x213a->0x213b) but the slot is stable -> match + interp.
     prev = _frame([_spr(104, 0, 0, _solid(2, 2, (5, 6, 7)), sprite_id=0x213a)])
     cur = _frame([_spr(104, 10, 0, _solid(2, 2, (5, 6, 7)), sprite_id=0x213b)])
     out = compose(cur, prev, 0.5)
-    assert tuple(out[0, 5]) == (5, 6, 7), "slot-stable object did not interpolate across an animation frame"
-    assert tuple(out[0, 0]) == (0, 0, 0) and tuple(out[0, 10]) == (0, 0, 0)
+    assert tuple(out[0, 5]) == (5, 6, 7) and tuple(out[0, 0]) == (0, 0, 0) and tuple(out[0, 10]) == (0, 0, 0)
 
 
-def test_texture_offset_is_applied_at_interpolated_anchor():
-    spr = _spr(3, 4, 4, _solid(2, 2, (1, 2, 3)))
-    spr.tex_off_x, spr.tex_off_y = 2, 1
-    prev = _frame([_spr(3, 0, 0, _solid(2, 2, (1, 2, 3)))])
-    prev.sprites[0].tex_off_x, prev.sprites[0].tex_off_y = 2, 1
-    out = compose(_frame([spr]), prev, 1.0)
-    assert tuple(out[5, 6]) == (1, 2, 3)              # drawn at (screen_x+off_x, screen_y+off_y)=(6,5)
+def test_still_object_with_oscillating_screen_offset_does_not_drift():
+    # The shake bug: world position is constant, but the per-animation-frame draw offset makes screen_x
+    # oscillate (5 -> 6). Interpolating SCREEN would drift (5.5); interpolating WORLD (delta 0) must NOT.
+    prev = _frame([_spr(2, 5, 5, _solid(2, 2, (1, 2, 3)), world=(50, 50))])
+    cur = _frame([_spr(2, 6, 5, _solid(2, 2, (1, 2, 3)), world=(50, 50))])
+    for a in (0.0, 0.3, 0.7, 1.0):
+        out = compose(cur, prev, a)
+        assert tuple(out[5, 6]) == (1, 2, 3), f"still object drifted at alpha={a}"
+        assert tuple(out[5, 5]) == (0, 0, 0), f"still object shows sub-frame drift at alpha={a}"
 
 
 def test_fixed_hud_sprite_is_not_interpolated():

@@ -40,7 +40,10 @@ def compose(cur, prev, alpha: float):
         if interp and inst.interpolate:
             p = prev_by_slot.get(inst.slot)
             if p is not None:
-                sx = round(p.screen_x + (inst.screen_x - p.screen_x) * alpha)
-                sy = round(p.screen_y + (inst.screen_y - p.screen_y) * alpha)
+                # Move by the WORLD delta (smooth) applied to the CURRENT screen placement, so the
+                # per-animation-frame draw offset (and camera) stay fixed at the current frame -- avoids the
+                # ±1 screen jitter that animation offsets inject and that interpolation would amplify.
+                sx -= round((1.0 - alpha) * (inst.world_x - p.world_x))
+                sy -= round((1.0 - alpha) * (inst.world_y - p.world_y))
         _blit(frame, inst.rgba, sx + inst.tex_off_x, sy + inst.tex_off_y)
     return frame

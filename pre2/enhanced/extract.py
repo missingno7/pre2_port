@@ -105,6 +105,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
             continue
         rgba, ax, ay = got
         sprites.append(SpriteInstance(slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
+                                      world_x=cmd.world_x, world_y=cmd.world_y,
                                       screen_x=cmd.screen_x, screen_y=cmd.screen_y,
                                       tex_off_x=ax - cmd.screen_x, tex_off_y=ay - cmd.screen_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))

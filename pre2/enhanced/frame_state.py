@@ -18,14 +18,21 @@ class SpriteInstance:
 
     Cross-frame identity is ``slot`` — the object's ACTIVE-LIST RECORD INDEX, which is stable across the
     walk/blink animation (unlike ``base_id = sprite_id & 0x1FFF``, which changes every animation frame and so
-    must NOT be used to match objects). ``screen_x``/``screen_y`` are the sprite's logical top-left placement
-    (the interpolation anchor); ``tex_off_x``/``tex_off_y`` offset the cropped RGBA texture from that anchor
-    (so the texture, whose tight bbox shifts with the animation frame, is drawn at ``screen + tex_off``).
-    ``rgba`` is H×W×4 (alpha 0 = transparent), extracted bg-independently from the verified ``paint_sprite``.
-    ``interpolate`` is False for fixed-screen HUD/boss-meter sprites. Draw order = position in ``sprites``."""
+    must NOT be used to match objects).
+
+    Interpolation uses the **world** position ``world_x``/``world_y`` (the object's true location, smooth),
+    NOT the screen position: the screen position folds in the per-animation-frame draw offset
+    (``attr.x_off``/``y_off``, different for each walk frame), so interpolating it amplifies that ±1 jitter
+    into visible shaking. ``screen_x``/``screen_y`` is the CURRENT frame's logical placement (= world − camera
+    − offset); the compositor moves it by the world delta and keeps the current offset/camera fixed.
+    ``tex_off_x``/``tex_off_y`` offset the cropped RGBA texture from ``screen`` (the tight bbox shifts with the
+    animation frame). ``rgba`` is H×W×4 (alpha 0 = transparent), extracted bg-independently from the verified
+    ``paint_sprite``. ``interpolate`` is False for fixed-screen HUD sprites. Draw order = order in ``sprites``."""
     slot: int
     base_id: int
     sprite_id: int
+    world_x: int
+    world_y: int
     screen_x: int
     screen_y: int
     tex_off_x: int
