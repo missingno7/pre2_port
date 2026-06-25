@@ -19,9 +19,12 @@ import numpy as np
 
 from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
-from pre2.recovered.object_render import MODE_NORMAL, paint_sprite, plan_sprite, plan_sprite_command
+from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
+                                          plan_sprite, plan_sprite_command)
 from pre2.recovered.render_frame import render_frame
 from sdl_view import render_planar_rgb_from_planes
+
+_OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
 # identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
@@ -104,7 +107,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
         if got is None:
             continue
         rgba, ax, ay = got
-        sprites.append(SpriteInstance(slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
+        rec = _OBJ_SEG + (LIST_TOP - slot * RECORD_BYTES)        # the object's persistent handle (pointer)
+        handle = mem.data[rec + 6] | (mem.data[rec + 7] << 8)
+        sprites.append(SpriteInstance(handle=handle, slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
                                       world_x=cmd.world_x, world_y=cmd.world_y,
                                       screen_x=cmd.screen_x, screen_y=cmd.screen_y,
                                       tex_off_x=ax - cmd.screen_x, tex_off_y=ay - cmd.screen_y,

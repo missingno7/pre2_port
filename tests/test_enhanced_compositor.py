@@ -21,9 +21,10 @@ def _solid(w, h, rgb):
     return s
 
 
-def _spr(slot, x, y, rgba, *, world=None, sprite_id=0x100, interpolate=True):
+def _spr(slot, x, y, rgba, *, world=None, handle=None, sprite_id=0x100, interpolate=True):
     wx, wy = world if world is not None else (x, y)
-    return SpriteInstance(slot=slot, base_id=sprite_id & 0x1FFF, sprite_id=sprite_id,
+    return SpriteInstance(handle=handle if handle is not None else slot, slot=slot,
+                          base_id=sprite_id & 0x1FFF, sprite_id=sprite_id,
                           world_x=wx, world_y=wy, screen_x=x, screen_y=y,
                           tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
@@ -48,12 +49,23 @@ def test_world_interpolation_lerps_matched_slot():
     assert tuple(compose(cur, prev, 1.0)[0, 10]) == (9, 9, 9)       # alpha=1 -> cur
 
 
-def test_animation_changes_id_but_slot_is_stable_so_still_interpolates():
-    # sprite_id/base_id change every source frame (0x213a->0x213b) but the slot is stable -> match + interp.
-    prev = _frame([_spr(104, 0, 0, _solid(2, 2, (5, 6, 7)), sprite_id=0x213a)])
-    cur = _frame([_spr(104, 10, 0, _solid(2, 2, (5, 6, 7)), sprite_id=0x213b)])
+def test_animation_changes_id_AND_slot_but_handle_is_stable_so_still_interpolates():
+    # sprite_id/base_id change every source frame (0x213a->0x213b) AND the slot shifts on spawn (104->103),
+    # but the persistent handle is stable -> match + interpolate.
+    prev = _frame([_spr(104, 0, 0, _solid(2, 2, (5, 6, 7)), handle=0xb96c, sprite_id=0x213a)])
+    cur = _frame([_spr(103, 10, 0, _solid(2, 2, (5, 6, 7)), handle=0xb96c, sprite_id=0x213b)])
     out = compose(cur, prev, 0.5)
     assert tuple(out[0, 5]) == (5, 6, 7) and tuple(out[0, 0]) == (0, 0, 0) and tuple(out[0, 10]) == (0, 0, 0)
+
+
+def test_handle_reuse_large_jump_snaps_to_current_no_teleport_interp():
+    # A handle reused for a different object (despawn+spawn) shows a large world jump -> must NOT interpolate
+    # across it (no teleport smear); snap to the current position.
+    prev = _frame([_spr(5, 0, 0, _solid(2, 2, (8, 8, 8)), handle=0x1234, world=(0, 0))])
+    cur = _frame([_spr(5, 28, 0, _solid(2, 2, (8, 8, 8)), handle=0x1234, world=(200, 0))])  # +200 > gate
+    out = compose(cur, prev, 0.5)
+    assert tuple(out[0, 28]) == (8, 8, 8), "large-jump (reuse) object should snap to current"
+    assert tuple(out[0, 14]) == (0, 0, 0), "must not interpolate across a handle-reuse teleport"
 
 
 def test_still_object_with_oscillating_screen_offset_does_not_drift():

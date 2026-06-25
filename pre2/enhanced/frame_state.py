@@ -16,9 +16,12 @@ import numpy as np
 class SpriteInstance:
     """One drawable sprite as a modern RGBA texture + its grounded screen placement.
 
-    Cross-frame identity is ``slot`` — the object's ACTIVE-LIST RECORD INDEX, which is stable across the
-    walk/blink animation (unlike ``base_id = sprite_id & 0x1FFF``, which changes every animation frame and so
-    must NOT be used to match objects).
+    Cross-frame identity is ``handle`` — the object's persistent handle (the active-list record's pointer
+    word at byte 6), which is stable across BOTH the walk/blink animation (unlike ``base_id = sprite_id &
+    0x1FFF``, which changes every animation frame) AND active-list compaction on spawn (unlike the slot
+    index, which shifts when objects are pushed). A handle can be REUSED after an object despawns, so the
+    compositor also gates interpolation on a small per-frame world move. ``slot``/``base_id`` are kept for
+    diagnostics only.
 
     Interpolation uses the **world** position ``world_x``/``world_y`` (the object's true location, smooth),
     NOT the screen position: the screen position folds in the per-animation-frame draw offset
@@ -28,6 +31,7 @@ class SpriteInstance:
     ``tex_off_x``/``tex_off_y`` offset the cropped RGBA texture from ``screen`` (the tight bbox shifts with the
     animation frame). ``rgba`` is H×W×4 (alpha 0 = transparent), extracted bg-independently from the verified
     ``paint_sprite``. ``interpolate`` is False for fixed-screen HUD sprites. Draw order = order in ``sprites``."""
+    handle: int
     slot: int
     base_id: int
     sprite_id: int
