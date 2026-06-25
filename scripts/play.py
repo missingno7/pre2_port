@@ -820,13 +820,24 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         def _identify_13h(c):
             try:
                 src = ((c.s.ds << 4) + c.s.si) & 0xFFFFF
-                name = identify_image(bytes(c.mem.data[src:src + 256]), args.game_root)
+                head = bytes(c.mem.data[src:src + 256])
+                name = identify_image(head, args.game_root)
+                if name is None and os.environ.get("PRE2_GAP_DUMP"):
+                    import hashlib as _h
+                    fn = f"artifacts/img13h_unid_{_h.sha256(head).hexdigest()[:8]}.bin"
+                    if not os.path.exists(fn):
+                        open(fn, "wb").write(bytes(c.mem.data[src:src + 0x10000]))
+                        print(f"[img13h] unidentified 13h source -> {fn}", flush=True)
                 if name is not None:
                     prev = current_13h_image[0]
                     # only reset the logo state when a DIFFERENT image loads; the bg copy re-runs each
                     # frame on the same title, but the logo (9090) is sticky on screen.
-                    if prev is None or prev[0] != name:
+                    if not isinstance(prev, tuple) or prev[0] != name:
                         current_13h_image[0] = (name, False)
+                else:
+                    # 91C0 copied a 13h image the fingerprint doesn't recognise -> a real "loaded but
+                    # unidentified" gap (distinct from None = no image copied yet = still loading/black).
+                    current_13h_image[0] = False
             except Exception:
                 pass
             if _origimg is not None:
@@ -892,6 +903,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 menu_page[0] = mp
                 menu_active[0] = True
                 menu_active[1] = rt.cpu.instruction_count
+                oldies_capture[0] = None        # the cold-boot attract OLDIES is over once a menu seeds;
+                #                                 drop its stale capture so it can't resurface in a later
+                #                                 non-pan transition frame (with the wrong, fading palette)
             except Exception:
                 menu_page[0] = None
             interpret_current_instruction_without_hook(c)
@@ -1042,12 +1056,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                                                  pel, active_w, wrap=0x1FFF)
         # Held pan-scene grace: between scenes the engine DAC-fades the outgoing page out / the incoming page
         # in (the 1030:9286 / 92A3 palette-fade loop), during which the scene's producer pauses and the gates
-        # above drop. The planes are unchanged through a DAC fade, so re-deplanarize the last pan-scene planes
-        # with the LIVE (fading) palette — byte-exact for the fade, never the VM framebuffer. Bounded by a
-        # frame-tick grace (wall-clock independent) so a genuinely persistent unrecovered pan scene still
-        # fails loud.
-        if (rt.program.memory.ega_pan_active and held_planes[0] is not None
-                and faithful_tick[0] - held_planes[0][5] < 150):
+        # above drop. The fade also drops ega_pan_active (no pel-pan writes once the scroll/menu loop exits),
+        # so this grace is gated ONLY on the frame-tick recency — held_planes is set exclusively by the
+        # menu/carte branches (always a pan scene), so a recent entry always means "a pan scene just faded".
+        # The planes are unchanged through a DAC fade, so re-deplanarize them with the LIVE (fading) palette —
+        # byte-exact for the fade, never the VM framebuffer; the frame-tick bound (wall-clock independent)
+        # still fails loud on a genuinely persistent unrecovered scene.
+        if held_planes[0] is not None and faithful_tick[0] - held_planes[0][5] < 150:
             hp, hpg, hppel, hpaw, hpwrap, _t = held_planes[0]
             faithful_info[0] = "faithful: holding (scene fade)"
             return render_planar_rgb_from_planes(hp, hpg, rt.dos.vga_palette, hppel, hpaw, wrap=hpwrap)
@@ -1095,6 +1110,11 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         mem = bytes(rt.program.memory.data)
         mode = rt.dos.video_mode & 0x7F
         faithful_info[0] = ""
+        if mode not in (0x13, 0x19):
+            # Outside 13h, forget the on-screen 13h image so the NEXT 13h scene starts from "nothing
+            # loaded yet" (-> black while it loads) and re-identifies on its own 91C0 copy, instead of
+            # briefly showing the previous title or flashing a gap during the mode switch.
+            current_13h_image[0] = None
         if not rt.program.memory.ega_display_enabled:
             # The attribute controller has the display blanked (PAS=0) while the program loads a new
             # palette. Show black, exactly as real hardware / DOSBox do — never the incoming screen
@@ -1117,7 +1137,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 # image fails LOUD (gap), never falls back to VM VRAM.
                 cur = current_13h_image[0]
                 rgb = None
-                if cur is not None:
+                if isinstance(cur, tuple):
                     name, has_logo = cur
                     try:
                         img = render_image_scene(name, args.game_root, with_logo=has_logo)
@@ -1127,11 +1147,20 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                     except Exception:
                         rgb = None
                 if rgb is None:
-                    if gap_seen[0] != "13h":
-                        gap_seen[0] = "13h"
-                        print("[faithful] mode-13h image not identified (no recovered leaf yet)", flush=True)
-                    faithful_info[0] = "FAITHFUL GAP: 13h image (see console)"
-                    rgb = np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
+                    if cur is None:
+                        # 13h mode but NO image copied yet (the mode just switched; the engine is loading /
+                        # the screen is black between scenes). Black is the correct faithful frame here, not
+                        # a gap — a 91C0 copy will identify the image a moment later.
+                        faithful_info[0] = "faithful: 13h loading"
+                        rgb = np.zeros((200, 320, 3), dtype=np.uint8)
+                    else:
+                        # cur is False = a 13h image WAS copied but the fingerprint doesn't recognise it (a
+                        # genuinely unrecovered image), or the recovered render failed -> fail LOUD.
+                        if gap_seen[0] != "13h":
+                            gap_seen[0] = "13h"
+                            print("[faithful] mode-13h image not identified (no recovered leaf yet)", flush=True)
+                        faithful_info[0] = "FAITHFUL GAP: 13h image (see console)"
+                        rgb = np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
             else:
                 rgb = render_vga_rgb(mem, rt.dos.vga_palette)
         elif rt.program.memory.ega_planar:

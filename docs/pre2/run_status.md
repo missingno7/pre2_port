@@ -12,10 +12,15 @@ out/in (the 1030:9286 / 92A3 palette-fade loop) while the scene's producer pause
 through a DAC fade, so the faithful path re-deplanarizes the last pan-scene planes with the LIVE (fading)
 palette — byte-exact for the fade, bounded by a frame-tick grace (the menu is gated on its controller-active
 flag, not an instruction-count freshness, since the live retrace busy-waits make one frame ~100k+
-instructions — the deterministic clock hid this). Remaining gaps are by-design only: an unidentified 13h
+instructions — the deterministic clock hid this). The held-planes grace is gated on the frame-tick alone
+(the fade drops ega_pan_active once the scroll/menu loop exits, so requiring it would re-gap the fade-out);
+it also covers the map→gameplay fade (carte done, camera still 0,0 = SCENE) and the stale cold-boot OLDIES
+capture is dropped once a menu seeds. A 13h scene with NO image copied yet (the mode just switched, loading)
+shows BLACK (the correct faithful loading frame), not a gap — only a 13h image that WAS copied but the
+fingerprint doesn't recognise fails loud. Remaining gaps are by-design only: a genuinely unrecovered 13h
 image, a snapshot attached mid-scene, DOS text mode. (Diagnosed via `--video faithful` cold-boot + demo
-replay; `PRE2_GAP_DUMP=1` saves the VM screen at each gap; the gap print carries CS:IP/mode/scene-signal
-context.)
+replay; `PRE2_GAP_DUMP=1` saves the VM screen / unidentified 13h source at each gap; the gap print carries
+CS:IP/mode/scene-signal context.)
 
 **Hybrid live replacements — 25 recovered leaves run in place of the ASM** (sqz; sprite decode/blit;
 object_render 26FA; frame tile-row/grid/scroll/panel; anim_advance; camera_shake; iris; palette_fade;
