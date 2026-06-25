@@ -19,11 +19,15 @@ passthrough. No truecolor fade / iris / curtain / smooth-camera yet.
 from __future__ import annotations
 
 from pre2.enhanced.compositor import compose
+from pre2.enhanced.transitions import apply_vfade
 
 # Gameplay source frames commit ~25 fps (~40 ms). If the latest source snapshot is older than this, or the
 # prev->cur interval is this large, we are not in steady gameplay (a scene, a load, a pause) -> passthrough
 # rather than interpolate across a gap.
 _MAX_SOURCE_GAP = 0.12   # seconds
+# A vertical-fade step's recovered phase is reused for this long before it is considered stale (the fade hook
+# fires ~per fade step; the display interpolates between). Longer than a step, shorter than a scene settle.
+_VFADE_GRACE = 0.1       # seconds
 
 
 class EnhancedRenderer:
@@ -40,6 +44,15 @@ class EnhancedRenderer:
         s = self.src
         # Read prev/cur atomically: in live --view the worker thread swaps them under this lock.
         prev, cur, prev_time, cur_time = s.read_enh_state()
+        # NATIVE VERTICAL FADE-OUT: project the recovered cleared bands over the frozen gameplay frame (the
+        # fade froze gameplay, so cur is the last frame; the phase top/bot comes straight from the VM state).
+        vf = getattr(s, "vfade", None)
+        if cur is not None and vf is not None and (now - vf[2]) < _VFADE_GRACE:
+            top, bot, _t = vf
+            frame = apply_vfade(compose(cur, None, 1.0), top, bot)
+            self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
+                          "reason": "vfade-native (projected)", "unsupported": len(cur.unsupported)}
+            return frame
         reason = None
         if not self.interpolate:
             reason = "interpolation disabled"

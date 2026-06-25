@@ -122,6 +122,8 @@ class FaithfulSession:
         # snapshot at the boundary, so the VM + present loop on the main thread never block on it (like audio).
         # enh_prev/cur/times are then shared -> guarded by _enh_lock. Off (None thread) in headless/demo/faithful.
         self.async_extract = False
+        self.vfade = None              # (top_cleared, bot_start, t): recovered VERTICAL fade-out phase for the
+                                       # enhanced compositor to project (apply_vfade); None when not fading.
         self._enh_lock = threading.Lock()
         self._extract_q = None
         self._extract_thread = None
@@ -305,6 +307,7 @@ class FaithfulSession:
                 self.last_capture_ic = rt.cpu.instruction_count
                 self.planar_image_capture = None
                 self.curtain_cache = None
+                self.vfade = None                  # a gameplay commit -> the vertical fade is over
                 self.particle_frame = None
                 self.foreground_frame = None
                 orig = self._orig[0x6772]
@@ -357,6 +360,7 @@ class FaithfulSession:
         except Exception:
             self.boundary_capture = None
         self.curtain_cache = None                  # the per-frame boundary ends any curtain in progress
+        self.vfade = None                          # a gameplay commit -> the vertical fade is over
         self.particle_frame = None                 # consumed for this frame; 4b8e re-stashes next frame
         self.foreground_frame = None               # consumed; 3732 re-stashes next frame it runs
         orig = self._orig[0x6772]
@@ -391,20 +395,28 @@ class FaithfulSession:
 
     def _capture_vfade_step(self, c):
         try:
-            base = self._get_last_committed()      # lazy-render the base if enhanced gameplay skipped it
-            if base is not None:
-                bplanes, bpage = base
-                page = self._rw(c.mem, 0x2DD6)
-                s52 = c.mem.data[(0x1030 << 4) + 0x3052] | (c.mem.data[(0x1030 << 4) + 0x3053] << 8)
-                s50 = c.mem.data[(0x1030 << 4) + 0x3050] | (c.mem.data[(0x1030 << 4) + 0x3051] << 8)
-                top = (s52 - page) // 0x28 + 10            # top band accumulated extent
-                bot = (s52 + s50 - page) // 0x28           # bottom band start
-                planes, pg = compose_vfade_planes(bplanes, bpage, top, bot)
-                self.boundary_capture = (
-                    render_planar_rgb_from_planes(planes, pg, c.pre2_dos.vga_palette),
-                    pg, "GAMEPLAY", None)
-                if top >= bot:
-                    self.last_committed = (planes, pg)
+            page = self._rw(c.mem, 0x2DD6)
+            s52 = c.mem.data[(0x1030 << 4) + 0x3052] | (c.mem.data[(0x1030 << 4) + 0x3053] << 8)
+            s50 = c.mem.data[(0x1030 << 4) + 0x3050] | (c.mem.data[(0x1030 << 4) + 0x3051] << 8)
+            top = (s52 - page) // 0x28 + 10                # top band accumulated extent
+            bot = (s52 + s50 - page) // 0x28               # bottom band start
+            # ENHANCED native projection: the compositor blacks these recovered bands over the frozen
+            # gameplay frame (apply_vfade) -- proven 0px-exact vs compose_vfade_planes.
+            if self.enh_clock is not None:
+                self.vfade = (top, bot, self.enh_clock())
+            # FAITHFUL vertical fade (also the enhanced safety bridge): only rendered when enhanced won't
+            # project it (faithful mode, or no enh frame yet) -- avoids the ~10ms faithful base render per
+            # fade step in live enhanced now that the projection covers it.
+            if self.enh_clock is None or self.enh_cur is None:
+                base = self._get_last_committed()
+                if base is not None:
+                    bplanes, bpage = base
+                    planes, pg = compose_vfade_planes(bplanes, bpage, top, bot)
+                    self.boundary_capture = (
+                        render_planar_rgb_from_planes(planes, pg, c.pre2_dos.vga_palette),
+                        pg, "GAMEPLAY", None)
+                    if top >= bot:
+                        self.last_committed = (planes, pg)
         except Exception:
             pass
         orig = self._orig[0x3111]
