@@ -60,6 +60,7 @@ from pre2.recovered.scene_compositor import RecoveredBackground
 from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
 from pre2.enhanced.compositor import compose
 from pre2.enhanced.extract import extract_enhanced_frame
+from pre2.enhanced.native_background import TileTextureCache, _HudCache
 from pre2.enhanced.sprite_cache import SpriteTextureCache
 
 _DSEG = 0x1A0F
@@ -122,6 +123,9 @@ class FaithfulSession:
         self._sprite_tex_cache = SpriteTextureCache()  # persistent sprite-texture cache (layer A): palette-
                                        # independent cel textures reused across source frames, so steady
                                        # gameplay re-extracts only cels that actually changed.
+        self._bg_cache = (TileTextureCache(), _HudCache())  # native-background caches (layer B): palette-
+                                       # independent tile textures + the recovered HUD strip, so steady
+                                       # gameplay builds idx0 natively (no render_frame ring rebuild).
         # Async extraction (live --view enhanced only): the ~17ms extract runs on a WORKER thread fed a memory
         # snapshot at the boundary, so the VM + present loop on the main thread never block on it (like audio).
         # enh_prev/cur/times are then shared -> guarded by _enh_lock. Off (None thread) in headless/demo/faithful.
@@ -240,7 +244,7 @@ class FaithfulSession:
             try:
                 efs = extract_enhanced_frame(_SnapMem(mem_bytes), _SnapDos(palette),
                                              game_root=self.args.game_root, with_faithful=False, effects=fx,
-                                             tex_cache=self._sprite_tex_cache)
+                                             tex_cache=self._sprite_tex_cache, bg_cache=self._bg_cache)
             except Exception:
                 efs = None
             if efs is None:
@@ -329,7 +333,7 @@ class FaithfulSession:
                 try:
                     efs = extract_enhanced_frame(c.mem, self.dos, game_root=self.args.game_root,
                                                  with_faithful=False, effects=fx,
-                                                 tex_cache=self._sprite_tex_cache)
+                                                 tex_cache=self._sprite_tex_cache, bg_cache=self._bg_cache)
                 except Exception:
                     efs = None
                 if efs is not None:

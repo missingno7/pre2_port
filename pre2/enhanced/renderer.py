@@ -127,11 +127,23 @@ class EnhancedRenderer:
         u = d.get("unsupported", 0)
         cache = getattr(self.src, "_sprite_tex_cache", None)
         tex = f" tex={cache.hit_rate()*100:.0f}%" if cache is not None else ""
+        bg = getattr(self.src, "_bg_cache", None)
+        bgs = ""
+        if bg is not None:
+            tc = bg[0]
+            fb = tc.stats.get("fallbacks", 0)
+            bgs = f" bg={tc.hit_rate()*100:.0f}%" + (f" bgfallback={fb}" if fb else "")
         return (f"enh:interp a={d['alpha']:.2f} sprites={d['interpolated_sprites']}"
-                + (f" unsupported={u}" if u else "") + tex)
+                + (f" unsupported={u}" if u else "") + tex + bgs)
 
     def sprite_cache_stats(self) -> dict:
         """Layer-A sprite-texture cache diagnostics (hit rate, miss/eviction counts, colourisation cost, L2
         RGBA hit rate) -- or ``None`` when no cache is attached."""
         cache = getattr(self.src, "_sprite_tex_cache", None)
         return dict(cache.stats, hit_rate=cache.hit_rate()) if cache is not None else None
+
+    def background_cache_stats(self) -> dict:
+        """Layer-B native-background diagnostics (tile-texture hit rate + decode misses, evictions, native
+        build cost, faithful-fallback count, HUD-strip cache hits) -- or ``None`` when no cache is attached."""
+        bg = getattr(self.src, "_bg_cache", None)
+        return dict(bg[0].stats, hit_rate=bg[0].hit_rate()) if bg is not None else None

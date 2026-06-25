@@ -19,7 +19,11 @@ import numpy as np
 
 from pre2.bridge.gameplay_effects import apply_gameplay_effects
 from pre2.bridge.render_state import read_renderer_state
+from time import perf_counter as _perf
+
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
+from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache,
+                                             native_background_indices)
 from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
@@ -156,7 +160,7 @@ def _make_sprite_texture(draw, attr, src_bank):
 
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
-                           tex_cache=None) -> EnhancedFrameState | None:
+                           tex_cache=None, bg_cache=None) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -167,6 +171,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     must be in front of sprites, and particles/fireflies draw on top. Absent in the parity path (effects=None).
     ``tex_cache`` (a :class:`~pre2.enhanced.sprite_cache.SpriteTextureCache`) persists cel textures across
     source frames; a throwaway one is made when None (parity path) -> identical output, no cross-frame reuse.
+    ``bg_cache`` is a ``(TileTextureCache, _HudCache)`` pair persisting the native-background tile/HUD textures
+    likewise (a throwaway pair when None).
     """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
@@ -179,16 +185,29 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     # Backdrop = the FIXED parallax base layer (sky/mountains), de-planarized directly from 0x7E80.
     backdrop_rgb = _render_backdrop(rs, page, palette)
 
-    # Render the background over a ZEROED base instead of the real base: every base-showing pixel becomes
-    # index 0, while opaque tile/effect pixels keep their (base-independent) colour. So tile_mask = index!=0
-    # is the TRUE tile coverage (colour-independent), and the real background is reconstructed EXACTLY by
-    # compositing those tile pixels over the backdrop (verified 0px). This costs the same one render as before
-    # but yields the coverage the compositor needs to scroll the tile layer without leaving backdrop-coloured
-    # tile pixels behind ("see-through" holes).
-    bg0_planes = [bytearray(0x10000) for _ in range(4)]
-    render_frame(replace(rs, object_camera=None, asset_planes=_zero_base(rs.asset_planes)),
-                 bg0_planes, palette, rebuild=True)
-    idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]   # EGA indices over zeroed base
+    # Background colour INDICES over a zeroed base: every base-showing pixel is index 0, opaque tile/effect
+    # pixels keep their (base-independent) colour. So tile_mask = index!=0 is the TRUE tile coverage
+    # (colour-independent) and the real background is reconstructed EXACTLY by compositing those tile pixels
+    # over the backdrop (verified 0px) -- the coverage the compositor needs to scroll the tile layer without
+    # leaving backdrop-coloured tile pixels behind ("see-through" holes).
+    #
+    # LAYER B: build idx0 NATIVELY from the recovered tilemap + cached tile textures (no render_frame ring
+    # rebuild, ~6ms -> ~0.15ms). The native path is byte-identical to the faithful render (proven 0px,
+    # pre2/probes/verify_native_background.py); anything it doesn't cover raises NativeBackgroundUnsupported and
+    # we fall back to the faithful render EXPLICITLY (counted in stats.fallbacks -- never a silent approximation).
+    if bg_cache is None:
+        bg_cache = (TileTextureCache(), _HudCache())
+    tile_cache, hud_cache = bg_cache
+    _t0 = _perf()
+    try:
+        idx0 = native_background_indices(rs, tile_cache, hud_cache)
+    except NativeBackgroundUnsupported:
+        tile_cache.stats["fallbacks"] += 1
+        bg0_planes = [bytearray(0x10000) for _ in range(4)]
+        render_frame(replace(rs, object_camera=None, asset_planes=_zero_base(rs.asset_planes)),
+                     bg0_planes, palette, rebuild=True)
+        idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]
+    tile_cache.stats["native_s"] += _perf() - _t0
     tile_mask = idx0 != 0
     backdrop_full = backdrop_rgb.copy()
     backdrop_full[VIEWPORT_H:] = pal_rgb[0]                   # HUD rows: base-showing == palette[0] (panel bg)
