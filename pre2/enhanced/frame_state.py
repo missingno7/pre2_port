@@ -53,8 +53,10 @@ class EnhancedFrameState:
     sprites: list                       # SpriteInstance, in draw order
     faithful_rgb: np.ndarray            # the full faithful frame (fallback / alpha=1 parity oracle)
     unsupported: list = field(default_factory=list)   # [(base_id, mode_name)] sprites not interpolated (OPAQUE/ERASE)
-    backdrop_rgb: "np.ndarray | None" = None   # the FIXED-screen parallax base layer (sky/mountains), rendered
-                            # backdrop-only (all tiles forced type-1 restore_background). The scrolling tile
-                            # layer is then `background_rgb != backdrop_rgb`; the compositor holds the backdrop
-                            # still and scrolls only the tile layer (so the backdrop does NOT shake). None ->
-                            # compositor falls back to a uniform whole-bg shift.
+    backdrop_rgb: "np.ndarray | None" = None   # the FIXED-screen parallax base layer (sky/mountains). The
+                            # compositor holds it still and scrolls only the tile layer over it (so the backdrop
+                            # does NOT shake). None -> compositor falls back to a uniform whole-bg shift.
+    tile_mask: "np.ndarray | None" = None      # TRUE coverage of the scrolling tile layer (h×w bool): where an
+                            # opaque tile/effect actually drew, found by rendering over a ZEROED base (index!=0)
+                            # — colour-independent, unlike `background_rgb != backdrop_rgb` which misses tile
+                            # pixels that share the backdrop's colour (they'd be left static -> "see-through").

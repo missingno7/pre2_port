@@ -31,10 +31,20 @@ _STRIDE = _PLANAR_ROW_BYTES       # 40 bytes/row (mode 0Dh planar), the page str
 # subtracts ROW_STRIDE*fine, scroll_copy adds SCREEN_ROW*fine back, both 0x28) -> net = the raw base. Verified
 # viewport-exact across cameras / fine_scroll values. (Rows below the viewport are HUD and unused.)
 _BACKDROP_BASE = 0x7E80
+_BASE_OFF = _BACKDROP_BASE - ASSET_LO   # offset of the parallax base within RendererState.asset_planes
+VIEWPORT_H = 176                         # gameplay viewport rows (the HUD strip below shows no backdrop)
 
 _OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
+# identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
+_ID_PAL = [(i, 0, 0) for i in range(256)]
+
+
+def _zero_base(asset_planes):
+    """Return asset_planes with the parallax BASE layer (>= 0x7E80) zeroed but the tile-graphic cache
+    (0x5E80..0x7E80) intact — so tiles still find their graphics but every base-showing pixel renders index 0."""
+    return tuple(bytes(a[:_BASE_OFF]) + b"\x00" * (len(a) - _BASE_OFF) for a in asset_planes)
 
 
 def _indices_window(planes, page, x0, y0, w, h):
@@ -101,17 +111,27 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         return None
     page, stride = cam.dest_page, cam.row_stride
     palette = dos.vga_palette or [(0, 0, 0)] * 256
+    pal_rgb = np.asarray(palette, dtype=np.uint8)
 
-    bg_planes = [bytearray(0x10000) for _ in range(4)]
-    render_frame(replace(rs, object_camera=None), bg_planes, palette, rebuild=True)
-    if effects is not None:
-        apply_gameplay_effects(bg_planes, page, effects)     # point particles / foreground / fireflies
-    background_rgb = render_planar_rgb_from_planes(bg_planes, page, palette)
-
-    # Backdrop-only render (the FIXED parallax base layer): same camera/scroll walk but every tile forced to
-    # type-1 restore_background, so the visible page is purely the base layer showing through. The compositor
-    # holds this still and scrolls only the tile layer (background_rgb != backdrop_rgb) -> no backdrop shake.
+    # Backdrop = the FIXED parallax base layer (sky/mountains), de-planarized directly from 0x7E80.
     backdrop_rgb = _render_backdrop(rs, page, palette)
+
+    # Render the background over a ZEROED base instead of the real base: every base-showing pixel becomes
+    # index 0, while opaque tile/effect pixels keep their (base-independent) colour. So tile_mask = index!=0
+    # is the TRUE tile coverage (colour-independent), and the real background is reconstructed EXACTLY by
+    # compositing those tile pixels over the backdrop (verified 0px). This costs the same one render as before
+    # but yields the coverage the compositor needs to scroll the tile layer without leaving backdrop-coloured
+    # tile pixels behind ("see-through" holes).
+    bg0_planes = [bytearray(0x10000) for _ in range(4)]
+    render_frame(replace(rs, object_camera=None, asset_planes=_zero_base(rs.asset_planes)),
+                 bg0_planes, palette, rebuild=True)
+    if effects is not None:
+        apply_gameplay_effects(bg0_planes, page, effects)    # point particles / foreground / fireflies
+    idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]   # EGA indices over zeroed base
+    tile_mask = idx0 != 0
+    backdrop_full = backdrop_rgb.copy()
+    backdrop_full[VIEWPORT_H:] = pal_rgb[0]                   # HUD rows: base-showing == palette[0] (panel bg)
+    background_rgb = np.where(tile_mask[..., None], pal_rgb[idx0], backdrop_full)
 
     faithful_rgb = None
     if with_faithful:
@@ -152,7 +172,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
-                              backdrop_rgb=backdrop_rgb)
+                              backdrop_rgb=backdrop_rgb, tile_mask=tile_mask)
 
 
 def _render_backdrop(rs, page, palette):

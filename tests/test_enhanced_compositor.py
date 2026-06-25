@@ -29,10 +29,10 @@ def _spr(slot, x, y, rgba, *, world=None, handle=None, sprite_id=0x100, interpol
                           tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
 
-def _frame(sprites, bg=None, camera=(0, 0), backdrop=None):
+def _frame(sprites, bg=None, camera=(0, 0), backdrop=None, tile_mask=None):
     bg = np.zeros((16, 32, 3), np.uint8) if bg is None else bg
     return EnhancedFrameState(background_rgb=bg, camera=camera, sprites=sprites,
-                              faithful_rgb=bg, unsupported=[], backdrop_rgb=backdrop)
+                              faithful_rgb=bg, unsupported=[], backdrop_rgb=backdrop, tile_mask=tile_mask)
 
 
 def test_alpha1_places_sprite_at_current_position():
@@ -99,12 +99,30 @@ def test_camera_scroll_holds_backdrop_fixed_and_scrolls_only_tile_layer():
     backdrop[2, 10] = (9, 9, 9)                        # a fixed backdrop feature (e.g. a cloud)
     prev_bg = backdrop.copy(); prev_bg[8:10, 14:16] = (200, 0, 0)   # tile at col 14 (cam 0)
     cur_bg = backdrop.copy(); cur_bg[8:10, 4:6] = (200, 0, 0)       # same world tile at col 4 (cam +10)
-    prev = _frame([], bg=prev_bg, camera=(0, 0), backdrop=backdrop)
-    cur = _frame([], bg=cur_bg, camera=(10, 0), backdrop=backdrop)
+    prev_m = np.zeros((16, 32), bool); prev_m[8:10, 14:16] = True   # true tile coverage
+    cur_m = np.zeros((16, 32), bool); cur_m[8:10, 4:6] = True
+    prev = _frame([], bg=prev_bg, camera=(0, 0), backdrop=backdrop, tile_mask=prev_m)
+    cur = _frame([], bg=cur_bg, camera=(10, 0), backdrop=backdrop, tile_mask=cur_m)
     out = compose(cur, prev, 0.5)                      # interp cam +5 -> tile at col 9
     assert tuple(out[2, 10]) == (9, 9, 9), "fixed backdrop feature must not move (no shake)"
     assert tuple(out[8, 9]) == (200, 0, 0), "tile layer did not scroll to the interpolated position"
     assert tuple(out[8, 14]) == (50, 50, 50) and tuple(out[8, 4]) == (50, 50, 50), "tile left stale copies"
+
+
+def test_coverage_mask_drives_scroll_not_colour_difference():
+    # The "see-through" bug: tile coverage must come from the TRUE mask, not `bg != backdrop`. Here a tile
+    # block is drawn ON TOP of a backdrop feature of the SAME colour; only the explicit tile_mask says it is a
+    # tile. The block must scroll as a unit (proven by its distinct pixel reaching the interpolated column).
+    backdrop = np.full((16, 32, 3), (50, 50, 50), np.uint8)
+    backdrop[8, 4] = backdrop[8, 14] = (50, 50, 50)   # backdrop has the tile's colour at the tile location
+    prev_bg = backdrop.copy(); prev_bg[8, 14] = (50, 50, 50); prev_bg[8, 15] = (200, 0, 0)  # tile cols 14-15
+    cur_bg = backdrop.copy(); cur_bg[8, 4] = (50, 50, 50); cur_bg[8, 5] = (200, 0, 0)        # cols 4-5
+    prev_m = np.zeros((16, 32), bool); prev_m[8, 14:16] = True
+    cur_m = np.zeros((16, 32), bool); cur_m[8, 4:6] = True
+    prev = _frame([], bg=prev_bg, camera=(0, 0), backdrop=backdrop, tile_mask=prev_m)
+    cur = _frame([], bg=cur_bg, camera=(10, 0), backdrop=backdrop, tile_mask=cur_m)
+    out = compose(cur, prev, 0.5)                       # cx=5 -> tile cols 4-5 -> 9-10
+    assert tuple(out[8, 10]) == (200, 0, 0), "tile block (incl. backdrop-coloured pixel) must scroll via mask"
 
 
 def test_fixed_hud_sprite_is_not_interpolated():

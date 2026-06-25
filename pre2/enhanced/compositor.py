@@ -103,12 +103,12 @@ def compose(cur, prev, alpha: float):
     frame = cur.background_rgb.copy()
     if bg_dx or bg_dy:
         h = VIEWPORT_H
-        if cur.backdrop_rgb is not None and prev.backdrop_rgb is not None:
-            # Layered: hold the fixed backdrop still, scroll only the tile layer (bg != backdrop) over it.
-            cur_mask = np.any(cur.background_rgb[:h] != cur.backdrop_rgb[:h], axis=2)
-            prev_mask = np.any(prev.background_rgb[:h] != prev.backdrop_rgb[:h], axis=2)
-            tile_rgb, tile_mask = _scroll_tile_layer(cur.background_rgb[:h], cur_mask,
-                                                     prev.background_rgb[:h], prev_mask, cdx, cdy, alpha)
+        if cur.tile_mask is not None and prev.tile_mask is not None and cur.backdrop_rgb is not None:
+            # Layered: hold the fixed backdrop still, scroll only the tile layer over it. The tile coverage is
+            # the TRUE (colour-independent) mask from extraction -- a `bg != backdrop` test would miss tile
+            # pixels that share the backdrop colour and leave them static ("see-through" holes during shake).
+            tile_rgb, tile_mask = _scroll_tile_layer(cur.background_rgb[:h], cur.tile_mask[:h],
+                                                     prev.background_rgb[:h], prev.tile_mask[:h], cdx, cdy, alpha)
             vp = cur.backdrop_rgb[:h].copy()
             vp[tile_mask] = tile_rgb[tile_mask]
             frame[:h] = vp
