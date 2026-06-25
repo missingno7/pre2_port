@@ -88,7 +88,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
     sprites, unsupported = [], []
     attrs = rs.object_attrs or {}
     banks = rs.object_src_banks or {}
-    cam_x_px = rs.camera_x * 16 + rs.fine_scroll if hasattr(rs, "camera_x") else 0
+    # camera in PIXELS, matching _placement: X = cam_x*16; Y = cam_y*16 + fine_scroll. Used to interpolate
+    # the background scroll between source frames (objects stay glued to the scrolled bg).
+    camera_px = (cam.cam_x * 16, cam.cam_y * 16 + cam.fine_scroll)
     # enumerate -> `slot` is the active-list record index (stable cross-frame identity, animation-independent)
     for slot, spr in enumerate(rs.object_sprites or ()):
         attr = attrs.get(spr.sprite_id)
@@ -114,5 +116,5 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
                                       screen_x=cmd.screen_x, screen_y=cmd.screen_y,
                                       tex_off_x=ax - cmd.screen_x, tex_off_y=ay - cmd.screen_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
-    return EnhancedFrameState(background_rgb=background_rgb, camera=(cam_x_px, 0),
+    return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported)

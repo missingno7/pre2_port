@@ -29,9 +29,9 @@ def _spr(slot, x, y, rgba, *, world=None, handle=None, sprite_id=0x100, interpol
                           tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
 
-def _frame(sprites, bg=None):
+def _frame(sprites, bg=None, camera=(0, 0)):
     bg = np.zeros((16, 32, 3), np.uint8) if bg is None else bg
-    return EnhancedFrameState(background_rgb=bg, camera=(0, 0), sprites=sprites,
+    return EnhancedFrameState(background_rgb=bg, camera=camera, sprites=sprites,
                               faithful_rgb=bg, unsupported=[])
 
 
@@ -77,6 +77,18 @@ def test_still_object_with_oscillating_screen_offset_does_not_drift():
         out = compose(cur, prev, a)
         assert tuple(out[5, 6]) == (1, 2, 3), f"still object drifted at alpha={a}"
         assert tuple(out[5, 5]) == (0, 0, 0), f"still object shows sub-frame drift at alpha={a}"
+
+
+def test_camera_scroll_shifts_bg_and_glues_static_object():
+    # Camera scrolls +10px between source frames; a world-static object must move WITH the background.
+    bg = np.zeros((8, 24, 3), np.uint8)
+    bg[:, 4] = (9, 9, 9)                              # a background marker at column 4
+    obj = _solid(2, 2, (7, 7, 7))
+    prev = _frame([_spr(1, 15, 0, obj, world=(100, 0))], bg=bg.copy(), camera=(0, 0))
+    cur = _frame([_spr(1, 5, 0, obj, world=(100, 0))], bg=bg.copy(), camera=(10, 0))
+    out = compose(cur, prev, 0.5)                      # bg_dx = round(0.5*10) = 5
+    assert tuple(out[0, 9]) == (9, 9, 9), "background did not scroll-interpolate"
+    assert tuple(out[0, 10]) == (7, 7, 7), "static object not glued to the scrolled background"
 
 
 def test_fixed_hud_sprite_is_not_interpolated():
