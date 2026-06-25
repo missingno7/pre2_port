@@ -101,9 +101,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
 
     ``with_faithful`` renders the full faithful frame into ``faithful_rgb`` (for parity/standalone use); the
     live viewer passes ``False`` since it already has the session's faithful frame (avoids a redundant render).
-    ``effects`` (a GameplayEffects from the session: point particles / foreground / fireflies) is drawn into
-    the background so the spider-web etc. appear and scroll with the camera (v1: in the bg layer, not yet
-    velocity-interpolated; absent in the static-snapshot parity path which passes effects=None).
+    ``effects`` (a GameplayEffects from the session: point particles / foreground tiles / fireflies) becomes a
+    separate OVERLAY layer (overlay_rgb/overlay_mask) the compositor draws OVER the sprites — foreground tiles
+    must be in front of sprites, and particles/fireflies draw on top. Absent in the parity path (effects=None).
     """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
@@ -125,13 +125,22 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     bg0_planes = [bytearray(0x10000) for _ in range(4)]
     render_frame(replace(rs, object_camera=None, asset_planes=_zero_base(rs.asset_planes)),
                  bg0_planes, palette, rebuild=True)
-    if effects is not None:
-        apply_gameplay_effects(bg0_planes, page, effects)    # point particles / foreground / fireflies
     idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]   # EGA indices over zeroed base
     tile_mask = idx0 != 0
     backdrop_full = backdrop_rgb.copy()
     backdrop_full[VIEWPORT_H:] = pal_rgb[0]                   # HUD rows: base-showing == palette[0] (panel bg)
     background_rgb = np.where(tile_mask[..., None], pal_rgb[idx0], backdrop_full)
+
+    # Effect OVERLAY (foreground tiles + point particles + fireflies) — drawn over an EMPTY buffer. All three
+    # are colour-0-keyed / OR-white, so index!=0 is exact coverage. Composited OVER the sprites by the
+    # compositor (foreground tiles must be in FRONT of sprites). Skipped when no effects are active.
+    overlay_rgb = overlay_mask = None
+    if effects is not None:
+        ov_planes = [bytearray(0x10000) for _ in range(4)]
+        apply_gameplay_effects(ov_planes, page, effects)
+        idx_ov = render_planar_rgb_from_planes(ov_planes, page, _ID_PAL)[:, :, 0]
+        overlay_mask = idx_ov != 0
+        overlay_rgb = pal_rgb[idx_ov]
 
     faithful_rgb = None
     if with_faithful:
@@ -172,7 +181,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
-                              backdrop_rgb=backdrop_rgb, tile_mask=tile_mask)
+                              backdrop_rgb=backdrop_rgb, tile_mask=tile_mask,
+                              overlay_rgb=overlay_rgb, overlay_mask=overlay_mask)
 
 
 def _render_backdrop(rs, page, palette):

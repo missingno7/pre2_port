@@ -12,6 +12,10 @@ tile layer is moved two-source: the bulk from the current frame shifted back tow
 exposed by the scroll filled from the PREVIOUS frame (real revealed content -- not an edge-replicated smear).
 When ``backdrop_rgb`` is absent the compositor falls back to a uniform whole-viewport shift.
 
+The effect OVERLAY (foreground tiles + particles + fireflies) is composited LAST, OVER the sprites and
+camera-scrolled like the tile layer (foreground tiles belong in front of sprites; particles/fireflies on
+top). v1: the overlay scrolls with the camera but its own per-particle motion is not yet velocity-interpolated.
+
 ``alpha`` in [0,1]: 0 = previous source placement, 1 (or ``prev is None``) = current verbatim. Object
 identity across frames is the persistent ``handle`` — stable across BOTH the walk/blink animation (which
 changes sprite_id/base_id every frame) AND active-list compaction on spawn (which shifts slot indices). A
@@ -131,4 +135,17 @@ def compose(cur, prev, alpha: float):
         else:                                         # fixed-screen HUD / boss meter -> no scroll, no interp
             sx, sy = inst.screen_x, inst.screen_y
         _blit(frame, inst.rgba, sx + inst.tex_off_x, sy + inst.tex_off_y)
+
+    # Effect overlay (foreground tiles + particles + fireflies) drawn OVER the sprites, scrolled with the
+    # camera like the tile layer (the effects are world-space). Foreground tiles must be in FRONT of sprites.
+    if cur.overlay_mask is not None:
+        h = VIEWPORT_H
+        if interp and (bg_dx or bg_dy):
+            p_rgb = prev.overlay_rgb[:h] if prev.overlay_mask is not None else cur.overlay_rgb[:h]
+            p_mask = prev.overlay_mask[:h] if prev.overlay_mask is not None else cur.overlay_mask[:h]
+            ov_rgb, ov_mask = _scroll_tile_layer(cur.overlay_rgb[:h], cur.overlay_mask[:h],
+                                                 p_rgb, p_mask, cdx, cdy, alpha)
+        else:
+            ov_rgb, ov_mask = cur.overlay_rgb[:h], cur.overlay_mask[:h]
+        frame[:h][ov_mask] = ov_rgb[ov_mask]
     return frame

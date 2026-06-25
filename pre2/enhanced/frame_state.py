@@ -60,3 +60,8 @@ class EnhancedFrameState:
                             # opaque tile/effect actually drew, found by rendering over a ZEROED base (index!=0)
                             # — colour-independent, unlike `background_rgb != backdrop_rgb` which misses tile
                             # pixels that share the backdrop's colour (they'd be left static -> "see-through").
+    overlay_rgb: "np.ndarray | None" = None    # the effect OVERLAY (foreground tiles + point particles +
+    overlay_mask: "np.ndarray | None" = None   # fireflies), drawn over an empty buffer (all are colour-0-keyed
+                            # / OR-white) so overlay_mask=index!=0 is exact. Composited OVER the sprites (the
+                            # foreground tiles must be in FRONT of sprites; particles/fireflies draw on top),
+                            # camera-scrolled like the tile layer. None when no effects are active this frame.
