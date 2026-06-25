@@ -23,7 +23,8 @@ Video backend (how frames are DISPLAYED; independent of the execution mode):
   * ``--video faithful``           the recovered FaithfulVisual backend (render_frame / render_visual +
                                    scene leaves from explicit state + assets); NEVER reads the VM
                                    framebuffer, fails LOUD on an unrecovered scene.
-  * ``--video enhanced``           reserved future modern renderer — NOT IMPLEMENTED.
+  * ``--video enhanced``           modern presentation layer on top of the faithful backend (projects the
+                                   faithful frame; never the VM framebuffer); currently a passthrough baseline.
 
 PRE2 uses BIOS text, linear VGA, and a 320x200 16-colour planar path; the viewer renders those
 and plays the digital audio (MOD music + PCM SFX) via the emulated Sound Blaster DMA path (PRE2
@@ -398,6 +399,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.recovered.scene_compositor import RecoveredBackground
     from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
     from pre2.bridge.faithful_session import FaithfulSession, BLANK_NO_PRESENT
+    from pre2.enhanced.renderer import EnhancedRenderer
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
@@ -581,12 +583,18 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
 
     last_rgb = [None]  # most recent rendered frame, for F10 screenshots
     faithful_info = [""]  # title-bar note for the live faithful renderer (gameplay only)
-    faithful = getattr(args, "video", "vm") == "faithful"   # video backend: 'vm' | 'faithful'
+    # Video backend: 'vm' | 'faithful' | 'enhanced'. 'enhanced' BUILDS ON the faithful backend (it projects
+    # the faithful frame through the modern pipeline), so it needs the FaithfulSession too.
+    enhanced_mode = getattr(args, "video", "vm") == "enhanced"
+    faithful = getattr(args, "video", "vm") in ("faithful", "enhanced")
     faithful_verify = getattr(args, "video_verify", False)   # --video-verify diagnostic
 
     session = FaithfulSession(rt, args, verify=faithful_verify) if faithful else None
     if session is not None:
         session.install_hooks()
+    # The enhanced renderer is a presentation layer ON TOP of the faithful session: it is handed the composed
+    # faithful frame (never mem/dos) and projects it. Milestone 2 = passthrough (returns it unchanged).
+    enhanced = EnhancedRenderer(session) if enhanced_mode else None
 
     def render_current():
         # Faithful backend: FaithfulSession composes the frame from recovered leaves (never the VM
@@ -602,6 +610,9 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 screen.fill((0, 0, 0))
                 pygame.display.flip()
                 return
+            if enhanced is not None:        # project the faithful frame through the modern pipeline
+                rgb = enhanced.render(rgb, now=perf_counter())
+                faithful_info[0] = f"{faithful_info[0]} | {enhanced.status()}"
         else:
             faithful_info[0] = ""
             mode = rt.dos.video_mode & 0x7F
@@ -1000,7 +1011,8 @@ def main(argv: list[str] | None = None) -> int:
                         "'faithful': display the recovered FaithfulVisual backend (render_frame / render_visual "
                         "+ scene leaves, from explicit state + assets); consumes grounded recovered source, "
                         "NEVER reads the VM framebuffer, fails LOUD on an unrecovered scene. "
-                        "'enhanced': future modern renderer (not implemented). "
+                        "'enhanced': modern presentation layer ON TOP of the faithful backend (projects the "
+                        "faithful frame; never reads the VM framebuffer); currently a passthrough baseline. "
                         "Execution mode is the other axis: hybrid (default) / --no-replacements / --verify-hooks.")
     p.add_argument("--video-verify", action="store_true", help="(with `--video faithful`) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
     p.add_argument("--speed", type=int, default=150_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Default 150k ~= PRE2's native rate: its per-frame game work is only ~1.3-1.9k instr (measure_frame_work.py), so ~132k (p90 work x 70Hz) fills one retrace frame with minimal spin; higher values just inflate idle retrace spin (a 450k frame is ~99% spin) and overrun the host interpreter (~270k instr/s) so the demo loop falls behind real time and drops to the 4Hz render fallback. Live --view ignores this and self-paces on the wall clock")
@@ -1019,12 +1031,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trace-hooks", action="store_true", help="run the LIVE hybrid runtime (hooks replacing ASM, NOT the oracle) and show which recovered hooks fire — a live coverage view in the title bar + a periodic/final per-hook tally. Hooks absent = that screen is still pure ASM")
     p.add_argument("--fast-retrace-waits", action=argparse.BooleanOptionalAction, default=True, help="recovered timing primitive (deterministic paths: headless replay, in-view demo replay, verify/oracle): collapse the classified VGA retrace busy-waits (9900/990D/44CD) in closed form, byte-equivalent to the interpreted stepper (~6-15x faster on wait-heavy scenes). On by default with the hybrid runtime; --no-fast-retrace-waits forces the pure interpreted ASM loops (and it is off under --no-replacements). Does NOT affect live --view wall-clock pacing")
     args = p.parse_args(argv)
-    # VIDEO BACKEND (separate axis from execution mode; only selects how frames are DISPLAYED).
-    # 'enhanced' is a reserved future backend and is not implemented.
-    if args.video == "enhanced":
-        p.error("`--video enhanced` is not implemented yet - it is a reserved future modern renderer, "
-                "blocked until `--video faithful` renders the whole game without FaithfulVisual gaps. "
-                "Use `--video vm` or `--video faithful`.")
 
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
