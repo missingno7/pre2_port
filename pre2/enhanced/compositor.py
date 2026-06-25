@@ -181,4 +181,10 @@ def compose(cur, prev, alpha: float):
                     py -= round(inv * dwy)
             if 0 <= px < fw and 0 <= py < VIEWPORT_H:
                 frame[py, px] = fr
+
+    # The HUD strip is ON TOP of everything. The faithful renderer bottom-clips world sprites at the viewport
+    # (row 176 = SCREEN_H) and draws the status bar over it; our edge-clipping _blit clips sprites only to the
+    # full frame, so a tall sprite at the bottom can spill into the HUD rows. Re-stamp the HUD (already present
+    # in background_rgb[VIEWPORT_H:], the faithful status bar) over any spill -> HUD always on top.
+    frame[VIEWPORT_H:] = cur.background_rgb[VIEWPORT_H:]
     return frame
