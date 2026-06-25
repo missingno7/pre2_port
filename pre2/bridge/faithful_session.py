@@ -298,9 +298,9 @@ class FaithfulSession:
             fx = capture_gameplay_effects(c.mem, particle_frame=self.particle_frame,
                                           foreground_frame=self.foreground_frame)
             # THREADED enhanced: hand the heavy extract to the worker thread (snapshot the VM memory at this
-            # consistent boundary so it stays valid while the VM runs on). The iris transition still needs the
-            # main-thread faithful render (passthrough), so it falls through to the synchronous path.
-            if self.async_extract and not self.verify and c.mem.data[(_DSEG << 4) + 0x2DD0] == 0:
+            # consistent boundary so it stays valid while the VM runs on). The iris is now projected natively by
+            # the compositor (apply_iris over the extracted frame), so iris frames go through the worker too.
+            if self.async_extract and not self.verify:
                 self._push_snapshot((bytes(c.mem.data), list(self.dos.vga_palette or []), fx))
                 self.last_committed = None
                 self.last_hud = None

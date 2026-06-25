@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pre2.enhanced.transitions import apply_vfade
+from pre2.enhanced.transitions import apply_iris, apply_vfade
 
 
 def test_apply_vfade_blacks_converging_bands():
@@ -33,3 +33,27 @@ def test_apply_vfade_clamps_out_of_range():
     f = np.full((200, 320, 3), 50, np.uint8)
     apply_vfade(f, -5, 999)            # clamps to [0,176]; bot>=176 -> no bottom band, top<=0 -> no top band
     assert (f == 50).all()
+
+
+def test_apply_iris_keeps_inside_blacks_outside():
+    f = np.full((200, 320, 3), 200, np.uint8)
+    apply_iris(f, 50, 160, 100)        # circle radius 50 about screen (col 160, row 100)
+    assert tuple(f[100, 160]) == (200, 200, 200), "centre must stay fully visible"
+    assert tuple(f[100, 120]) == (200, 200, 200), "well inside (40px) stays visible"
+    assert tuple(f[100, 230]) == (0, 0, 0), "well outside (70px) must be black"
+    assert tuple(f[10, 10]) == (0, 0, 0), "far corner must be black"
+
+
+def test_apply_iris_radius_zero_is_fully_black():
+    f = np.full((200, 320, 3), 200, np.uint8)
+    apply_iris(f, 0, 160, 100)
+    assert (f == 0).all()
+
+
+def test_apply_iris_radius_follows_state():
+    # a larger radius keeps a point visible that a smaller radius blacks -> the mask tracks the radius phase.
+    p = (100, 210)   # 50px right of centre col 160, row 100
+    small = np.full((200, 320, 3), 200, np.uint8); apply_iris(small, 30, 160, 100)
+    big = np.full((200, 320, 3), 200, np.uint8); apply_iris(big, 80, 160, 100)
+    assert tuple(small[p]) == (0, 0, 0), "outside the small radius -> black"
+    assert tuple(big[p]) == (200, 200, 200), "inside the larger radius -> visible"

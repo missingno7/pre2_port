@@ -19,7 +19,7 @@ passthrough. No truecolor fade / iris / curtain / smooth-camera yet.
 from __future__ import annotations
 
 from pre2.enhanced.compositor import compose
-from pre2.enhanced.transitions import apply_vfade
+from pre2.enhanced.transitions import apply_iris, apply_vfade
 
 # Gameplay source frames commit ~25 fps (~40 ms). If the latest source snapshot is older than this, or the
 # prev->cur interval is this large, we are not in steady gameplay (a scene, a load, a pause) -> passthrough
@@ -53,15 +53,19 @@ class EnhancedRenderer:
             self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
                           "reason": "vfade-native (projected)", "unsupported": len(cur.unsupported)}
             return frame
+        # NATIVE CIRCULAR IRIS: the end-level iris-out closes a circle on the frozen gameplay frame. The phase
+        # (radius/centre) is the recovered IrisState; centre fields are swapped vs screen axes (see apply_iris).
+        ir = getattr(cur, "iris", None) if cur is not None else None
+        if ir is not None:
+            frame = apply_iris(compose(cur, None, 1.0), ir.radius, ir.center_y, ir.center_x)
+            self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
+                          "reason": "iris-native (projected)", "unsupported": len(cur.unsupported)}
+            return frame
         reason = None
         if not self.interpolate:
             reason = "interpolation disabled"
         elif cur is None:
             reason = "no source snapshot (non-gameplay / not yet captured)"
-        elif getattr(cur, "iris", None) is not None:
-            # The circular-iris level-end transition isn't projected by the compositor yet; the session keeps
-            # rendering it faithfully, so pass that through (otherwise compose would show the un-irised frame).
-            reason = "iris transition (faithful passthrough)"
         elif (now - cur_time) > _MAX_SOURCE_GAP:
             reason = "source snapshot stale (non-gameplay / paused)"
         if reason is not None:
