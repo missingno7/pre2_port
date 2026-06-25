@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from pre2.enhanced.compositor import _blit
-from pre2.enhanced.transitions import apply_iris
+from pre2.enhanced.transitions import apply_curtain, apply_iris, apply_vfade
 
 # Close durations in PRESENT seconds, grounded by the recovered effect's natural length (the iris closes
 # 0xE6->0 over ~48 source frames). The enhanced renders at the display rate from present-time progress, but is
@@ -30,6 +30,13 @@ from pre2.enhanced.transitions import apply_iris
 _IRIS_CLOSE_S = 1.2
 _IRIS_R0 = 0xE6            # iris start radius (the recovered [0x2DD0] seed)
 _COVERED_RELEASE_S = 0.6   # max covered-black hold after the recovered effect ends, before releasing the scene
+# Room/cave transition (close = vertical fade-out, then a center-out curtain reveal of the new room). Present
+# durations are the smooth driver; both phases are ANCHORED to the recovered progress (never less closed /
+# less revealed than the game) so they always finish in step with the game, never cut off or lagging.
+_VFADE_CLOSE_S = 0.5
+_CURTAIN_OPEN_S = 0.6
+_VFADE_MID = 88           # the two fade bands meet here (fully closed)
+_CURTAIN_FULL = 10        # completed_pairs at a full reveal
 
 
 class EnhancedTransition:
@@ -41,9 +48,14 @@ class EnhancedTransition:
         self.old_frame = old_frame       # frozen RGB of the scene being closed
         self.center = center             # (col, row) for the iris
         self.sprites = list(sprites)     # world sprites kept visible through the effect (the player)
-        self.phase = "close"             # close -> covered -> (release)
+        self.phase = "close"             # close -> covered -> open -> (release)
         self._covered_at = None          # wall time the effect finished closing / the recovered state ended
         self._anchor_radius = _IRIS_R0   # the game's CURRENT recovered radius (a floor on how closed we are)
+        # room transition (close = vfade, open = curtain reveal of the new room)
+        self.new_frame = None            # the new room, captured when the curtain (open) starts
+        self._vf_anchor = (0, _VFADE_MID * 2)   # recovered vfade (top, bot) -- a floor on how closed we are
+        self._curtain_anchor = 0.0       # recovered curtain completed_pairs -- a floor on how revealed we are
+        self._open_start = None          # wall time the curtain (open) phase began
 
     # -- the recovered state drives only trigger/parameters/end, never the per-frame progress --
     def note_active(self, now, cur):
@@ -54,24 +66,67 @@ class EnhancedTransition:
             if cur.sprites:
                 self.sprites = [s for s in cur.sprites if s.interpolate]
 
+    def note_vfade(self, top, bot):
+        """Room CLOSE phase: the recovered vertical-fade bands (a floor on how closed we must be)."""
+        self._vf_anchor = (top, bot)
+
+    def note_curtain(self, now, completed, new_frame):
+        """Room OPEN phase: the recovered curtain reveal started -> capture the new room + progress anchor."""
+        if self.phase in ("close", "covered"):
+            self.phase = "open"
+            self._open_start = now
+            if self.new_frame is None and new_frame is not None:
+                self.new_frame = new_frame
+        self._curtain_anchor = max(self._curtain_anchor, float(completed))
+
     def note_ended(self, now):
-        """The recovered effect ended (scene is changing) -> enter the covered-black hold if not already."""
+        """The recovered effect ended (scene is changing) -> enter the covered-black hold if not already.
+        For a room transition mid-CLOSE this is the covered/black gap before the curtain opens."""
         if self._covered_at is None:
             self._covered_at = now
-        self.phase = "covered"
+        if self.phase == "close":
+            self.phase = "covered"
 
-    def released(self, now, scene_ready):
-        """True when the controller should hand off to the new scene (release the transition)."""
+    def released(self, now, scene_ready, gameplay_fresh=False):
+        """True when the controller should hand off (release the transition)."""
+        if self.kind == "room":
+            if self.phase == "open":
+                # the new room is revealed -> hand back to the live game when it resumes, or the reveal is done
+                return gameplay_fresh or ((now - self._open_start) >= _CURTAIN_OPEN_S
+                                          and self._curtain_anchor >= _CURTAIN_FULL)
+            if self.phase == "covered":
+                # waiting for the curtain (cave) -- do NOT release on fresh gameplay (that is the blink); release
+                # only if a real scene arrives (death -> game-over) or the covered-black hold expires.
+                return scene_ready or (now - self._covered_at) >= _COVERED_RELEASE_S
+            return False
+        # iris
         if self.phase != "covered":
             return False
-        # release as soon as the new scene is actually ready, else after a bounded covered-black hold
         return scene_ready or (now - self._covered_at) >= _COVERED_RELEASE_S
 
     def render(self, now):
         """Render this transition's frame at the wall time ``now`` (present_hz)."""
         if self.kind == "iris":
             return self._render_iris(now)
+        if self.kind == "room":
+            return self._render_room(now)
         return None
+
+    def _render_room(self, now):
+        if self.phase == "close":          # vertical fade-out closing the old room (present-time + anchor)
+            p = min(1.0, max(0.0, (now - self.start_time) / _VFADE_CLOSE_S))
+            top = max(int(_VFADE_MID * p), int(self._vf_anchor[0]))
+            bot = min(int(2 * _VFADE_MID - _VFADE_MID * p), int(self._vf_anchor[1]))
+            frame = self.old_frame.copy()
+            apply_vfade(frame, top, bot)
+            return frame
+        if self.phase == "covered":        # black while the new room loads (never show it early -> no blink)
+            return np.zeros_like(self.old_frame)
+        # open: center-out curtain reveal of the new room (present-time + anchor to the recovered progress)
+        p = min(1.0, max(0.0, (now - self._open_start) / _CURTAIN_OPEN_S))
+        pairs = max(_CURTAIN_FULL * p, self._curtain_anchor)
+        base = self.new_frame if self.new_frame is not None else self.old_frame
+        return apply_curtain(np.zeros_like(base), base, pairs)
 
     def _render_iris(self, now):
         if self.phase == "close":

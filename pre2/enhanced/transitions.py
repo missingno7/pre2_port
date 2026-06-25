@@ -28,6 +28,30 @@ def apply_vfade(frame, top_cleared: int, bot_start: int):
     return frame
 
 
+_CURTAIN_CENTER_BYTE = 0x14   # panel_copy reveals strips symmetric about byte-col 0x14 (px 160)
+_CURTAIN_PAIRS = 10           # full reveal = 10 centre-out strip-pairs
+
+
+def apply_curtain(frame, new_frame, completed_pairs: float):
+    """Project the recovered center-out CURTAIN reveal (1030:3054 panel_copy): reveal ``new_frame`` over a
+    black ``frame`` in 16px-wide vertical strips growing symmetrically from the centre, matching panel_copy's
+    column set (byte-cols ``0x14-2k`` and ``0x14+2k`` for k=0..completed_pairs). ``completed_pairs`` is the
+    recovered progress 0..10 (0 = black, 10 = fully revealed); fractional values feather the leading strip for
+    a smooth present-time reveal. Only the gameplay viewport rows are revealed (the HUD stays black), as in
+    compose_curtain_planes."""
+    k_full = int(completed_pairs)
+    def reveal(byte_col):
+        x0 = max(0, byte_col * 8)
+        x1 = min(frame.shape[1], byte_col * 8 + 16)
+        if x1 > x0:
+            frame[:VIEWPORT_H, x0:x1] = new_frame[:VIEWPORT_H, x0:x1]
+    for k in range(k_full):
+        reveal(_CURTAIN_CENTER_BYTE - 2 * k)
+        if k:
+            reveal(_CURTAIN_CENTER_BYTE + 2 * k)
+    return frame
+
+
 def apply_iris(frame, radius: int, center_col: int, center_row: int):
     """Project the recovered end-level circular IRIS (1030:31F4) onto ``frame`` IN PLACE: keep everything
     inside the circle of ``radius`` about ``(center_col, center_row)`` visible, black outside. The original

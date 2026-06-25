@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from pre2.enhanced.transition_controller import EnhancedTransition
-from pre2.enhanced.transitions import apply_iris, apply_vfade
+from pre2.enhanced.transitions import apply_curtain, apply_iris, apply_vfade
 
 
 def test_apply_vfade_blacks_converging_bands():
@@ -78,3 +78,33 @@ def test_iris_transition_covered_is_black_then_releases():
     assert not tr.released(101.8, scene_ready=False), "must hold black briefly, not release instantly"
     assert tr.released(101.8, scene_ready=True), "release immediately once the new scene is ready"
     assert tr.released(102.5, scene_ready=False), "release after the bounded covered-black hold"
+
+
+def test_apply_curtain_reveals_center_out():
+    new = np.full((200, 320, 3), 200, np.uint8)
+    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 0)
+    assert (f == 0).all(), "completed_pairs=0 -> fully black"
+    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 1)
+    assert tuple(f[88, 160]) == (200, 200, 200), "centre strip revealed first"
+    assert tuple(f[88, 8]) == (0, 0, 0), "edges still black at one pair"
+    f = apply_curtain(np.zeros((200, 320, 3), np.uint8), new, 10)
+    assert tuple(f[88, 160]) == (200, 200, 200) and tuple(f[180, 160]) == (0, 0, 0), "HUD rows stay black"
+
+
+def test_room_transition_covered_is_black_no_blink():
+    # The blink bug: between close and open the new room is already loaded (fresh), but COVERED must stay black.
+    old = np.full((200, 320, 3), 200, np.uint8)
+    tr = EnhancedTransition("room", 100.0, old_frame=old)
+    tr.note_ended(100.5)                                  # vfade ended, no curtain yet -> covered
+    assert tr.phase == "covered"
+    assert (tr.render(100.6) == 0).all(), "covered must be black (never the fresh new room -> no blink)"
+
+
+def test_room_transition_open_reveals_new_frame():
+    old = np.zeros((200, 320, 3), np.uint8)
+    new = np.full((200, 320, 3), 150, np.uint8)
+    tr = EnhancedTransition("room", 100.0, old_frame=old)
+    tr.note_curtain(100.5, completed=10, new_frame=new)   # curtain -> open
+    assert tr.phase == "open"
+    out = tr.render(100.5 + 1.0)                            # well past the open duration -> fully revealed
+    assert tuple(out[88, 160]) == (150, 150, 150), "open phase reveals the captured new room"

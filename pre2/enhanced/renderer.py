@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from pre2.enhanced.compositor import compose
 from pre2.enhanced.transition_controller import EnhancedTransition
-from pre2.enhanced.transitions import apply_vfade
 
 # Gameplay source frames commit ~25 fps (~40 ms). If the latest source snapshot is older than this, or the
 # prev->cur interval is this large, we are not in steady gameplay (a scene, a load, a pause) -> passthrough
@@ -46,23 +45,17 @@ class EnhancedRenderer:
         s = self.src
         # Read prev/cur atomically: in live --view the worker thread swaps them under this lock.
         prev, cur, prev_time, cur_time = s.read_enh_state()
-        # NATIVE VERTICAL FADE-OUT: project the recovered cleared bands over the frozen gameplay frame (the
-        # fade froze gameplay, so cur is the last frame; the phase top/bot comes straight from the VM state).
-        vf = getattr(s, "vfade", None)
-        if cur is not None and vf is not None and (now - vf[2]) < _VFADE_GRACE:
-            top, bot, _t = vf
-            frame = apply_vfade(compose(cur, None, 1.0), top, bot)
-            self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
-                          "reason": "vfade-native (projected)", "unsupported": len(cur.unsupported)}
-            return frame
-        # NATIVE TRANSITION CONTROLLER (present-time state machine). The recovered state only TRIGGERS the iris
-        # and supplies its centre; the controller computes the close progress from the wall clock and decides
-        # what is visible per phase -- closing over the old scene, then COVERED-black (player kept visible)
-        # while the game loads the next scene, so we never flash the original/new frame between phases.
+        # NATIVE TRANSITION CONTROLLER (present-time state machines). The recovered state only TRIGGERS each
+        # transition + supplies its parameters; the controller computes progress from the wall clock and decides
+        # what is visible PER PHASE -- so the new scene is never flashed between phases (no blink/double-fade).
         fresh = cur is not None and (now - cur_time) < _MAX_SOURCE_GAP
         iris_active = fresh and getattr(cur, "iris", None) is not None
+        vf = getattr(s, "vfade", None)
+        vfade_active = vf is not None and (now - vf[2]) < _VFADE_GRACE
+        cu = getattr(s, "curtain", None)
+        curtain_active = cu is not None and (now - cu[1]) < _VFADE_GRACE   # curtain = (completed_pairs, t)
         tr = self._transition
-        if iris_active:
+        if iris_active:                                    # IRIS (level-end): close -> covered(black+player)
             if tr is None or tr.kind != "iris":
                 tr = EnhancedTransition("iris", now, old_frame=compose(cur, None, 1.0),
                                         center=(cur.iris.center_y, cur.iris.center_x),
@@ -70,13 +63,26 @@ class EnhancedRenderer:
                 self._transition = tr
             else:
                 tr.note_active(now, cur)
+        elif vfade_active or curtain_active or (tr is not None and tr.kind == "room"):
+            # ROOM/CAVE: close (vfade) -> covered black (load new room) -> open (curtain reveal of the new room)
+            if tr is None or tr.kind != "room":
+                tr = EnhancedTransition("room", now, old_frame=compose(cur, None, 1.0) if cur is not None
+                                        else None)
+                self._transition = tr
+            if vfade_active:
+                tr.note_vfade(vf[0], vf[1])
+            if curtain_active:
+                tr.note_curtain(now, cu[0], compose(cur, None, 1.0) if cur is not None else None)
+            if not vfade_active and not curtain_active:
+                tr.note_ended(now)
         elif tr is not None:
-            tr.note_ended(now)            # recovered effect ended -> covered-black hold until the scene is ready
+            tr.note_ended(now)
         if tr is not None:
+            transition_active = iris_active or vfade_active or curtain_active
             scene_ready = bool(getattr(s, "scene_capture", None)) and not fresh
-            if tr.released(now, scene_ready):
+            if not transition_active and tr.released(now, scene_ready, gameplay_fresh=fresh):
                 self._transition = None
-            else:
+            elif tr.old_frame is not None:
                 self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
                               "reason": f"{tr.kind}-native ({tr.phase})", "unsupported": 0}
                 return tr.render(now)

@@ -124,6 +124,8 @@ class FaithfulSession:
         self.async_extract = False
         self.vfade = None              # (top_cleared, bot_start, t): recovered VERTICAL fade-out phase for the
                                        # enhanced compositor to project (apply_vfade); None when not fading.
+        self.curtain = None            # (completed_pairs, t): recovered center-out CURTAIN reveal progress for
+                                       # the enhanced room-transition OPEN phase; None when no curtain running.
         self._enh_lock = threading.Lock()
         self._extract_q = None
         self._extract_thread = None
@@ -308,6 +310,7 @@ class FaithfulSession:
                 self.planar_image_capture = None
                 self.curtain_cache = None
                 self.vfade = None                  # a gameplay commit -> the vertical fade is over
+                self.curtain = None
                 self.particle_frame = None
                 self.foreground_frame = None
                 orig = self._orig[0x6772]
@@ -361,6 +364,7 @@ class FaithfulSession:
             self.boundary_capture = None
         self.curtain_cache = None                  # the per-frame boundary ends any curtain in progress
         self.vfade = None                          # a gameplay commit -> the vertical fade is over
+        self.curtain = None
         self.particle_frame = None                 # consumed for this frame; 4b8e re-stashes next frame
         self.foreground_frame = None               # consumed; 3732 re-stashes next frame it runs
         orig = self._orig[0x6772]
@@ -374,6 +378,13 @@ class FaithfulSession:
             dst = self._rw(c.mem, 0x2DD6)
             step = c.mem.data[(0x1030 << 4) + 0x3050] | (c.mem.data[(0x1030 << 4) + 0x3051] << 8)
             completed = step // 4 + 1                       # strip-pairs done by this 307D
+            if self.enh_clock is not None:                  # recovered curtain progress -> enhanced OPEN phase
+                self.curtain = (completed, self.enh_clock())
+            if self.enh_clock is not None:
+                # ENHANCED owns the room-transition reveal -> skip the faithful curtain render in live enhanced
+                # (kept as the bridge only in faithful mode / before the first enh frame).
+                orig = self._orig[0x307D]
+                return orig(c) if orig is not None else interpret_current_instruction_without_hook(c)
             if self.curtain_cache is None:
                 nr, _, kind = render_visual_planes(c.mem, c.pre2_dos, game_root=self.args.game_root,
                                                    display_page=src)
