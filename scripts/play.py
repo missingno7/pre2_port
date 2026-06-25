@@ -1095,10 +1095,13 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             planes = [bytearray(0x2000) for _ in range(4)]
             for p in range(4):
                 planes[p][0:0x1F40] = planar_image_capture[0][p]
+            active_w = (rt.program.memory.ega_h_display_end + 1) * 8
             faithful_info[0] = "faithful[TITLE]"
-            held_planes[0] = (planes, ds, 0, (rt.program.memory.ega_h_display_end + 1) * 8, 0xFFFF,
-                              faithful_tick[0])
-            return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette)
+            # The image is a single 0x2000 page (copied to A000:0); deplanarize it as a 0x2000 circular page
+            # (wrap=0x1FFF) so a transition frame where display_start has already moved to another page can't
+            # read past the buffer (and just wraps back to the held image) instead of crashing.
+            held_planes[0] = (planes, ds, 0, active_w, 0x1FFF, faithful_tick[0])
+            return render_planar_rgb_from_planes(planes, ds, rt.dos.vga_palette, 0, active_w, wrap=0x1FFF)
         # Held pan-scene grace: between scenes the engine DAC-fades the outgoing page out / the incoming page
         # in (the 1030:9286 / 92A3 palette-fade loop), during which the scene's producer pauses and the gates
         # above drop. The fade also drops ega_pan_active (no pel-pan writes once the scroll/menu loop exits),
