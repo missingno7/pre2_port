@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from pre2.enhanced.transition_controller import EnhancedTransition
 from pre2.enhanced.transitions import apply_iris, apply_vfade
 
 
@@ -57,3 +58,23 @@ def test_apply_iris_radius_follows_state():
     big = np.full((200, 320, 3), 200, np.uint8); apply_iris(big, 80, 160, 100)
     assert tuple(small[p]) == (0, 0, 0), "outside the small radius -> black"
     assert tuple(big[p]) == (200, 200, 200), "inside the larger radius -> visible"
+
+
+def test_iris_transition_is_present_time_driven():
+    # The controller closes from WALL-CLOCK progress (not source samples): later wall time -> smaller circle.
+    old = np.full((200, 320, 3), 200, np.uint8)
+    tr = EnhancedTransition("iris", 100.0, old_frame=old, center=(160, 100), sprites=[])
+    v0 = int(np.any(tr.render(100.0) != 0, axis=2).sum())
+    v_mid = int(np.any(tr.render(100.8) != 0, axis=2).sum())
+    v_late = int(np.any(tr.render(101.5) != 0, axis=2).sum())
+    assert v0 > v_mid > v_late, "iris must close as present time advances"
+
+
+def test_iris_transition_covered_is_black_then_releases():
+    old = np.full((200, 320, 3), 200, np.uint8)
+    tr = EnhancedTransition("iris", 100.0, old_frame=old, center=(160, 100), sprites=[])
+    tr.note_ended(101.7)                                  # recovered effect ended -> covered
+    assert (tr.render(101.8) == 0).all(), "covered phase must be black (not the old/new frame -> no flash)"
+    assert not tr.released(101.8, scene_ready=False), "must hold black briefly, not release instantly"
+    assert tr.released(101.8, scene_ready=True), "release immediately once the new scene is ready"
+    assert tr.released(102.5, scene_ready=False), "release after the bounded covered-black hold"

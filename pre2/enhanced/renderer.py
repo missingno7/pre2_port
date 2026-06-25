@@ -18,8 +18,9 @@ passthrough. No truecolor fade / iris / curtain / smooth-camera yet.
 """
 from __future__ import annotations
 
-from pre2.enhanced.compositor import _blit, compose
-from pre2.enhanced.transitions import apply_iris, apply_vfade
+from pre2.enhanced.compositor import compose
+from pre2.enhanced.transition_controller import EnhancedTransition
+from pre2.enhanced.transitions import apply_vfade
 
 # Gameplay source frames commit ~25 fps (~40 ms). If the latest source snapshot is older than this, or the
 # prev->cur interval is this large, we are not in steady gameplay (a scene, a load, a pause) -> passthrough
@@ -37,6 +38,7 @@ class EnhancedRenderer:
         self.options = dict(options or {})
         self._diag = {"interpolated_sprites": 0, "passthrough": True,
                       "alpha": 0.0, "reason": "init"}
+        self._transition = None         # active EnhancedTransition (present-time state machine), or None
 
     def present(self, now, faithful_frame):
         """Return the display frame at wall time ``now``: an interpolated gameplay composite when the
@@ -53,32 +55,31 @@ class EnhancedRenderer:
             self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
                           "reason": "vfade-native (projected)", "unsupported": len(cur.unsupported)}
             return frame
-        # NATIVE CIRCULAR IRIS: the end-level iris-out closes a circle on the frozen gameplay frame. The phase
-        # (radius/centre) is the recovered IrisState; centre fields are swapped vs screen axes (see apply_iris).
-        # Gated on freshness so that when the iris ENDS (scene goes stale, 6772 stops) we passthrough to the
-        # tally/next scene instead of holding the last black iris frame forever.
-        ir = getattr(cur, "iris", None) if cur is not None else None
-        if ir is not None and (now - cur_time) < _MAX_SOURCE_GAP:
-            # Smooth at the DISPLAY rate by interpolating the radius/centre between source frames (the recovered
-            # phase still drives it -- we only fill BETWEEN captured steps, never invent the trajectory).
-            radius, ccol, crow = float(ir.radius), float(ir.center_y), float(ir.center_x)
-            pir = getattr(prev, "iris", None) if prev is not None else None
-            period = cur_time - prev_time
-            if pir is not None and period > 0.0:
-                a = (now - cur_time) / period
-                a = 0.0 if a < 0.0 else 1.0 if a > 1.0 else a
-                radius = pir.radius + (ir.radius - pir.radius) * a
-                ccol = pir.center_y + (ir.center_y - pir.center_y) * a
-                crow = pir.center_x + (ir.center_x - pir.center_x) * a
-            frame = apply_iris(compose(cur, None, 1.0), radius, ccol, crow)
-            # The iris keeps the PLAYER (and any world sprite) visible -- re-blit world sprites over the mask
-            # (matches the VM; at level-end iris the only sprite is the player). HUD/fixed sprites are masked.
-            for inst in cur.sprites:
-                if inst.interpolate:
-                    _blit(frame, inst.rgba, inst.screen_x + inst.tex_off_x, inst.screen_y + inst.tex_off_y)
-            self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
-                          "reason": "iris-native (projected)", "unsupported": len(cur.unsupported)}
-            return frame
+        # NATIVE TRANSITION CONTROLLER (present-time state machine). The recovered state only TRIGGERS the iris
+        # and supplies its centre; the controller computes the close progress from the wall clock and decides
+        # what is visible per phase -- closing over the old scene, then COVERED-black (player kept visible)
+        # while the game loads the next scene, so we never flash the original/new frame between phases.
+        fresh = cur is not None and (now - cur_time) < _MAX_SOURCE_GAP
+        iris_active = fresh and getattr(cur, "iris", None) is not None
+        tr = self._transition
+        if iris_active:
+            if tr is None or tr.kind != "iris":
+                tr = EnhancedTransition("iris", now, old_frame=compose(cur, None, 1.0),
+                                        center=(cur.iris.center_y, cur.iris.center_x),
+                                        sprites=[sp for sp in cur.sprites if sp.interpolate])
+                self._transition = tr
+            else:
+                tr.note_active(now, cur)
+        elif tr is not None:
+            tr.note_ended(now)            # recovered effect ended -> covered-black hold until the scene is ready
+        if tr is not None:
+            scene_ready = bool(getattr(s, "scene_capture", None)) and not fresh
+            if tr.released(now, scene_ready):
+                self._transition = None
+            else:
+                self._diag = {"interpolated_sprites": 0, "passthrough": False, "alpha": 1.0,
+                              "reason": f"{tr.kind}-native ({tr.phase})", "unsupported": 0}
+                return tr.render(now)
         reason = None
         if not self.interpolate:
             reason = "interpolation disabled"
