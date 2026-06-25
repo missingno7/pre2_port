@@ -136,7 +136,22 @@ def compose(cur, prev, alpha: float):
             sx, sy = inst.screen_x, inst.screen_y
         _blit(frame, inst.rgba, sx + inst.tex_off_x, sy + inst.tex_off_y)
 
-    # Effect overlay (foreground tiles + particles + fireflies) drawn OVER the sprites, scrolled with the
+    # One-shot point particles (spider threads/sparkles) OVER the sprites, UNDER the foreground/firefly overlay
+    # (engine order). Each is rewound along its own per-frame velocity for smooth sub-source-frame motion, and
+    # glued to the scrolled world by the camera shift. They have no cross-frame identity (spawned+killed each
+    # frame), so the interpolation uses the current particle's own velocity (exact at alpha=1).
+    if cur.particles:
+        pr = cur.particle_rgb
+        fh, fw = frame.shape[:2]
+        for (sx, sy, vx, vy) in cur.particles:
+            if interp:
+                px, py = sx + bg_dx - round(inv * vx), sy + bg_dy - round(inv * vy)
+            else:
+                px, py = sx, sy
+            if 0 <= px < fw and 0 <= py < VIEWPORT_H:
+                frame[py, px] = pr
+
+    # Effect overlay (foreground tiles + fireflies) drawn OVER the sprites + particles, scrolled with the
     # camera like the tile layer (the effects are world-space). Foreground tiles must be in FRONT of sprites.
     if cur.overlay_mask is not None:
         h = VIEWPORT_H

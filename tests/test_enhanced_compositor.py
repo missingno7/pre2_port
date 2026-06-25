@@ -29,10 +29,11 @@ def _spr(slot, x, y, rgba, *, world=None, handle=None, sprite_id=0x100, interpol
                           tex_off_x=0, tex_off_y=0, rgba=rgba, interpolate=interpolate)
 
 
-def _frame(sprites, bg=None, camera=(0, 0), backdrop=None, tile_mask=None):
+def _frame(sprites, bg=None, camera=(0, 0), backdrop=None, tile_mask=None, particles=None, particle_rgb=None):
     bg = np.zeros((16, 32, 3), np.uint8) if bg is None else bg
     return EnhancedFrameState(background_rgb=bg, camera=camera, sprites=sprites,
-                              faithful_rgb=bg, unsupported=[], backdrop_rgb=backdrop, tile_mask=tile_mask)
+                              faithful_rgb=bg, unsupported=[], backdrop_rgb=backdrop, tile_mask=tile_mask,
+                              particles=particles or [], particle_rgb=particle_rgb)
 
 
 def test_alpha1_places_sprite_at_current_position():
@@ -123,6 +124,18 @@ def test_coverage_mask_drives_scroll_not_colour_difference():
     cur = _frame([], bg=cur_bg, camera=(10, 0), backdrop=backdrop, tile_mask=cur_m)
     out = compose(cur, prev, 0.5)                       # cx=5 -> tile cols 4-5 -> 9-10
     assert tuple(out[8, 10]) == (200, 0, 0), "tile block (incl. backdrop-coloured pixel) must scroll via mask"
+
+
+def test_particle_velocity_interpolation():
+    # A point particle at screen (10,8) with per-frame velocity (8,0): at alpha=1 it sits at its drawn pos;
+    # at alpha=0.5 it is rewound half its velocity (col 6); no cross-frame identity needed.
+    cur = _frame([], particles=[(10, 8, 8, 0)], particle_rgb=(255, 255, 255))
+    assert tuple(compose(cur, None, 1.0)[8, 10]) == (255, 255, 255)         # alpha=1 -> drawn pos
+    prev = _frame([], particles=[], camera=(0, 0))
+    out = compose(_frame([], particles=[(10, 8, 8, 0)], particle_rgb=(255, 255, 255), camera=(0, 0)),
+                  prev, 0.5)
+    assert tuple(out[8, 6]) == (255, 255, 255), "particle not rewound along its velocity"
+    assert tuple(out[8, 10]) == (0, 0, 0), "particle left a stale copy at the drawn position"
 
 
 def test_fixed_hud_sprite_is_not_interpolated():

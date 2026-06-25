@@ -60,8 +60,13 @@ class EnhancedFrameState:
                             # opaque tile/effect actually drew, found by rendering over a ZEROED base (index!=0)
                             # — colour-independent, unlike `background_rgb != backdrop_rgb` which misses tile
                             # pixels that share the backdrop's colour (they'd be left static -> "see-through").
-    overlay_rgb: "np.ndarray | None" = None    # the effect OVERLAY (foreground tiles + point particles +
-    overlay_mask: "np.ndarray | None" = None   # fireflies), drawn over an empty buffer (all are colour-0-keyed
-                            # / OR-white) so overlay_mask=index!=0 is exact. Composited OVER the sprites (the
-                            # foreground tiles must be in FRONT of sprites; particles/fireflies draw on top),
-                            # camera-scrolled like the tile layer. None when no effects are active this frame.
+    overlay_rgb: "np.ndarray | None" = None    # the effect OVERLAY (foreground tiles + fireflies), drawn over
+    overlay_mask: "np.ndarray | None" = None   # an empty buffer (both colour-0-keyed / OR-white) so
+                            # overlay_mask=index!=0 is exact. Composited OVER the sprites (foreground tiles must
+                            # be in FRONT of sprites), camera-scrolled like the tile layer. None when inactive.
+    particles: list = field(default_factory=list)   # one-shot point particles (spider threads/sparkles) as
+                            # (screen_x, screen_y, vel_x, vel_y): drawn as points UNDER the overlay (engine order
+                            # is particles -> foreground -> fireflies), velocity-interpolated between source
+                            # frames (they have no cross-frame identity, so each is rewound along its own
+                            # per-frame velocity). ``particle_rgb`` is their colour (15/white).
+    particle_rgb: "tuple | None" = None

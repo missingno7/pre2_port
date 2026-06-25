@@ -22,6 +22,7 @@ from pre2.bridge.render_state import read_renderer_state
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
+from pre2.recovered.particles import advance_particle
 from pre2.recovered.render_frame import ASSET_LO, render_frame
 from sdl_view import HEIGHT, WIDTH, _PLANAR_ROW_BYTES, render_planar_rgb_from_planes
 
@@ -39,6 +40,29 @@ _OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-ins
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
 # identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
 _ID_PAL = [(i, 0, 0) for i in range(256)]
+
+
+def _extract_particles(pf):
+    """Lift the one-shot point particles (4B8E) to interpolatable points: ``(screen_x, screen_y, vel_x,
+    vel_y)`` for each on-screen particle, matching draw_particles' advance + cull + screen mapping exactly
+    (so at alpha=1 the compositor plots the same pixel). vel is the particle's per-frame world delta (=
+    screen delta), used to rewind it along its own path for sub-source-frame motion."""
+    cam_x = (pf.cam_col << 4) & 0xFFFF
+    cam_y = (pf.cam_row << 4) & 0xFFFF
+    yb = (pf.y_bias & 0xFF) - 256 if pf.y_bias & 0x80 else pf.y_bias & 0xFF
+    pts = []
+    for (x, y, angle, speed) in pf.particles:
+        nx, ny = advance_particle(x, y, angle, speed, pf.cos, pf.sin)
+        sy = (ny - yb - cam_y) & 0xFFFF
+        if sy >= 0xB0:                                  # off top/bottom (cull, as _plot_particle)
+            continue
+        sx = (nx - cam_x) & 0xFFFF
+        if sx >= 0x140:                                 # off left/right
+            continue
+        vx = ((nx - x + 0x8000) & 0xFFFF) - 0x8000      # signed per-frame delta
+        vy = ((ny - y + 0x8000) & 0xFFFF) - 0x8000
+        pts.append((sx, sy, vx, vy))
+    return pts
 
 
 def _zero_base(asset_planes):
@@ -131,16 +155,21 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     backdrop_full[VIEWPORT_H:] = pal_rgb[0]                   # HUD rows: base-showing == palette[0] (panel bg)
     background_rgb = np.where(tile_mask[..., None], pal_rgb[idx0], backdrop_full)
 
-    # Effect OVERLAY (foreground tiles + point particles + fireflies) — drawn over an EMPTY buffer. All three
-    # are colour-0-keyed / OR-white, so index!=0 is exact coverage. Composited OVER the sprites by the
-    # compositor (foreground tiles must be in FRONT of sprites). Skipped when no effects are active.
-    overlay_rgb = overlay_mask = None
+    # Effect OVERLAY (foreground tiles + fireflies) — drawn over an EMPTY buffer (both colour-0-keyed /
+    # OR-white, so index!=0 is exact coverage). Composited OVER the sprites. One-shot point particles are
+    # pulled OUT to a point list (below) so they can be velocity-interpolated; engine order is particles ->
+    # foreground -> fireflies, so the compositor draws the particle points UNDER this overlay.
+    overlay_rgb = overlay_mask = particle_rgb = None
+    particles = []
     if effects is not None:
         ov_planes = [bytearray(0x10000) for _ in range(4)]
-        apply_gameplay_effects(ov_planes, page, effects)
+        apply_gameplay_effects(ov_planes, page, replace(effects, particles=None))   # foreground + fireflies
         idx_ov = render_planar_rgb_from_planes(ov_planes, page, _ID_PAL)[:, :, 0]
         overlay_mask = idx_ov != 0
         overlay_rgb = pal_rgb[idx_ov]
+        if effects.particles is not None:
+            particles = _extract_particles(effects.particles)
+            particle_rgb = tuple(int(c) for c in pal_rgb[15])    # 4B8E plots colour 15 (white)
 
     faithful_rgb = None
     if with_faithful:
@@ -182,7 +211,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
                               backdrop_rgb=backdrop_rgb, tile_mask=tile_mask,
-                              overlay_rgb=overlay_rgb, overlay_mask=overlay_mask)
+                              overlay_rgb=overlay_rgb, overlay_mask=overlay_mask,
+                              particles=particles, particle_rgb=particle_rgb)
 
 
 def _render_backdrop(rs, page, palette):
