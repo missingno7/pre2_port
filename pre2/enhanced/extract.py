@@ -266,7 +266,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                               backdrop_rgb=backdrop_rgb, tile_mask=tile_mask,
                               overlay_rgb=overlay_rgb, overlay_mask=overlay_mask,
                               particles=particles, particle_rgb=particle_rgb,
-                              fireflies=fireflies, firefly_rgb=firefly_rgb)
+                              fireflies=fireflies, firefly_rgb=firefly_rgb,
+                              iris=rs.iris, page=page)
 
 
 def _render_backdrop(rs, page, palette):

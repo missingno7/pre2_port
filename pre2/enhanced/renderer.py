@@ -44,6 +44,10 @@ class EnhancedRenderer:
             reason = "interpolation disabled"
         elif cur is None:
             reason = "no source snapshot (non-gameplay / not yet captured)"
+        elif getattr(cur, "iris", None) is not None:
+            # The circular-iris level-end transition isn't projected by the compositor yet; the session keeps
+            # rendering it faithfully, so pass that through (otherwise compose would show the un-irised frame).
+            reason = "iris transition (faithful passthrough)"
         elif (now - s.enh_cur_time) > _MAX_SOURCE_GAP:
             reason = "source snapshot stale (non-gameplay / paused)"
         if reason is not None:

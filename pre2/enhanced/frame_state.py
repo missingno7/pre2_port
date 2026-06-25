@@ -75,3 +75,8 @@ class EnhancedFrameState:
                             # interpolated by matching the persistent ``slot`` across frames (like sprites by
                             # handle) and lerping world position. ``firefly_rgb`` is their colour.
     firefly_rgb: "tuple | None" = None
+    iris: object = None      # the circular-iris transition state (render_frame.IrisState: radius, center) or
+                            # None. When set, this is a level-end transition the enhanced compositor doesn't yet
+                            # project, so the renderer passes the faithful frame through (and the session keeps
+                            # rendering it). Also the "steady gameplay" discriminator for skipping the faithful render.
+    page: int = 0            # the gameplay dest page (cam.dest_page) -- bookkeeping for boundary_capture

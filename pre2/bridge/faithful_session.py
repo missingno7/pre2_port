@@ -40,6 +40,7 @@ from pre2.recovered.carte import build_carte_page
 from pre2.recovered.menu_scene import MenuScenePage
 from pre2.recovered.scene_compositor import RecoveredBackground
 from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
+from pre2.enhanced.compositor import compose
 from pre2.enhanced.extract import extract_enhanced_frame
 
 _DSEG = 0x1A0F
@@ -99,6 +100,9 @@ class FaithfulSession:
         self.enh_cur = None
         self.enh_prev_time = 0.0
         self.enh_cur_time = 0.0
+        self._lazy_pc = None           # (ic, (planes,page)|None): faithful planes rendered ON DEMAND for a
+                                       # transition base when the per-frame faithful render was skipped (enhanced
+                                       # steady gameplay). Cached per instruction_count.
 
     # -------------------------------------------------------------------- helpers
     def _rw(self, mem, off):
@@ -113,6 +117,40 @@ class FaithfulSession:
         o = (page + _HUD_OFF) & 0xFFFF
         for p in range(4):
             planes[p][o:o + _HUD_LEN] = hud[p]
+
+    def _lazy_faithful_planes(self):
+        """Render the faithful planes from the CURRENT VM state -- the transition base when the per-frame
+        faithful render was SKIPPED in enhanced steady gameplay. The current frame IS the frozen scene the
+        transition is operating on, so this is correct (and rarer than per-frame). Cached per
+        instruction_count. Returns (planes, page) or None."""
+        rt = self.rt
+        ic = rt.cpu.instruction_count
+        if self._lazy_pc is not None and self._lazy_pc[0] == ic:
+            return self._lazy_pc[1]
+        res = None
+        try:
+            disp = rt.program.memory.ega_display_start
+            fx = capture_gameplay_effects(rt.cpu.mem, particle_frame=self.particle_frame,
+                                          foreground_frame=self.foreground_frame)
+            gvs = capture_game_visual_state(rt.cpu.mem, self.dos, disp,
+                                            game_root=self.args.game_root, effects=fx)
+            res = render_game_visual_state(gvs)
+        except Exception:
+            res = None
+        self._lazy_pc = (ic, res)
+        return res
+
+    def _get_last_committed(self):
+        """The vertical-fade base: the last 6772 frame's planes, rendered lazily if it was skipped."""
+        return self.last_committed if self.last_committed is not None else self._lazy_faithful_planes()
+
+    def _get_last_hud(self):
+        """The frozen HUD strip, rendered lazily if the last 6772 faithful render was skipped."""
+        if self.last_hud is None:
+            base = self._lazy_faithful_planes()
+            if base is not None:
+                self.last_hud = self._snapshot_hud(*base)
+        return self.last_hud
 
     # -------------------------------------------------------------------- hook install
     def install_hooks(self):
@@ -162,35 +200,48 @@ class FaithfulSession:
             disp = rt.program.memory.ega_display_start
             fx = capture_gameplay_effects(c.mem, particle_frame=self.particle_frame,
                                           foreground_frame=self.foreground_frame)
-            gvs = capture_game_visual_state(c.mem, c.pre2_dos, disp,
-                                            game_root=self.args.game_root, effects=fx)
-            planes, page = render_game_visual_state(gvs)       # raises FaithfulVisualGap for scenes
-            d = None
-            if self.verify:
-                data = rt.program.memory.data; d = 0
-                for p in range(4):
-                    apb = EGA_APERTURE + p * EGA_PLANE_STRIDE
-                    for o in range(176 * 0x28):                # gameplay viewport (HUD verified separately)
-                        a = (page + o) & 0xFFFF
-                        if planes[p][a] != data[apb + a]:
-                            d += 1
-            self.boundary_capture = (render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
-                                     page, gvs.scene_kind.name, d)
-            self.last_committed = (planes, page)  # base for the vertical fade-out (the frame it clears)
-            self.last_capture_ic = rt.cpu.instruction_count
-            self.planar_image_capture = None      # a committed gameplay frame -> the title image is gone
-            self.last_hud = self._snapshot_hud(planes, page)  # the DISPLAYED HUD (frozen between commits)
+            # ENHANCED source-snapshot seam: extract the modern frame at this gameplay commit (the only place a
+            # new ~25 fps source frame is produced) and keep prev+cur for the compositor.
+            efs = None
             if self.enhanced_capture and self.enh_clock is not None:
-                # Source-snapshot seam: extract the modern RGB/RGBA frame at THIS gameplay commit (the only
-                # place a new source frame is produced ~25 fps) and keep prev+cur for the enhanced compositor.
                 try:
                     efs = extract_enhanced_frame(c.mem, self.dos, game_root=self.args.game_root,
                                                  with_faithful=False, effects=fx)
-                    if efs is not None:
-                        self.enh_prev, self.enh_cur = self.enh_cur, efs
-                        self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, self.enh_clock()
                 except Exception:
-                    pass
+                    efs = None
+                if efs is not None:
+                    self.enh_prev, self.enh_cur = self.enh_cur, efs
+                    self.enh_prev_time, self.enh_cur_time = self.enh_cur_time, self.enh_clock()
+            if efs is not None and efs.iris is None and not self.verify:
+                # STEADY enhanced gameplay: the compositor OWNS the display, and compose(efs, None, 1.0)
+                # reproduces the faithful frame parity-exact (~0.2 ms) -> SKIP the ~10 ms faithful planar
+                # render. last_committed / last_hud are rendered LAZILY (only if a transition hook needs them,
+                # which reads the current frozen frame -- see _lazy_faithful_planes / _get_last_hud).
+                self.boundary_capture = (compose(efs, None, 1.0), efs.page, "GAMEPLAY", None)
+                self.last_committed = None
+                self.last_hud = None
+                self.last_capture_ic = rt.cpu.instruction_count
+                self.planar_image_capture = None
+            else:
+                # FAITHFUL planar render: scenes, the iris transition (passthrough), verify, or faithful mode.
+                gvs = capture_game_visual_state(c.mem, c.pre2_dos, disp,
+                                                game_root=self.args.game_root, effects=fx)
+                planes, page = render_game_visual_state(gvs)   # raises FaithfulVisualGap for scenes
+                d = None
+                if self.verify:
+                    data = rt.program.memory.data; d = 0
+                    for p in range(4):
+                        apb = EGA_APERTURE + p * EGA_PLANE_STRIDE
+                        for o in range(176 * 0x28):            # gameplay viewport (HUD verified separately)
+                            a = (page + o) & 0xFFFF
+                            if planes[p][a] != data[apb + a]:
+                                d += 1
+                self.boundary_capture = (render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
+                                         page, gvs.scene_kind.name, d)
+                self.last_committed = (planes, page)  # base for the vertical fade-out (the frame it clears)
+                self.last_capture_ic = rt.cpu.instruction_count
+                self.planar_image_capture = None      # a committed gameplay frame -> the title image is gone
+                self.last_hud = self._snapshot_hud(planes, page)  # DISPLAYED HUD (frozen between commits)
         except FaithfulVisualGap:
             self.boundary_capture = None           # a SCENE/IMAGE frame at 6772 -> handled at present time
         except Exception:
@@ -215,8 +266,9 @@ class FaithfulSession:
                 self.curtain_cache = (nr, src, kind.name)
             nr, csrc, kindname = self.curtain_cache
             planes, page = compose_curtain_planes(nr, csrc, dst, completed)
-            if self.last_hud is not None:
-                self._overlay_hud(planes, page, self.last_hud)
+            hud = self._get_last_hud()
+            if hud is not None:
+                self._overlay_hud(planes, page, hud)
             self.boundary_capture = (
                 render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette),
                 page, kindname, None)
@@ -229,8 +281,9 @@ class FaithfulSession:
 
     def _capture_vfade_step(self, c):
         try:
-            if self.last_committed is not None:
-                bplanes, bpage = self.last_committed
+            base = self._get_last_committed()      # lazy-render the base if enhanced gameplay skipped it
+            if base is not None:
+                bplanes, bpage = base
                 page = self._rw(c.mem, 0x2DD6)
                 s52 = c.mem.data[(0x1030 << 4) + 0x3052] | (c.mem.data[(0x1030 << 4) + 0x3053] << 8)
                 s50 = c.mem.data[(0x1030 << 4) + 0x3050] | (c.mem.data[(0x1030 << 4) + 0x3051] << 8)
@@ -315,8 +368,9 @@ class FaithfulSession:
                                                 render_gameover_background(self._go_asset, scroll, page)))
                 planes, _st = build_gameover_scene(c.mem, rt.dos, game_root=self.args.game_root,
                                                    page=page, background=bg)
-                if self.last_hud is not None:        # the displayed game-over HUD is FROZEN at death
-                    self._overlay_hud(planes, page, self.last_hud)
+                hud = self._get_last_hud()           # the displayed game-over HUD is FROZEN at death
+                if hud is not None:
+                    self._overlay_hud(planes, page, hud)
                 rgb = render_planar_rgb_from_planes(planes, page, c.pre2_dos.vga_palette)
                 self.scene_capture = (rgb, page, rt.cpu.instruction_count, "GAMEOVER")
             elif self.tally_pending is not None:
