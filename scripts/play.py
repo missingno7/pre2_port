@@ -963,6 +963,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         console hint), never ASM VRAM."""
         faithful_tick[0] += 1
         cur_kind = derive_scene_kind(rt.cpu.mem, rt.dos)
+        # Gameplay AT THE CAMERA ORIGIN (a level start / restart-after-game-over) reads as SCENE because
+        # is_gameplay_frame keys on a non-zero camera. The authoritative "we are in gameplay" signal is the
+        # 1030:6772 main-loop frame boundary having fired recently (scenes run their own loops, never 6772);
+        # reclassify so such a frame routes to the gameplay branch (live render / last-commit hold) instead
+        # of falling through to a scene gap or the stale held-pan-scene grace. The window spans a few live
+        # frames; the death sequence stops 6772 long before the game-over screen, so it is not caught here.
+        if cur_kind == SceneKind.SCENE and rt.cpu.instruction_count - last_capture_ic[0] < 200000:
+            cur_kind = SceneKind.GAMEPLAY
         if cur_kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
             # Long gap with no 6772 commit (e.g. the player-death fall: a sub-loop that animates the
             # player via the object system but never reaches 6772) would FREEZE the viewer on the last
