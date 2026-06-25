@@ -216,11 +216,13 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
 - **`1030:684E..6913` — object-update walker.** OBSERVED (disasm + `pre2/probes/probe_object_tick.py`).
   `si=0x4FD0`, 12 slots × 0x12, `cl=4`. Per non-empty (`[+4]!=0xFFFF`) slot: velocity apply → anim advance
   → per-type AI handler. Live-slot rule: valid IFF `[+4]!=0xFFFF` (most slots empty; never trust a raw slot).
-- **`1030:6861..6873` — `apply_velocity`. VERIFIED** (`pre2/recovered/object_update.py`,
-  `tests/test_object_update.py`). `Y += sar([+0xA],4)`; `[+8]!=0xFFFF` → `X += sar([+8],4)` (12.4 fixed,
-  signed, wrap). Shadow-proven 770/770 + 453/453 exact vs ASM over two demos (moving + static). X-vel `-1`
-  collides with the `0xFFFF` sentinel (unrepresentable). **Recommended first live replacement** (isolated,
-  pure, no other side effects).
+- **`1030:6861..6873` — `apply_velocity`. VERIFIED + LIVE-HOOKED** (`pre2/recovered/object_update.py`,
+  checkpoint `pre2/checkpoints/object_update.py`, `tests/test_object_update.py`). `Y += sar([+0xA],4)`;
+  `[+8]!=0xFFFF` → `X += sar([+8],4)` (12.4 fixed, signed, wrap). Shadow-proven 770/770 + 453/453 exact vs ASM
+  over two demos (moving + static); standard verify-mode lockstep 0 divergence. X-vel `-1` collides with the
+  `0xFFFF` sentinel (unrepresentable). LIVE hook reproduces the block's regs + FLAGS + instruction count
+  (byte-transparent except at a mid-block IRQ — the atomic-block-swap limit on the instruction-granular clock).
+  Suite 334; enhanced parity unregressed.
 - **`1030:6881..68E6` — anim advance.** OBSERVED (writes `[+4]` frame from script ptr `[+0xC]`; reads
   `[0x6BE2]`/`[0xA801]`). Next shadow-recovery candidate.
 - **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
