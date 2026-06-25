@@ -14,16 +14,22 @@ import numpy as np
 
 @dataclass
 class SpriteInstance:
-    """One drawable sprite as a modern RGBA texture + its grounded screen anchor.
+    """One drawable sprite as a modern RGBA texture + its grounded screen placement.
 
+    Cross-frame identity is ``slot`` — the object's ACTIVE-LIST RECORD INDEX, which is stable across the
+    walk/blink animation (unlike ``base_id = sprite_id & 0x1FFF``, which changes every animation frame and so
+    must NOT be used to match objects). ``screen_x``/``screen_y`` are the sprite's logical top-left placement
+    (the interpolation anchor); ``tex_off_x``/``tex_off_y`` offset the cropped RGBA texture from that anchor
+    (so the texture, whose tight bbox shifts with the animation frame, is drawn at ``screen + tex_off``).
     ``rgba`` is H×W×4 (alpha 0 = transparent), extracted bg-independently from the verified ``paint_sprite``.
-    ``anchor_x``/``anchor_y`` are the texture's top-left on screen (px). ``base_id`` is the cross-frame
-    identity for interpolation; ``interpolate`` is False for fixed-screen HUD/boss-meter sprites (drawn at
-    their anchor, not lerped). Draw order = position in the owning frame's ``sprites`` list."""
+    ``interpolate`` is False for fixed-screen HUD/boss-meter sprites. Draw order = position in ``sprites``."""
+    slot: int
     base_id: int
     sprite_id: int
-    anchor_x: int
-    anchor_y: int
+    screen_x: int
+    screen_y: int
+    tex_off_x: int
+    tex_off_y: int
     rgba: np.ndarray
     interpolate: bool = True
 

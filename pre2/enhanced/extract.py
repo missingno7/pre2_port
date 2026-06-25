@@ -86,7 +86,8 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
     attrs = rs.object_attrs or {}
     banks = rs.object_src_banks or {}
     cam_x_px = rs.camera_x * 16 + rs.fine_scroll if hasattr(rs, "camera_x") else 0
-    for spr in (rs.object_sprites or ()):
+    # enumerate -> `slot` is the active-list record index (stable cross-frame identity, animation-independent)
+    for slot, spr in enumerate(rs.object_sprites or ()):
         attr = attrs.get(spr.sprite_id)
         if attr is None:
             continue
@@ -94,7 +95,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
         if cmd is None:
             continue
         if int(cmd.mode) != MODE_NORMAL:           # OPAQUE/ERASE: bg-dependent blend, not a texture
-            unsupported.append((cmd.base_id, _MODE_NAME.get(int(cmd.mode), hex(int(cmd.mode)))))
+            unsupported.append((slot, cmd.base_id, _MODE_NAME.get(int(cmd.mode), hex(int(cmd.mode)))))
             continue
         draw = plan_sprite(spr, attr, cam)
         if draw is None:
@@ -103,8 +104,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True) -> Enhanc
         if got is None:
             continue
         rgba, ax, ay = got
-        sprites.append(SpriteInstance(base_id=cmd.base_id, sprite_id=cmd.sprite_id,
-                                      anchor_x=ax, anchor_y=ay, rgba=rgba,
-                                      interpolate=not cmd.is_hud))
+        sprites.append(SpriteInstance(slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
+                                      screen_x=cmd.screen_x, screen_y=cmd.screen_y,
+                                      tex_off_x=ax - cmd.screen_x, tex_off_y=ay - cmd.screen_y,
+                                      rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=(cam_x_px, 0),
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported)

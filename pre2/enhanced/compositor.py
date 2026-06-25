@@ -5,15 +5,16 @@ start from the (cached) background, then for each sprite in draw order blit its 
 position interpolated between the previous and current source frames by ``alpha``. No planar buffers, no
 deplanarize, no faithful rasterization at display time, no whole-frame blend — sprites move individually.
 
-``alpha`` in [0,1]: 0 = previous source positions, 1 (or ``prev is None``) = current verbatim. Object
-identity across frames is ``base_id`` (duplicates paired in draw order via a per-id queue), matching the
-recovered :func:`pre2.recovered.render_interp.interpolate_frame` contract. Fixed-screen sprites
-(``interpolate=False``: HUD / boss meter) are drawn at their anchor, never lerped. New sprites (no prev
-match) appear at their current position; despawned ones simply aren't in ``cur``.
+``alpha`` in [0,1]: 0 = previous source placement, 1 (or ``prev is None``) = current verbatim. Object
+identity across frames is the ACTIVE-LIST ``slot`` — stable across the walk/blink animation; matching on
+``base_id`` would split one animating object into a new identity every frame (the cause of the stutter we
+fixed). The LOGICAL placement (``screen_x``/``screen_y``) is interpolated and the CURRENT animation frame's
+texture is drawn (positions interpolate; the sprite image swaps discretely per source frame) at
+``interp_placement + cur.tex_off``. Fixed-screen sprites (``interpolate=False``: HUD / boss meter) are drawn
+at their current placement, never lerped. New objects (no prev slot) appear at their current placement;
+despawned ones simply aren't in ``cur``.
 """
 from __future__ import annotations
-
-from collections import defaultdict, deque
 
 
 def _blit(frame, rgba, x: int, y: int) -> None:
@@ -33,17 +34,13 @@ def compose(cur, prev, alpha: float):
     """Render one display subframe (RGB) from ``cur`` (and ``prev`` for interpolation) at ``alpha``."""
     frame = cur.background_rgb.copy()
     interp = prev is not None and alpha < 1.0
-    prev_by_id: dict = defaultdict(deque)
-    if interp:
-        for inst in prev.sprites:
-            prev_by_id[inst.base_id].append(inst)
+    prev_by_slot = {inst.slot: inst for inst in prev.sprites} if interp else {}
     for inst in cur.sprites:
-        x, y = inst.anchor_x, inst.anchor_y
+        sx, sy = inst.screen_x, inst.screen_y
         if interp and inst.interpolate:
-            q = prev_by_id.get(inst.base_id)
-            if q:
-                p = q.popleft()
-                x = round(p.anchor_x + (inst.anchor_x - p.anchor_x) * alpha)
-                y = round(p.anchor_y + (inst.anchor_y - p.anchor_y) * alpha)
-        _blit(frame, inst.rgba, x, y)
+            p = prev_by_slot.get(inst.slot)
+            if p is not None:
+                sx = round(p.screen_x + (inst.screen_x - p.screen_x) * alpha)
+                sy = round(p.screen_y + (inst.screen_y - p.screen_y) * alpha)
+        _blit(frame, inst.rgba, sx + inst.tex_off_x, sy + inst.tex_off_y)
     return frame
