@@ -43,6 +43,26 @@ fill at 70 / 144 / 240 Hz) are **cheap interpolation** (~0.8 ms viewport ops + p
 faithful re-rasterization. The earlier "object-aware interpolation is blocked" conclusion was wrong — it came
 from re-rasterizing per display subframe; the fix is to re-render only per source frame.
 
+## 0b. The enhanced contract: modern RGB/RGBA, planar only as an extractor
+
+**Faithful preserves original pixels; enhanced preserves original meaning.** The enhanced runtime path is a
+modern RGB/RGBA compositor — it must NOT drag the EGA planar model forward as its per-subframe hot path. The
+recovered/faithful planar code (`render_frame`, `paint_sprite`) is used only as a **source-cadence
+extractor/oracle**: generate the faithful base, extract the background and sprite textures once per source
+frame, and certify `alpha=1` parity. Forbidden as the enhanced runtime path: per-subframe planar blits,
+per-subframe deplanarize, depending on EGA planes/latches/byte-columns/pel-pan except as source data, or
+re-calling the faithful rasterizer at display refresh.
+
+**Audit (`pre2/probes/audit_enhanced_layers.py`) — all modern layers are exportable** at source cadence:
+`background_rgb` via `render_frame(object_camera=None)` (clean bg-without-sprites; layer separation is clean),
+`sprite_instances` from `GameFrameSnapshot` (id / image id / screen+world pos / draw order / flip / clip /
+is_hud / mode / life), `sprite_rgba` for NORMAL sprites (mask+sprite → bg-independent texture; **all gameplay
+witnesses are 100% NORMAL**), plus camera / animation-frame identity / faithful_frame. **Precise layer
+flagged:** `OPAQUE`/`ERASE` sprites (flash/blink) are bg-dependent OR/mask blends — not standalone textures;
+absent in steady gameplay; handled as per-sprite faithful passthrough (with a reported reason), never a silent
+blend. First milestone scope: **gameplay moving NORMAL sprites only**; HUD/menu/CARTE/OLDIES/gameover/tally/
+13h/fades/iris/curtains stay faithful passthrough.
+
 ## 1. Architecture
 
 ```
