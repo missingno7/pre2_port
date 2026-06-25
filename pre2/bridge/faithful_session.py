@@ -634,10 +634,11 @@ class FaithfulSession:
         interpret_current_instruction_without_hook(c)
 
     # -------------------------------------------------------------------- composition
-    def frame(self, mem_bytes):
+    def frame(self):
         """Compose the faithful RGB frame for the CURRENT VM video state (text marker / 13h image / planar
         scene), or ``None`` for an unknown mode (caller blanks the screen). Sets :attr:`faithful_info`. Never
-        reads the VM framebuffer — every pixel comes from a recovered leaf."""
+        reads the VM framebuffer — every pixel comes from a recovered leaf (so it needs NO 1 MB VM-memory copy:
+        the raw planes are materialised lazily only in the PRE2_GAP_DUMP diagnostic)."""
         rt = self.rt
         mode = self.dos.video_mode & 0x7F
         self.faithful_info = ""
@@ -662,7 +663,7 @@ class FaithfulSession:
         if rt.program.memory.ega_planar:
             mem_o = rt.program.memory
             ds = mem_o.ega_pan_display_start if mem_o.ega_pan_active else mem_o.ega_display_start
-            return self._faithful_planar(mem_bytes, ds)
+            return self._faithful_planar(ds)
         return None    # unknown mode -> caller blanks the screen
 
     def _frame_13h(self):
@@ -693,7 +694,7 @@ class FaithfulSession:
                 rgb = np.full((200, 320, 3), (48, 0, 32), dtype=np.uint8)
         return rgb
 
-    def _faithful_planar(self, mem_bytes, ds):
+    def _faithful_planar(self, ds):
         """Mirror the committed frame from the 1030:6772 frame-boundary GameVisualState capture (NOT an
         ad-hoc live read). Gameplay/iris frames come from the latest boundary capture; scenes whose leaf is
         not recovered yet fail LOUD (diagnostic frame + console hint), never ASM VRAM."""
@@ -818,7 +819,7 @@ class FaithfulSession:
             if os.environ.get("PRE2_GAP_DUMP"):
                 try:
                     from PIL import Image as _Img
-                    vm = render_planar_rgb(mem_bytes, ds, rt.dos.vga_palette, 0,
+                    vm = render_planar_rgb(bytes(rt.program.memory.data), ds, rt.dos.vga_palette, 0,
                                            (m.ega_h_display_end + 1) * 8)
                     fn = f"artifacts/gap_{cur_kind.name}_{rt.cpu.s.ip:04x}_{rt.cpu.instruction_count}.png"
                     _Img.fromarray(vm).save(fn)

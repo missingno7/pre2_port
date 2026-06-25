@@ -606,14 +606,23 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         if not replaying:
             session.start_async_extraction()
             session.async_extract = False   # enabled once we confirm we're running live (realtime) below
+            # The enhanced pipeline churns many short-lived numpy arrays per frame; those are freed by
+            # refcounting, so the CYCLIC collector mostly scans them for nothing -> periodic GC-pause hitches
+            # ("occasional slowdowns"). Freeze the long-lived VM+assets out of GC scanning and collect far less
+            # often. Timing-only (does not change any computed pixel), so demo determinism is unaffected.
+            import gc
+            gc.collect()
+            gc.freeze()
+            gc.set_threshold(50_000, 500, 500)
 
     def render_current():
         # Faithful backend: FaithfulSession composes the frame from recovered leaves (never the VM
         # framebuffer). VM backend: de-planarize / de-VGA the actual VM video memory. play.py owns only the
         # backend selection + presentation; all faithful capture state/hooks/scene logic lives in the session.
-        mem = bytes(rt.program.memory.data)
         if faithful:
-            rgb = session.frame(mem)
+            # session.frame() reads NO VM framebuffer -> no 1 MB mem copy per display frame (it was pure GC
+            # churn: ~present_hz x 1 MB/s -> periodic GC-pause hitches). The VM backend below still needs it.
+            rgb = session.frame()
             faithful_info[0] = session.faithful_info
             if rgb is BLANK_NO_PRESENT:     # display blanked -> keep the previous frame (do NOT present)
                 return
@@ -625,6 +634,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 rgb = enhanced.present(perf_counter(), rgb)
                 faithful_info[0] = f"{faithful_info[0]} | {enhanced.status()}"
         else:
+            mem = bytes(rt.program.memory.data)   # VM backend de-planarizes raw VRAM -> needs the copy
             faithful_info[0] = ""
             mode = rt.dos.video_mode & 0x7F
             if not rt.program.memory.ega_display_enabled:
