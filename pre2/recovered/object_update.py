@@ -19,7 +19,8 @@ Recovered so far:
 from __future__ import annotations
 
 __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
-           "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation"]
+           "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
+           "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -100,3 +101,63 @@ def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, s
     val = frame | (FLIP_BIT if (flip_byte & 0x80) else 0)    # [asm 68DA-68DF] bit15 = H-flip from [si+9]
     new_id = (old_id & ID_FLAGS_MASK) | val                  # [asm 68E1-68E6] keep blink/opaque flags
     return AnimResult(sprite_id=new_id, script_ptr=(bx + 2) & 0xFFFF, attr_a340=a340)
+
+
+# -- despawn-if-far-from-player (1030:8084, + the 7CFF tail) ------------------------------------------- #
+
+FAR_X = 0x140            # [asm 80A0 cmp ax,0x140] |obj.x - player.x| above this -> far
+FAR_Y = 0x12C            # [asm 80AF cmp ax,0x12c] |obj.y - player.y| above this -> far
+EMPTY_ID = 0xFFFF        # [asm 80BD/7D06] sprite-id 0xFFFF marks the slot empty (despawned)
+_STATE_KEEP = 0xFF       # [asm 808C] state [si+0xE]==0xFF -> never despawn
+_DRAWN_BIT = 0x20        # [asm 8092] record flags [si+5] bit5 = drawn (on-screen) -> keep
+_STATE_FREE_SLOT = 0x0A  # [asm 80B4] state >= 0xA on a far object -> also free its spawn slot (the 7CFF tail)
+
+
+def _abs16(d: int) -> int:
+    """|d| as the ASM computes it: 16-bit subtract then ``neg`` if the sign bit is set (magnitude 0..0x8000)."""
+    d &= 0xFFFF
+    return d if d < 0x8000 else (0x10000 - d) & 0xFFFF
+
+
+class DespawnResult:
+    """The contract of one despawn check (1030:8084 + 7CFF): the post-values of the four fields it may write.
+    When the object is KEPT the fields equal their inputs (no write)."""
+    __slots__ = ("kept", "sprite_id", "def2", "def4", "def7")
+
+    def __init__(self, kept, sprite_id, def2, def4, def7):
+        self.kept = kept            # True -> no change (object stays live)
+        self.sprite_id = sprite_id  # [si+4]
+        self.def2 = def2            # [def+2] (spawn slot; freed only on the far state>=0xA path)
+        self.def4 = def4            # [def+4] (behaviour flags; bit2 cleared on despawn)
+        self.def7 = def7            # [def+7]
+
+    def __eq__(self, o):
+        return (isinstance(o, DespawnResult) and self.sprite_id == o.sprite_id and self.def2 == o.def2
+                and self.def4 == o.def4 and self.def7 == o.def7)
+
+    def __repr__(self):
+        return (f"Despawn(kept={self.kept}, id={self.sprite_id:#06x}, def2={self.def2:#06x}, "
+                f"def4={self.def4:#04x}, def7={self.def7:#04x})")
+
+
+def despawn_check(obj_x: int, obj_y: int, state: int, flags5: int, old_id: int,
+                  player_x: int, player_y: int, def2: int, def4: int, def7: int) -> DespawnResult:
+    """The shared per-object "despawn if far from the player" pre-check — recovers ``1030:8084`` and its
+    ``7CFF`` tail (every AI handler calls it first). Keep the object (no write) when its state is the keep
+    sentinel ``0xFF``, or it is currently drawn (``[si+5]`` bit5), or it is within ``FAR_X``×``FAR_Y`` of the
+    player. Otherwise despawn: ``[si+4]=0xFFFF``, ``[def+4]&=0xFB``, ``[def+7]=0``; and for a ``state>=0x0A``
+    far object also free its spawn slot ``[def+2]=0xFFFF`` (unless ``[def+4]`` bit1 is set). Returns the
+    post-values of the four written fields (unchanged when kept). Pure; the caller owns the records."""
+    keep = DespawnResult(True, old_id & 0xFFFF, def2 & 0xFFFF, def4 & 0xFF, def7 & 0xFF)
+    if state == _STATE_KEEP:                                  # [asm 808C-8090]
+        return keep
+    if flags5 & _DRAWN_BIT:                                   # [asm 8092-8096]
+        return keep
+    far = _abs16(obj_x - player_x) > FAR_X or _abs16(obj_y - player_y) > FAR_Y   # [asm 8098-80B2]
+    if not far:
+        return keep
+    new_def4 = def4 & 0xFB                                    # [asm 80C2 / 7D0B] clear bit2
+    new_def2 = def2 & 0xFFFF
+    if state >= _STATE_FREE_SLOT and not (new_def4 & 0x02):   # [asm 80B4 jb / 7D0F test 2] free spawn slot
+        new_def2 = EMPTY_ID
+    return DespawnResult(False, EMPTY_ID, new_def2, new_def4, 0)

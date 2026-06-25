@@ -223,3 +223,16 @@ LIFT PATH (toward a high-level `object_tick` in real source): velocity ✓ + ani
 helpers `0x8084` (despawn) → `0x698C`/`0x8001`/`0x8022` (collision) → the thin per-type handlers → then
 compose the walker loop (684E..6913) as one function with the recovered leaves (handlers as a dispatch table),
 shadow-verify the whole tick, and live-hook the composed walker (not each tiny leaf — coastline upward).
+
+## Stage 1 cont. (2026-06-26) — despawn-if-far keystone recovered
+
+- **`1030:8084` (+ the `7CFF` tail) — `despawn_check`. VERIFIED** (`object_update.despawn_check`). The shared
+  pre-check every AI handler calls first: keep the object when state `[+0xE]==0xFF`, or it is drawn
+  (`[+5]&0x20`), or within `FAR_X`×`FAR_Y` (0x140×0x12C) of the player (`[0x4F1C]/[0x4F1E]`, abs16 distance);
+  else despawn — `[+4]=0xFFFF`, `[def+4]&=0xFB`, `[def+7]=0`; a far `state>=0xA` object additionally frees its
+  spawn slot `[def+2]=0xFFFF` (unless `[def+4]` bit1 set, via the 7CFF tail). Shadow-proven 770/770 + 234/234
+  exact (incl. the real despawn writes). tests +7.
+
+Recovered object-update leaves so far: **apply_velocity ✓ (live) · advance_animation ✓ · despawn_check ✓**.
+Remaining for the walker lift: the collision helpers (`0x698C`/`0x8001`/`0x8022`) the handlers call, then the
+thin per-type handlers, then compose `object_tick` (684E..6913).

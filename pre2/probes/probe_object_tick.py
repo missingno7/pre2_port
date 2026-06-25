@@ -21,8 +21,9 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
 from play import _advance_frame_deterministic, _make_replay_runtime
-from pre2.recovered.object_update import (AnimResult, ObjectScaleUnsupported,   # SHADOW: routines under test
-                                          advance_animation, apply_velocity)
+from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW: routines under test
+                                          ObjectScaleUnsupported, advance_animation, apply_velocity,
+                                          despawn_check)
 
 SEG = 0x1030
 
@@ -44,6 +45,9 @@ def main():
         l = ((ds << 4) + off) & 0xFFFFF
         return cpu.mem.data[l] | (cpu.mem.data[l + 1] << 8)
 
+    def rdb(ds, off):
+        return cpu.mem.data[((ds << 4) + (off & 0xFFFF)) & 0xFFFFF]
+
     def rec_fields(ds, si):
         return {k: rdw(ds, si + o) for k, o in
                 (("x", 0), ("y", 2), ("id", 4), ("def", 6), ("xv", 8), ("yv", 0xA), ("anim", 0xC))}
@@ -60,6 +64,9 @@ def main():
     anim = Counter()              # 'match' / 'mismatch' / 'scale_skip'
     anim_pending = {}             # si -> predicted AnimResult from 6881
     anim_mismatches = []
+    dsp = Counter()               # 'match' / 'mismatch' / 'kept' / 'despawn'
+    dsp_pending = [None]          # (si, def_ptr, predicted DespawnResult); 8084 is atomic -> single slot
+    dsp_mismatches = []
     handlers = defaultdict(Counter)   # handler_index -> Counter(target_addr -> n)
     handler_ids = defaultdict(Counter)  # handler_index -> Counter(base sprite id)
 
@@ -124,6 +131,27 @@ def main():
                 anim_mismatches.append((si, "pred", repr(pred), "actual", repr(actual)))
         chain(c)
 
+    def h_despawn_pre(c):
+        ds, si = c.s.ds, c.s.si
+        d = rdw(ds, si + 6)
+        pred = despawn_check(rdw(ds, si), rdw(ds, si + 2), rdb(ds, si + 0xE), rdb(ds, si + 5), rdw(ds, si + 4),
+                             rdw(ds, 0x4F1C), rdw(ds, 0x4F1E), rdw(ds, d + 2), rdb(ds, d + 4), rdb(ds, d + 7))
+        dsp_pending[0] = (si, d, pred)
+        dsp["kept" if pred.kept else "despawn"] += 1
+        chain(c)
+
+    def h_despawn_exit(c):
+        if dsp_pending[0] is not None:
+            ds = c.s.ds
+            si, d, pred = dsp_pending[0]
+            dsp_pending[0] = None
+            actual = DespawnResult(pred.kept, rdw(ds, si + 4), rdw(ds, d + 2), rdb(ds, d + 4), rdb(ds, d + 7))
+            ok = (pred == actual)
+            dsp["match" if ok else "mismatch"] += 1
+            if not ok and len(dsp_mismatches) < 10:
+                dsp_mismatches.append((si, "pred", repr(pred), "actual", repr(actual)))
+        chain(c)
+
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
         target = rdw(cs, (bx + 0x6AA9) & 0xFFFF)
@@ -133,7 +161,8 @@ def main():
         chain(c)
 
     for off, fn in ((0x6856, h_looptop), (0x6861, h_vel_pre), (0x6875, h_vel_post),
-                    (0x6881, h_anim_pre), (0x68E9, h_anim_post), (0x68FC, h_dispatch)):
+                    (0x6881, h_anim_pre), (0x68E9, h_anim_post), (0x68FC, h_dispatch),
+                    (0x8084, h_despawn_pre), (0x80CA, h_despawn_exit), (0x7D1A, h_despawn_exit)):
         cpu.replacement_hooks[(SEG, off)] = fn
         cpu.hook_names[(SEG, off)] = f"probe_{off:04x}"
 
@@ -174,6 +203,12 @@ def main():
     print(f"  checks: {atot}   match: {anim['match']}   MISMATCH: {anim['mismatch']}"
           f"   scale-skip([0x6BE2]!=0): {anim['scale_skip']}")
     for m in anim_mismatches:
+        print(f"    MISMATCH {m}")
+    print(f"\n=== DESPAWN-IF-FAR SHADOW (0x8084 + 7CFF: keep / despawn [si+4],[def+2/4/7]) ===")
+    dtot = dsp["match"] + dsp["mismatch"]
+    print(f"  checks: {dtot}   match: {dsp['match']}   MISMATCH: {dsp['mismatch']}"
+          f"   (kept: {dsp['kept']}  despawn: {dsp['despawn']})")
+    for m in dsp_mismatches:
         print(f"    MISMATCH {m}")
     print(f"\n=== AI HANDLER DISPATCH (0x68FC: call cs:[bx+0x6AA9]) ===")
     print(f"  {'idx':>4} {'handler@':>9} {'calls':>8}  base sprite-ids (top)")

@@ -227,8 +227,11 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   `tests/test_object_update.py`). Script-ptr `[+0xC]` walk (negative word = back-jump loop); `frame =
   ((raw&0x1FFF)+0x138)&0x1FFF`; `[+4] = (old&0x6000)|frame|(flip<<15)`; `[0xA340]` scratch. Shadow 770/770 +
   447/447 exact. Scale path ([0x6BE2]!=0, 0xA801 boss-zoom remap) GUARDED (never fires in normal gameplay).
-- **`1030:8084` — despawn-if-far-from-player** (keystone; every handler calls it). OBSERVED. `|x-[4F1C]|>0x140
-  || |y-[4F1E]|>0x12C` → despawn `[+4]=0xFFFF`. Recover next (unlocks the thin handlers).
+- **`1030:8084` (+ `7CFF` tail) — `despawn_check`. VERIFIED** (`object_update.despawn_check`,
+  `tests/test_object_update.py`). Keep if state `[+0xE]==0xFF` / drawn `[+5]&0x20` / within `FAR_X`×`FAR_Y`
+  (0x140×0x12C) of player `[0x4F1C]/[0x4F1E]`; else despawn `[+4]=0xFFFF`, `[def+4]&=0xFB`, `[def+7]=0`, and a
+  far `state>=0xA` object also frees its spawn slot `[def+2]=0xFFFF` (unless `[def+4]&2`). Shadow 770/770 +
+  234/234 exact (incl. real despawns). The shared pre-check every AI handler calls first.
 - **`1030:698C` — object↔tile collision helper** (when `[def+4]&8`). OBSERVED. level map `es:[2DDA]`, xlat 7E5E.
 - **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
   `1→7C8C`, `2→7C2D`, `10→7665`. 24-entry catalogue at `CS:0x6AA9`. Handlers UNRECOVERED.

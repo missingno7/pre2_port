@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, ObjectScaleUnsupported,
-                                          advance_animation, apply_velocity)
+from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, ObjectScaleUnsupported,
+                                          advance_animation, apply_velocity, despawn_check)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -93,3 +93,50 @@ def test_anim_runaway_backjump_raises():
     # a reader that always returns a negative word -> the back-jump never terminates -> guard raises
     with pytest.raises(ObjectScaleUnsupported):
         advance_animation(0x100, lambda off: 0xFFFE, old_id=0, flip_byte=0, scale=0)
+
+
+# -- despawn_check (1030:8084 + 7CFF) --
+
+def test_despawn_keep_when_state_sentinel():
+    r = despawn_check(0x9999, 0x9999, state=0xFF, flags5=0, old_id=0x1234,
+                      player_x=0, player_y=0, def2=0xAAAA, def4=0xFF, def7=0x5)
+    assert r.kept and r == DespawnResult(True, 0x1234, 0xAAAA, 0xFF, 0x5)
+
+
+def test_despawn_keep_when_drawn_bit_set():
+    r = despawn_check(0x9999, 0x9999, state=1, flags5=0x20, old_id=0x10,
+                      player_x=0, player_y=0, def2=0, def4=0, def7=0)
+    assert r.kept
+
+
+def test_despawn_keep_when_close():
+    r = despawn_check(0x100, 0x100, state=1, flags5=0, old_id=0x10,   # |dx|=0x100<=0x140, |dy|=0x100<=0x12c
+                      player_x=0, player_y=0, def2=0, def4=0, def7=0)
+    assert r.kept and r.sprite_id == 0x10
+
+
+def test_despawn_far_x_low_state_small_despawn():
+    # |dx|=0x200 (>0x140) far; state<0xA -> [si+4]=0xFFFF, def4 bit2 cleared, def7=0, def2 kept
+    r = despawn_check(0x200, 0, state=5, flags5=0, old_id=0x10,
+                      player_x=0, player_y=0, def2=0x1111, def4=0x06, def7=0x9)
+    assert r == DespawnResult(False, 0xFFFF, 0x1111, 0x02, 0)
+
+
+def test_despawn_far_high_state_frees_spawn_slot():
+    # far (Y), state>=0xA, def4 bit1 clear -> also free [def+2]=0xFFFF
+    r = despawn_check(0, 0x200, state=0xA, flags5=0, old_id=0x10,
+                      player_x=0, player_y=0, def2=0x1111, def4=0x04, def7=0)
+    assert r == DespawnResult(False, 0xFFFF, 0xFFFF, 0x00, 0)
+
+
+def test_despawn_far_high_state_but_def4_bit1_keeps_slot():
+    r = despawn_check(0, 0x200, state=0xA, flags5=0, old_id=0x10,
+                      player_x=0, player_y=0, def2=0x1111, def4=0x02, def7=0)
+    assert r == DespawnResult(False, 0xFFFF, 0x1111, 0x02, 0)   # bit1 set -> spawn slot NOT freed
+
+
+def test_despawn_distance_is_abs16_wrapping():
+    # obj_x=0, player_x=0xFFF0 -> |0-0xFFF0| = 0x10 (NOT far on X); Y is far -> despawn
+    r = despawn_check(0, 0x200, state=1, flags5=0, old_id=0,
+                      player_x=0xFFF0, player_y=0, def2=0, def4=0, def7=0)
+    assert not r.kept
