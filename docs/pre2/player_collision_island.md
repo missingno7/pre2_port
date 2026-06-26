@@ -57,8 +57,11 @@ wrappers over two shared core routines + the slope helper.
 ## Recovery plan (next)
 1. ✅ Leaves recovered+verified: `0x6401` fall (791+138), `0x6407` h-block (98), `0x661A` slope (16+8 on the
    slope demos).
-2. **`0x641F` land** — recover next (needs the map-read bridge `es=[0x2DDA]`/`di` + the `5E18` landing-dust
-   register state; the soft-land path is heavily witnessed on flat ground, the hard-land on jump+land frames).
+2. ✅ **`0x641F` land recovered+verified** (`collision_land`): 1272/1272 (L1) + 149/149 (slope demo), byte-exact
+   over all three exits (rising/soft/hard). The `5E18` landing dust = `player_emit_trail` ungated; the map read
+   is `read_es(di)` → `[tile+0x8E1D]`.
+3. **3 tile handlers** (`65EF/6641/6657`) — thin compositions of land/fall/slope — recover next.
+4. `5B81` tile-interaction → `5A96` main body → compose `collision(mem)` → unblocks the player_update collapse.
 2. Recover `0x641F` land (reads the tile-property table `0x8E1D` + slopes) — the core ground response.
 3. Recover the 3 tile handlers (`65EF/6641/6657`) as thin compositions of the above.
 4. Recover `5B81` tile-interaction (map reads + the `0x6BAB` eat-state + the handler dispatch).
