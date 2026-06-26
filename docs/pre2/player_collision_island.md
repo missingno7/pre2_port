@@ -10,9 +10,21 @@ Status: **boundary mapped (OBSERVED)** — recovery not started. Heavily witness
 - **`5A96..5B80` main collision** (`ret` at `5B80`). Computes the player's tile cell from Y/X, reads the tile,
   range-checks vs the camera (`[0x2DE4]`/`[0x2DE6]`), calls the tile-interaction worker `5B81`, then a vertical
   tile-scan loop (`5B6F-5B7B` calling `5C92`/`5CAC`, ~3584×) and the fall-off-edge path `63B5` (~820×).
-- **`5B81` tile-interaction worker**: reads the tiles around the player from the map (`es:[di]`, `es=[0x2DDA]`),
-  remaps tile ids via the table `0x7F5E`, manages the "tile being eaten/destroyed" state (`[0x6BAB]`), and
-  dispatches the **tile-type handler `call word ptr [bx+0x7D9B]`** at `5C04` (DS-relative table).
+- **`5B81` tile-interaction worker** (mapped; witnessed enter 2082×, dispatch 2082×, ceiling 1691×, eat 3-5×,
+  off-top `63B5` 0×). Three parts:
+  1. **Ground dispatch**: `di = bx+0x100` (tile below the player); tile id `es:[di]` remapped via `0x7F5E` →
+     `bx = type*2`; dispatch the **ground tile handler `call [bx+0x7D9B]`** (`5C04`) — the land/fall/slope core.
+  2. **Eat-state** (`5BB8`, rare): the tile-eating mechanic — if `[0x6BAB]` (the tile-being-eaten ptr) ≠ `di`,
+     finish/start eating via the prop bit `0x20` (`[bx+0x805E]`), advancing the tile sprite id and dirtying the
+     grid (`5C7B`: `[0x2DF4]=1`/`[0x2DE0]=0x55AA` or `653D` draw).
+  3. **Ceiling collision** (`5C16`, common, when not falling): `bx-0x100` (tile above); remap via `0x7E5E`/
+     `0x805E`; dispatch a **second table `call [bx+0x7DA9]`** (ceiling-tile handler) which returns "solid" in
+     `ah&1`; if rising into a solid ceiling, nudge X by ±2 to slip past an open side (`es:[di±dx+0x100]`).
+  Above-the-top (`Y<=-1`): `63B5` + `[0x6BF3]=0xFF` (never witnessed).
+
+## Two handler tables (DS-relative, bx = type*2)
+- `cs:[0x7D9B]` — **ground** tile handlers (land/fall/slope), dispatched at `5C04`.
+- `cs:[0x7DA9]` — **ceiling** tile handlers, dispatched at `5C33`; returns "solid" in `ah&1`.
 
 ## Tile-type handler table `cs:[0x7D9B]` (bx = tile_type*2) — witnessed
 | bx | handler | fires (L1) | role |
@@ -60,8 +72,10 @@ wrappers over two shared core routines + the slope helper.
 2. ✅ **`0x641F` land recovered+verified** (`collision_land`): 1272/1272 (L1) + 149/149 (slope demo), byte-exact
    over all three exits (rising/soft/hard). The `5E18` landing dust = `player_emit_trail` ungated; the map read
    is `read_es(di)` → `[tile+0x8E1D]`.
-3. **3 tile handlers** (`65EF/6641/6657`) — thin compositions of land/fall/slope — recover next.
-4. `5B81` tile-interaction → `5A96` main body → compose `collision(mem)` → unblocks the player_update collapse.
+3. **`5B81` composition** (mapped): the 3 ground tile handlers (`65EF/6641/6657`, thin over land/fall/slope) +
+   the ceiling table `cs:[0x7DA9]` + the side-nudge + the rare eat-state. Threads the `di` map pointer.
+4. `5A96` main body (tile-cell calc + camera range-check + the `5CAC` scan loop) → compose `collision(mem)`
+   and shadow-verify the full write-contract → unblocks the player_update live collapse.
 2. Recover `0x641F` land (reads the tile-property table `0x8E1D` + slopes) — the core ground response.
 3. Recover the 3 tile handlers (`65EF/6641/6657`) as thin compositions of the above.
 4. Recover `5B81` tile-interaction (map reads + the `0x6BAB` eat-state + the handler dispatch).
