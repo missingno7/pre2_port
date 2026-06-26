@@ -21,6 +21,7 @@ __all__ = [
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
     "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
     "player_state_anim4", "player_dispatch_handler", "PLAYER_HANDLERS",
+    "player_fsm_frontend", "player_fsm_step",
     "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
@@ -476,6 +477,62 @@ PLAYER_HANDLERS = {
     5: player_state_anim5,    # 0x5E96
     8: player_state_anim8,    # 0x5CCE
 }
+
+
+def player_fsm_frontend(rb, rw) -> tuple:
+    """Recover the FSM front-end ``1030:58A7..591F`` (after the input-decode call ``DC1``).
+
+    Combine the six decoded input flags (``[0x27E8..0x27ED]``) into ``[0x6BDB]``/``[0x6BDC]``, update the
+    facing word ``[0x4F25]`` (+/-1; resetting ``[0x6BEB]`` on a turn), and pack the 5-bit dispatch bitmask from
+    bit0 of ``[0x27EC],[0x27ED],[0x27EA],[0x27EB],[0x27E8]``. Returns ``(bitmask, writes)`` where ``writes`` may
+    include ``[0x6BDB],[0x6BDC],[0x4F25],[0x6BEB]``. Pure."""
+    ec, ed = rb(0x27EC), rb(0x27ED)
+    ea, eb, e8 = rb(0x27EA), rb(0x27EB), rb(0x27E8)
+    writes = {0x6BDB: ed | ec, 0x6BDC: ea | eb}                  # [58A7-58BB]
+    facing = rw(0x4F25)                                          # [58BF-58FC] facing update
+    if ec != 0:
+        if ed == 0 and (facing & 0xFFFF) != 1:
+            writes[0x4F25] = 1
+            writes[0x6BEB] = 0
+    elif ed != 0:
+        if (facing & 0xFFFF) != 0xFFFF:
+            writes[0x4F25] = 0xFFFF
+            writes[0x6BEB] = 0
+    bitmask = 0                                                  # [58FC-591F] pack bit0 of the 5 flags
+    for flag in (ec, ed, ea, eb, e8):
+        bitmask = ((bitmask << 1) | (flag & 1)) & 0xFF
+    return bitmask, writes
+
+
+def player_fsm_step(rb, rw) -> dict:
+    """Compose the full per-frame player FSM ``1030:58A7..5A0B`` (the ``[0x6BC5]==0`` normal-play path):
+    front-end -> ``select_anim_id`` -> dispatch to the recovered handler. Returns the merged dict of writes.
+
+    Threads the intermediate writes the way the ASM does: the facing/state changes from the front-end and the
+    ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``). Raises
+    (fail loud) for the not-yet-recovered states (anim_id 3/6/7 and idle's anim13 sub-path)."""
+    bitmask, writes = player_fsm_frontend(rb, rw)               # [58A7-591F]
+    beb = writes.get(0x6BEB, rw(0x6BEB))
+    anim_id, sel_writes = player_select_anim_id(bitmask, rb(0x6BCD), rb(0x4F2D),  # [5921-595C]
+                                                rb(0x4F27), beb, rb)
+    writes.update(sel_writes)                                   # [0x4F1B], [0x6BEB], maybe [0x4F2C]
+
+    # All handlers except anim_id 8 begin with `cmp [0x6BD0],0 ; jne 5F93` — when the override flag is set they
+    # run the shared override tail 0x5F93 (not recovered). Fail loud rather than run the wrong body.
+    if rb(0x6BD0) != 0 and anim_id != 8:
+        raise NotImplementedError("player override tail 0x5F93 ([0x6BD0]!=0) not recovered")
+
+    # The handler reads back fields the front-end/selector just wrote — facing [0x4F25], the [0x4F2C] reset,
+    # and crucially the input-held flags [0x6BDB]/[0x6BDC] that drive player_accel. Expose every pending write
+    # through a read overlay (the ASM reads them from memory mid-routine).
+    def rb2(off):
+        return (writes[off] & 0xFF) if off in writes else rb(off)
+
+    def rw2(off):
+        return (writes[off] & 0xFFFF) if off in writes else rw(off)
+
+    writes.update(player_dispatch_handler(anim_id, rb2, rw2))   # [5A0B] call cs:[anim_id*2 + 0x7D2F]
+    return writes
 
 
 def player_dispatch_handler(anim_id: int, rb, rw) -> dict:

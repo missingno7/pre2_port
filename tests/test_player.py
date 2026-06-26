@@ -17,6 +17,7 @@ from pre2.recovered.player import (
     player_charge_6bce,
     player_dispatch_handler,
     player_emit_trail,
+    player_fsm_frontend,
     player_select_anim_id,
     player_set_anim,
     player_state_anim4,
@@ -261,6 +262,23 @@ def test_state_anim4_accel_path():
     assert out[0x4F22] == 0x20                       # |Xvel| 0x10 <= 0x20 -> accel +0x10 (clamped 0x20)
     assert out[0x4F27] == 0x10                       # set_anim al = |Xvel| (clobbered)
     assert out[0x4F28] == 0x9402 and out[0x4F20] == 0x0688
+
+
+def test_fsm_frontend_bitmask_and_facing():
+    # right (ec) held alone -> bitmask bit4, turn to face right, [0x6BDB]=ec|ed
+    mem = {0x27EC: 0xFF, 0x4F25: 0xFFFF}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    bm, w = player_fsm_frontend(rb, rw)
+    assert bm == 0x10                                # ec -> bit4
+    assert w[0x4F25] == 1 and w[0x6BEB] == 0         # turned right, run counter reset
+    assert w[0x6BDB] == 0xFF
+    # e8 held alone -> bitmask bit0; no direction -> no facing change
+    mem2 = {0x27E8: 0xFF, 0x4F25: 1}
+    rb2 = lambda o: mem2.get(o, 0) & 0xFF
+    rw2 = lambda o: mem2.get(o, 0) & 0xFFFF
+    bm2, w2 = player_fsm_frontend(rb2, rw2)
+    assert bm2 == 0x01 and 0x4F25 not in w2
 
 
 def test_dispatch_routes_to_recovered_handlers_and_gaps_eating():

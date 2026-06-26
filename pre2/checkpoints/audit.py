@@ -75,6 +75,7 @@ _NOT_SEPARATELY_HOOKED = [
     ("player FSM handler: anim8", "1030:5CCE (anim_id=8)", "recovered / shadow-only", "player_state_anim8: friction_dir/sym + set_anim (al=clobbered Xvel low) + advance; shadow-verified 134/134"),
     ("player FSM handler: anim4", "1030:5E62 (anim_id=4)", "recovered / shadow-only", "player_state_anim4: [0x6BD3]=0/[0x6BE1]=4/charge; accel(0x20)+set_anim or fall to idle; shadow-verified 11/11"),
     ("player FSM dispatch (all 6)", "1030:5A0B cs:[0x7D2F]", "recovered / shadow-only", "player_dispatch_handler: anim_id -> the 6 recovered handlers; full-dispatch shadow 1980/1980 (L1) + 211/211 (L6) byte-exact; anim_id 3/6/7 (0x5F96 eating) + idle anim13 sub-path = gaps"),
+    ("player FSM step (full)", "1030:58A7..5A0B", "recovered / shadow-only", "player_fsm_step: front-end (bitmask/facing) -> select_anim_id -> dispatch; full shadow 1980/1980 (L1) + 211/211 (L6) byte-exact; gaps = override tail 5F93 + eating 3/6/7 + idle anim13"),
     ("secondary lists 0x4F2E/0x50A8/0x5450/0x6BBE", "581E/6210/60FE/60DF", "ASM / not recovered", "other per-frame entity lists"),
 ]
 

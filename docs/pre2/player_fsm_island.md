@@ -150,13 +150,23 @@ zero divergences** across anim_ids 0,1,2,4,5,8. (This 2-hook probe perturbs far 
 a0=637 here vs 629 unhooked.) Remaining gaps, both fail-loud: the eating handler (anim_id 3/6/7, ~69×) and the
 idle anim13 sub-path (`5D8A`, timeline-reachable but rare — its dust effects `3435/3414` are out-of-FSM-scope).
 
+## Full FSM step composed (`player_fsm_step`) — front-end + select + dispatch
+`player_fsm_frontend` (`58A7-591F`: flag combine + facing `[0x4F25]` + 5-bit bitmask pack; bitmask verified
+1999/1999 vs the real `ah`) → `player_select_anim_id` → `player_dispatch_handler`. **Full shadow (capture at the
+front-end `58A7`, compare the whole player contract at the dispatch return `5A0F`): 1980/1980 (L1) + 211/211
+(L6), byte-exact, zero divergences.** The entire per-frame player FSM — input → state → behaviour — is recovered
+code. (`DC1` input-decode + `6294` sync are upstream; `6294` is a no-op when `[0x280D]==0`.)
+
+Two real composition bugs the shadow caught (not perturbation): the handler reads `[0x6BDB]` (input-held, for
+`accel`) which the front-end writes — needed a full read-overlay of pending writes; and the `[0x6BD0]!=0`
+override sends every handler (bar anim8) to the unrecovered tail `5F93` — now a fail-loud gap. Gaps total
+101/88 per demo (override + eating 3/6/7 + idle anim13).
+
 ## Remaining to fully collapse `player_update`
-1. The eating handler `0x5F96` (anim_id 3/6/7) + idle's `5D8A` anim13 sub-path.
-2. The shared override tail `0x5F93` (`[0x6BD0]!=0`).
-3. Front-end: input-flag combine + facing (`58A7-58FC`) + bitmask pack (`58FC-591F`) feeding `select_anim_id`.
-4. Assemble `player_update` (front-end → select → dispatch → X/Y integrate → collision → timers) and
-   live-collapse into one hook (verify-mode, non-perturbing), subsuming the X/Y/timer leaves.
-5. The collision sub-island `5A96`/`cs:[0x7D9B]`.
+1. The eating handler `0x5F96` (anim_id 3/6/7) + idle's `5D8A` anim13 sub-path + the override tail `0x5F93`.
+2. Live-hook `player_update` (front-end → select → dispatch → X/Y integrate → collision → timers) and collapse
+   in **verify-mode** (the non-perturbing oracle), subsuming the X/Y/timer leaves.
+3. The collision sub-island `5A96`/`cs:[0x7D9B]`.
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +
