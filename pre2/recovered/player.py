@@ -20,7 +20,8 @@ __all__ = [
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
     "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
-    "player_state_anim4", "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
+    "player_state_anim4", "player_dispatch_handler", "PLAYER_HANDLERS",
+    "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
     "TRAIL_RING_LO", "TRAIL_RING_HI", "TRAIL_STRIDE", "TRAIL_SPRITE",
@@ -211,7 +212,7 @@ def player_advance_anim(anim_ptr: int, facing: int, read_word) -> tuple:
     return frame, new_ptr, bcf
 
 
-def player_state_run(fields: dict, read_word) -> dict:
+def player_state_run(rb, rw) -> dict:
     """Recover the ``anim_id==1`` "run" FSM handler ``1030:5EC4`` (the normal-play main path).
 
     The handler is a composition of the recovered primitives (the original source structure). With entry
@@ -224,16 +225,15 @@ def player_state_run(fields: dict, read_word) -> dict:
         ptr      = set_anim_b(anim=1, seq=2)      # 5F0C player_set_anim ([0x4F27]/[0x4F28])
         advance_anim(ptr)                         # 5F0F player_advance_anim ([0x4F20]/[0x4F28]/[0x6BCF])
 
-    ``fields`` supplies the initial player words/bytes it reads; returns the dict of writes. Pure."""
+    ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
     out = {}
-    out[0x6BD3] = _sat_inc_byte(fields[0x6BD3])                                          # [5EF9-5EFE]
-    xvel = player_accel(fields[0x4F22], fields[0x4F25], fields[0x4F24],                  # [5F03-5F06]
-                        fields[0x6BDB] != 0, RUN_ACCEL_LIMIT)
-    xvel = player_friction_dir(xvel, fields[0x6BF6])                                     # [5F09]
+    out[0x6BD3] = _sat_inc_byte(rb(0x6BD3))                                              # [5EF9-5EFE]
+    xvel = player_accel(rw(0x4F22), rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, RUN_ACCEL_LIMIT)  # [5F03-5F06]
+    xvel = player_friction_dir(xvel, rw(0x6BF6))                                         # [5F09]
     out[0x4F22] = xvel
-    state, ptr = player_set_anim(1, 2, fields[0x4F27], fields[0x4F28], read_word)        # [5F0C] set_anim_b
+    state, ptr = player_set_anim(1, 2, rb(0x4F27), rw(0x4F28), rw)                       # [5F0C] set_anim_b
     out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, fields[0x4F25] & 0xFF, read_word)     # [5F0F]
+    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)                # [5F0F]
     out[0x4F28] = new_ptr
     out[0x4F20] = frame
     out[0x6BCF] = bcf
@@ -265,7 +265,7 @@ def player_charge_6bce(v: int) -> int:
     return (v + 2) & 0xFF if v <= 0x30 else v
 
 
-def player_state_anim5(fields: dict, read_word) -> dict:
+def player_state_anim5(rb, rw) -> dict:
     """Recover the ``anim_id==5`` FSM handler ``1030:5E96`` (main path, gate ``[0x6BD0]==0``).
 
     A clean composition (entry ``al==5``, ``bx==0x0A`` preserved into ``set_anim_b``)::
@@ -276,16 +276,16 @@ def player_state_anim5(fields: dict, read_word) -> dict:
         [0x4F22] = friction_sym([0x4F22])            # 5EB0 player_friction_sym
         [0x6BCE] = charge_6bce([0x6BCE])             # 5EB3 -> 5EB7
 
-    ``fields`` supplies the initial words/bytes; returns the dict of writes. Pure."""
+    ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
     out = {0x6BC8: 0, 0x6BE1: 4}
-    state, ptr = player_set_anim(5, 0x0A, fields[0x4F27], fields[0x4F28], read_word)      # [5EAA]
+    state, ptr = player_set_anim(5, 0x0A, rb(0x4F27), rw(0x4F28), rw)                     # [5EAA]
     out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, fields[0x4F25] & 0xFF, read_word)      # [5EAD]
+    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)                 # [5EAD]
     out[0x4F28] = new_ptr
     out[0x4F20] = frame
     out[0x6BCF] = bcf
-    out[0x4F22] = player_friction_sym(fields[0x4F22], fields[0x4F24])                     # [5EB0]
-    out[0x6BCE] = player_charge_6bce(fields[0x6BCE])                                      # [5EB3->5EB7]
+    out[0x4F22] = player_friction_sym(rw(0x4F22), rb(0x4F24))                             # [5EB0]
+    out[0x6BCE] = player_charge_6bce(rb(0x6BCE))                                          # [5EB3->5EB7]
     return out
 
 
@@ -464,6 +464,30 @@ def player_state_anim4(rb, rw) -> dict:
     rb2 = lambda o: 0 if o == 0x6BD3 else rb(o)
     out.update(player_state_idle(rb2, rw, entry_bx=8))
     return out
+
+
+# The per-anim_id FSM handler table (the recovered counterpart of ``cs:[anim_id*2 + 0x7D2F]``). anim_ids 3/6/7
+# share the audio-coupled "eating" handler 0x5F96 (not yet recovered).
+PLAYER_HANDLERS = {
+    0: player_state_idle,     # 0x5CDB
+    1: player_state_run,      # 0x5EC4
+    2: player_state_jump,     # 0x5F30
+    4: player_state_anim4,    # 0x5E62
+    5: player_state_anim5,    # 0x5E96
+    8: player_state_anim8,    # 0x5CCE
+}
+
+
+def player_dispatch_handler(anim_id: int, rb, rw) -> dict:
+    """Dispatch the player FSM to the recovered per-state handler (the ``cs:[anim_id*2 + 0x7D2F]`` table).
+
+    This is the first full assembly of the FSM handler layer: every recovered handler behind one uniform
+    ``(rb, rw) -> writes`` entry point, keyed by the ``anim_id`` from :func:`player_select_anim_id`. anim_ids
+    3/6/7 (the audio-coupled "eating" handler 0x5F96) are not recovered yet and fail loud."""
+    handler = PLAYER_HANDLERS.get(anim_id)
+    if handler is None:
+        raise NotImplementedError(f"player FSM handler for anim_id={anim_id} (0x5F96 eating) not recovered")
+    return handler(rb, rw)
 
 
 def player_tick_timers(timers: dict) -> dict:

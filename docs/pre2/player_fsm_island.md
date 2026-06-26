@@ -142,6 +142,22 @@ verify-mode (`enable_pre2_hook_verification`, instruction-count-transparent) on 
 The last handler `0x5F96` (anim_id 3/6/7, "eating") is audio-coupled: it plays a sound (`call 0x282`), writes
 the override flag `[0x6BD0]`, and branches to `0x6081` (the common path, 88×) — its own focused recovery.
 
+## First full FSM dispatch composed (`player_dispatch_handler`)
+All 6 recovered handlers behind one uniform `(rb, rw) -> writes` entry, keyed by the `anim_id` from
+`player_select_anim_id` (the recovered `cs:[anim_id*2 + 0x7D2F]` table). **Full-dispatch shadow (hook the real
+`5A0B` dispatch, compare the whole contract at the `5A0F` return): 1980/1980 (L1) + 211/211 (L6), byte-exact,
+zero divergences** across anim_ids 0,1,2,4,5,8. (This 2-hook probe perturbs far less than the per-handler ones:
+a0=637 here vs 629 unhooked.) Remaining gaps, both fail-loud: the eating handler (anim_id 3/6/7, ~69×) and the
+idle anim13 sub-path (`5D8A`, timeline-reachable but rare — its dust effects `3435/3414` are out-of-FSM-scope).
+
+## Remaining to fully collapse `player_update`
+1. The eating handler `0x5F96` (anim_id 3/6/7) + idle's `5D8A` anim13 sub-path.
+2. The shared override tail `0x5F93` (`[0x6BD0]!=0`).
+3. Front-end: input-flag combine + facing (`58A7-58FC`) + bitmask pack (`58FC-591F`) feeding `select_anim_id`.
+4. Assemble `player_update` (front-end → select → dispatch → X/Y integrate → collision → timers) and
+   live-collapse into one hook (verify-mode, non-perturbing), subsuming the X/Y/timer leaves.
+5. The collision sub-island `5A96`/`cs:[0x7D9B]`.
+
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +
 dispatches the **tile-type handler table `cs:[0x7D9B]`** *every* frame, runs a vertical tile-scan loop (`5CAC`

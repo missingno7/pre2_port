@@ -15,6 +15,7 @@ from pre2.recovered.player import (
     player_friction_sym,
     player_gravity,
     player_charge_6bce,
+    player_dispatch_handler,
     player_emit_trail,
     player_select_anim_id,
     player_set_anim,
@@ -160,10 +161,11 @@ def test_select_anim_id_maps_bitmask_via_table():
 def test_state_run_composes_primitives_byte_exact():
     seq = {0x9000: 0x0177}
     table = {(2 + ANIM_SEQ_TABLE) & 0xFFFF: 0x9000}  # seq_index 2 -> ptr 0x9000
-    rw = lambda off: table.get(off, seq.get(off, 0))
-    fields = {0x6BD3: 0x05, 0x4F22: 0x10, 0x4F25: 1, 0x4F24: 0,
-              0x6BDB: 1, 0x6BF6: 0x40, 0x4F27: 0x00, 0x4F28: 0x1234}
-    out = player_state_run(fields, rw)
+    mem = {0x6BD3: 0x05, 0x4F22: 0x10, 0x4F25: 1, 0x4F24: 0,
+           0x6BDB: 1, 0x6BF6: 0x40, 0x4F27: 0x00, 0x4F28: 0x1234}
+    rb = lambda off: mem.get(off, 0) & 0xFF
+    rw = lambda off: table.get(off, seq.get(off, mem.get(off, 0))) & 0xFFFF
+    out = player_state_run(rb, rw)
     assert out[0x6BD3] == 0x06                       # sat_inc frame counter
     assert out[0x4F22] == 0x18                       # accel +0x10 -> 0x20, friction -8 -> 0x18
     assert out[0x4F27] == 1                          # set_anim_b stored anim_id (changed 0->1)
@@ -180,9 +182,10 @@ def test_charge_6bce_grows_capped():
 def test_state_anim5_composition_byte_exact():
     seq = {0x9100: 0x0312}
     table = {(0x0A + ANIM_SEQ_TABLE) & 0xFFFF: 0x9100}   # seq_index 0x0A -> ptr 0x9100
-    rw = lambda off: table.get(off, seq.get(off, 0))
-    fields = {0x4F27: 0x00, 0x4F28: 0x1111, 0x4F25: 1, 0x4F22: 0x40, 0x4F24: 0, 0x6BCE: 0x10}
-    out = player_state_anim5(fields, rw)
+    mem = {0x4F27: 0x00, 0x4F28: 0x1111, 0x4F25: 1, 0x4F22: 0x40, 0x4F24: 0, 0x6BCE: 0x10}
+    rb = lambda off: mem.get(off, 0) & 0xFF
+    rw = lambda off: table.get(off, seq.get(off, mem.get(off, 0))) & 0xFFFF
+    out = player_state_anim5(rb, rw)
     assert out[0x6BC8] == 0 and out[0x6BE1] == 4
     assert out[0x4F27] == 5                      # set_anim_b stored anim_id (changed 0->5)
     assert out[0x4F28] == 0x9102 and out[0x4F20] == 0x0312   # advance_anim
@@ -258,6 +261,19 @@ def test_state_anim4_accel_path():
     assert out[0x4F22] == 0x20                       # |Xvel| 0x10 <= 0x20 -> accel +0x10 (clamped 0x20)
     assert out[0x4F27] == 0x10                       # set_anim al = |Xvel| (clobbered)
     assert out[0x4F28] == 0x9402 and out[0x4F20] == 0x0688
+
+
+def test_dispatch_routes_to_recovered_handlers_and_gaps_eating():
+    import pytest
+    mem = {0x4F22: 0x40, 0x6BF6: 0x40, 0x4F24: 0, 0x6BFE: 0, 0x4F2A: 0x10, 0x6BD1: 2, 0x4F25: 1}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    # anim_id 0 routes to the idle handler (here its airborne path)
+    assert player_dispatch_handler(0, rb, rw)[0x4F22] == 0x2C
+    # the audio-coupled eating handler (anim_id 3/6/7 -> 0x5F96) is not recovered yet -> fails loud
+    for aid in (3, 6, 7):
+        with pytest.raises(NotImplementedError):
+            player_dispatch_handler(aid, rb, rw)
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():
