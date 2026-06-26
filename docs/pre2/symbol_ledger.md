@@ -253,8 +253,47 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   `id>>8`. (Found via the handler shadow: predicting flags5 separately diverged whenever the id changed.)
 - **Other handlers** (state machines on the same leaves): idx1 `7C8C` = `despawn_check` only; idx2 `7C2D` =
   vertical-bob oscillator (def params `[def+0xB/0xD/0xE]`, calls despawn + anim seek + helper `7FD9`).
-- **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
-  `1→7C8C`, `2→7C2D`, `10→7665`. 24-entry catalogue at `CS:0x6AA9`. Handlers UNRECOVERED.
+- **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. 24-entry catalogue at
+  `CS:0x6AA9`. **ALL 12 WITNESSED handler types RECOVERED + shadow-verified byte-exact** (`object_update.py`,
+  `tests/test_object_update.py`; live-demo shadow `pre2/probes/probe_handler_shadow.py` — the light 2-hook
+  probe, since the heavy `probe_object_tick` perturbs input-timing-sensitive replays):
+  - idx0 `7C90`, idx1 `7C8C` (despawn-only), idx2 `7C2D` (vertical-bob), idx3 `7B91` (tile-collision walker),
+    idx4 `7ADF` (orbit/pendulum + `orbit_position` 7B53), idx7 `7898` (creeper/leaper), idx8 `77DE` (pouncer),
+    idx9 `773D` (horizontal patrol), idx10 `7665` (charger), idx11 `760F`, idx12 `75C4` (falling/quake object).
+  - **idx6 `78EC..7A47` — the EARTHQUAKE / screen-shake driver. VERIFIED** (462/462 on demo 105310, the FULL
+    contract: obj + def bytes `dE/dF/d10` + the position accumulators `[def+0x11]/[def+0x13]` stored as
+    little-endian byte pairs `d11/d12`,`d13/d14` + the global shake state `[0xA30E/0xA310/0x6BC0/0x6BC1]` +
+    both PRNG states). Computes `dist²=dX²+dY²`; near+enabled (`[0x6BD0]`) → directional shake kick, else
+    counts `[def+0x10]` down and RANDOM-reseeds on underflow; tail `7A28` drives `objX/Y = accum>>3`.
+- **DEF-FIELD UNION:** the same `def` offset is type-specific — e.g. `[def+0xD]/[def+0xF]` are 16-bit patrol
+  bounds for idx9 but single bytes (radius / angle / speed) for idx4/idx6/idx7/idx12; `[def+0x11]` is a byte
+  speed for idx9 but the low half of a 16-bit accumulator for idx6. Shadow reads def as BYTES and handlers
+  reconstruct words where needed.
+- **`1030:26CF` / `39DF` — the two PRNGs. VERIFIED** (`pre2/recovered/prng.py`, `tests/test_prng.py`;
+  shadow 44/44 + 556/556 on demo 105310). `rng_ror`: `ror16((s+0x9248),3)` over `[0x28C1]`. `rng_lcg`: a
+  four-byte mixer over `[0x2CEC..0x2CEF]` returning the new `[0x2CED]`.
+- **`1030:698C` (+ slope helper `6A7D`) — `terrain_collision`. VERIFIED** (`object_update.terrain_collision`,
+  `tests/test_object_update.py`; shadow `pre2/probes/probe_terrain_collision.py` — 292/292 L6 + 2066/2066 L1 +
+  314/314 L4, full obj x/y/xvel/yvel/anim_ptr + `[def+4]` writes). The walker calls it pre-dispatch when
+  `[def+4]&8`. Reads 3 level-map tiles (here / above / ahead-above by Xvel sign, map seg `[0x2DDA]`) and the
+  property tables `[0x7E5E]` (wall), `[0x7F5E]` (ground), `[0x8E1D]` (slope); resolves a horizontal
+  collision / wall-climb (the `[def+4]` 0x40/0x80 climb-state bits) then a vertical/ground collision:
+  solid -> snap onto the (slope-aware) surface + stop/bounce by `[def+4]&0x20`, empty -> gravity (cap 0x100).
+- **`object_tick` — the COMPOSED walker `1030:684E..6913`. VERIFIED** (`pre2/recovered/object_tick.py`,
+  `tests/test_object_tick.py`; whole-tick shadow `pre2/probes/probe_object_tick_composed.py`). One high-level
+  pass over the 12 slots composing the verified leaves: per non-empty slot `apply_velocity` →
+  (`terrain_collision` if `[def+4]&8`) → `advance_animation` → AI dispatch. Byte-exact over whole frames vs the
+  ASM: L6 1349 slots, earthquake/idx6 1962 slots + 1760 globals (PRNG threaded), L7 3067 slots — ZERO
+  mismatches, ZERO gaps. VM-independent (talks to memory only through a `WalkerMem` accessor). Unrecovered
+  handler / non-zero-scale anim -> `Pre2ObjectGap` (fail loud).
+- **DISPATCH 8-BIT DETAIL** (caught by the whole-tick shadow): the walker computes the handler-table offset
+  with `shl bl,1` on the **8-bit** `bl` (`bl=[def+1]`), so the offset is `([def+1]*2)&0xFF` — the `0x80` bit of
+  `[def+1]` is a FLAG that shifts out, NOT part of the type index (e.g. `[def+1]=0x84` dispatches idx4).
+- **NOT recovered yet** — the object SPAWN emitters `1030:7FD9` (effect/trail spawn, called by idx4/idx6 etc.)
+  and `1030:7DE6` (`spawn_effects`): they write OTHER slots / effect state, never the acting object's own
+  record, so per-slot + whole-tick(start-non-empty) reproduction is byte-exact without them. A LIVE
+  whole-walker hook collapse (replacing 684E..6913) needs these so the spawned effects still appear. Also
+  still open: never-witnessed handlers idx5 `7A60`, idx13–23 (need their levels).
 - **Phase B (the blit) — full spec mapped, TODO implement.** Per sprite it is a **two-phase
   composite** (like the verified `blit_masked`): a **blink/anim mode** `[26F7]` chooses the
   phases — set at `2740..2761`: default `1`; while life `[si+0x11]`>0 it blinks (`[6BD5]&3`

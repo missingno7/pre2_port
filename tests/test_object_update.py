@@ -11,7 +11,9 @@ from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, 
                                           apply_velocity, despawn_check, dying_state, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7c8c,
                                           handle_object_7c90, handle_object_760f, handle_object_7c2d,
-                                          handle_object_7b91, on_screen_tile, saturating_counter, spawn_effects)
+                                          handle_object_7b91, handle_object_7adf, orbit_position,
+                                          handle_object_7898, handle_object_75c4, handle_object_78ec,
+                                          on_screen_tile, saturating_counter, spawn_effects)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -281,7 +283,10 @@ def _o9(**kw):
     o.update(kw); return o
 
 def _d9(**kw):
-    d = dict(d2=0x1111, d4=1, d7=0, dD=0x100, dF=0x300, d11=0, d12=20)
+    left = kw.pop("dD", 0x100)        # patrol bounds are 16-bit but stored as byte-union halves (dD/dE, dF/d10)
+    right = kw.pop("dF", 0x300)
+    d = dict(d2=0x1111, d4=1, d7=0, dD=left & 0xFF, dE=(left >> 8) & 0xFF,
+             dF=right & 0xFF, d10=(right >> 8) & 0xFF, d11=0, d12=20)
     d.update(kw); return d
 
 def _g9(**kw):
@@ -578,3 +583,270 @@ def test_h7b91_state2_bounces_off_left_edge():
     o, d = _o3(state=2, x=(-1) & 0xFFFF, xvel=0x30), _d3()
     handle_object_7b91(o, d, _g3(player_x=0), _RD3, tile_prop=lambda x, y: 0)
     assert o["xvel"] == (-0x30) & 0xFFFF
+
+
+# -- orbit_position (7B53) + handle_object_7adf (idx4 orbit/pendulum enemy, 1030:7ADF) --
+
+def test_orbit_position_math():
+    # X = centreX + ((s8(cos)>>2)*s8(radius))>>4 ; Y likewise with sin.
+    assert orbit_position(0x100, 0x80, 0x10, 0x40, 0x00) == ((0x100 + (((0x40 >> 2) * 0x10) >> 4)) & 0xFFFF, 0x80)
+    # negative cos (signed byte) descends X via arithmetic shift
+    cx = (0x100 + (((_neg8(0x80) >> 2) * 0x10) >> 4)) & 0xFFFF
+    assert orbit_position(0x100, 0x80, 0x10, 0x80, 0x00)[0] == cx
+
+
+def _neg8(v):
+    return v - 0x100 if v & 0x80 else v
+
+
+def _o4(**kw):
+    o = dict(x=0x100, y=0x80, id=0x14F, state=0); o.update(kw); return o
+
+def _d4(**kw):
+    d = dict(d2=0x1111, d4=1, d7=0, d6=0, d9=0x100, dB=0x100, dD=0x20, dE=0x40, dF=0, d10=0)
+    d.update(kw); return d
+
+def _g4(**kw):
+    g = dict(player_x=0x100, player_y=0x100); g.update(kw); return g
+
+_COS = lambda a: 0x40   # constant tables -> deterministic orbit position
+_SIN = lambda a: 0x00
+
+
+def test_h7adf_state0_descends_until_depth():
+    o, d = _o4(state=0, y=0x100), _d4(d6=0, dB=0x100, dD=0x20)   # relY=0 < radius 0x20 -> descend
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert o["y"] == 0x102 and o["state"] == 0
+
+
+def test_h7adf_state0_reaches_orbit():
+    o, d = _o4(state=0, y=0x130), _d4(d6=0, dB=0x100, dD=0x20)   # relY=0x30 >= radius 0x20 -> state 1
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert o["state"] == 1
+
+
+def test_h7adf_state0_counter_gates_descent():
+    o, d = _o4(state=0, y=0x100), _d4(d6=5, d7=0)               # counter not ready -> no move
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert o["y"] == 0x100 and d["d7"] == 1
+
+
+def test_h7adf_state1_spins_angle_and_clamps():
+    o, d = _o4(state=1), _d4(dF=0, dE=0x40, d9=0x100, dB=0x100, dD=0x20)
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert d["dF"] == 4 and o["state"] == 1                      # angle 0->4, below max 0x40
+    o, d = _o4(state=1), _d4(dF=0x3E, dE=0x40)                   # 0x3E+4=0x42 >= 0x40 -> clamp + state 2
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert d["dF"] == 0x40 and o["state"] == 2
+
+
+def test_h7adf_state2_pendulum():
+    o, d = _o4(state=2), _d4(dF=0x10, d10=0)                     # angle 0x10 >= 0 -> dl=-1
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert d["d10"] == 0xFF and d["dF"] == (0x10 + _neg8(0xFF)) & 0xFF   # d10=-1, angle += -1
+
+
+def test_h7adf_state2_sets_position_on_orbit():
+    o, d = _o4(state=2, x=0, y=0), _d4(dF=0x10, d10=0, d9=0x100, dB=0x80, dD=0x10)
+    handle_object_7adf(o, d, _g4(), cos_table=_COS, sin_table=_SIN)
+    assert (o["x"], o["y"]) == orbit_position(0x100, 0x80, 0x10, 0x40, 0x00)
+
+
+# -- handle_object_7898 (idx7 creeper/leaper, 1030:7898) --
+
+def _o7(**kw):
+    o = dict(x=0x200, y=0x100, id=0x14F, xvel=0, yvel=0, state=0, anim_ptr=0x100); o.update(kw); return o
+
+def _d7(**kw):
+    d = dict(d2=0x1111, d4=1, d7=0, dD=2, dE=5); d.update(kw); return d
+
+def _g7(**kw):
+    g = dict(player_x=0x200, player_y=0x100); g.update(kw); return g
+
+_RD7 = lambda off: 0xFFFE    # a negative (loop-marker) word -> anim_script_forward returns immediately
+
+
+def test_h7898_state0_creeps_toward_player_when_out_of_range():
+    o, d = _o7(x=0x200), _d7(dD=0)                      # |dx|=0x100>>4=0x10 > range 0 -> out of range
+    handle_object_7898(o, d, _g7(player_x=0x300), _RD7)
+    assert o["xvel"] == 1 and o["state"] == 0           # faces right (obj.x <= player_x), no leap
+    o2, d2 = _o7(x=0x400), _d7(dD=0)
+    handle_object_7898(o2, d2, _g7(player_x=0x300), _RD7)
+    assert o2["xvel"] == (0xFFFF) and o2["state"] == 0  # faces left (obj.x > player_x)
+
+
+def test_h7898_state0_leaps_when_in_range():
+    o, d = _o7(x=0x200), _d7(dD=2, dE=5)               # obj.x <= player_x -> faces right; |dx|=5>>4=0 <= range
+    handle_object_7898(o, d, _g7(player_x=0x205), _RD7)
+    assert o["state"] == 0xA
+    assert o["yvel"] == (5 << 4)                        # def[0xE]<<4
+    assert o["xvel"] == (5 << 4)                        # facing right (xvel hi byte 0) -> not mirrored
+
+
+def test_h7898_leap_mirrors_x_when_facing_left():
+    o, d = _o7(x=0x300), _d7(dD=2, dE=5)               # obj.x > player_x -> xvel becomes 0xFFFF, hi&0x50!=0
+    handle_object_7898(o, d, _g7(player_x=0x2FF), _RD7)
+    assert o["state"] == 0xA and o["xvel"] == (-(5 << 4)) & 0xFFFF
+
+
+def test_h7898_flying_state_does_nothing():
+    o, d = _o7(state=0xA, xvel=0x50, yvel=0x50), _d7()
+    handle_object_7898(o, d, _g7(), _RD7)
+    assert o["xvel"] == 0x50 and o["yvel"] == 0x50 and o["state"] == 0xA
+
+
+def test_h7898_dying_state():
+    o, d = _o7(state=0xFF, id=0x2000), _d7(d4=1)
+    handle_object_7898(o, d, _g7(), _RD7)
+    assert o["yvel"] == 0xF                             # dying_state gravity
+
+
+# -- handle_object_75c4 (idx12 falling/earthquake object, 1030:75C4) --
+
+def _o12(**kw):
+    o = dict(x=0x200, id=0x2000 | 0x14F, xvel=0, state=0); o.update(kw); return o
+
+def _d12(**kw):
+    d = dict(dD=3, d7=0); d.update(kw); return d
+
+
+def test_h75c4_state0_sets_velocity_toward_player_and_advances():
+    o, d = _o12(x=0x200, state=0), _d12(dD=3)
+    handle_object_75c4(o, d, dict(player_x=0x300))      # player right -> +speed
+    assert o["xvel"] == (3 << 4) and o["state"] == 1
+    o, d = _o12(x=0x300, state=0), _d12(dD=3)
+    handle_object_75c4(o, d, dict(player_x=0x200))      # player left -> -speed
+    assert o["xvel"] == (-(3 << 4)) & 0xFFFF
+
+
+def test_h75c4_state1_drawn_resets_timer():
+    o, d = _o12(state=1, id=0x2000 | 0x14F), _d12(d7=5)   # drawn (bit13) -> reset
+    handle_object_75c4(o, d, dict(player_x=0))
+    assert d["d7"] == 0 and o["state"] == 1
+
+
+def test_h75c4_state1_offscreen_times_out():
+    o, d = _o12(state=1, id=0x14F), _d12(d7=0x99)        # not drawn, timer hits 0x9A -> die
+    handle_object_75c4(o, d, dict(player_x=0))
+    assert d["d7"] == 0x9A and o["state"] == 0xFF
+
+
+# -- handle_object_78ec (idx6 earthquake / screen-shake driver, 1030:78EC) --
+
+def _o6(**kw):
+    o = dict(x=0x200, y=0x100, id=0x2000 | 0x14F, xvel=0, yvel=0, state=0); o.update(kw); return o
+
+def _d6(**kw):
+    d = dict(d2=0x1111, d4=1, d6=0, d7=0, dD=0x40, dE=0, dF=0, d10=0, d11=0, d12=0, d13=0, d14=0)
+    d.update(kw); return d
+
+def _g6(**kw):
+    g = dict(player_x=0x200, player_y=0x100, a30e=0, a310=0, bc0=0, bc1=0, bd0=1,
+             ror=0, la=0, lb=0, lc=0, ld=0)
+    g.update(kw); return g
+
+
+def test_h78ec_state0_arms_when_player_in_range():
+    o, d = _o6(x=0x200, y=0x100, state=0), _d6(dD=0x40)
+    handle_object_78ec(o, d, _g6(player_x=0x210))       # |dx|>>4 = 1 <= 0x40 -> arm
+    assert o["state"] == 1 and d["d10"] == 0x18
+    # accumulators seeded to objX<<3 / objY<<3 (byte-pair little-endian)
+    assert (d["d11"] | (d["d12"] << 8)) == (0x200 << 3) & 0xFFFF
+    assert (d["d13"] | (d["d14"] << 8)) == (0x100 << 3) & 0xFFFF
+
+
+def test_h78ec_state0_out_of_range_stays():
+    o, d = _o6(x=0x200, state=0), _d6(dD=0)
+    handle_object_78ec(o, d, _g6(player_x=0x400))       # |dx|>>4 = 0x20 > 0 -> no arm
+    assert o["state"] == 0
+
+
+def test_h78ec_state1_close_kick_sets_shake_velocity_and_accumulates():
+    # player very close (dist^2 small), bd0 enabled, |dY|<0x30 -> sets [def+0xE]; then accumulate runs
+    o, d = _o6(x=0x200, y=0x100, state=1), _d6(dE=0, dF=0, d11=0, d12=0, d13=0, d14=0)
+    handle_object_78ec(o, d, _g6(player_x=0x201, player_y=0x100, bd0=1))
+    assert d["dE"] != 0                                  # a shake X velocity was kicked
+    assert o["x"] == (_s16_ref(d["d11"] | (d["d12"] << 8)) >> 3) & 0xFFFF
+
+
+def test_h78ec_state1_far_counts_timer_down():
+    o, d = _o6(x=0x200, y=0x100, state=1, id=0x2000 | 0x14F), _d6(d10=5)
+    handle_object_78ec(o, d, _g6(player_x=0x9000, player_y=0x100, bd0=1))   # far -> a310!=0 -> decrement
+    assert d["d10"] == 4
+
+
+def test_h78ec_dying_state():
+    o, d = _o6(state=0xFF, id=0x2000), _d6(d4=1)
+    handle_object_78ec(o, d, _g6())
+    assert o["yvel"] == 0xF                               # dying_state ran (gravity)
+
+
+def _s16_ref(v):
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+# -- terrain_collision (1030:698C) + slope helper _surface_offset (6A7D) --
+
+from pre2.recovered.object_update import terrain_collision, _surface_offset
+
+def _terrain(mapd=None, propa=None, propb=None, slopes=None):
+    mapd = mapd or {}; propa = propa or {}; propb = propb or {}; slopes = slopes or {}
+    return dict(read_map=lambda i: mapd.get(i & 0xFFFF, 0),
+                prop_a=lambda t: propa.get(t, 0), prop_b=lambda t: propb.get(t, 0),
+                slope=lambda t: slopes.get(t, 0), read_word=lambda off: 0xFFFE)
+
+
+def test_terrain_gravity_when_no_ground():
+    o = dict(x=0x105, y=0x205, xvel=0, yvel=0x20, anim_ptr=0x100)
+    terrain_collision(o, dict(d4=0), **_terrain())     # empty map -> fall
+    assert o["yvel"] == 0x30                            # +0x10 gravity
+
+
+def test_terrain_gravity_capped_at_0x100():
+    o = dict(x=0x105, y=0x205, xvel=0, yvel=0x100, anim_ptr=0x100)
+    terrain_collision(o, dict(d4=0), **_terrain())     # yvel already >=0x100 -> no add
+    assert o["yvel"] == 0x100
+
+
+def test_terrain_lands_and_stops_when_non_bouncing():
+    # tile_here solid (propB!=0), flat slope, def4&0x20 -> stop on landing
+    here = (0x20 << 8) | 0x10
+    o = dict(x=0x105, y=0x205, xvel=0, yvel=0x100, anim_ptr=0x100)
+    terrain_collision(o, dict(d4=0x20), **_terrain(mapd={here: 7}, propb={7: 1}))
+    assert o["yvel"] == 0 and (o["y"] & 0xF) == 0       # snapped to tile, stopped
+
+
+def test_terrain_bounces_when_fast():
+    here = (0x20 << 8) | 0x10
+    o = dict(x=0x105, y=0x205, xvel=0, yvel=0x100, anim_ptr=0x100)
+    terrain_collision(o, dict(d4=0), **_terrain(mapd={here: 7}, propb={7: 1}))
+    assert o["yvel"] == (-0x80) & 0xFFFF                # bounce at -yvel/2 (|0x80|>0x20)
+
+
+def test_terrain_wall_bounce_reverses_xvel():
+    # ahead-above tile is a wall (propA!=0), no climb flag -> neg xvel
+    here = (0x20 << 8) | 0x10
+    ahead_above = ((0x1F) << 8) | 0x11                  # tx+1 (xvel>0), ty-1
+    o = dict(x=0x105, y=0x205, xvel=0x40, yvel=0, anim_ptr=0x100)
+    terrain_collision(o, dict(d4=0), **_terrain(mapd={ahead_above: 9}, propa={9: 1}))
+    assert o["xvel"] == (-0x40) & 0xFFFF
+
+
+def test_terrain_starts_climb_when_flag_set():
+    ahead_above = ((0x1F) << 8) | 0x11
+    o = dict(x=0x105, y=0x205, xvel=0x40, yvel=0, anim_ptr=0x100)
+    d = dict(d4=0x40)
+    terrain_collision(o, d, **_terrain(mapd={ahead_above: 9}, propa={9: 1}))
+    assert (d["d4"] & 0x80) and o["yvel"] == 0xFFF0     # climbing up, 0x80 set
+
+
+def test_surface_offset_flat_is_signed_raw():
+    assert _surface_offset(0x105, 3, lambda t: 0x00) == 0
+    assert _surface_offset(0x105, 3, lambda t: 0x05) == 5     # flat (no 0x30 bits) -> raw value
+    assert _surface_offset(0x105, 3, lambda t: 0x80) == -128  # flat negative (no 0x30 bits) -> signed byte
+
+
+def test_surface_offset_slope_rising():
+    # slope byte 0x10|0x4 -> rising: (subx//3) + (s&0xf)=4 ; subx = 0x105&0xf = 5 -> 5//3=1 -> 1+4=5
+    assert _surface_offset(0x105, 3, lambda t: 0x14) == 5

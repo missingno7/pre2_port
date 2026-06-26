@@ -27,7 +27,8 @@ from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW:
                                           anim_script_rewind, anim_script_forward,
                                           handle_object_7665, handle_object_773d,
                                           handle_object_77de, handle_object_7c8c, handle_object_7c90, handle_object_760f,
-                                          handle_object_7c2d, handle_object_7b91)
+                                          handle_object_7c2d, handle_object_7b91, handle_object_7adf,
+                                          handle_object_7898)
 
 SEG = 0x1030
 
@@ -202,12 +203,13 @@ def main():
 
     def _def_dict(ds, d):
         return {"d2": rdw(ds, d + 2), "d4": rdb(ds, d + 4), "d6": rdb(ds, d + 6), "d7": rdb(ds, d + 7),
-                "d9": rdw(ds, d + 9), "dB": rdw(ds, d + 0xB), "dD": rdw(ds, d + 0xD), "dE": rdb(ds, d + 0xE),
-                "dF": rdw(ds, d + 0xF), "d10": rdb(ds, d + 0x10), "d11": rdb(ds, d + 0x11),
+                "d9": rdw(ds, d + 9), "dB": rdw(ds, d + 0xB), "dD": rdb(ds, d + 0xD), "dE": rdb(ds, d + 0xE),
+                "dF": rdb(ds, d + 0xF), "d10": rdb(ds, d + 0x10), "d11": rdb(ds, d + 0x11),
                 "d12": rdb(ds, d + 0x12)}
 
     _HANDLERS = {0x7665: handle_object_7665, 0x773D: handle_object_773d, 0x77DE: handle_object_77de,
-                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90, 0x760F: handle_object_760f, 0x7C2D: handle_object_7c2d, 0x7B91: handle_object_7b91}
+                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90, 0x760F: handle_object_760f, 0x7C2D: handle_object_7c2d, 0x7B91: handle_object_7b91,
+                 0x7ADF: handle_object_7adf, 0x7898: handle_object_7898}
 
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
@@ -227,6 +229,10 @@ def main():
             try:
                 if target == 0x7B91:
                     fn(obj, defn, glb, lambda off: rdw(ds, off), tile_prop=tile_prop)
+                elif target == 0x7ADF:                              # idx4 orbit: cos/sin tables + spawn trail
+                    fn(obj, defn, glb, lambda off: rdw(ds, off),
+                       cos_table=lambda ang: rdb(ds, (0x6F90 + ang) & 0xFFFF),
+                       sin_table=lambda ang: rdb(ds, (0x7090 + ang) & 0xFFFF))
                 else:
                     fn(obj, defn, glb, lambda off: rdw(ds, off))   # uniform (obj, defn, glb, read_word)
                 hdl_pending[0] = (si, d, obj, defn)
