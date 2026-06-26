@@ -15,7 +15,15 @@ Started with the isolated horizontal-kinematics leaf (the player counterpart of 
 """
 from __future__ import annotations
 
-__all__ = ["player_x_integrate", "player_y_integrate", "X_MIN", "X_MAX", "VIEW_TILES"]
+__all__ = [
+    "player_x_integrate", "player_y_integrate", "player_tick_timers",
+    "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
+]
+
+# [asm 5A4A-5A87] per-frame countdown timers decremented at the tail of the player update, each clamped at 0
+# (`sub [x],1 ; adc [x],0` = decrement-but-not-below-zero). Seven byte counters + one word counter.
+TIMER_BYTES = (0x6BCE, 0x6BCD, 0x6BEA, 0x6BE8, 0x6BE4, 0x6BE1, 0x6C00)
+TIMER_WORD = 0x6BE2
 
 X_MIN = 0x0008          # [asm 5A29] commit only if new_x >= 8 (left world edge)
 X_MAX = 0x0FF8          # [asm 5A2E] commit only if new_x < 0xFF8 (right world edge)
@@ -50,3 +58,20 @@ def player_y_integrate(y: int, yvel: int) -> int:
     are no bounds here; the ground/tile collision at ``5A96`` (the very next call) clamps Y and zeroes Yvel on
     contact. Pure: returns the new ``[0x4F1E]`` value."""
     return (y + (_s16(yvel) >> 4)) & 0xFFFF                  # [5A36-5A3D] Y += sar(Yvel,4)
+
+
+def _dec_floor(v: int, width: int) -> int:
+    """One ``sub v,1 ; adc v,0`` saturating decrement (clamps at 0) for an ``width``-bit unsigned counter."""
+    mask = (1 << width) - 1
+    return (v - 1) & mask if (v & mask) != 0 else 0
+
+
+def player_tick_timers(timers: dict) -> dict:
+    """Recover the player-update timer tail ``1030:5A47..5A87``.
+
+    Decrement each of the seven byte countdown timers + the one word countdown timer, every one clamped at 0.
+    Pure: ``timers`` maps each address in ``TIMER_BYTES``/``TIMER_WORD`` to its current value; returns the new
+    values (same keys). Bytes are 8-bit-wrapped, the word is 16-bit."""
+    out = {a: _dec_floor(timers[a], 8) for a in TIMER_BYTES}     # [5A4A-5A7E] seven byte timers
+    out[TIMER_WORD] = _dec_floor(timers[TIMER_WORD], 16)         # [5A82-5A87] one word timer
+    return out

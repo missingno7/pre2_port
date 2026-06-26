@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.recovered.player import VIEW_TILES, X_MAX, X_MIN, _s16, player_x_integrate, player_y_integrate
+from pre2.recovered.player import (
+    TIMER_BYTES, TIMER_WORD, VIEW_TILES, X_MAX, X_MIN, _s16,
+    player_tick_timers, player_x_integrate, player_y_integrate,
+)
 
 from .common import report
 
@@ -23,14 +26,30 @@ _ENTRY = (0x1030, 0x5A0F)     # mov ax,[0x4F22]  (start of the X integrate)
 _NEXT = (0x1030, 0x5A36)      # mov ax,[0x4F2A]  (the Y integrate — first instruction after the X block)
 _ENTRY_Y = (0x1030, 0x5A36)   # mov ax,[0x4F2A]  (start of the Y integrate)
 _NEXT_Y = (0x1030, 0x5A41)    # call 0x5A96      (the ground/tile collision — first instruction after Y)
+_ENTRY_T = (0x1030, 0x5A47)   # mov dx,1         (start of the per-frame timer decrements)
+_NEXT_T = (0x1030, 0x5A8C)    # pop bp           (the routine epilogue — first instruction after the timers)
 _DS = 0x1A0F
 _PX = 0x4F1C
 _PY = 0x4F1E
 
 
+def _rb(mem, off):
+    return mem.data[((_DS << 4) + off) & 0xFFFFF]
+
+
 def _rw(mem, off):
     b = ((_DS << 4) + off) & 0xFFFFF
     return mem.data[b] | (mem.data[b + 1] << 8)
+
+
+def _wb(mem, off, v):
+    mem.data[((_DS << 4) + off) & 0xFFFFF] = v & 0xFF
+
+
+def _ww(mem, off, v):
+    b = ((_DS << 4) + off) & 0xFFFFF
+    mem.data[b] = v & 0xFF
+    mem.data[b + 1] = (v >> 8) & 0xFF
 
 
 @registry.replace(*_ENTRY, "player_x_integrate")
@@ -89,8 +108,34 @@ def player_y_integrate_hook(cpu) -> None:
     cpu.s.ip = _NEXT_Y[1]
 
 
+@registry.replace(*_ENTRY_T, "player_tick_timers")
+def player_tick_timers_hook(cpu) -> None:
+    """Native replacement for the player-update timer tail at 1030:5A47..5A87 (8 saturating countdowns)."""
+    mem = cpu.mem
+    timers = {a: _rb(mem, a) for a in TIMER_BYTES}
+    timers[TIMER_WORD] = _rw(mem, TIMER_WORD)
+    out = player_tick_timers(timers)
+
+    if getattr(cpu, "pre2_verify_mode", False):
+        cpu.pre2_player_t_pending.append(out)
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    for a in TIMER_BYTES:
+        _wb(mem, a, out[a])
+    _ww(mem, TIMER_WORD, out[TIMER_WORD])
+    # Straight-line block, 17 ASM insns; step() adds 1 -> add 16. Reproduce the final `adc word,0` FLAGS
+    # (== add of the post-`sub` value + its borrow) for IRQ-push transparency; they are otherwise dead (the
+    # next instruction is `pop bp`).
+    orig = timers[TIMER_WORD]
+    sub_res = (orig - 1) & 0xFFFF
+    cpu.set_add_flags(sub_res, 1 if orig == 0 else 0, out[TIMER_WORD], 16)
+    cpu.instruction_count += 16
+    cpu.s.ip = _NEXT_T[1]
+
+
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
-    """Install the lockstep verify hooks: diff the recovered X (at 5A36) / Y (at 5A41) vs the ASM's."""
+    """Install the lockstep verify hooks: diff the recovered X (5A36) / Y (5A41) / timers (5A8C) vs the ASM."""
 
     def _verify_x_at_next(c) -> None:
         # 0x5A36 is the X-integrate EXIT *and* the Y-integrate ENTRY. In verify mode this hook shadows the
@@ -114,7 +159,18 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
             report(stats, on_result, raise_on_divergence, "player_y_integrate", reason)
         interpret_current_instruction_without_hook(c)
 
+    def _verify_t_at_next(c) -> None:
+        pending = getattr(c, "pre2_player_t_pending", None)
+        if pending:
+            pred = pending.pop()
+            bad = [hex(a) for a in pred if pred[a] != (_rw(c.mem, a) if a == TIMER_WORD else _rb(c.mem, a))]
+            reason = None if not bad else f"timers differ at {bad}"
+            report(stats, on_result, raise_on_divergence, "player_tick_timers", reason)
+        interpret_current_instruction_without_hook(c)
+
     cpu.replacement_hooks[_NEXT] = _verify_x_at_next
     cpu.hook_names[_NEXT] = "player_x_integrate_verify"
     cpu.replacement_hooks[_NEXT_Y] = _verify_y_at_next
     cpu.hook_names[_NEXT_Y] = "player_y_integrate_verify"
+    cpu.replacement_hooks[_NEXT_T] = _verify_t_at_next
+    cpu.hook_names[_NEXT_T] = "player_tick_timers_verify"

@@ -57,6 +57,30 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
     `5A41`, reproduces the `add` FLAGS). Fires ~2069× on L1.
   - Verify-mode oracle: 487/487 (L1) + 66/66 (L6), zero divergences. Note `5A36` is the X exit *and* the Y
     entry, so in verify mode the X verify-hook also captures the Y prediction (X always runs just before Y).
+- **`player_tick_timers` (1030:5A47..5A87). LIVE + VERIFIED**. The routine tail: 7 byte + 1 word per-frame
+  countdown timers (`[0x6BCE/6BCD/6BEA/6BE8/6BE4/6BE1/6C00]` + word `[0x6BE2]`), each a `sub [x],1 ; adc [x],0`
+  saturating decrement (clamps at 0, NOT 0xFF).
+  - Shadow: 2078/2078 (L1) + 299/299 (L6). Live: inline-block swap (17 insns, writes the 8 timers, jumps to
+    the epilogue `5A8C`, reproduces the final `adc` FLAGS — otherwise dead, `pop bp` follows).
+  - Verify-mode oracle: 483/483 (L1) + 66/66 (L6), zero divergences. Fires ~1996× on L1.
+
+## Sub-islands still ASM (the FSM "brain" + terrain) — scoped, witness data
+The kinematics shell (X/Y integrate + timers) is live. What remains of the player update is the actual
+behaviour, in three unrecovered pieces:
+- **Per-state handlers `cs:[0x7D2F]`** (dispatched at `5A0B`) — the FSM brain (idle/run/jump/attack/death/…).
+  16-entry table; recover one state at a time.
+- **Ground/tile collision + tile-interaction `5A96`** — a genuine sub-island, not a leaf. Witness (L1):
+  fires 2006×/frame; calls the tile-interaction worker `5B81` + dispatches the **tile-type handler table
+  `cs:[0x7D9B]`** *every* frame, runs a vertical tile-scan loop (`5CAC` ×3584), and the fall-off-edge path
+  (`63B5`) ×820. It writes Yvel (868×), Y (39×), and flags `[0x6BF3]/[0x6BD2]/[0x6BE5]`. The `0x7D9B` table is
+  the per-tile-type behaviour (ground stop, collectible, breakable, hazard…) — its own multi-step recovery,
+  analogous to the object idx0-12 handler table.
+- **Animation-state select `484E`** (called at `5A44`) — picks the player sprite/anim index into `[0x4F20]`
+  (high byte = anim, low 5 bits = collision tile-column) from Xvel thresholds (`0x40/0x20`) + the run counter
+  `[0x7B1A]` + a table at `0x7B29`. Moderate; fires every frame.
+
+A single collapsed `player_update` hook (subsuming the X/Y/timer leaves, like `object_tick` subsumed
+`object_velocity`) is the end state — reachable once these three are recovered.
 
 ## Mismatch taxonomy (classes to watch as the FSM is recovered)
 1. **Fixed-point**: 12.4 velocities, arithmetic `sar` (floor toward -inf) — sign/rounding bugs.
@@ -68,10 +92,12 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
 6. **Collision-coupled**: `5A96` (ground/tile) overwrites Y/Yvel after the integrate — recover the integrate
    and the collision separately and compose.
 
-## Next leaves (staged, shadow-before-live)
-With X+Y integrate live, the next safe leaves up the same routine, in order of risk:
-1. **Ground/tile collision `5A96`** — reads the tile-property table by `[0x4F20]`; recover the lookup + the
-   Y/Yvel response separately, then compose (collision-coupled mismatch class).
-2. **Per-state handlers `cs:[0x7D2F]`** — one state at a time (start with idle/run), each shadow-verified
-   before live. This is where facing/animation/action behaviour lives.
-Keep each its own small reversible step. No broad FSM rewrite; no guessed struct fields.
+## Next, in order of value/tractability
+1. **Animation-state select `484E`** — self-contained, every-frame, writes only `[0x4F20]`; easy to
+   shadow-verify. Good next leaf.
+2. **Per-state handlers `cs:[0x7D2F]`** — one state at a time (idle/run first), each shadow-verified before
+   live. The FSM brain.
+3. **Collision/tile-interaction `5A96` + `cs:[0x7D9B]`** — the largest piece; recover the tile-property
+   lookup + Y/Yvel response, then the tile-type handlers one at a time.
+Then collapse to a single `player_update` hook. Keep each its own small reversible step. No broad FSM rewrite;
+no guessed struct fields.
