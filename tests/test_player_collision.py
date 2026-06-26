@@ -1,8 +1,8 @@
 """Tests for the recovered player collision leaves (pre2.recovered.player_collision).
 
 ASM equivalence proven on live gameplay demos: collision_fall 791/791 (L1) + 138/138 (L6),
-collision_hblock 98/98 (L1). collision_slope_offset is unwitnessed in the L1/L6 corpus (no slope tiles), so
-its test pins the recovered formula from the disasm (ASM_MATCHED, not yet lockstep-VERIFIED)."""
+collision_hblock 98/98 (L1), collision_slope_offset 16/16 (slope demo 001513) + 8/8 (102854) -- all VERIFIED
+byte-exact (the slope demo is a level with sloped/slippery tiles)."""
 from __future__ import annotations
 
 from pre2.recovered.player_collision import collision_fall, collision_hblock, collision_slope_offset
