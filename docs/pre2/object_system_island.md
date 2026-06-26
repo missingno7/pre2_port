@@ -367,3 +367,15 @@ final boss is one of the never-witnessed handler ids (idx5/7 or idx13-23) in the
 
 Recovered handlers: idx0/1/2/8/9/10/11 (7 of the witnessed types). Remaining: idx3 (7B91 jumper, needs 7FD9 +
 level-map), idx4 (7ADF orbit, needs 7B53 sin/cos + 8089), idx6 (78EC) / idx12 (75C4) [earthquake] + 698C.
+
+## Stage 1 cont. (2026-06-26) — idx3 falling/landing enemy (level-map collision)
+
+- **`1030:7B91..7C2C` — handler idx3 `handle_object_7b91`. VERIFIED**. A falling/landing enemy: state 0 waits
+  until the player is within `[def+0xD]` tiles, then falls (Yvel=0x20); state 1 trails effects (7FD9) and
+  reads the level tile under it (`[0x7F5E + map[tileY*0x100+tileX]]` via es:[0x2DDA]) -> on solid ground it
+  snaps to the tile, stops, flags `[def+4]|=0x48`, dashes toward the player (±0x30), state 2; state 2 bounces
+  X off the left edge; state 0xFF dying. Takes a ``tile_prop(tx,ty)`` callback (the live level-map lookup, the
+  same one 698C uses). Shadow (obj/def) 1139/1139 (L6).
+
+Recovered handlers: idx0/1/2/3/8/9/10/11 (8 of the witnessed). Remaining: idx4 (7ADF orbit, needs 7B53 sin/cos
++ 8089), idx6 (78EC) / idx12 (75C4) [earthquake] + 698C terrain collision, then compose object_tick.

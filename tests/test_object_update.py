@@ -11,7 +11,7 @@ from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, 
                                           apply_velocity, despawn_check, dying_state, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7c8c,
                                           handle_object_7c90, handle_object_760f, handle_object_7c2d,
-                                          on_screen_tile, saturating_counter, spawn_effects)
+                                          handle_object_7b91, on_screen_tile, saturating_counter, spawn_effects)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -533,3 +533,48 @@ def test_spawn_effects_three_entries():
     out = spawn_effects(def9=0x123, defB=0x200, arg=0, dl=8, find_free=lambda: next(it))   # step=2, y=0x1E8
     assert out == [(0x123, 0x1E8, 0, 2), (0x123, 0x1E8, 0, 4), (0x123, 0x1E8, 0, 6)]
     assert free[0] == [0x123, 0x1E8, 0, 2] and free[2] == [0x123, 0x1E8, 0, 6]
+
+
+# -- handle_object_7b91 (idx3 falling/landing enemy, 1030:7B91) --
+
+def _o3(**kw):
+    o = dict(x=0x100, y=0x100, id=0x2000 | 0x144, xvel=0, yvel=0, anim_ptr=0x200, state=0)
+    o.update(kw); return o
+
+def _d3(**kw):
+    d = dict(d2=0, d4=0, d6=0, d7=0, d9=0x100, dB=0x100, dD=8)
+    d.update(kw); return d
+
+def _g3(**kw):
+    g = dict(player_x=0x100, player_y=0x100)
+    g.update(kw); return g
+
+_RD3 = lambda off: 0xFFFE
+
+
+def test_h7b91_state0_waits_until_player_near():
+    o, d = _o3(state=0), _d3(d6=0, d9=0x100, dD=2)
+    handle_object_7b91(o, d, _g3(player_x=0x300), _RD3, tile_prop=lambda x, y: 0)   # distX=0x20 > 2 -> wait
+    assert o["state"] == 0
+
+
+def test_h7b91_state0_falls_when_player_near():
+    o, d = _o3(state=0), _d3(d6=0, d9=0x100, dD=8)
+    handle_object_7b91(o, d, _g3(player_x=0x100), _RD3, tile_prop=lambda x, y: 0)   # distX=0 <= 8 -> fall
+    assert o["state"] == 1 and o["yvel"] == 0x20 and o["anim_ptr"] == 0x202
+
+
+def test_h7b91_state1_falls_until_solid_then_lands():
+    o, d = _o3(state=1, y=0x105, anim_ptr=0x200), _d3()
+    handle_object_7b91(o, d, _g3(), _RD3, tile_prop=lambda x, y: 0)                 # no ground -> keep falling
+    assert o["state"] == 1 and o["y"] == 0x105
+    o, d = _o3(state=1, y=0x105, anim_ptr=0x200), _d3()
+    handle_object_7b91(o, d, _g3(player_x=0x200), _RD3, tile_prop=lambda x, y: 1)   # solid -> land
+    assert o["state"] == 2 and o["y"] == 0x100 and o["yvel"] == 0
+    assert (d["d4"] & 0x48) == 0x48 and o["xvel"] == 0x30
+
+
+def test_h7b91_state2_bounces_off_left_edge():
+    o, d = _o3(state=2, x=(-1) & 0xFFFF, xvel=0x30), _d3()
+    handle_object_7b91(o, d, _g3(player_x=0), _RD3, tile_prop=lambda x, y: 0)
+    assert o["xvel"] == (-0x30) & 0xFFFF

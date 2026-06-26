@@ -22,7 +22,7 @@ __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT", 
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
            "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state", "saturating_counter",
-           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f", "handle_object_7c2d", "spawn_effects"]
+           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f", "handle_object_7c2d", "spawn_effects", "handle_object_7b91"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -504,3 +504,47 @@ def handle_object_7c2d(obj: dict, defn: dict, glb: dict, read_word=None, spawn=N
         if _s16(rel_y) < 0:                               # [7C7B jge -> ret] rose above the centre
             obj["state"] = 0
             obj["anim_ptr"] = anim_script_rewind(obj["anim_ptr"], read_word)
+
+
+def handle_object_7b91(obj: dict, defn: dict, glb: dict, read_word=None, spawn=None, tile_prop=None) -> None:
+    """Recover the idx3 AI handler ``1030:7B91..7C2C`` — a FALLING/LANDING enemy. state 0: wait until the
+    player is within ``[def+0xD]`` tiles (horizontally, of the spawn X ``[def+9]``), then start falling
+    (Yvel=0x20). state 1: trail effects (``7FD9``) + check the level tile under it; once it hits solid ground
+    snap to the tile, stop, flag for collision (``[def+4]|=0x48``), dash toward the player (±0x30), state 2.
+    state 2: bounce its X velocity if it wraps off the left edge. state 0xFF: dying.
+
+    ``obj``: x, y, id, xvel, yvel, anim_ptr, state. ``defn``: d2, d4, d6, d7, d9, dB, dD. ``glb``: player_x,
+    player_y. ``tile_prop(tile_x, tile_y) -> int`` returns the terrain property under that tile (the live
+    level-map lookup ``[0x7F5E + map[tileY*0x100+tileX]]``); ``spawn`` is the optional effect spawner."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [7B91 call 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    st = obj["state"]
+    if st == 0:                                            # [7B99] wait for the player to approach
+        defn["d7"], ready = saturating_counter(defn["d6"], defn["d7"])
+        if not ready:
+            return
+        dist_x = (_abs16(defn["d9"] - glb["player_x"]) >> 4) & 0xFF   # [7BA2-7BAD]
+        if (defn["dD"] & 0xFF) < dist_x:                   # [7BAF jb 7C2C] still too far -> wait
+            return
+        defn["d4"] &= 0xEF                                 # [7BB4]
+        obj["state"] = 1
+        obj["yvel"] = 0x20                                 # [7BBC] start falling
+        obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)
+    elif st == 1:                                          # [7BC5] fall until it lands on solid ground
+        if spawn is not None:
+            spawn(defn["d9"], defn["dB"], 0, (obj["y"] - defn["dB"]) & 0xFF)   # [7BC9-7BD1]
+        prop = tile_prop((obj["x"] >> 4) & 0xFF, (obj["y"] >> 4) & 0xFF) if tile_prop else 0  # [7BD4-7BEB]
+        if prop == 0:                                      # [7BEC je 7C2C] no ground yet -> keep falling
+            return
+        obj["y"] &= 0xFFF0                                 # [7BF0] snap to the tile
+        obj["yvel"] = 0                                    # [7BF4]
+        obj["state"] = 2                                   # [7BF9]
+        defn["d4"] |= 0x48                                 # [7C00]
+        obj["xvel"] = 0x30 if _s16(glb["player_x"]) >= _s16(obj["x"]) else (-0x30) & 0xFFFF   # [7C04-7C11]
+        obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)
+    elif st == 2:                                          # [7C18] bounce off the left world edge
+        if _s16(obj["x"]) < 0:
+            obj["xvel"] = (-_s16(obj["xvel"])) & 0xFFFF
+    elif st == 0xFF:                                       # [7C29 jmp 7CDA]
+        dying_state(obj, defn, glb)

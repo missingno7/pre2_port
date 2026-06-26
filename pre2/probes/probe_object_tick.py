@@ -27,7 +27,7 @@ from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW:
                                           anim_script_rewind, anim_script_forward,
                                           handle_object_7665, handle_object_773d,
                                           handle_object_77de, handle_object_7c8c, handle_object_7c90, handle_object_760f,
-                                          handle_object_7c2d)
+                                          handle_object_7c2d, handle_object_7b91)
 
 SEG = 0x1030
 
@@ -207,7 +207,7 @@ def main():
                 "d12": rdb(ds, d + 0x12)}
 
     _HANDLERS = {0x7665: handle_object_7665, 0x773D: handle_object_773d, 0x77DE: handle_object_77de,
-                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90, 0x760F: handle_object_760f, 0x7C2D: handle_object_7c2d}
+                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90, 0x760F: handle_object_760f, 0x7C2D: handle_object_7c2d, 0x7B91: handle_object_7b91}
 
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
@@ -221,8 +221,14 @@ def main():
             obj, defn = _obj_dict(ds, si), _def_dict(ds, d)
             glb = {"mode": rdb(ds, 0x2D8A), "shake": rdb(ds, 0x6BEA), "a340": rdb(ds, 0xA340),
                    "frame": rdb(ds, 0x6BD5), "player_x": rdw(ds, 0x4F1C), "player_y": rdw(ds, 0x4F1E)}
+            def tile_prop(tx, ty):                     # the live level-map terrain lookup (idx3 needs it)
+                tile = cpu.mem.data[((rdw(ds, 0x2DDA) << 4) + ((ty * 0x100 + tx) & 0xFFFF)) & 0xFFFFF]
+                return rdb(ds, 0x7F5E + tile)
             try:
-                fn(obj, defn, glb, lambda off: rdw(ds, off))   # uniform (obj, defn, glb, read_word)
+                if target == 0x7B91:
+                    fn(obj, defn, glb, lambda off: rdw(ds, off), tile_prop=tile_prop)
+                else:
+                    fn(obj, defn, glb, lambda off: rdw(ds, off))   # uniform (obj, defn, glb, read_word)
                 hdl_pending[0] = (si, d, obj, defn)
             except ObjectScaleUnsupported:
                 hdl_pending[0] = None
