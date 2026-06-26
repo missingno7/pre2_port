@@ -169,8 +169,12 @@ override sends every handler (bar anim8) to the unrecovered tail `5F93` — now 
 101/88 per demo (override + eating 3/6/7 + idle anim13).
 
 ## Remaining to fully collapse `player_update`
-1. **idle's `5D8A` anim13 sub-path** — the last FSM dispatch gap (its dust effects `3435/3414` are
-   out-of-FSM-scope spawns).
+1. **idle's `5D8A` anim13 sub-path = the "idle look-around"** — anim `0x13` + a CAMERA PAN (`3435` scrolls the
+   camera right via `[0x2DE4]`/`[0x2DE8]`, `3414` left), triggered by `[0x27E9]` held while standing still
+   (`[0x27E9]` is NOT in the dispatch bitmask, so it doesn't change anim_id — it just drives this branch).
+   **UNWITNESSED in the whole demo corpus** (the running demos never idle-and-look) — needs a crafted/recorded
+   demo before it can be recovered byte-exact; currently a fail-loud gap in `player_state_idle`. It also mutates
+   cross-cutting camera state (`[0x2DE4]`/`[0x2DE8]`), so it's a small sub-island, not a leaf.
 2. Live-hook `player_update` (front-end → select → dispatch → X/Y integrate → collision → timers) and collapse
    in **verify-mode** (the non-perturbing oracle), subsuming the X/Y/timer leaves. NB: the full-step *standalone*
    shadow shows perturbation-class residuals on the **stateful** eating sequence (`[0x4F28]` advances across
