@@ -7,7 +7,8 @@ from __future__ import annotations
 import pytest
 
 from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, ObjectScaleUnsupported,
-                                          advance_animation, apply_velocity, despawn_check, on_screen_tile)
+                                          advance_animation, anim_script_forward, anim_script_rewind,
+                                          apply_velocity, despawn_check, on_screen_tile)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -167,3 +168,24 @@ def test_onscreen_uses_arithmetic_shift_for_negative_pixel():
     assert on_screen_tile(0xFFF0, 0x50, cam_x=0, cam_y=0) is True
     # x = -48 (0xFFD0) >> 4 = -3 -> off-left
     assert on_screen_tile(0xFFD0, 0x50, cam_x=0, cam_y=0) is False
+
+
+# -- anim_script_rewind / anim_script_forward (1030:8048 / 8058) --
+
+def test_anim_rewind_stops_at_negative_marker():
+    mem = {0x100: (-4) & 0xFFFF, 0x102: 0x10, 0x104: 0x11, 0x106: 0x12}
+    rd = lambda o: mem.get(o & 0xFFFF, 0)
+    assert anim_script_rewind(0x106, rd) == 0x100   # back over 0x104,0x102 (>=0), stop at the negative 0x100
+
+
+def test_anim_forward_steps_past_negative_marker():
+    mem = {0x100: 0x10, 0x102: 0x11, 0x104: (-2) & 0xFFFF}
+    rd = lambda o: mem.get(o & 0xFFFF, 0)
+    assert anim_script_forward(0x100, rd) == 0x106  # 0x100,0x102 >=0, 0x104<0 -> step +2 past it
+
+
+def test_anim_seek_runaway_raises():
+    with pytest.raises(ObjectScaleUnsupported):
+        anim_script_rewind(0x100, lambda o: 0x10)   # never negative -> runaway guard
+    with pytest.raises(ObjectScaleUnsupported):
+        anim_script_forward(0x100, lambda o: 0x10)

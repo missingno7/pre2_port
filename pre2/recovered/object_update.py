@@ -20,7 +20,8 @@ from __future__ import annotations
 
 __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
-           "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile"]
+           "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
+           "anim_script_rewind", "anim_script_forward"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -179,3 +180,28 @@ def on_screen_tile(x: int, y: int, cam_x: int, cam_y: int) -> bool:
         return False
     ty = _s16(((_s16(y) >> 4) - cam_y) & 0xFFFF)             # [asm 8034-8036]
     return ONSCREEN_Y[0] <= ty <= ONSCREEN_Y[1]              # [asm 803A-8042]
+
+
+# -- animation-script loop seeks (1030:8048 rewind / 8058 forward) ------------------------------------- #
+
+def anim_script_rewind(script_ptr: int, read_word) -> int:
+    """Recover ``1030:8048`` — seek the script pointer BACK to the loop marker: step ``-2`` while the entry is
+    non-negative, stop ON the first negative (back-jump) word. Returns the new ``[si+0xC]``. (A handler calls
+    this to restart the current animation loop, e.g. the bob oscillator at its top.)"""
+    bx = script_ptr & 0xFFFF
+    for _ in range(256):                                     # [asm 804C-8051] bx-=2 while [bx] >= 0
+        bx = (bx - 2) & 0xFFFF
+        if read_word(bx) >= 0x8000:                          # negative -> stop here
+            return bx
+    raise ObjectScaleUnsupported("runaway anim rewind (no loop marker)")
+
+
+def anim_script_forward(script_ptr: int, read_word) -> int:
+    """Recover ``1030:8058`` — seek the script pointer FORWARD past the loop marker: step ``+2`` while the entry
+    is non-negative, then ``+2`` once more past the negative (back-jump) word. Returns the new ``[si+0xC]``."""
+    bx = script_ptr & 0xFFFF
+    for _ in range(256):                                     # [asm 805C-8063] bx+=2 while [bx] >= 0
+        if read_word(bx) >= 0x8000:                          # negative -> step past it [asm 8065]
+            return (bx + 2) & 0xFFFF
+        bx = (bx + 2) & 0xFFFF
+    raise ObjectScaleUnsupported("runaway anim forward (no loop marker)")

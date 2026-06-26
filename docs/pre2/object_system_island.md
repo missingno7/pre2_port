@@ -250,3 +250,17 @@ remaining walker pieces with witnesses; `8001` needs a witness (its handler `7C9
 Recovered object-update leaves: **apply_velocity ✓(live) · advance_animation ✓ · despawn_check ✓ ·
 on_screen_tile ✓**. NEXT: `698C` is the big terrain-collision routine (own pass + a collision witness); then
 the per-type handlers `7C8C`/`7C2D`/`7665` (thin: despawn + on_screen + small logic) → compose the walker.
+
+## Stage 1 cont. (2026-06-26) — anim-seek helpers; the composition target
+
+- **`1030:8048`/`8058` — `anim_script_rewind`/`anim_script_forward`. VERIFIED**. Seek `[si+0xC]` back/forward
+  to the loop marker (negative back-jump word); shadow 9/9 exact. Prerequisites the bob/oscillator handlers
+  (`7C2D`) and `698C` call.
+
+THE COLLAPSE TARGET (what all these recovered leaves compose into): the walker `684E..6913` becomes one
+high-level `object_tick(objects, player, camera, level_map)` — per non-empty slot: `apply_velocity` →
+(`[def+4]&8`? `terrain_collide`/698C) → `advance_animation` → `dispatch[def.handler_index](...)`; each handler
+= `despawn_check` + `on_screen_tile` + anim-seek + small per-type state logic. Once `698C` and the per-type
+handlers are recovered+verified, the loop is plain structured source over an `ObjectRecord` list (pure,
+VM-independent) and the live hook moves up to the COMPOSED tick (one hook for the whole loop). Recovered
+leaves so far: apply_velocity·advance_animation·despawn_check·on_screen_tile·anim_script_rewind/forward.

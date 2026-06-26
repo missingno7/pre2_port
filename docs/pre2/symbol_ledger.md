@@ -238,9 +238,14 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
 - **`1030:698C` — object↔terrain COLLISION** (walker calls it at 687E when `[def+4]&8`; fires 141×). OBSERVED,
   big: tile lookups via `es:[0x2DDA]` + property tables `0x7E5E`/`0x7F5E`, wall-bounce/floor/climb response
   writing `[si]/[si+2]/[si+8]/[si+0xA]/[def+4]` + calls `8048`/`8058`. NEEDS A DEDICATED PASS (+ collision witness).
+- **`1030:8048`/`8058` — `anim_script_rewind`/`anim_script_forward`. VERIFIED** (`object_update`,
+  `tests/test_object_update.py`). Seek `[si+0xC]` back/forward to the loop marker (the negative back-jump
+  word). Shadow 9/9 exact. Called by the bob/oscillator handlers + `698C`.
 - **Walker sub-helpers (OBSERVED):** `8001` saturating `[def+7]` counter vs `[def+6]` (0 fires here — needs a
-  witness); `8048`/`8058` anim-script rewind/forward to the loop marker; `806C` find-free-slot spawn allocator
-  (walks `0x4FD0`×12 for `[+4]==0xFFFF`).
+  witness); `806C` find-free-slot spawn allocator (walks `0x4FD0`×12 for `[+4]==0xFFFF`).
+- **Handlers are state machines** on the shared leaves: idx1 `7C8C` = `despawn_check` only; idx2 `7C2D` = a
+  vertical-bob oscillator (state 0 down / 1 up via def params `[def+0xB/0xD/0xE]`, calls despawn + anim
+  seek + helper `7FD9`); idx10 `7665` = another `[si+0xE]` state machine. Per-type AI, recover next.
 - **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
   `1→7C8C`, `2→7C2D`, `10→7665`. 24-entry catalogue at `CS:0x6AA9`. Handlers UNRECOVERED.
 - **Phase B (the blit) — full spec mapped, TODO implement.** Per sprite it is a **two-phase
