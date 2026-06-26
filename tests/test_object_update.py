@@ -8,7 +8,8 @@ import pytest
 
 from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, ObjectScaleUnsupported,
                                           advance_animation, anim_script_forward, anim_script_rewind,
-                                          apply_velocity, despawn_check, on_screen_tile)
+                                          apply_velocity, despawn_check, handle_object_7665,
+                                          on_screen_tile)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -189,3 +190,83 @@ def test_anim_seek_runaway_raises():
         anim_script_rewind(0x100, lambda o: 0x10)   # never negative -> runaway guard
     with pytest.raises(ObjectScaleUnsupported):
         anim_script_forward(0x100, lambda o: 0x10)
+
+
+# -- handle_object_7665 (idx10 AI state machine, 1030:7665..773C) --
+
+def _o(**kw):
+    o = dict(x=0x100, y=0x100, id=0x0187, xvel=0, yvel=0, anim_ptr=0x200, state=0)
+    o.update(kw); return o
+
+def _d(**kw):
+    d = dict(d2=0x1111, d4=0, d7=0, dD=4)
+    d.update(kw); return d
+
+def _g(**kw):
+    g = dict(mode=0, shake=0, a340=0, frame=1, player_x=0x100, player_y=0x100)
+    g.update(kw); return g
+
+_RD = lambda off: 0xFFFE   # script reader: immediate back-jump -> anim_script_forward returns ptr+2
+
+
+def test_h7665_state0_settles_to_arm_when_stopped():
+    o, d = _o(state=0, yvel=0), _d()
+    handle_object_7665(o, d, _g(), _RD)
+    assert o["state"] == 1 and (d["d4"] & 0x18) == 0x18
+
+
+def test_h7665_state0_stays_while_falling():
+    o, d = _o(state=0, yvel=0x40), _d()
+    handle_object_7665(o, d, _g(), _RD)
+    assert o["state"] == 0
+
+
+def test_h7665_state1_arms_timer_and_advances_anim():
+    o, d = _o(state=1, yvel=0, anim_ptr=0x200), _d()
+    handle_object_7665(o, d, _g(), _RD)
+    assert o["state"] == 2 and d["d7"] == 0x1E and o["anim_ptr"] == 0x202
+
+
+def test_h7665_state1_falls_back_when_moving():
+    o, d = _o(state=1, yvel=5), _d()
+    handle_object_7665(o, d, _g(), _RD)
+    assert o["state"] == 0
+
+
+def test_h7665_state2_charges_toward_player_each_side():
+    o, d = _o(state=2, xvel=0, x=0x100), _d(dD=4, d7=5)
+    handle_object_7665(o, d, _g(a340=1, player_x=0x180, frame=1), _RD)   # objX<playerX (close) -> +dD
+    assert o["xvel"] == 4 and d["d4"] == 0x0F and d["d7"] == 5           # frame&3 -> no timer dec
+    o, d = _o(state=2, xvel=0, x=0x180), _d(dD=4, d7=5)
+    handle_object_7665(o, d, _g(a340=1, player_x=0x100, frame=1), _RD)   # objX>=playerX -> -dD
+    assert o["xvel"] == (-4) & 0xFFFF
+
+
+def test_h7665_state2_idle_when_not_anim_ready():
+    o, d = _o(state=2, xvel=0), _d(d7=5)
+    handle_object_7665(o, d, _g(a340=0, frame=4), _RD)                   # |xvel|<0x10 & a340==0 -> early ret
+    assert o["state"] == 2 and d["d7"] == 5
+
+
+def test_h7665_state2_timer_expires_to_state3():
+    o, d = _o(state=2, xvel=0x20, anim_ptr=0x200), _d(d7=1)              # |xvel|>=0x10 skips charge
+    handle_object_7665(o, d, _g(frame=4), _RD)                          # frame&3==0 -> dec d7 1->0 -> state 3
+    assert o["state"] == 3 and o["yvel"] == 0 and d["d4"] == 0x36 and o["anim_ptr"] == 0x202
+
+
+def test_h7665_state3_despawns_when_anim_done():
+    o, d = _o(state=3, id=0x187), _d(d4=0)
+    handle_object_7665(o, d, _g(a340=1), _RD)
+    assert o["id"] == 0xFFFF
+
+
+def test_h7665_state_ff_despawns_when_flag_clear():
+    o, d = _o(state=0xFF, id=0x187), _d(d4=0)                           # def4 bit0 clear -> despawn
+    handle_object_7665(o, d, _g(), _RD)
+    assert o["id"] == 0xFFFF
+
+
+def test_h7665_state_ff_applies_gravity_when_drawn():
+    o, d = _o(state=0xFF, id=0x2187, yvel=0), _d(d4=1)                  # id bit13 (drawn) + def4 bit0 -> gravity
+    handle_object_7665(o, d, _g(), _RD)
+    assert o["yvel"] == 0xF and o["id"] == 0x2187

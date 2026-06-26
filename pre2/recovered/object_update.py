@@ -21,7 +21,7 @@ from __future__ import annotations
 __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
-           "anim_script_rewind", "anim_script_forward"]
+           "anim_script_rewind", "anim_script_forward", "despawn_full", "handle_object_7665"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -205,3 +205,76 @@ def anim_script_forward(script_ptr: int, read_word) -> int:
             return (bx + 2) & 0xFFFF
         bx = (bx + 2) & 0xFFFF
     raise ObjectScaleUnsupported("runaway anim forward (no loop marker)")
+
+
+# -- per-type AI handler: idx10 @ 1030:7665 ----------------------------------------------------------- #
+# A charging/falling enemy state machine on [si+0xE] (settle 0 -> arm 1 -> charge-at-player 2 -> expire 3
+# -> dying 0xFF). Reads game-mode [0x2D8A], shake [0x6BEA], anim-ready [0xA340], frame [0x6BD5], player
+# [0x4F1C]/[0x4F1E]; def params [def+0xD] charge speed, [def+4] flags, [def+7] timer. Calls despawn_check
+# (8084), anim_script_forward (8058), and the full despawn (7CFF). obj/defn/glb are plain dicts.
+
+def despawn_full(obj: dict, defn: dict) -> None:
+    """The unconditional full despawn — recovers ``1030:7CFF`` reached as a handler tail: ``[def+7]=0``,
+    ``[si+4]=0xFFFF``, ``[def+4]&=0xFB``, and free the spawn slot ``[def+2]=0xFFFF`` unless ``[def+4]`` bit1."""
+    defn["d7"] = 0
+    obj["id"] = EMPTY_ID
+    defn["d4"] &= 0xFB
+    if not (defn["d4"] & 0x02):
+        defn["d2"] = EMPTY_ID
+
+
+def handle_object_7665(obj: dict, defn: dict, glb: dict, read_word) -> None:
+    """Recover the idx10 AI handler ``1030:7665..773C`` (mutates ``obj``/``defn`` in place).
+
+    ``obj``: x, y, id, xvel, yvel, anim_ptr, state. ``defn``: d2, d4, d7, dD.
+    ``glb``: mode([0x2D8A]), shake([0x6BEA]), a340([0xA340]), frame([0x6BD5]), player_x([0x4F1C]),
+    player_y([0x4F1E]). ``read_word(off)`` reads the animation script (for anim_script_forward).
+
+    NOTE: the record's "flags5" byte ``[si+5]`` is the HIGH BYTE of the sprite-id word ``[si+4]`` (they
+    overlap), so the drawn bit ``[si+5]&0x20`` is ``id & 0x2000`` and despawn_check's flags5 is ``id>>8``."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [7665 call 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    st = obj["state"]
+    if glb["mode"] == 5 and glb["shake"] != 0 and st != 3 and st != 0xFF:   # [766B-7684] freeze-on-shake
+        defn["d7"] = 1
+
+    if st == 0:                                              # [7685] settle: wait until vertical motion stops
+        defn["d4"] |= 0x18
+        if obj["yvel"] == 0:
+            obj["state"] = 1
+    elif st == 1:                                            # [7698] arm
+        if obj["yvel"] != 0:
+            obj["state"] = 0
+        else:
+            defn["d7"] = 0x1E                                # arm the active timer
+            obj["state"] = 2
+            obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)
+    elif st == 2:                                            # [76B3] charge at the player, then expire
+        if abs(_s16(obj["xvel"])) < 0x10:                    # [76B7-76C3] only re-aim when nearly stopped
+            if glb["a340"] == 0:                             # [76C5] not anim-ready -> idle this frame
+                return
+            defn["d4"] = 0x0F                                # [76CC]
+            spd = defn["dD"] & 0xFF                          # [76D0] charge speed [def+0xD]
+            obj["xvel"] = spd if _s16(obj["x"]) < _s16(glb["player_x"]) else (-spd) & 0xFFFF  # [76D5-76DE]
+        if glb["frame"] & 3:                                 # [76E1] count down only every 4th frame
+            return
+        defn["d7"] = (defn["d7"] - 1) & 0xFF                 # [76E8]
+        if defn["d7"] != 0:
+            return
+        obj["state"] = 3                                     # [76ED] timer expired -> stop + die soon
+        obj["yvel"] = 0
+        obj["xvel"] = 0xFFFF if (obj["xvel"] & 0x8000) else 0   # [76F8 sar 0xF] keep only the sign
+        defn["d4"] = 0x36
+        obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)
+    elif st == 3:                                            # [7703] wait for the death anim, then despawn
+        if glb["a340"] != 0:
+            despawn_full(obj, defn)
+    elif st == 0xFF:                                         # [7712] dying: gravity or despawn
+        if not (defn["d4"] & 1):                             # [7716] bit0 clear -> despawn
+            despawn_full(obj, defn)
+        elif (obj["id"] & 0x2000) or (_s16(glb["player_y"]) >= _s16(obj["y"])):  # [771F-772C] drawn=id bit13
+            if _s16(obj["yvel"]) < 0xF0:                     # [7731] gravity, capped at 0xF0
+                obj["yvel"] = (obj["yvel"] + 0xF) & 0xFFFF
+        else:
+            despawn_full(obj, defn)

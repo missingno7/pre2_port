@@ -24,7 +24,7 @@ from play import _advance_frame_deterministic, _make_replay_runtime
 from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW: routines under test
                                           ObjectScaleUnsupported, advance_animation, apply_velocity,
                                           despawn_check, on_screen_tile,
-                                          anim_script_rewind, anim_script_forward)
+                                          anim_script_rewind, anim_script_forward, handle_object_7665)
 
 SEG = 0x1030
 
@@ -74,6 +74,11 @@ def main():
     seek_pending = [None]         # predicted new script ptr
     handlers = defaultdict(Counter)   # handler_index -> Counter(target_addr -> n)
     handler_ids = defaultdict(Counter)  # handler_index -> Counter(base sprite id)
+    hdl = Counter()               # handle_object_7665: 'match' / 'mismatch'
+    hdl_pending = [None]          # (si, def_ptr, predicted obj dict, predicted def dict)
+    hdl_mismatches = []
+    _OBJ = (("x", 0), ("y", 2), ("id", 4), ("xvel", 8), ("yvel", 0xA), ("anim_ptr", 0xC))
+    _OBJB = (("state", 0xE),)   # NOTE: [si+5] is the high byte of id [si+4] (overlaps) -> not a separate field
 
     def chain(c):
         interpret_current_instruction_without_hook(c)
@@ -187,12 +192,44 @@ def main():
             seek_pending[0] = None
         chain(c)
 
+    def _obj_dict(ds, si):
+        o = {k: rdw(ds, si + off) for k, off in _OBJ}
+        o.update({k: rdb(ds, si + off) for k, off in _OBJB})
+        return o
+
+    def _def_dict(ds, d):
+        return {"d2": rdw(ds, d + 2), "d4": rdb(ds, d + 4), "d7": rdb(ds, d + 7), "dD": rdb(ds, d + 0xD)}
+
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
         target = rdw(cs, (bx + 0x6AA9) & 0xFFFF)
         idx = bx >> 1
         handlers[idx][target] += 1
         handler_ids[idx][rdw(ds, si + 4) & 0x1FFF] += 1
+        if target == 0x7665:                       # SHADOW the recovered idx10 handler
+            d = rdw(ds, si + 6)
+            obj, defn = _obj_dict(ds, si), _def_dict(ds, d)
+            glb = {"mode": rdb(ds, 0x2D8A), "shake": rdb(ds, 0x6BEA), "a340": rdb(ds, 0xA340),
+                   "frame": rdb(ds, 0x6BD5), "player_x": rdw(ds, 0x4F1C), "player_y": rdw(ds, 0x4F1E)}
+            try:
+                handle_object_7665(obj, defn, glb, lambda off: rdw(ds, off))
+                hdl_pending[0] = (si, d, obj, defn)
+            except ObjectScaleUnsupported:
+                hdl_pending[0] = None
+        chain(c)
+
+    def h_handler_exit(c):
+        if hdl_pending[0] is not None:
+            ds = c.s.ds
+            si, d, pobj, pdefn = hdl_pending[0]
+            hdl_pending[0] = None
+            aobj, adefn = _obj_dict(ds, si), _def_dict(ds, d)
+            ok = (pobj == aobj and pdefn == adefn)
+            hdl["match" if ok else "mismatch"] += 1
+            if not ok and len(hdl_mismatches) < 8:
+                do = {k: (pobj[k], aobj[k]) for k in pobj if pobj[k] != aobj[k]}
+                dd = {k: (pdefn[k], adefn[k]) for k in pdefn if pdefn[k] != adefn[k]}
+                hdl_mismatches.append((f"si={si:#06x}", "obj", do, "def", dd))
         chain(c)
 
     for off, fn in ((0x6856, h_looptop), (0x6861, h_vel_pre), (0x6875, h_vel_post),
@@ -200,7 +237,8 @@ def main():
                     (0x8084, h_despawn_pre), (0x80CA, h_despawn_exit), (0x7D1A, h_despawn_exit),
                     (0x8022, h_onscreen_pre), (0x8044, h_onscreen_exit(True)), (0x8046, h_onscreen_exit(False)),
                     (0x8048, h_seek_pre(anim_script_rewind)), (0x8057, h_seek_exit),
-                    (0x8058, h_seek_pre(anim_script_forward)), (0x806B, h_seek_exit)):
+                    (0x8058, h_seek_pre(anim_script_forward)), (0x806B, h_seek_exit),
+                    (0x6901, h_handler_exit)):
         cpu.replacement_hooks[(SEG, off)] = fn
         cpu.hook_names[(SEG, off)] = f"probe_{off:04x}"
 
@@ -254,6 +292,11 @@ def main():
     stot = seek["match"] + seek["mismatch"]
     print(f"\n=== ANIM-SEEK SHADOW (0x8048 rewind / 0x8058 forward -> [si+0xC]) ===")
     print(f"  checks: {stot}   match: {seek['match']}   MISMATCH: {seek['mismatch']}")
+    htot = hdl["match"] + hdl["mismatch"]
+    print(f"\n=== HANDLER idx10 (0x7665) SHADOW (full state machine; obj+def writes) ===")
+    print(f"  checks: {htot}   match: {hdl['match']}   MISMATCH: {hdl['mismatch']}")
+    for m in hdl_mismatches:
+        print(f"    MISMATCH {m}")
     print(f"\n=== AI HANDLER DISPATCH (0x68FC: call cs:[bx+0x6AA9]) ===")
     print(f"  {'idx':>4} {'handler@':>9} {'calls':>8}  base sprite-ids (top)")
     for idx in sorted(handlers):

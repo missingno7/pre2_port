@@ -243,9 +243,16 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   word). Shadow 9/9 exact. Called by the bob/oscillator handlers + `698C`.
 - **Walker sub-helpers (OBSERVED):** `8001` saturating `[def+7]` counter vs `[def+6]` (0 fires here — needs a
   witness); `806C` find-free-slot spawn allocator (walks `0x4FD0`×12 for `[+4]==0xFFFF`).
-- **Handlers are state machines** on the shared leaves: idx1 `7C8C` = `despawn_check` only; idx2 `7C2D` = a
-  vertical-bob oscillator (state 0 down / 1 up via def params `[def+0xB/0xD/0xE]`, calls despawn + anim
-  seek + helper `7FD9`); idx10 `7665` = another `[si+0xE]` state machine. Per-type AI, recover next.
+- **`1030:7665..773C` — handler idx10 `handle_object_7665`. VERIFIED** (`object_update.handle_object_7665`,
+  `tests/test_object_update.py`). A 5-state enemy AI (`[si+0xE]`: settle 0 → arm 1 → charge-at-player 2 →
+  expire 3 → dying 0xFF) composing `despawn_check` + `anim_script_forward` + the full despawn `7CFF`; reads
+  game-mode `[0x2D8A]`, shake `[0x6BEA]`, anim-ready `[0xA340]`, frame `[0x6BD5]`, player `[0x4F1C]/[0x4F1E]`,
+  def params `[def+0xD]`/`[def+4]`/`[def+7]`. Shadow 1947/1947 + 160/160 exact (full obj+def write set).
+- **RECORD-LAYOUT CORRECTION:** `[si+5]` is the HIGH BYTE of the sprite-id word `[si+4]` (they overlap) — NOT
+  an independent "flags" byte. The "drawn bit" `[si+5]&0x20` = id bit13 (`0x2000`); despawn_check's flags5 =
+  `id>>8`. (Found via the handler shadow: predicting flags5 separately diverged whenever the id changed.)
+- **Other handlers** (state machines on the same leaves): idx1 `7C8C` = `despawn_check` only; idx2 `7C2D` =
+  vertical-bob oscillator (def params `[def+0xB/0xD/0xE]`, calls despawn + anim seek + helper `7FD9`).
 - **`1030:68FC` — AI handler dispatch** `call cs:[bx+0x6AA9]`, idx=`[def@[+6]+1]`. Map (demo 001513):
   `1→7C8C`, `2→7C2D`, `10→7665`. 24-entry catalogue at `CS:0x6AA9`. Handlers UNRECOVERED.
 - **Phase B (the blit) — full spec mapped, TODO implement.** Per sprite it is a **two-phase

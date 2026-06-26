@@ -264,3 +264,19 @@ high-level `object_tick(objects, player, camera, level_map)` — per non-empty s
 handlers are recovered+verified, the loop is plain structured source over an `ObjectRecord` list (pure,
 VM-independent) and the live hook moves up to the COMPOSED tick (one hook for the whole loop). Recovered
 leaves so far: apply_velocity·advance_animation·despawn_check·on_screen_tile·anim_script_rewind/forward.
+
+## Stage 1 cont. (2026-06-26) — first full per-type AI handler (idx10)
+
+- **`1030:7665..773C` — `handle_object_7665`. VERIFIED** (a 5-state enemy AI: settle 0 → arm 1 →
+  charge-at-player 2 → expire 3 → dying 0xFF). Composes the recovered leaves: `despawn_check` (the 8084 call) +
+  `anim_script_forward` + the full despawn (7CFF); reads game-mode/shake/anim/frame/player globals + def
+  params. Shadow 1947/1947 + 160/160 exact over the full obj+def write set (longer demo 102854 + 001513).
+- **Record-layout correction:** `[si+5]` is the HIGH BYTE of the id word `[si+4]` (overlap) — drawn bit
+  `[si+5]&0x20` = `id & 0x2000`. (The handler shadow exposed it: predicting flags5 as a separate field
+  diverged whenever the id changed.)
+
+Recovered object-update set: apply_velocity·advance_animation·despawn_check·on_screen_tile·anim_script_
+rewind/forward + the FIRST per-type handler (idx10). All re-verified on the longer demo (vel/anim/despawn/
+onscreen 1947/1947 each). The walker collapse is close: remaining = handlers idx1 (=despawn only, trivial),
+idx2 (bob, needs 7FD9), the rest of the 24-entry table as witnessed, and `698C` terrain collision; then
+compose `object_tick`.
