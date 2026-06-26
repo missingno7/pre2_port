@@ -64,23 +64,41 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
     the epilogue `5A8C`, reproduces the final `adc` FLAGS — otherwise dead, `pop bp` follows).
   - Verify-mode oracle: 483/483 (L1) + 66/66 (L6), zero divergences. Fires ~1996× on L1.
 
-## Sub-islands still ASM (the FSM "brain" + terrain) — scoped, witness data
-The kinematics shell (X/Y integrate + timers) is live. What remains of the player update is the actual
-behaviour, in three unrecovered pieces:
-- **Per-state handlers `cs:[0x7D2F]`** (dispatched at `5A0B`) — the FSM brain (idle/run/jump/attack/death/…).
-  16-entry table; recover one state at a time.
-- **Ground/tile collision + tile-interaction `5A96`** — a genuine sub-island, not a leaf. Witness (L1):
-  fires 2006×/frame; calls the tile-interaction worker `5B81` + dispatches the **tile-type handler table
-  `cs:[0x7D9B]`** *every* frame, runs a vertical tile-scan loop (`5CAC` ×3584), and the fall-off-edge path
-  (`63B5`) ×820. It writes Yvel (868×), Y (39×), and flags `[0x6BF3]/[0x6BD2]/[0x6BE5]`. The `0x7D9B` table is
-  the per-tile-type behaviour (ground stop, collectible, breakable, hazard…) — its own multi-step recovery,
-  analogous to the object idx0-12 handler table.
-- **Animation-state select `484E`** (called at `5A44`) — picks the player sprite/anim index into `[0x4F20]`
-  (high byte = anim, low 5 bits = collision tile-column) from Xvel thresholds (`0x40/0x20`) + the run counter
-  `[0x7B1A]` + a table at `0x7B29`. Moderate; fires every frame.
+## The FSM dispatch (mapped via witness) — the next target
+The kinematics shell (X/Y integrate + timers) is live. The actual behaviour is in the **per-input handler
+table `cs:[0x7D2F]`**, dispatched at `5A0B` (`call word ptr [bx+0x7D2F]`).
+
+**How `bx` is selected (witnessed):** `[0x6BC5]` is a *forced/scripted-animation* gate. In all normal
+gameplay it is **0** (1997/1997 L1, 299/299 L6), so the setup at `5960` does `jmp 5A0B` and the momentum
+block (`596A-5A0B`: run-counter `[0x7B1A]` accel/decel, `[0x6BC6]` deceleration, `[0x4F2A]` clamp) is SKIPPED.
+`bx` then holds the **5-bit input bitmask** packed at `58FC-591F` (bits from `[0x27EC],[0x27ED],[0x27EA],
+[0x27EB],[0x27E8]`), times 2. So the player FSM is **input-indexed**, not a stored-state machine. Witnessed
+handlers (L1, by frequency):
+
+| bx | handler | fires | role (hypothesis) |
+|---|---|---|---|
+| 0x02 | `0x7D02` | 855 | run |
+| 0x00 | `0x803D` | 629 | idle / no input |
+| 0x04 | `0x3D38` | 248 | |
+| 0x10 | `0x683D` | 156 | |
+| 0x06 | `0x0140` | 58 | |
+| 0x08 | `0x107D` | 21 | |
+
+(The momentum block `596A-5A0B` and `484E` anim-select only run when `[0x6BC5]!=0` — a scripted/cutscene pose;
+both are **dormant in normal play**, so they have no demo witness and are NOT recovery targets yet.)
+
+**Plan:** recover the witnessed handlers one at a time (most-hit first: `0x7D02`, `0x803D`), shadow-verify each
+(they set the player sprite `[0x4F0A/0x4F0C/0x4F0E]`, anim `[0x4F20]`, and velocities) before live — exactly
+like the object idx0-12 handler table.
+
+## Other sub-island still ASM: collision + tile-interaction `5A96`
+A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +
+dispatches the **tile-type handler table `cs:[0x7D9B]`** *every* frame, runs a vertical tile-scan loop (`5CAC`
+×3584), and the fall-off-edge path (`63B5`) ×820. Writes Yvel (868×), Y (39×), flags `[0x6BF3]/[0x6BD2]/
+[0x6BE5]`. The `0x7D9B` table is the per-tile-type behaviour (ground stop, collectible, breakable, hazard…).
 
 A single collapsed `player_update` hook (subsuming the X/Y/timer leaves, like `object_tick` subsumed
-`object_velocity`) is the end state — reachable once these three are recovered.
+`object_velocity`) is the end state — reachable once the handler table + collision are recovered.
 
 ## Mismatch taxonomy (classes to watch as the FSM is recovered)
 1. **Fixed-point**: 12.4 velocities, arithmetic `sar` (floor toward -inf) — sign/rounding bugs.
@@ -93,11 +111,10 @@ A single collapsed `player_update` hook (subsuming the X/Y/timer leaves, like `o
    and the collision separately and compose.
 
 ## Next, in order of value/tractability
-1. **Animation-state select `484E`** — self-contained, every-frame, writes only `[0x4F20]`; easy to
-   shadow-verify. Good next leaf.
-2. **Per-state handlers `cs:[0x7D2F]`** — one state at a time (idle/run first), each shadow-verified before
-   live. The FSM brain.
-3. **Collision/tile-interaction `5A96` + `cs:[0x7D9B]`** — the largest piece; recover the tile-property
-   lookup + Y/Yvel response, then the tile-type handlers one at a time.
+1. **FSM handlers `cs:[0x7D2F]`** — recover the witnessed ones most-hit-first (`0x7D02` run, `0x803D` idle),
+   each shadow-verified before live. The FSM brain.
+2. **Collision/tile-interaction `5A96` + `cs:[0x7D9B]`** — the largest piece; recover the tile-property lookup
+   + Y/Yvel response, then the tile-type handlers one at a time.
 Then collapse to a single `player_update` hook. Keep each its own small reversible step. No broad FSM rewrite;
-no guessed struct fields.
+no guessed struct fields. (`484E` anim-select + the `596A` momentum block are dormant in normal play — only
+under the `[0x6BC5]` scripted-pose gate — so they wait for a witness.)
