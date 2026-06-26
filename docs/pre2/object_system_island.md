@@ -280,3 +280,21 @@ rewind/forward + the FIRST per-type handler (idx10). All re-verified on the long
 onscreen 1947/1947 each). The walker collapse is close: remaining = handlers idx1 (=despawn only, trivial),
 idx2 (bob, needs 7FD9), the rest of the 24-entry table as witnessed, and `698C` terrain collision; then
 compose `object_tick`.
+
+## Stage 1 cont. (2026-06-26) — 2nd handler (idx9 patrol) + shared dying state; multi-level witnesses
+
+User provided per-level demos (passwords now recovered): boss 105203, tiger 105730, earthquake 105310,
+L4/L5/L6 expert. Handler types now witnessed across them: idx 0,1,2,3,4,8,9,10,11 (sprite-id families differ
+per level). The scale/zoom path ([0x6BE2]!=0) still never fires (the gorilla boss doesn't zoom) -> the
+advance_animation guard holds.
+
+- **`1030:773D..77DD` — handler idx9 `handle_object_773d`. VERIFIED**. A horizontal-patrol enemy that
+  accelerates back and forth (signed speed `[def+0x11]` ±3/frame, capped at `[def+0x12]`) between bounds
+  `[def+0xD]`/`[def+0xF]`, with its OWN proximity despawn (NOT the shared 8084: despawn if `|objY-playerY|`
+  >= 0xBE or the player is outside the patrol window ±0x1E0). Shadow 310/310 (boss demo) + 63/63 (L6) exact.
+- **`1030:7CDA` — `dying_state` (shared)**. The state-0xFF "dying" logic (despawn unless held+near -> gravity
+  capped at 0xF0); inlined at 7665's 7712 and jumped-to by 7C2D/773D. Factored out + reused.
+
+Recovered set: apply_velocity·advance_animation·despawn_check·on_screen_tile·anim_seek + handlers idx10
+(7665) & idx9 (773D) + dying_state. NEXT: the remaining witnessed handlers (idx 0/2/3/4/8/11; idx1 = despawn
+only) + 698C terrain collision, then compose object_tick over a handler dispatch table.

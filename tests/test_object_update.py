@@ -8,8 +8,8 @@ import pytest
 
 from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, ObjectScaleUnsupported,
                                           advance_animation, anim_script_forward, anim_script_rewind,
-                                          apply_velocity, despawn_check, handle_object_7665,
-                                          on_screen_tile)
+                                          apply_velocity, despawn_check, dying_state, handle_object_7665,
+                                          handle_object_773d, on_screen_tile)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -270,3 +270,66 @@ def test_h7665_state_ff_applies_gravity_when_drawn():
     o, d = _o(state=0xFF, id=0x2187, yvel=0), _d(d4=1)                  # id bit13 (drawn) + def4 bit0 -> gravity
     handle_object_7665(o, d, _g(), _RD)
     assert o["yvel"] == 0xF and o["id"] == 0x2187
+
+
+# -- handle_object_773d (idx9 horizontal-patrol enemy, 1030:773D) --
+
+def _o9(**kw):
+    o = dict(x=0x200, y=0x100, id=0x2000 | 0x14F, xvel=0, yvel=0, state=0)   # id bit13 set = drawn
+    o.update(kw); return o
+
+def _d9(**kw):
+    d = dict(d2=0x1111, d4=1, d7=0, dD=0x100, dF=0x300, d11=0, d12=20)
+    d.update(kw); return d
+
+def _g9(**kw):
+    g = dict(player_x=0x200, player_y=0x100)
+    g.update(kw); return g
+
+
+def test_h773d_state0_patrols_right_and_accelerates():
+    o, d = _o9(state=0, x=0x200), _d9(d11=0, d12=20, dF=0x300)
+    handle_object_773d(o, d, _g9())
+    assert o["xvel"] == 0 and d["d11"] == 3 and o["state"] == 0
+
+
+def test_h773d_state0_speed_caps_at_d12():
+    o, d = _o9(state=0, x=0x200), _d9(d11=19, d12=20, dF=0x300)   # 19+3=22 > 20 -> no store
+    handle_object_773d(o, d, _g9())
+    assert d["d11"] == 19 and o["xvel"] == 19
+
+
+def test_h773d_state0_turns_at_right_bound():
+    o, d = _o9(state=0, x=0x300), _d9(dF=0x2FF)                    # dF < x -> turn to state 1
+    handle_object_773d(o, d, _g9())
+    assert o["state"] == 1
+
+
+def test_h773d_state1_patrols_left_and_turns():
+    o, d = _o9(state=1, x=0x200), _d9(d11=5, d12=20, dD=0x100)     # dD < x -> no turn
+    handle_object_773d(o, d, _g9())
+    assert o["xvel"] == 5 and d["d11"] == 2 and o["state"] == 1
+    o, d = _o9(state=1, x=0x100), _d9(dD=0x100)                    # dD >= x -> turn to state 0
+    handle_object_773d(o, d, _g9())
+    assert o["state"] == 0
+
+
+def test_h773d_despawns_when_player_too_far_vertically():
+    o, d = _o9(id=0x14F, y=0x100, state=0), _d9(d4=5)              # not drawn (no bit13)
+    handle_object_773d(o, d, _g9(player_y=0x100 + 0xBE))          # |dY|>=0xBE -> despawn
+    assert o["id"] == 0xFFFF and (d["d4"] & 4) == 0               # [def+4] bit2 cleared
+
+
+def test_h773d_drawn_object_skips_despawn():
+    o, d = _o9(id=0x2000 | 0x14F, y=0x100, state=0), _d9()
+    handle_object_773d(o, d, _g9(player_y=0xFFFF))               # would be far, but drawn -> no despawn
+    assert o["id"] == (0x2000 | 0x14F)
+
+
+def test_dying_state_gravity_vs_despawn():
+    o, d = dict(id=0x2000, yvel=0), dict(d2=0, d4=1, d7=0)       # held + drawn -> gravity
+    dying_state(o, d, dict(player_y=0, player_x=0))
+    assert o["yvel"] == 0xF
+    o, d = dict(id=0, yvel=0), dict(d2=0, d4=0, d7=0)            # def4 bit0 clear -> despawn
+    dying_state(o, d, dict(player_y=0, player_x=0))
+    assert o["id"] == 0xFFFF

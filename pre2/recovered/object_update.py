@@ -21,7 +21,8 @@ from __future__ import annotations
 __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
-           "anim_script_rewind", "anim_script_forward", "despawn_full", "handle_object_7665"]
+           "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state",
+           "handle_object_7665", "handle_object_773d"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -30,6 +31,11 @@ VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed p
 def _s16(v: int) -> int:
     v &= 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
+
+
+def _s8(v: int) -> int:
+    v &= 0xFF
+    return v - 0x100 if v & 0x80 else v
 
 
 def apply_velocity(x: int, y: int, xvel: int, yvel: int) -> tuple[int, int]:
@@ -270,11 +276,55 @@ def handle_object_7665(obj: dict, defn: dict, glb: dict, read_word) -> None:
     elif st == 3:                                            # [7703] wait for the death anim, then despawn
         if glb["a340"] != 0:
             despawn_full(obj, defn)
-    elif st == 0xFF:                                         # [7712] dying: gravity or despawn
-        if not (defn["d4"] & 1):                             # [7716] bit0 clear -> despawn
-            despawn_full(obj, defn)
-        elif (obj["id"] & 0x2000) or (_s16(glb["player_y"]) >= _s16(obj["y"])):  # [771F-772C] drawn=id bit13
-            if _s16(obj["yvel"]) < 0xF0:                     # [7731] gravity, capped at 0xF0
-                obj["yvel"] = (obj["yvel"] + 0xF) & 0xFFFF
+    elif st == 0xFF:                                         # [7712, == the shared 7CDA] dying
+        dying_state(obj, defn, glb)
+
+
+def dying_state(obj: dict, defn: dict, glb: dict) -> None:
+    """The shared 'dying' state — recovers ``1030:7CDA`` (also inlined at 7665's 7712): despawn unless the
+    object is "held" (def4 bit0 set) and either drawn (id bit13) or the player is at/below it, in which case
+    apply gravity (``yvel += 0xF`` capped at 0xF0). Reached by several handlers' state ``0xFF``."""
+    if not (defn["d4"] & 1):                                  # [7CDE] bit0 clear -> despawn
+        despawn_full(obj, defn)
+    elif (obj["id"] & 0x2000) or (_s16(glb["player_y"]) >= _s16(obj["y"])):  # [7CE4-7CF1]
+        if _s16(obj["yvel"]) < 0xF0:                          # [7CF3] gravity, capped at 0xF0
+            obj["yvel"] = (obj["yvel"] + 0xF) & 0xFFFF
+    else:
+        despawn_full(obj, defn)
+
+
+def handle_object_773d(obj: dict, defn: dict, glb: dict) -> None:
+    """Recover the idx9 AI handler ``1030:773D..77DD`` — a horizontal-patrol enemy that accelerates back and
+    forth between def bounds, with its OWN proximity despawn (it does NOT call the shared 8084).
+
+    ``obj``: x, y, id, xvel, yvel, state. ``defn``: d4, dD (left bound, word), dF (right bound, word),
+    d11 (signed-byte speed, mutated), d12 (speed magnitude limit). ``glb``: player_x, player_y."""
+    drawn = obj["id"] & 0x2000
+    st = obj["state"]
+    if not drawn and st != 0xFF:                             # [7740-7784] proximity despawn (skip if drawn/dying)
+        if _abs16(obj["y"] - glb["player_y"]) >= 0xBE:       # [774C-775A] too far vertically -> despawn
+            keep = False
         else:
-            despawn_full(obj, defn)
+            px, dD, dF = _s16(glb["player_x"]), _s16(defn["dD"]), _s16(defn["dF"])
+            keep = (dF + 0x1E0 > px) if px >= dD else (px + 0x1E0 >= dD)   # [775C-7779] horizontal window
+        if not keep:
+            obj["id"] = EMPTY_ID                             # [777B] despawn ([si+4]=0xFFFF, [def+4]&=0xFB)
+            defn["d4"] &= 0xFB
+            return
+
+    if st == 0:                                              # [7785] patrol right: accelerate +3 up to +d12
+        sp = _s8(defn["d11"])
+        obj["xvel"] = sp & 0xFFFF                            # [7790] Xvel = current speed
+        if sp + 3 <= (defn["d12"] & 0xFF):                   # [7793-779D] cap at [def+0x12]
+            defn["d11"] = (sp + 3) & 0xFF
+        if _s16(defn["dF"]) < _s16(obj["x"]):                # [77A2-77A9] past the right bound -> turn
+            obj["state"] = 1
+    elif st == 1:                                            # [77AE] patrol left: accelerate -3 down to -d12
+        sp = _s8(defn["d11"])
+        obj["xvel"] = sp & 0xFFFF
+        if sp - 3 >= -(defn["d12"] & 0xFF):                  # [77B9-77C5] cap at -[def+0x12]
+            defn["d11"] = (sp - 3) & 0xFF
+        if _s16(defn["dD"]) >= _s16(obj["x"]):               # [77CA-77D1] past the left bound -> turn
+            obj["state"] = 0
+    elif st == 0xFF:                                         # [77DA jmp 7CDA]
+        dying_state(obj, defn, glb)

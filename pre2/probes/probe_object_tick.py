@@ -24,7 +24,8 @@ from play import _advance_frame_deterministic, _make_replay_runtime
 from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW: routines under test
                                           ObjectScaleUnsupported, advance_animation, apply_velocity,
                                           despawn_check, on_screen_tile,
-                                          anim_script_rewind, anim_script_forward, handle_object_7665)
+                                          anim_script_rewind, anim_script_forward,
+                                          handle_object_7665, handle_object_773d)
 
 SEG = 0x1030
 
@@ -198,7 +199,10 @@ def main():
         return o
 
     def _def_dict(ds, d):
-        return {"d2": rdw(ds, d + 2), "d4": rdb(ds, d + 4), "d7": rdb(ds, d + 7), "dD": rdb(ds, d + 0xD)}
+        return {"d2": rdw(ds, d + 2), "d4": rdb(ds, d + 4), "d7": rdb(ds, d + 7), "dD": rdw(ds, d + 0xD),
+                "dF": rdw(ds, d + 0xF), "d11": rdb(ds, d + 0x11), "d12": rdb(ds, d + 0x12)}
+
+    _HANDLERS = {0x7665: handle_object_7665, 0x773D: handle_object_773d}
 
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
@@ -206,13 +210,17 @@ def main():
         idx = bx >> 1
         handlers[idx][target] += 1
         handler_ids[idx][rdw(ds, si + 4) & 0x1FFF] += 1
-        if target == 0x7665:                       # SHADOW the recovered idx10 handler
+        fn = _HANDLERS.get(target)
+        if fn is not None:                         # SHADOW a recovered handler
             d = rdw(ds, si + 6)
             obj, defn = _obj_dict(ds, si), _def_dict(ds, d)
             glb = {"mode": rdb(ds, 0x2D8A), "shake": rdb(ds, 0x6BEA), "a340": rdb(ds, 0xA340),
                    "frame": rdb(ds, 0x6BD5), "player_x": rdw(ds, 0x4F1C), "player_y": rdw(ds, 0x4F1E)}
             try:
-                handle_object_7665(obj, defn, glb, lambda off: rdw(ds, off))
+                if fn is handle_object_7665:
+                    fn(obj, defn, glb, lambda off: rdw(ds, off))
+                else:
+                    fn(obj, defn, glb)
                 hdl_pending[0] = (si, d, obj, defn)
             except ObjectScaleUnsupported:
                 hdl_pending[0] = None
@@ -293,7 +301,7 @@ def main():
     print(f"\n=== ANIM-SEEK SHADOW (0x8048 rewind / 0x8058 forward -> [si+0xC]) ===")
     print(f"  checks: {stot}   match: {seek['match']}   MISMATCH: {seek['mismatch']}")
     htot = hdl["match"] + hdl["mismatch"]
-    print(f"\n=== HANDLER idx10 (0x7665) SHADOW (full state machine; obj+def writes) ===")
+    print(f"\n=== RECOVERED HANDLERS SHADOW (7665 idx10 + 773D idx9; full obj+def writes) ===")
     print(f"  checks: {htot}   match: {hdl['match']}   MISMATCH: {hdl['mismatch']}")
     for m in hdl_mismatches:
         print(f"    MISMATCH {m}")
