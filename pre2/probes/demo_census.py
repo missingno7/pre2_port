@@ -22,7 +22,7 @@ from play import _advance_frame_deterministic, _make_replay_runtime
 HANDLER_ADDR = {0x7c90: 0, 0x7c8c: 1, 0x7c2d: 2, 0x7b91: 3, 0x7adf: 4, 0x7a60: 5, 0x78ec: 6, 0x7898: 7,
                 0x77de: 8, 0x773d: 9, 0x7665: 10, 0x760f: 11, 0x75c4: 12, 0x7f6c: 13, 0x7f26: 14, 0x7ee2: 15,
                 0x7ed8: 16, 0x7ebf: 17, 0x7eb5: 18, 0x7e97: 22, 0x7d9b: 23}
-RECOVERED = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12}  # handle_object_* in pre2.recovered.object_update
+RECOVERED = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}  # handle_object_* in pre2.recovered.object_update
 _MAX_FRAMES = 2000
 
 

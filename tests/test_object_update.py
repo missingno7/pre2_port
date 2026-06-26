@@ -12,7 +12,7 @@ from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, 
                                           handle_object_773d, handle_object_77de, handle_object_7c8c,
                                           handle_object_7c90, handle_object_760f, handle_object_7c2d,
                                           handle_object_7b91, handle_object_7adf, orbit_position,
-                                          handle_object_7898, handle_object_75c4, handle_object_78ec,
+                                          handle_object_7898, handle_object_75c4, handle_object_78ec, handle_object_7a60,
                                           on_screen_tile, saturating_counter, spawn_effects)
 
 
@@ -850,3 +850,61 @@ def test_surface_offset_flat_is_signed_raw():
 def test_surface_offset_slope_rising():
     # slope byte 0x10|0x4 -> rising: (subx//3) + (s&0xf)=4 ; subx = 0x105&0xf = 5 -> 5//3=1 -> 1+4=5
     assert _surface_offset(0x105, 3, lambda t: 0x14) == 5
+
+
+# -- handle_object_7a60 (idx5 2D-proximity pouncer, 1030:7A60) --
+
+def _o5(**kw):
+    o = dict(x=0x200, y=0x100, id=0x14F, xvel=0, yvel=0, state=0, anim_ptr=0x100); o.update(kw); return o
+
+def _d5(**kw):
+    d = dict(d2=0x1111, d4=1, d7=0, dD=3, dE=2, dF=5); d.update(kw); return d
+
+def _g5(**kw):
+    g = dict(player_x=0x200, player_y=0x100); g.update(kw); return g
+
+_RD5 = lambda off: 0xFFFE    # negative loop-marker word for anim_script_forward
+
+
+def test_h7a60_state0_creeps_then_leaps_in_range():
+    o, d = _o5(x=0x200, y=0x100), _d5(dD=3, dE=2, dF=5)        # player within X(3) and Y(2) tiles -> leap
+    handle_object_7a60(o, d, _g5(player_x=0x205, player_y=0x100), _RD5)
+    assert o["state"] == 0xA
+    assert o["yvel"] == (5 << 4)                                # def[0xF]<<4, UNSIGNED
+    assert o["xvel"] == (5 << 4)                                # facing right (obj.x<=player_x) -> not mirrored
+
+
+def test_h7a60_out_of_x_range_no_leap():
+    o, d = _o5(x=0x200), _d5(dD=0, dE=9)                        # |dx|=0x100>>4=0x10 > 0 -> out of X range
+    handle_object_7a60(o, d, _g5(player_x=0x300, player_y=0x100), _RD5)
+    assert o["state"] == 0 and o["xvel"] == 1                   # faced player, did not leap
+
+
+def test_h7a60_out_of_y_range_no_leap():
+    o, d = _o5(x=0x200, y=0x100), _d5(dD=9, dE=0)              # in X, |dy|=0x100>>4=0x10 > 0 -> out of Y range
+    handle_object_7a60(o, d, _g5(player_x=0x205, player_y=0x300), _RD5)
+    assert o["state"] == 0
+
+
+def test_h7a60_leap_mirrors_x_when_facing_left():
+    o, d = _o5(x=0x300, y=0x100), _d5(dD=9, dE=9, dF=5)        # obj.x>player_x -> faces left -> xvel mirrored
+    handle_object_7a60(o, d, _g5(player_x=0x2FF, player_y=0x100), _RD5)
+    assert o["state"] == 0xA and o["xvel"] == (-(5 << 4)) & 0xFFFF
+
+
+def test_h7a60_state0xA_lands_near_player_y():
+    o, d = _o5(state=0xA, y=0x104, yvel=0x50), _d5()           # |y-player_y|=4 <= 8 -> land
+    handle_object_7a60(o, d, _g5(player_y=0x100), _RD5)
+    assert o["state"] == 0xB and o["yvel"] == 0
+
+
+def test_h7a60_state0xA_still_flying_when_far_in_y():
+    o, d = _o5(state=0xA, y=0x140, yvel=0x50), _d5()           # |y-player_y|=0x40 > 8 -> keep flying
+    handle_object_7a60(o, d, _g5(player_y=0x100), _RD5)
+    assert o["state"] == 0xA and o["yvel"] == 0x50
+
+
+def test_h7a60_dying_state():
+    o, d = _o5(state=0xFF, id=0x2000), _d5(d4=1)
+    handle_object_7a60(o, d, _g5(), _RD5)
+    assert o["yvel"] == 0xF                                     # dying_state gravity

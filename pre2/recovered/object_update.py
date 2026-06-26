@@ -24,7 +24,7 @@ __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT", 
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
            "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state", "saturating_counter",
-           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f", "handle_object_7c2d", "spawn_effects", "handle_object_7b91", "handle_object_7adf", "orbit_position", "handle_object_7898", "handle_object_75c4", "handle_object_78ec", "terrain_collision"]
+           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f", "handle_object_7c2d", "spawn_effects", "handle_object_7b91", "handle_object_7adf", "orbit_position", "handle_object_7898", "handle_object_75c4", "handle_object_78ec", "terrain_collision", "handle_object_7a60"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -855,3 +855,42 @@ def terrain_collision(obj: dict, defn: dict, read_map, prop_a, prop_b, slope, re
                 obj["yvel"] = (obj["yvel"] + 0x10) & 0xFFFF  # [6A73]
         else:
             _settle(obj, defn, tile_here, slope)             # [6A3E]
+
+
+def handle_object_7a60(obj: dict, defn: dict, glb: dict, read_word=None) -> None:
+    """Recover the idx5 AI handler ``1030:7A60..7ADE`` — a 2D-proximity POUNCER. Shared far-despawn first;
+    state 0 faces the player (``Xvel=±1``) and, once the player is within BOTH ``[def+0xD]`` horizontal and
+    ``[def+0xE]`` vertical tiles, leaps: state -> 0xA, ``Yvel = [def+0xF]<<4`` (UNSIGNED byte — note the ASM's
+    ``xor ah,ah`` not ``cwde``), ``Xvel = ±that`` mirrored by the facing. state 0xA flies until the object is
+    within 8px of the player's Y, then lands: anim advances, state -> 0xB, ``Yvel=0``. state 0xB idles; 0xFF
+    dies.
+
+    ``obj``: x, y, id, xvel, yvel, state, anim_ptr. ``defn``: d2, d4, d7, dD (X range), dE (Y range), dF (leap
+    speed, UNSIGNED byte). ``glb``: player_x, player_y."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [7A60 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    st = obj["state"]
+    if st == 0:                                              # [7A65-7A6A]
+        dx = 1 if _s16(obj["x"]) <= _s16(glb["player_x"]) else (-1)   # [7A6C-7A76 jle] face the player
+        obj["xvel"] = dx & 0xFFFF                            # [7A78]
+        distx = (_abs16(glb["player_x"] - obj["x"]) >> 4) & 0xFF      # [7A7B-7A84]
+        if (defn["dD"] & 0xFF) < distx:                      # [7A86-7A89 jb -> ret] out of X range
+            return
+        disty = (_abs16(glb["player_y"] - obj["y"]) >> 4) & 0xFF      # [7A8B-7A95]
+        if (defn["dE"] & 0xFF) < disty:                      # [7A97-7A9A jb -> ret] out of Y range
+            return
+        obj["state"] = 0xA                                   # [7A9C] leap
+        spd = ((defn["dF"] & 0xFF) << 4) & 0xFFFF            # [7AA0-7AA5] UNSIGNED [def+0xF]<<4
+        obj["yvel"] = spd                                    # [7AA7]
+        if (obj["xvel"] >> 8) & 0x80:                        # [7AAA-7AB0] facing-left (Xvel hi byte) -> mirror X
+            spd = (-spd) & 0xFFFF
+        obj["xvel"] = spd                                    # [7AB2]
+    elif st == 0xA:                                          # [7AB7-7AB9]
+        if _abs16(obj["y"] - glb["player_y"]) <= 8:          # [7ABB-7AC9 ja -> ret] reached the player's Y
+            obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)   # [7ACB 8058]
+            obj["state"] = 0xB                               # [7ACE]
+            obj["yvel"] = 0                                  # [7AD2]
+    elif st == 0xFF:                                         # [7AD7-7AD9]
+        dying_state(obj, defn, glb)                          # [7ADB 7CDA]
+    # state 0xB and any other -> ret

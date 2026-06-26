@@ -298,11 +298,17 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
 - **DISPATCH 8-BIT DETAIL** (caught by the whole-tick shadow): the walker computes the handler-table offset
   with `shl bl,1` on the **8-bit** `bl` (`bl=[def+1]`), so the offset is `([def+1]*2)&0xFF` — the `0x80` bit of
   `[def+1]` is a FLAG that shifts out, NOT part of the type index (e.g. `[def+1]=0x84` dispatches idx4).
-- **NOT recovered yet** — the object SPAWN emitters `1030:7FD9` (effect/trail spawn, called by idx4/idx6 etc.)
-  and `1030:7DE6` (`spawn_effects`): they write OTHER slots / effect state, never the acting object's own
-  record, so per-slot + whole-tick(start-non-empty) reproduction is byte-exact without them. A LIVE
-  whole-walker hook collapse (replacing 684E..6913) needs these so the spawned effects still appear. Also
-  still open: never-witnessed handlers idx5 `7A60`, idx13–23 (need their levels).
+- **`1030:7A60` — handler idx5 `handle_object_7a60`. VERIFIED** (witnessed by snapshot 154531: new enemies,
+  ids 0x163-0x165). A 2D-proximity POUNCER: state 0 faces the player (Xvel ±1) and, once the player is within
+  BOTH `[def+0xD]` X-tiles and `[def+0xE]` Y-tiles, leaps (state 0xA; `Yvel=[def+0xF]<<4` UNSIGNED — note the
+  ASM's `xor ah,ah` not `cwde`; `Xvel=±that` by facing); state 0xA flies until within 8px of the player's Y,
+  then lands (anim advance, state 0xB, Yvel=0); 0xB idles; 0xFF dies. Shadow 10/10 + whole-segment lockstep
+  0-diff on the snapshot. Now in object_tick's HANDLERS -> the live hook handles these enemies.
+- **Effect SPAWN emitters `1030:7FD9` (spawn_effects) + `8014` (find-free) — RECOVERED + LIVE.** Spawn 3 trail
+  entries into the secondary effect list `0x7DE6`; shadow-verified live (307/307) and wired into object_tick
+  (idx2/3/4 spawn via `mem.spawn`), whole-tick fx-list diff = 0.
+- **Still UNRECOVERED**: never-witnessed handlers idx13–23 (need their levels; object_tick fails loud on them),
+  and the SECONDARY object list at `0x8489` (the 2nd per-frame pass at 6913, handler table `cs:[bx+0x6AC3]`).
 - **Phase B (the blit) — full spec mapped, TODO implement.** Per sprite it is a **two-phase
   composite** (like the verified `blit_masked`): a **blink/anim mode** `[26F7]` chooses the
   phases — set at `2740..2761`: default `1`; while life `[si+0x11]`>0 it blinks (`[6BD5]&3`

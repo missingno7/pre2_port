@@ -30,7 +30,8 @@ SEG = 0x1030
 TARGETS = {0x7665: ou.handle_object_7665, 0x773D: ou.handle_object_773d, 0x77DE: ou.handle_object_77de,
            0x7C8C: ou.handle_object_7c8c, 0x7C90: ou.handle_object_7c90, 0x760F: ou.handle_object_760f,
            0x7C2D: ou.handle_object_7c2d, 0x7B91: ou.handle_object_7b91, 0x7ADF: ou.handle_object_7adf,
-           0x7898: ou.handle_object_7898, 0x75C4: ou.handle_object_75c4, 0x78EC: ou.handle_object_78ec}
+           0x7898: ou.handle_object_7898, 0x75C4: ou.handle_object_75c4, 0x78EC: ou.handle_object_78ec,
+           0x7A60: ou.handle_object_7a60}
 
 GSEG = 0x1A0F   # idx6 (78EC) reads/writes its shake + PRNG globals in this fixed data segment
 
