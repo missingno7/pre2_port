@@ -10,7 +10,8 @@ from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, 
                                           advance_animation, anim_script_forward, anim_script_rewind,
                                           apply_velocity, despawn_check, dying_state, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7c8c,
-                                          handle_object_7c90, on_screen_tile, saturating_counter)
+                                          handle_object_7c90, handle_object_760f, on_screen_tile,
+                                          saturating_counter)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -448,3 +449,41 @@ def test_h7c90_state1_waits_while_falling():
     o, d = _o0(state=1, yvel=5), _d0()
     handle_object_7c90(o, d, dict(player_x=0x100, player_y=0x100), _RD0)
     assert o["state"] == 1
+
+
+# -- handle_object_760f (idx11 leaping squirrel, 1030:760F) --
+
+def _o11(**kw):
+    o = dict(x=0x100, y=0x100, id=0x2000 | 0x16B, xvel=0, yvel=0, state=0)
+    o.update(kw); return o
+
+def _d11(**kw):
+    d = dict(d2=0, d4=0, d7=0, dD=4, dE=6, dF=8)
+    d.update(kw); return d
+
+def _g11(**kw):
+    g = dict(a340=1, player_x=0x100, player_y=0x100)
+    g.update(kw); return g
+
+
+def test_h760f_state0_waits_for_anim_ready():
+    o, d = _o11(state=0), _d11()
+    handle_object_760f(o, d, _g11(a340=0), None)
+    assert o["state"] == 0
+
+
+def test_h760f_state0_leaps_toward_player():
+    o, d = _o11(state=0, x=0x100), _d11(dD=4, dE=6)
+    handle_object_760f(o, d, _g11(a340=1, player_x=0x200), None)
+    assert o["state"] == 1
+    assert o["xvel"] == (4 << 4)                 # leap toward player (playerX > objX)
+    assert o["yvel"] == (-(6 << 4)) & 0xFFFF     # jump up
+
+
+def test_h760f_state1_gravity_until_terminal():
+    o, d = _o11(state=1, yvel=0), _d11(dF=8)      # terminal = 8<<4 = 0x80
+    handle_object_760f(o, d, _g11(), None)
+    assert o["yvel"] == 8
+    o, d = _o11(state=1, yvel=0x80), _d11(dF=8)   # at terminal -> no more accel
+    handle_object_760f(o, d, _g11(), None)
+    assert o["yvel"] == 0x80

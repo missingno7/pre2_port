@@ -334,3 +334,18 @@ Disasm of the remaining witnessed handlers (idx2/3/4) shows they share a deeper 
 
 Recovered handlers: idx0/1/8/9/10. Remaining: idx2 (7C2D bob)/idx3 (7B91)/idx4 (7ADF orbit) need 7FD9/8089/
 7B53 + the level-map read; idx11 (760F) TBD. Then 698C terrain collision + compose object_tick.
+
+## Stage 1 cont. (2026-06-26) — idx11 squirrel + level->type census
+
+Fast dispatch census across all demos -> the level/demo -> handler-type map (so the user can target demos
+instead of hunting). New types found: idx11 (760F = the flying squirrel, L5+squirrel demo), idx6 (78EC) +
+idx12 (75C4) in the earthquake level. Witnessed handler indices: 0,1,2,3,4,6,8,9,10,11,12. NEVER witnessed:
+idx5 (7A60), idx7 (7898), idx13-23.
+
+- **`1030:760F..7664` — handler idx11 `handle_object_760f`. VERIFIED**. The LEAPING enemy (flying squirrel):
+  when anim-ready, leaps toward the player (Xvel=±[def+0xD]<<4) and up (Yvel=-[def+0xE]<<4, state 1), then
+  falls under gravity (+8/frame until terminal [def+0xF]<<4). state 0xFF jmps 7712 == dying_state. No 7FD9.
+  Shadow 1158/1158 (squirrel demo) + part of 962/962 (L5).
+
+Recovered handlers: idx0/1/8/9/10/11. Remaining witnessed: idx2 (bob)/idx3 (jumper)/idx4 (orbit) [need
+7FD9/8089/7B53 + level-map]; idx6 (78EC)/idx12 (75C4) [earthquake, TBD] + 698C terrain collision.

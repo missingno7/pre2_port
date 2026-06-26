@@ -22,7 +22,7 @@ __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT", 
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
            "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state", "saturating_counter",
-           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c"]
+           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -429,4 +429,29 @@ def handle_object_7c90(obj: dict, defn: dict, glb: dict, read_word) -> None:
     elif st == 2:                                           # [7CD5] idle
         pass
     elif st == 0xFF:
+        dying_state(obj, defn, glb)
+
+
+def handle_object_760f(obj: dict, defn: dict, glb: dict, read_word=None) -> None:
+    """Recover the idx11 AI handler ``1030:760F..7664`` — the LEAPING enemy (flying squirrel). When anim-ready
+    it leaps toward the player (Xvel = ±``[def+0xD]``<<4) and up (Yvel = -``[def+0xE]``<<4, state 1), then
+    falls under gravity (Yvel += 8 each frame until it reaches the terminal ``[def+0xF]``<<4).
+
+    ``obj``: x, id, xvel, yvel, state. ``defn``: d2, d4, d7, dD, dE, dF. ``glb``: a340, player_x, player_y."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [7611 call 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    st = obj["state"]
+    if st == 0:                                            # [7617] wait for anim, then leap
+        if glb["a340"] == 0:                              # [761B]
+            return
+        obj["state"] = 1
+        defn["d4"] &= 0xEF                                # [7626]
+        leap = (_s8(defn["dD"]) << 4) & 0xFFFF            # [762A-7630] horizontal leap toward player
+        obj["xvel"] = leap if _s16(glb["player_x"]) > _s16(obj["x"]) else (-leap) & 0xFFFF
+        obj["yvel"] = (-(_s8(defn["dE"]) << 4)) & 0xFFFF  # [763D-7645] jump up
+    elif st == 1:                                         # [7649] gravity until terminal velocity
+        if _s16(obj["yvel"]) < _s16((_s8(defn["dF"]) << 4) & 0xFFFF):   # [764D-7656]
+            obj["yvel"] = (obj["yvel"] + 8) & 0xFFFF
+    elif st == 0xFF:                                      # [7661 jmp 7712 == dying_state]
         dying_state(obj, defn, glb)
