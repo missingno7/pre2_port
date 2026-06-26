@@ -22,7 +22,7 @@ __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT", 
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
            "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state", "saturating_counter",
-           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f"]
+           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c", "handle_object_760f", "handle_object_7c2d", "spawn_effects"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -455,3 +455,52 @@ def handle_object_760f(obj: dict, defn: dict, glb: dict, read_word=None) -> None
             obj["yvel"] = (obj["yvel"] + 8) & 0xFFFF
     elif st == 0xFF:                                      # [7661 jmp 7712 == dying_state]
         dying_state(obj, defn, glb)
+
+
+# -- idx2 vertical-bob oscillator (1030:7C2D) + its effect spawner (1030:7FD9) -------------------------- #
+
+def spawn_effects(def9: int, defB: int, arg: int, dl: int, find_free) -> list:
+    """Recover ``1030:7FD9`` — spawn 3 entries into the secondary effect list (``0x7DE6``). Each 6-byte entry:
+    ``[0]=X=[def+9]``, ``[2]=Y=[def+0xB]-0x18``, ``[4]=arg``, ``[5]=angle = (k+1)*(dl>>2)`` (signed byte shift).
+    ``find_free()`` yields the next writable slot (a length>=4 mutable sequence ``[x, y, b4, b5]``); the live
+    caller scans ``0x7DE6`` for the first ``x==0xFFFF``. Returns the 3 spawned ``(x, y, b4, b5)`` tuples. It does
+    NOT touch the object record/def, so a handler's obj/def contract is independent of it."""
+    step = (_s8(dl) >> 2) & 0xFF                          # [7FD9 sar dl,1 x2]
+    y = (defB - 0x18) & 0xFFFF                            # [7FEF]
+    out, ang = [], step
+    for _ in range(3):                                   # [7FE1 bp=3]
+        slot = find_free()                               # [7FE4 call 8014]
+        slot[0], slot[1], slot[2], slot[3] = def9 & 0xFFFF, y, arg & 0xFF, ang & 0xFF
+        out.append((def9 & 0xFFFF, y, arg & 0xFF, ang & 0xFF))
+        ang = (ang + step) & 0xFF                         # [7FFB ch += ah]
+    return out
+
+
+def handle_object_7c2d(obj: dict, defn: dict, glb: dict, read_word=None, spawn=None) -> None:
+    """Recover the idx2 AI handler ``1030:7C2D..7C8B`` — a vertical BOB oscillator that floats down/up around
+    ``[def+0xB]`` within amplitude ``[def+0xD]`` at speed ``[def+0xE]``, trailing effects (``7FD9``) each frame.
+
+    ``obj``: x, y, id, yvel, anim_ptr, state. ``defn``: d2, d4, d7, d9, dB, dD, dE. ``glb``: player_x, player_y.
+    ``spawn`` (optional) is the recovered :func:`spawn_effects` bound to the effect list; the obj/def contract
+    is independent of it (the live walker passes it; the shadow leaves it None)."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [7C2D call 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    st = obj["state"]
+    if st >= 2:                                           # [7C35 cmp al,2; jae 7C85]
+        if st == 0xFF:
+            dying_state(obj, defn, glb)
+        return
+    rel_y = (obj["y"] - defn["dB"]) & 0xFFFF              # [7C3A] distance below the bob centre
+    if spawn is not None:
+        spawn(defn["d9"], defn["dB"], 0, rel_y & 0xFF)    # [7C40-7C42] al=0, dl=rel_y low byte
+    if st == 0:                                           # [7C4A] moving DOWN
+        obj["yvel"] = (_s8(defn["dE"] & 0xFF) << 4) & 0xFFFF
+        if _s8(defn["dD"] & 0xFF) < _s8(rel_y & 0xFF):    # [7C59 cmp [def+0xD],al; jge -> ret] amplitude reached
+            obj["state"] = 1
+            obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)
+    else:                                                # [7C66] state 1, moving UP
+        obj["yvel"] = (-(_s8(defn["dE"] & 0xFF) << 4)) & 0xFFFF
+        if _s16(rel_y) < 0:                               # [7C7B jge -> ret] rose above the centre
+            obj["state"] = 0
+            obj["anim_ptr"] = anim_script_rewind(obj["anim_ptr"], read_word)

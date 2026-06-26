@@ -10,8 +10,8 @@ from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, 
                                           advance_animation, anim_script_forward, anim_script_rewind,
                                           apply_velocity, despawn_check, dying_state, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7c8c,
-                                          handle_object_7c90, handle_object_760f, on_screen_tile,
-                                          saturating_counter)
+                                          handle_object_7c90, handle_object_760f, handle_object_7c2d,
+                                          on_screen_tile, saturating_counter, spawn_effects)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -487,3 +487,49 @@ def test_h760f_state1_gravity_until_terminal():
     o, d = _o11(state=1, yvel=0x80), _d11(dF=8)   # at terminal -> no more accel
     handle_object_760f(o, d, _g11(), None)
     assert o["yvel"] == 0x80
+
+
+# -- handle_object_7c2d (idx2 vertical-bob, 1030:7C2D) + spawn_effects (7FD9) --
+
+def _o2(**kw):
+    o = dict(x=0x100, y=0x110, id=0x2000 | 0x13E, xvel=0, yvel=0, anim_ptr=0x200, state=0)
+    o.update(kw); return o
+
+def _d2(**kw):
+    d = dict(d2=0, d4=0, d7=0, d9=0x100, dB=0x100, dD=8, dE=2)
+    d.update(kw); return d
+
+def _g2(**kw):
+    g = dict(player_x=0x100, player_y=0x110)
+    g.update(kw); return g
+
+_RD2 = lambda off: 0xFFFE
+
+
+def test_h7c2d_state0_moves_down_within_amplitude():
+    o, d = _o2(y=0x102, state=0), _d2(dB=0x100, dD=8, dE=2)   # rel_y=2 ; _s8(8) >= _s8(2) -> stay down
+    handle_object_7c2d(o, d, _g2(player_y=0x102), _RD2)
+    assert o["yvel"] == (2 << 4) and o["state"] == 0
+
+
+def test_h7c2d_state0_turns_up_at_amplitude():
+    o, d = _o2(y=0x120, state=0, anim_ptr=0x200), _d2(dB=0x100, dD=8)   # rel_y=0x20 > 8 -> turn up
+    handle_object_7c2d(o, d, _g2(player_y=0x120), _RD2)
+    assert o["state"] == 1 and o["anim_ptr"] == 0x202
+
+
+def test_h7c2d_state1_moves_up_then_returns_at_centre():
+    o, d = _o2(y=0x110, state=1), _d2(dB=0x100, dE=2)         # rel_y=0x10 >= 0 -> keep rising
+    handle_object_7c2d(o, d, _g2(player_y=0x110), _RD2)
+    assert o["yvel"] == (-(2 << 4)) & 0xFFFF and o["state"] == 1
+    o, d = _o2(y=0x0F0, state=1, anim_ptr=0x200), _d2(dB=0x100)   # rel_y=-0x10 < 0 -> turn down
+    handle_object_7c2d(o, d, _g2(player_y=0x0F0), _RD2)
+    assert o["state"] == 0 and o["anim_ptr"] == 0x1FE
+
+
+def test_spawn_effects_three_entries():
+    free = [[0xFFFF, 0, 0, 0] for _ in range(5)]
+    it = iter(free)
+    out = spawn_effects(def9=0x123, defB=0x200, arg=0, dl=8, find_free=lambda: next(it))   # step=2, y=0x1E8
+    assert out == [(0x123, 0x1E8, 0, 2), (0x123, 0x1E8, 0, 4), (0x123, 0x1E8, 0, 6)]
+    assert free[0] == [0x123, 0x1E8, 0, 2] and free[2] == [0x123, 0x1E8, 0, 6]

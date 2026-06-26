@@ -349,3 +349,21 @@ idx5 (7A60), idx7 (7898), idx13-23.
 
 Recovered handlers: idx0/1/8/9/10/11. Remaining witnessed: idx2 (bob)/idx3 (jumper)/idx4 (orbit) [need
 7FD9/8089/7B53 + level-map]; idx6 (78EC)/idx12 (75C4) [earthquake, TBD] + 698C terrain collision.
+
+## Stage 1 cont. (2026-06-26) — idx2 bob + the 7FD9 effect spawner
+
+- **`1030:7C2D..7C8B` — handler idx2 `handle_object_7c2d`. VERIFIED**. A vertical BOB oscillator floating
+  down/up around `[def+0xB]` within amplitude `[def+0xD]` at speed `[def+0xE]`, trailing effects each frame.
+  state 0 down until `rel_y > [def+0xD]` (signed byte) -> state 1 up until it rises above centre -> state 0.
+  Shadow (obj/def) 866/866 (L6) + 1110/1110 (L5).
+- **`1030:7FD9` — `spawn_effects`** (the trail spawner): spawns 3 entries into the secondary effect list
+  `0x7DE6` (X=[def+9], Y=[def+0xB]-0x18, [4]=arg, [5]=angle=(k+1)*(dl>>2)) at the first free slots (8014).
+  It does NOT touch the object record/def, so idx2's obj/def contract is verified independently of it; the
+  0x7DE6 contract is unit-tested (a live-shadow of the effect list is a later add).
+
+Note (password edge, user-confirmed): L10-expert code B005 (index 19) is rejected because the validator's
+level loop only accepts indices 0..0x12 -> the final level/boss is not password-reachable (by design); the
+final boss is one of the never-witnessed handler ids (idx5/7 or idx13-23) in the last level.
+
+Recovered handlers: idx0/1/2/8/9/10/11 (7 of the witnessed types). Remaining: idx3 (7B91 jumper, needs 7FD9 +
+level-map), idx4 (7ADF orbit, needs 7B53 sin/cos + 8089), idx6 (78EC) / idx12 (75C4) [earthquake] + 698C.

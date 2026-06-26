@@ -26,7 +26,8 @@ from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW:
                                           despawn_check, on_screen_tile,
                                           anim_script_rewind, anim_script_forward,
                                           handle_object_7665, handle_object_773d,
-                                          handle_object_77de, handle_object_7c8c, handle_object_7c90, handle_object_760f)
+                                          handle_object_77de, handle_object_7c8c, handle_object_7c90, handle_object_760f,
+                                          handle_object_7c2d)
 
 SEG = 0x1030
 
@@ -201,11 +202,12 @@ def main():
 
     def _def_dict(ds, d):
         return {"d2": rdw(ds, d + 2), "d4": rdb(ds, d + 4), "d6": rdb(ds, d + 6), "d7": rdb(ds, d + 7),
-                "dD": rdw(ds, d + 0xD), "dE": rdb(ds, d + 0xE), "dF": rdw(ds, d + 0xF),
-                "d10": rdb(ds, d + 0x10), "d11": rdb(ds, d + 0x11), "d12": rdb(ds, d + 0x12)}
+                "d9": rdw(ds, d + 9), "dB": rdw(ds, d + 0xB), "dD": rdw(ds, d + 0xD), "dE": rdb(ds, d + 0xE),
+                "dF": rdw(ds, d + 0xF), "d10": rdb(ds, d + 0x10), "d11": rdb(ds, d + 0x11),
+                "d12": rdb(ds, d + 0x12)}
 
     _HANDLERS = {0x7665: handle_object_7665, 0x773D: handle_object_773d, 0x77DE: handle_object_77de,
-                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90, 0x760F: handle_object_760f}
+                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90, 0x760F: handle_object_760f, 0x7C2D: handle_object_7c2d}
 
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si
