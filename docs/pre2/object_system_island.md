@@ -313,3 +313,24 @@ All handlers now share the uniform signature ``(obj, defn, glb, read_word)``; th
 ``{target: fn}`` map. Recovered handlers: idx1 (7C8C), idx8 (77DE), idx9 (773D), idx10 (7665). Remaining
 witnessed: idx0 (7C90), idx2 (7C2D bob), idx3 (7B91), idx4 (7ADF), idx11 (760F) + the 698C terrain collision,
 then compose ``object_tick`` over the dispatch table.
+
+## Stage 1 cont. (2026-06-26) — idx0 handler + remaining-handler dependency map
+
+- **`1030:7C90..7CD9` — handler idx0 `handle_object_7c90`. VERIFIED**. A ground enemy/collectible: waits on
+  the `8001` timer, despawns if the player is >= 0xB0 above (signed objY-playerY), else flags itself for the
+  walker's tile-collision (`[def+4]|=8`) and chases on the ground (±0x20 toward player once landed). Shadow
+  verified in L5 (74 of the 800/800 checks). No 7FD9 dependency -> clean.
+
+Disasm of the remaining witnessed handlers (idx2/3/4) shows they share a deeper sub-layer to recover next:
+- **`1030:7FD9`** — spawns 3 entries into a SECONDARY effect list at `0x7DE6` (6-byte entries: X=[def+9],
+  Y=[def+0xB]-0x18, [4]=arg, [5]=angle += dl>>2) via **`8014`** (find-free-slot in 0x7DE6, terminator
+  `[di]==0xFFFF`). Used by idx2/3/4 (the "spread of effects" — stars/projectiles). NOTE: it does NOT touch the
+  object record or def, so a handler's obj/def contract is independent of it (shadow them separately).
+- **`1030:8089`** = `despawn_check` entered mid-routine (skips the `[si]`/`[si+2]` load) so the caller (idx4)
+  can despawn by the ORBIT CENTRE `[def+9]/[def+0xB]` instead of the object position.
+- **`1030:7B53`** — idx4's orbit position: `X = centreX + (cos[0x6F90+angle]>>2 * radius)>>4`,
+  `Y = centreY + (sin[0x7090+angle]>>2 * radius)>>4` (the flying-squirrel circular motion).
+- idx3 `7B91` also does a level-map tile-collision read (`es:[0x2DDA]` + property table `0x7F5E`, like 698C).
+
+Recovered handlers: idx0/1/8/9/10. Remaining: idx2 (7C2D bob)/idx3 (7B91)/idx4 (7ADF orbit) need 7FD9/8089/
+7B53 + the level-map read; idx11 (760F) TBD. Then 698C terrain collision + compose object_tick.

@@ -10,7 +10,7 @@ from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, 
                                           advance_animation, anim_script_forward, anim_script_rewind,
                                           apply_velocity, despawn_check, dying_state, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7c8c,
-                                          on_screen_tile, saturating_counter)
+                                          handle_object_7c90, on_screen_tile, saturating_counter)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -405,3 +405,46 @@ def test_h77de_faces_player_when_stationary():
     o, d = _o8(state=0xFF, xvel=0, x=0x200, id=0x2000 | 0x18C), _d8(d4=1)
     handle_object_77de(o, d, _g8(player_x=0x300), _RD8)   # xvel==0 -> face right (objX<playerX) -> +1
     assert o["xvel"] == 1
+
+
+# -- handle_object_7c90 (idx0 ground enemy/collectible, 1030:7C90) --
+
+def _o0(**kw):
+    o = dict(x=0x100, y=0x100, id=0x2000 | 0x160, xvel=0, yvel=0, anim_ptr=0x200, state=0)
+    o.update(kw); return o
+
+def _d0(**kw):
+    d = dict(d2=0, d4=0, d6=0, d7=0)
+    d.update(kw); return d
+
+_RD0 = lambda off: 0xFFFE
+
+
+def test_h7c90_state0_activates_near_player():
+    o, d = _o0(state=0), _d0(d6=0)
+    handle_object_7c90(o, d, dict(player_x=0x100, player_y=0x100), _RD0)
+    assert (d["d4"] & 8) == 8 and o["state"] == 1
+
+
+def test_h7c90_state0_waits_until_ready():
+    o, d = _o0(state=0), _d0(d6=5, d7=0)                              # 1>>2=0 < 5 -> not ready
+    handle_object_7c90(o, d, dict(player_x=0x100, player_y=0x100), _RD0)
+    assert o["state"] == 0 and (d["d4"] & 8) == 0
+
+
+def test_h7c90_state0_despawns_when_far_below_player():
+    o, d = _o0(state=0, y=0x200), _d0(d6=0, d4=1)                     # objY-playerY = 0x100 >= 0xB0
+    handle_object_7c90(o, d, dict(player_x=0x200, player_y=0x100), _RD0)
+    assert o["id"] == 0xFFFF
+
+
+def test_h7c90_state1_chases_once_landed():
+    o, d = _o0(state=1, yvel=0, x=0x100, anim_ptr=0x200), _d0()
+    handle_object_7c90(o, d, dict(player_x=0x200, player_y=0x100), _RD0)
+    assert o["state"] == 2 and o["xvel"] == 0x20 and o["anim_ptr"] == 0x202
+
+
+def test_h7c90_state1_waits_while_falling():
+    o, d = _o0(state=1, yvel=5), _d0()
+    handle_object_7c90(o, d, dict(player_x=0x100, player_y=0x100), _RD0)
+    assert o["state"] == 1

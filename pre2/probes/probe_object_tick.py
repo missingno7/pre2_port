@@ -26,7 +26,7 @@ from pre2.recovered.object_update import (AnimResult, DespawnResult,   # SHADOW:
                                           despawn_check, on_screen_tile,
                                           anim_script_rewind, anim_script_forward,
                                           handle_object_7665, handle_object_773d,
-                                          handle_object_77de, handle_object_7c8c)
+                                          handle_object_77de, handle_object_7c8c, handle_object_7c90)
 
 SEG = 0x1030
 
@@ -204,8 +204,8 @@ def main():
                 "dD": rdw(ds, d + 0xD), "dE": rdb(ds, d + 0xE), "dF": rdw(ds, d + 0xF),
                 "d10": rdb(ds, d + 0x10), "d11": rdb(ds, d + 0x11), "d12": rdb(ds, d + 0x12)}
 
-    _HANDLERS = {0x7665: handle_object_7665, 0x773D: handle_object_773d,
-                 0x77DE: handle_object_77de, 0x7C8C: handle_object_7c8c}
+    _HANDLERS = {0x7665: handle_object_7665, 0x773D: handle_object_773d, 0x77DE: handle_object_77de,
+                 0x7C8C: handle_object_7c8c, 0x7C90: handle_object_7c90}
 
     def h_dispatch(c):
         bx, cs, ds, si = c.s.bx, c.s.cs, c.s.ds, c.s.si

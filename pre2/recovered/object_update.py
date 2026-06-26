@@ -18,7 +18,7 @@ Recovered so far:
 """
 from __future__ import annotations
 
-__all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
+__all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT", "handle_object_7c90",
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
            "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state", "saturating_counter",
@@ -396,4 +396,37 @@ def handle_object_77de(obj: dict, defn: dict, glb: dict, read_word) -> None:
         if ready:                                           # [788E jae 7827]
             _pounce(obj, defn, glb, read_word)
     elif st == 0xFF:                                        # [7890 jmp 7CDA]
+        dying_state(obj, defn, glb)
+
+
+def handle_object_7c90(obj: dict, defn: dict, glb: dict, read_word) -> None:
+    """Recover the idx0 AI handler ``1030:7C90..7CD9`` — a ground enemy/collectible that, once the player is
+    near, flags itself for the walker's tile-collision pass (``[def+4]|=8``) then chases on the ground.
+
+    state 0: wait on the ``8001`` timer; despawn if the player is >= 0xB0 above (signed ``objY-playerY``);
+    else set the collide flag + state 1. state 1: once vertical motion stops (``yvel==0``), pick a horizontal
+    speed toward the player (±0x20) + anim-forward + state 2. state 2: idle. state 0xFF: dying.
+
+    ``obj``: x, y, id, xvel, yvel, anim_ptr, state. ``defn``: d2, d4, d6, d7. ``glb``: player_x, player_y."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [7C90 call 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    st = obj["state"]
+    if st == 0:                                             # [7C96]
+        defn["d7"], ready = saturating_counter(defn["d6"], defn["d7"])   # [7C9A call 8001]
+        if not ready:
+            return
+        if _s16(obj["y"] - glb["player_y"]) >= 0xB0:        # [7C9F-7CA9 jge 7CFF] far below player -> despawn
+            despawn_full(obj, defn)
+        else:
+            defn["d4"] |= 8                                 # [7CAB] flag for the walker's 698C tile collision
+            obj["state"] = 1
+    elif st == 1:                                           # [7CB4]
+        if obj["yvel"] == 0:                                # [7CB8] until vertical motion stops
+            obj["state"] = 2
+            obj["xvel"] = 0x20 if _s16(obj["x"]) < _s16(glb["player_x"]) else (-0x20) & 0xFFFF   # [7CC2-7CCE]
+            obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)   # [7CD1]
+    elif st == 2:                                           # [7CD5] idle
+        pass
+    elif st == 0xFF:
         dying_state(obj, defn, glb)
