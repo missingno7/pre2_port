@@ -15,7 +15,7 @@ Started with the isolated horizontal-kinematics leaf (the player counterpart of 
 """
 from __future__ import annotations
 
-__all__ = ["player_x_integrate", "X_MIN", "X_MAX", "VIEW_TILES"]
+__all__ = ["player_x_integrate", "player_y_integrate", "X_MIN", "X_MAX", "VIEW_TILES"]
 
 X_MIN = 0x0008          # [asm 5A29] commit only if new_x >= 8 (left world edge)
 X_MAX = 0x0FF8          # [asm 5A2E] commit only if new_x < 0xFF8 (right world edge)
@@ -41,3 +41,12 @@ def player_x_integrate(x: int, xvel: int, cam_left: int) -> int:
     if _s16(bound) > _s16(new_x) and _s16(new_x) >= X_MIN and _s16(new_x) < X_MAX:  # [5A25/5A29/5A2E]
         return new_x                                         # [5A33] commit
     return x & 0xFFFF                                        # blocked -> unchanged
+
+
+def player_y_integrate(y: int, yvel: int) -> int:
+    """Recover the player vertical kinematics ``1030:5A36..5A3D``.
+
+    ``new_y = y + sar(yvel, 4)`` (12.4 fixed, arithmetic shift). UNCONDITIONAL — unlike the X integrate there
+    are no bounds here; the ground/tile collision at ``5A96`` (the very next call) clamps Y and zeroes Yvel on
+    contact. Pure: returns the new ``[0x4F1E]`` value."""
+    return (y + (_s16(yvel) >> 4)) & 0xFFFF                  # [5A36-5A3D] Y += sar(Yvel,4)

@@ -15,14 +15,17 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.recovered.player import VIEW_TILES, X_MAX, X_MIN, _s16, player_x_integrate
+from pre2.recovered.player import VIEW_TILES, X_MAX, X_MIN, _s16, player_x_integrate, player_y_integrate
 
 from .common import report
 
 _ENTRY = (0x1030, 0x5A0F)     # mov ax,[0x4F22]  (start of the X integrate)
-_NEXT = (0x1030, 0x5A36)      # mov ax,[0x4F2A]  (the Y integrate — first instruction after the block)
+_NEXT = (0x1030, 0x5A36)      # mov ax,[0x4F2A]  (the Y integrate — first instruction after the X block)
+_ENTRY_Y = (0x1030, 0x5A36)   # mov ax,[0x4F2A]  (start of the Y integrate)
+_NEXT_Y = (0x1030, 0x5A41)    # call 0x5A96      (the ground/tile collision — first instruction after Y)
 _DS = 0x1A0F
 _PX = 0x4F1C
+_PY = 0x4F1E
 
 
 def _rw(mem, off):
@@ -64,17 +67,54 @@ def player_x_integrate_hook(cpu) -> None:
     cpu.s.ip = _NEXT[1]
 
 
-def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
-    """Install the lockstep verify hook at 0x5A36: diff the recovered prediction vs the ASM's [0x4F1C]."""
+@registry.replace(*_ENTRY_Y, "player_y_integrate")
+def player_y_integrate_hook(cpu) -> None:
+    """Native replacement for the player vertical kinematics at 1030:5A36..5A3D (Y += sar(Yvel,4))."""
+    mem = cpu.mem
+    y, yvel = _rw(mem, _PY), _rw(mem, 0x4F2A)
+    new_y = player_y_integrate(y, yvel)
 
-    def _verify_at_next(c) -> None:
+    if getattr(cpu, "pre2_verify_mode", False):
+        cpu.pre2_player_y_pending.append(new_y)
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    # The block is 4 ASM insns ending in `add [0x4F1E],ax`; step() adds 1, so add 3. Reproduce the add's FLAGS
+    # (the next IRQ pushes them).
+    b = ((_DS << 4) + _PY) & 0xFFFFF
+    mem.data[b] = new_y & 0xFF
+    mem.data[b + 1] = (new_y >> 8) & 0xFF
+    cpu.set_add_flags(y, (_s16(yvel) >> 4) & 0xFFFF, new_y, 16)
+    cpu.instruction_count += 3
+    cpu.s.ip = _NEXT_Y[1]
+
+
+def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
+    """Install the lockstep verify hooks: diff the recovered X (at 5A36) / Y (at 5A41) vs the ASM's."""
+
+    def _verify_x_at_next(c) -> None:
+        # 0x5A36 is the X-integrate EXIT *and* the Y-integrate ENTRY. In verify mode this hook shadows the
+        # player_y_integrate replacement at the same address, so it does both jobs: diff X (the prediction
+        # made at 5A0F) and capture the Y prediction (5A0F always runs immediately before 5A36).
         pending = getattr(c, "pre2_player_pending", None)
         if pending:
             pred = pending.pop()
             actual = _rw(c.mem, _PX)
             reason = None if pred == actual else f"X rec={pred:#06x} asm={actual:#06x}"
             report(stats, on_result, raise_on_divergence, "player_x_integrate", reason)
+        c.pre2_player_y_pending.append(player_y_integrate(_rw(c.mem, _PY), _rw(c.mem, 0x4F2A)))
         interpret_current_instruction_without_hook(c)
 
-    cpu.replacement_hooks[_NEXT] = _verify_at_next
+    def _verify_y_at_next(c) -> None:
+        pending = getattr(c, "pre2_player_y_pending", None)
+        if pending:
+            pred = pending.pop()
+            actual = _rw(c.mem, _PY)
+            reason = None if pred == actual else f"Y rec={pred:#06x} asm={actual:#06x}"
+            report(stats, on_result, raise_on_divergence, "player_y_integrate", reason)
+        interpret_current_instruction_without_hook(c)
+
+    cpu.replacement_hooks[_NEXT] = _verify_x_at_next
     cpu.hook_names[_NEXT] = "player_x_integrate_verify"
+    cpu.replacement_hooks[_NEXT_Y] = _verify_y_at_next
+    cpu.hook_names[_NEXT_Y] = "player_y_integrate_verify"

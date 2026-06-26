@@ -51,6 +51,12 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
   - Audit: classified `live`, verify-enabled, no drift. Demo byte-determinism is already affected upstream by
     the live `object_tick` collapse, so this hook is verified the desync-immune way (verify-mode + audit), not
     by demo byte-reproduction.
+- **`player_y_integrate` (1030:5A36..5A3D). LIVE + VERIFIED**. `new_y = Y + sar(Yvel,4)`, UNCONDITIONAL (no
+  clamps — the ground/tile collision at `5A96`, the very next call, corrects Y/Yvel on contact).
+  - Shadow: 2069/2069 (L1) + 299/299 (L6). Live: inline-block swap (4 insns, writes `[0x4F1E]`, jumps to
+    `5A41`, reproduces the `add` FLAGS). Fires ~2069× on L1.
+  - Verify-mode oracle: 487/487 (L1) + 66/66 (L6), zero divergences. Note `5A36` is the X exit *and* the Y
+    entry, so in verify mode the X verify-hook also captures the Y prediction (X always runs just before Y).
 
 ## Mismatch taxonomy (classes to watch as the FSM is recovered)
 1. **Fixed-point**: 12.4 velocities, arithmetic `sar` (floor toward -inf) — sign/rounding bugs.
@@ -63,11 +69,9 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
    and the collision separately and compose.
 
 ## Next leaves (staged, shadow-before-live)
-With the X integrate live, the next safe leaves up the same routine, in order of risk:
-1. **Y integrate `5A36..5A3D`** — simpler (`Y += sar(Yvel,4)`, fewer clamps). Recover + shadow + live like the
-   X integrate.
-2. **Ground/tile collision `5A96`** — reads the tile-property table by `[0x4F20]`; recover the lookup + the
+With X+Y integrate live, the next safe leaves up the same routine, in order of risk:
+1. **Ground/tile collision `5A96`** — reads the tile-property table by `[0x4F20]`; recover the lookup + the
    Y/Yvel response separately, then compose (collision-coupled mismatch class).
-3. **Per-state handlers `cs:[0x7D2F]`** — one state at a time (start with idle/run), each shadow-verified
+2. **Per-state handlers `cs:[0x7D2F]`** — one state at a time (start with idle/run), each shadow-verified
    before live. This is where facing/animation/action behaviour lives.
 Keep each its own small reversible step. No broad FSM rewrite; no guessed struct fields.
