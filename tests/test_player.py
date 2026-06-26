@@ -18,6 +18,7 @@ from pre2.recovered.player import (
     player_emit_trail,
     player_select_anim_id,
     player_set_anim,
+    player_state_anim4,
     player_state_anim5,
     player_state_anim8,
     player_state_idle,
@@ -242,6 +243,21 @@ def test_state_anim8_setanim_uses_clobbered_xvel():
     assert out[0x4F22] == 0x2C                       # friction_dir 0x40->0x38, friction_sym ->0x2C
     assert out[0x4F27] == 0x2C                       # set_anim_b al = post-friction Xvel low byte (the gotcha)
     assert out[0x4F28] == 0x9302 and out[0x4F20] == 0x0455
+
+
+def test_state_anim4_accel_path():
+    from pre2.recovered.player import ANIM_SEQ_TABLE
+    seq = {0x9400: 0x0688}
+    table = {(8 + ANIM_SEQ_TABLE) & 0xFFFF: 0x9400}
+    mem = {0x4F22: 0x10, 0x6BF6: 0x10, 0x4F24: 0, 0x6BCE: 0, 0x4F25: 1, 0x6BDB: 1,
+           0x4F27: 0xFF, 0x4F28: 0, 0x6BD3: 0x99, 0x6BE1: 0}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: table.get(o, seq.get(o, mem.get(o, 0))) & 0xFFFF
+    out = player_state_anim4(rb, rw)
+    assert out[0x6BD3] == 0 and out[0x6BE1] == 4 and out[0x6BCE] == 2   # cleared / set / charged
+    assert out[0x4F22] == 0x20                       # |Xvel| 0x10 <= 0x20 -> accel +0x10 (clamped 0x20)
+    assert out[0x4F27] == 0x10                       # set_anim al = |Xvel| (clobbered)
+    assert out[0x4F28] == 0x9402 and out[0x4F20] == 0x0688
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():

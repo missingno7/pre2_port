@@ -125,13 +125,22 @@ path) is a few primitive calls. Status of the 7 distinct handlers (anim_id 3/6/7
 | 0 | `0x5CDB` | 629 | **recovered+verified** 719/719+88/88 | airborne/moving+trail(`5E11`)/default/long-idle/fidget(`0x79E0`); anim13+dust `3435/3414` unwitnessed |
 | 2 | `0x5F30` | 250 | **recovered+verified** 288/288+4/4 | jump-arc table `0x79CE`/gravity + horizontal + `set_anim(2)` + 2× friction; `[0x6BE0]`→idle |
 | 3/6/7 | `0x5F96` | 72 | scoped | `set_anim; advance; friction_sym; sat_inc; mul[0x7B18]; table 0x7B07; [0x7B19]` |
-| 4 | `0x5E62` | 20 | scoped | `accel(0x20); set_anim; advance` + `|Xvel|<=0x20`→idle fall-through (al clobbered) |
+| 4 | `0x5E62` | 20 | **recovered+verified** 11/11 | `[0x6BD3]=0;[0x6BE1]=4;charge`; `|Xvel|<=0x20`→accel(0x20)+set_anim+advance, else→idle (bx=8) |
 | 8 | `0x5CCE` | 156 | **recovered+verified** 134/134 | `friction_dir; friction_sym; set_anim; advance` (al = post-friction Xvel low byte) |
 
 Note: handlers `0x5CCE`/`0x5E62` call `set_anim` *after* `friction_sym`/`|Xvel|` clobbers `ax`, so their
 `[0x4F27]` ends up velocity-derived (faithful, just not anim_id) — compose with the real register flow.
-The complex handlers (idle especially) carry game-specific logic (fidget tables, dust, fall-throughs) and are
-their own focused recoveries.
+
+**Verification methodology note:** the standalone shadow probes hook a routine's entry+exit and run the
+recovered fn from the live ASM state. Hooking a *high-frequency* shared instruction (e.g. idle's exit `5E0D`,
+763×) lightly perturbs the deterministic demo clock, so per-handler call *counts* differ from the unhooked run
+(idle dispatch: 629 real vs 719/763 under 2/12 hooks). The **byte-exactness of each compared call is still
+valid** (it compares recovered vs real ASM from an identical state). The rigorous, non-perturbing oracle is
+verify-mode (`enable_pre2_hook_verification`, instruction-count-transparent) on the eventual live
+`player_update` — that is the final check before/as the collapse lands.
+
+The last handler `0x5F96` (anim_id 3/6/7, "eating") is audio-coupled: it plays a sound (`call 0x282`), writes
+the override flag `[0x6BD0]`, and branches to `0x6081` (the common path, 88×) — its own focused recovery.
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +

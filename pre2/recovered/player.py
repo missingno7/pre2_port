@@ -20,7 +20,7 @@ __all__ = [
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
     "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
-    "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
+    "player_state_anim4", "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
     "TRAIL_RING_LO", "TRAIL_RING_HI", "TRAIL_STRIDE", "TRAIL_SPRITE",
@@ -440,6 +440,29 @@ def player_state_anim8(rb, rw) -> dict:
     out[0x4F28] = new_ptr
     out[0x4F20] = frame
     out[0x6BCF] = bcf
+    return out
+
+
+def player_state_anim4(rb, rw) -> dict:
+    """Recover the ``anim_id==4`` FSM handler ``1030:5E62`` (main path, gate ``[0x6BD0]==0``).
+
+    Always: ``[0x6BD3]=0``, ``[0x6BE1]=4``, ``charge_6bce``. Then on ``|Xvel| <= 0x20`` accelerate (limit 0x20)
+    + ``set_anim_b`` + advance (``al`` = the clobbered ``|Xvel|`` low byte, ``bx``==8); otherwise fall through
+    to the idle handler (bx==8), which — because ``[0x6BD3]`` was just zeroed — sees a fresh idle timer."""
+    out = {0x6BD3: 0, 0x6BE1: 4, 0x6BCE: player_charge_6bce(rb(0x6BCE))}   # [5E6C-5E76]
+    mag = abs(_s16(rw(0x4F22)))                                            # [5E79]
+    if mag <= 0x20:                                                        # [5E85-5E87] jbe -> accel
+        out[0x4F22] = player_accel(rw(0x4F22), rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, 0x20)  # [5E8C]
+        state, ptr = player_set_anim(mag & 0xFF, 8, rb(0x4F27), rw(0x4F28), rw)   # [5E8F] al = clobbered |Xvel|
+        out[0x4F27] = state
+        frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)     # [5E92]
+        out[0x4F28] = new_ptr
+        out[0x4F20] = frame
+        out[0x6BCF] = bcf
+        return out
+    # [5E89] jmp 5CDB — idle sees [0x6BD3]==0 (just written) and bx==8
+    rb2 = lambda o: 0 if o == 0x6BD3 else rb(o)
+    out.update(player_state_idle(rb2, rw, entry_bx=8))
     return out
 
 
