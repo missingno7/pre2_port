@@ -19,7 +19,8 @@ __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
-    "player_state_run", "player_state_anim5", "player_state_idle", "player_charge_6bce", "player_emit_trail",
+    "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump",
+    "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
     "TRAIL_RING_LO", "TRAIL_RING_HI", "TRAIL_STRIDE", "TRAIL_SPRITE",
@@ -31,6 +32,8 @@ TRAIL_STRIDE = 0x12       # [asm 5E2E] trail-ring slot stride
 TRAIL_SPRITE = 0x35       # [asm 5E29] trail sprite id written into slot+4
 
 RUN_ACCEL_LIMIT = 0x50    # [asm 5F03] the run state's horizontal speed cap passed to player_accel
+JUMP_IMPULSE_TABLE = 0x79CE   # [asm 5F57] 9 words of per-frame Yvel impulse for the jump arc (decaying)
+JUMP_FRAMES = 9               # [asm 5F50] frames driven by the impulse table before gravity takes over
 
 ANIM_SEQ_TABLE = 0x7CDF   # [asm 6366/637D] base of the per-state animation-sequence pointer table
 ANIM_ID_TABLE = 0x7B7F    # [asm 592E] base of the input-bitmask -> anim_id (FSM state index) table
@@ -296,10 +299,11 @@ def _idle_set_advance(out: dict, anim_id: int, seq: int, rb, rw, facing: int) ->
     out[0x6BCF] = bcf
 
 
-def _idle_default_anim(out: dict, facing: int, rw) -> None:
-    """Idle "default" anim path ``1030:5DED`` — load the idle sequence (entry bx==0) and write frame 0 WITHOUT
-    advancing and WITHOUT the 0x1F mask (only the facing bit is merged); resets ``[0x4F2C]``."""
-    ptr = rw(ANIM_SEQ_TABLE)                                     # [5DED] bx = [0 + 0x7CDF]
+def _idle_default_anim(out: dict, entry_bx: int, facing: int, rw) -> None:
+    """Idle "default" anim path ``1030:5DED`` — load the sequence for the handler's entry ``bx`` (anim_id*2;
+    0 for a direct idle, but e.g. 4 when the jump handler falls through) and write frame 0 WITHOUT advancing
+    and WITHOUT the 0x1F mask (only the facing bit is merged); resets ``[0x4F2C]``."""
+    ptr = rw((entry_bx + ANIM_SEQ_TABLE) & 0xFFFF)              # [5DED] bx = [entry_bx + 0x7CDF]
     out[0x4F28] = ptr                                            # [5DF1]
     ax = rw(ptr)                                                 # [5DF5]
     ah = ((ax >> 8) | (facing & 0x80)) & 0xFF                    # [5DF7-5DFE] no 0x1F mask here
@@ -307,11 +311,13 @@ def _idle_default_anim(out: dict, facing: int, rw) -> None:
     out[0x4F2C] = 0                                              # [5E03]
 
 
-def player_state_idle(rb, rw) -> dict:
+def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
     """Recover the ``anim_id==0`` "idle" FSM handler ``1030:5CDB`` (main path, gate ``[0x6BD0]==0``).
 
-    The grounded idle/landing/turn/fidget state. ``rb``/``rw`` read entry memory (byte/word); returns the dict
-    of writes. The witnessed paths (see docs/pre2/player_fsm_island.md): airborne, moving+turn (anim 0x12 +
+    The grounded idle/landing/turn/fidget state. ``rb``/``rw`` read entry memory (byte/word); ``entry_bx`` is
+    the dispatch ``bx`` (anim_id*2) — 0 for a direct idle, but other handlers fall through here with their own
+    bx (e.g. the jump handler with 4), which only affects the 5DED default-anim sequence. Returns the dict of
+    writes. The witnessed paths (see docs/pre2/player_fsm_island.md): airborne, moving+turn (anim 0x12 +
     trail), default (5DED), long-idle (anim 0x10), and fidget (anim 0x11 via the table at 0x79E0). The
     short-idle anim-0x13 path + dust effects (3435/3414) never fire and are left unrecovered (fail loud)."""
     out = {0x6BC8: 0}                                            # [5CE8]
@@ -334,12 +340,12 @@ def player_state_idle(rb, rw) -> dict:
                 out.update(trail[0])
                 out[0x6BBE] = trail[1]
         else:
-            _idle_default_anim(out, facing, rw)                # [5D2E] jmp 5DED
+            _idle_default_anim(out, entry_bx, facing, rw)                # [5D2E] jmp 5DED
         out[0x4F27] = 0                                         # [5E08]
         return out
 
     if _s16(out[0x4F22]) != 0:                                  # [5D42-5D46] 0 < |Xvel| < 8 -> default
-        _idle_default_anim(out, facing, rw)
+        _idle_default_anim(out, entry_bx, facing, rw)
         out[0x4F27] = 0
         return out
 
@@ -370,7 +376,7 @@ def player_state_idle(rb, rw) -> dict:
     si = 0x79E0
     while True:
         if key < rw(si):                                       # [5DD2] jb 5DED
-            _idle_default_anim(out, facing, rw)
+            _idle_default_anim(out, entry_bx, facing, rw)
             out[0x4F27] = 0
             return out
         if key < rw((si + 2) & 0xFFFF):                        # [5DD6] jb 5DE0
@@ -378,6 +384,44 @@ def player_state_idle(rb, rw) -> dict:
             out[0x4F27] = 0
             return out
         si = (si + 4) & 0xFFFF                                 # [5DDB]
+
+
+def player_state_jump(rb, rw) -> dict:
+    """Recover the ``anim_id==2`` "jump/rising" FSM handler ``1030:5F30`` (main path, gate ``[0x6BD0]==0``).
+
+    Falls through to the idle handler when ``[0x6BE0]!=0`` (entering with ``bx==4``). Otherwise: drive the jump
+    arc — for the first ``9`` frames add the decaying impulse ``[0x79CE + counter*2]`` to Yvel (counter is
+    ``[0x6BD1]``, post-incremented), then switch to gravity; apply horizontal control (accel toward 0x30 when
+    Xvel is small, else symmetric friction); ``set_anim_b(2, seq=4)`` + advance; finally two directional
+    frictions. ``rb``/``rw`` read entry memory; returns the dict of writes."""
+    if rb(0x6BE0) != 0:                                          # [5F37-5F3E] jmp 5CDB
+        return player_state_idle(rb, rw, entry_bx=4)
+    out = {0x6BFE: 0}                                            # [5F41]
+    counter = rb(0x6BD1)                                         # [5F46]
+    out[0x6BD1] = (counter + 1) & 0xFF                          # [5F4C] inc
+    if counter < JUMP_FRAMES:                                    # [5F50] jae
+        impulse = rw((JUMP_IMPULSE_TABLE + counter * 2) & 0xFFFF)   # [5F55-5F57] (no scripted halving: [0x6BC5]==0)
+        out[0x4F2A] = (rw(0x4F2A) + impulse) & 0xFFFF           # [5F64] Yvel += impulse
+    else:
+        out[0x4F2A] = player_gravity(rw(0x4F2A), rb(0x6BC7), 0xC0)   # [5F6A-5F6D] gravity
+
+    xvel = rw(0x4F22)
+    if (xvel & 0xFFFF) < 0x30:                                  # [5F73] jb (unsigned)
+        xvel = player_accel(xvel, rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, 0x30)   # [5F7E]
+    else:
+        xvel = player_friction_sym(xvel, rb(0x4F24))            # [5F79]
+
+    state, ptr = player_set_anim(2, 4, rb(0x4F27), rw(0x4F28), rw)   # [5F81-5F86] set_anim_b
+    out[0x4F27] = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)   # [5F89]
+    out[0x4F28] = new_ptr
+    out[0x4F20] = frame
+    out[0x6BCF] = bcf
+
+    xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8C]
+    xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8F]
+    out[0x4F22] = xvel
+    return out
 
 
 def player_tick_timers(timers: dict) -> dict:

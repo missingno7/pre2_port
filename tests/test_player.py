@@ -20,6 +20,7 @@ from pre2.recovered.player import (
     player_set_anim,
     player_state_anim5,
     player_state_idle,
+    player_state_jump,
     player_state_run,
     player_tick_timers,
     player_x_integrate,
@@ -203,6 +204,30 @@ def test_state_idle_airborne_applies_friction_only():
     out = player_state_idle(rb, rw)
     assert out[0x4F22] == 0x2C                      # friction_dir 0x40->0x38, friction_sym ->0x2C
     assert 0x4F20 not in out and 0x4F27 not in out  # airborne: no anim, no [0x4F27] reset
+
+
+def test_state_jump_falls_to_idle_when_6be0_set():
+    mem = {0x6BE0: 1, 0x4F22: 0x40, 0x6BF6: 0x40, 0x4F24: 0, 0x6BFE: 0, 0x4F2A: 0x10, 0x6BD1: 2, 0x4F25: 1}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    out = player_state_jump(rb, rw)
+    assert out[0x4F22] == 0x2C and 0x4F20 not in out   # delegated to idle's airborne path
+
+
+def test_state_jump_arc_adds_impulse():
+    from pre2.recovered.player import ANIM_SEQ_TABLE, JUMP_IMPULSE_TABLE
+    seq = {0x9200: 0x0241}
+    jt = {(JUMP_IMPULSE_TABLE + 2 * 2) & 0xFFFF: 0xFFEC}        # counter 2 -> impulse -0x14
+    table = {(4 + ANIM_SEQ_TABLE) & 0xFFFF: 0x9200}
+    mem = {0x6BE0: 0, 0x6BD1: 2, 0x4F2A: 0x00, 0x4F22: 0x00, 0x4F25: 1, 0x4F24: 0,
+           0x6BDB: 1, 0x4F27: 0, 0x4F28: 0, 0x6BF6: 0x10, 0x6BC7: 0}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: jt.get(o, table.get(o, seq.get(o, mem.get(o, 0)))) & 0xFFFF
+    out = player_state_jump(rb, rw)
+    assert out[0x6BD1] == 3                              # counter inc
+    assert out[0x4F2A] == 0xFFEC                         # Yvel += -0x14
+    assert out[0x4F22] == 0x0C                           # accel +0x10 -> friction_dir x2 (-2,-2)
+    assert out[0x4F27] == 2 and out[0x4F28] == 0x9202 and out[0x4F20] == 0x0241
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():

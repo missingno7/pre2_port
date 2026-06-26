@@ -123,7 +123,7 @@ path) is a few primitive calls. Status of the 7 distinct handlers (anim_id 3/6/7
 | 1 | `0x5EC4` | 856 | **recovered+verified** 795/795 | `sat_inc; accel(0x50); friction_dir; set_anim; advance_anim` |
 | 5 | `0x5E96` | 16 | **recovered+verified** 14/14 | `set_anim; advance_anim; friction_sym; charge_6BCE` |
 | 0 | `0x5CDB` | 629 | **recovered+verified** 719/719+88/88 | airborne/moving+trail(`5E11`)/default/long-idle/fidget(`0x79E0`); anim13+dust `3435/3414` unwitnessed |
-| 2 | `0x5F30` | 250 | scoped | `[0x6BE0]`→idle fall-through, table `0x79CE` walk |
+| 2 | `0x5F30` | 250 | **recovered+verified** 288/288+4/4 | jump-arc table `0x79CE`/gravity + horizontal + `set_anim(2)` + 2× friction; `[0x6BE0]`→idle |
 | 3/6/7 | `0x5F96` | 72 | scoped | `set_anim; advance; friction_sym; sat_inc; mul[0x7B18]; table 0x7B07; [0x7B19]` |
 | 4 | `0x5E62` | 20 | scoped | `accel(0x20); set_anim; advance` + `|Xvel|<=0x20`→idle fall-through (al clobbered) |
 | 8 | `0x5CCE` | 156 | scoped | `friction_dir; friction_sym; set_anim; advance` (al = post-friction value) |

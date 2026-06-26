@@ -71,6 +71,7 @@ _NOT_SEPARATELY_HOOKED = [
     ("player FSM handler: run", "1030:5EC4 (anim_id=1)", "recovered / shadow-only", "player_state_run: composition of the primitives; shadow-verified 795/795 main path ([0x6BD0] override tail not yet recovered)"),
     ("player FSM handler: anim5", "1030:5E96 (anim_id=5)", "recovered / shadow-only", "player_state_anim5: composition (set_anim/advance/friction_sym/charge_6BCE); shadow-verified 14/14"),
     ("player FSM handler: idle", "1030:5CDB (anim_id=0)", "recovered / shadow-only", "player_state_idle + player_emit_trail (5E11): airborne/moving+trail/default/long-idle/fidget paths; shadow-verified 719/719+88/88 (anim13 path 5D8A unwitnessed)"),
+    ("player FSM handler: jump", "1030:5F30 (anim_id=2)", "recovered / shadow-only", "player_state_jump: jump-arc table 0x79CE / gravity + horizontal + set_anim(2) + 2x friction; falls to idle on [0x6BE0]; shadow-verified 288/288+4/4"),
     ("secondary lists 0x4F2E/0x50A8/0x5450/0x6BBE", "581E/6210/60FE/60DF", "ASM / not recovered", "other per-frame entity lists"),
 ]
 
