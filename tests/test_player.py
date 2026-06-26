@@ -19,6 +19,7 @@ from pre2.recovered.player import (
     player_select_anim_id,
     player_set_anim,
     player_state_anim5,
+    player_state_anim8,
     player_state_idle,
     player_state_jump,
     player_state_run,
@@ -228,6 +229,19 @@ def test_state_jump_arc_adds_impulse():
     assert out[0x4F2A] == 0xFFEC                         # Yvel += -0x14
     assert out[0x4F22] == 0x0C                           # accel +0x10 -> friction_dir x2 (-2,-2)
     assert out[0x4F27] == 2 and out[0x4F28] == 0x9202 and out[0x4F20] == 0x0241
+
+
+def test_state_anim8_setanim_uses_clobbered_xvel():
+    from pre2.recovered.player import ANIM_SEQ_TABLE
+    seq = {0x9300: 0x0455}
+    table = {(0x10 + ANIM_SEQ_TABLE) & 0xFFFF: 0x9300}
+    mem = {0x4F22: 0x40, 0x6BF6: 0x40, 0x4F24: 0, 0x4F27: 0xFF, 0x4F28: 0, 0x4F25: 1}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: table.get(o, seq.get(o, mem.get(o, 0))) & 0xFFFF
+    out = player_state_anim8(rb, rw)
+    assert out[0x4F22] == 0x2C                       # friction_dir 0x40->0x38, friction_sym ->0x2C
+    assert out[0x4F27] == 0x2C                       # set_anim_b al = post-friction Xvel low byte (the gotcha)
+    assert out[0x4F28] == 0x9302 and out[0x4F20] == 0x0455
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():

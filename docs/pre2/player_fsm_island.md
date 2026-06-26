@@ -126,7 +126,7 @@ path) is a few primitive calls. Status of the 7 distinct handlers (anim_id 3/6/7
 | 2 | `0x5F30` | 250 | **recovered+verified** 288/288+4/4 | jump-arc table `0x79CE`/gravity + horizontal + `set_anim(2)` + 2× friction; `[0x6BE0]`→idle |
 | 3/6/7 | `0x5F96` | 72 | scoped | `set_anim; advance; friction_sym; sat_inc; mul[0x7B18]; table 0x7B07; [0x7B19]` |
 | 4 | `0x5E62` | 20 | scoped | `accel(0x20); set_anim; advance` + `|Xvel|<=0x20`→idle fall-through (al clobbered) |
-| 8 | `0x5CCE` | 156 | scoped | `friction_dir; friction_sym; set_anim; advance` (al = post-friction value) |
+| 8 | `0x5CCE` | 156 | **recovered+verified** 134/134 | `friction_dir; friction_sym; set_anim; advance` (al = post-friction Xvel low byte) |
 
 Note: handlers `0x5CCE`/`0x5E62` call `set_anim` *after* `friction_sym`/`|Xvel|` clobbers `ax`, so their
 `[0x4F27]` ends up velocity-derived (faithful, just not anim_id) — compose with the real register flow.

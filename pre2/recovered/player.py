@@ -19,7 +19,7 @@ __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
-    "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump",
+    "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
     "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
@@ -421,6 +421,25 @@ def player_state_jump(rb, rw) -> dict:
     xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8C]
     xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8F]
     out[0x4F22] = xvel
+    return out
+
+
+def player_state_anim8(rb, rw) -> dict:
+    """Recover the ``anim_id==8`` FSM handler ``1030:5CCE`` (the depth-override state; no ``[0x6BD0]`` gate).
+
+    ``friction_dir; friction_sym; set_anim_b; advance_anim``. NOTE the register-flow gotcha: ``friction_sym``
+    (6333) leaves ``ax`` = the new Xvel, so the following ``set_anim_b`` (6374) is called with ``al`` = that
+    Xvel's low byte (NOT the anim_id) and ``bx`` == 0x10 (anim_id*2) as the sequence index. Faithful to the
+    ASM. ``rb``/``rw`` read entry memory; returns the dict of writes."""
+    xv = player_friction_dir(rw(0x4F22), rw(0x6BF6))           # [5CCE]
+    xv = player_friction_sym(xv, rb(0x4F24))                   # [5CD1] -> ax = xv
+    out = {0x4F22: xv}
+    state, ptr = player_set_anim(xv & 0xFF, 0x10, rb(0x4F27), rw(0x4F28), rw)   # [5CD4] al = xv low byte
+    out[0x4F27] = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)       # [5CD7]
+    out[0x4F28] = new_ptr
+    out[0x4F20] = frame
+    out[0x6BCF] = bcf
     return out
 
 
