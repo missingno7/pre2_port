@@ -9,7 +9,8 @@ import pytest
 from pre2.recovered.object_update import (NO_X_MOVE, AnimResult, DespawnResult, ObjectScaleUnsupported,
                                           advance_animation, anim_script_forward, anim_script_rewind,
                                           apply_velocity, despawn_check, dying_state, handle_object_7665,
-                                          handle_object_773d, on_screen_tile)
+                                          handle_object_773d, handle_object_77de, handle_object_7c8c,
+                                          on_screen_tile, saturating_counter)
 
 
 def test_positive_velocity_integrates_with_shift():
@@ -333,3 +334,74 @@ def test_dying_state_gravity_vs_despawn():
     o, d = dict(id=0, yvel=0), dict(d2=0, d4=0, d7=0)            # def4 bit0 clear -> despawn
     dying_state(o, d, dict(player_y=0, player_x=0))
     assert o["id"] == 0xFFFF
+
+
+# -- saturating_counter (8001), handle_object_7c8c (idx1), handle_object_77de (idx8 pouncer) --
+
+def test_saturating_counter():
+    assert saturating_counter(2, 0) == (1, False)        # 1>>2=0 < 2
+    assert saturating_counter(2, 7) == (8, True)         # 8>>2=2 >= 2
+    assert saturating_counter(0, 0xFF) == (0xFF, True)   # saturates at 0xFF
+
+
+def test_h7c8c_is_despawn_only():
+    o, d = dict(x=0x500, y=0, id=0x10, state=0), dict(d2=0, d4=0, d7=0)   # far -> despawn
+    handle_object_7c8c(o, d, dict(player_x=0, player_y=0))
+    assert o["id"] == 0xFFFF
+    o, d = dict(x=0, y=0, id=0x10, state=0), dict(d2=0, d4=0, d7=0)       # near -> keep
+    handle_object_7c8c(o, d, dict(player_x=0, player_y=0))
+    assert o["id"] == 0x10
+
+
+_RD8 = lambda off: 0xFFFE   # script reader: forward -> +2, rewind -> -2
+
+def _o8(**kw):
+    o = dict(x=0x200, y=0x100, id=0x2000 | 0x18C, xvel=5, yvel=0, anim_ptr=0x200, state=0)  # bit13 = drawn
+    o.update(kw); return o
+
+def _d8(**kw):
+    d = dict(d2=0, d4=0, d6=2, d7=0, dD=8, dE=3, dF=2, d10=4, d11=0, d12=0)
+    d.update(kw); return d
+
+def _g8(**kw):
+    g = dict(player_x=0x208, player_y=0x100)
+    g.update(kw); return g
+
+
+def test_h77de_state0_waits_until_counter_ready():
+    o, d = _o8(state=0), _d8(d6=5, d7=0)                  # 1>>2=0 < 5 -> not ready
+    handle_object_77de(o, d, _g8(), _RD8)
+    assert d["d7"] == 1 and o["state"] == 0
+
+
+def test_h77de_state0_pounces_when_ready_and_in_range():
+    o, d = _o8(state=0, x=0x200, y=0x100, anim_ptr=0x200), _d8(d6=0, dD=8, dE=3, dF=2, d10=4)
+    handle_object_77de(o, d, _g8(player_x=0x208, player_y=0x100), _RD8)  # in range, ready -> pounce
+    assert o["state"] == 0xA
+    assert o["yvel"] == (-(3 << 4)) & 0xFFFF             # -([def+0xE]<<4)
+    assert o["xvel"] == (2 << 4)                         # toward player (playerX > objX)
+    assert o["anim_ptr"] == 0x202 and d["d4"] == 0x2C
+
+
+def test_h77de_state0_no_pounce_when_out_of_range():
+    o, d = _o8(state=0), _d8(d6=0, dD=1, d10=1)          # ready but player far in tiles
+    handle_object_77de(o, d, _g8(player_x=0x400, player_y=0x100), _RD8)
+    assert o["state"] == 0
+
+
+def test_h77de_rise_fall_land_cycle():
+    o, d = _o8(state=0xA, yvel=(-5) & 0xFFFF), _d8()     # rising
+    handle_object_77de(o, d, _g8(), _RD8)
+    assert o["state"] == 0xA
+    o, d = _o8(state=0xA, yvel=2, anim_ptr=0x200), _d8()  # apex -> falling
+    handle_object_77de(o, d, _g8(), _RD8)
+    assert o["state"] == 0xB and o["anim_ptr"] == 0x202
+    o, d = _o8(state=0xB, yvel=0, xvel=9, anim_ptr=0x208), _d8(d7=99)   # landed
+    handle_object_77de(o, d, _g8(), _RD8)
+    assert o["state"] == 0xC and o["xvel"] == 0 and d["d7"] == 0 and o["anim_ptr"] == 0x204
+
+
+def test_h77de_faces_player_when_stationary():
+    o, d = _o8(state=0xFF, xvel=0, x=0x200, id=0x2000 | 0x18C), _d8(d4=1)
+    handle_object_77de(o, d, _g8(player_x=0x300), _RD8)   # xvel==0 -> face right (objX<playerX) -> +1
+    assert o["xvel"] == 1

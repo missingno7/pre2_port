@@ -298,3 +298,18 @@ advance_animation guard holds.
 Recovered set: apply_velocity·advance_animation·despawn_check·on_screen_tile·anim_seek + handlers idx10
 (7665) & idx9 (773D) + dying_state. NEXT: the remaining witnessed handlers (idx 0/2/3/4/8/11; idx1 = despawn
 only) + 698C terrain collision, then compose object_tick over a handler dispatch table.
+
+## Stage 1 cont. (2026-06-26) — saturating counter + 2 more handlers (idx1 trivial, idx8 pouncer)
+
+- **`1030:8001` — `saturating_counter`. VERIFIED**. Saturating-inc `[def+7]` (caps 0xFF), ready when
+  `([def+7]>>2) >= [def+6]`. (Finally witnessed: idx8 uses it.)
+- **`1030:7C8C` — handler idx1 `handle_object_7c8c`** = `despawn_check` only (a passive object).
+- **`1030:77DE..7897` — handler idx8 `handle_object_77de`. VERIFIED**. A POUNCING enemy: faces the player,
+  waits on the `8001` timer, and when the player is within `[def+0xD]×[def+0x10]` tiles leaps up+toward them
+  (`[def+0xE]` height / `[def+0xF]` speed); states 0xA rise → 0xB land → 0xC cooldown → pounce. The tiger
+  (105730) and a L6 enemy are idx8. Shadow incl. idx1/8/9/10 = 705/705 (L6) + 8/8 (tiger) + 648/648 (L7).
+
+All handlers now share the uniform signature ``(obj, defn, glb, read_word)``; the probe dispatches them via a
+``{target: fn}`` map. Recovered handlers: idx1 (7C8C), idx8 (77DE), idx9 (773D), idx10 (7665). Remaining
+witnessed: idx0 (7C90), idx2 (7C2D bob), idx3 (7B91), idx4 (7ADF), idx11 (760F) + the 698C terrain collision,
+then compose ``object_tick`` over the dispatch table.

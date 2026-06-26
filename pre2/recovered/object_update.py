@@ -21,8 +21,8 @@ from __future__ import annotations
 __all__ = ["NO_X_MOVE", "VEL_SHIFT", "FRAME_BASE", "ID_FLAGS_MASK", "FLIP_BIT",
            "apply_velocity", "ObjectScaleUnsupported", "AnimResult", "advance_animation",
            "FAR_X", "FAR_Y", "EMPTY_ID", "DespawnResult", "despawn_check", "on_screen_tile",
-           "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state",
-           "handle_object_7665", "handle_object_773d"]
+           "anim_script_rewind", "anim_script_forward", "despawn_full", "dying_state", "saturating_counter",
+           "handle_object_7665", "handle_object_773d", "handle_object_77de", "handle_object_7c8c"]
 
 NO_X_MOVE = 0xFFFF   # [asm 686C] sentinel in [si+8]: skip the X integrate this frame
 VEL_SHIFT = 4        # [asm 6854 cl=4 / 6864 sar ax,cl] velocity is 12.4 fixed point (arithmetic >>4)
@@ -293,7 +293,7 @@ def dying_state(obj: dict, defn: dict, glb: dict) -> None:
         despawn_full(obj, defn)
 
 
-def handle_object_773d(obj: dict, defn: dict, glb: dict) -> None:
+def handle_object_773d(obj: dict, defn: dict, glb: dict, read_word=None) -> None:
     """Recover the idx9 AI handler ``1030:773D..77DD`` — a horizontal-patrol enemy that accelerates back and
     forth between def bounds, with its OWN proximity despawn (it does NOT call the shared 8084).
 
@@ -327,4 +327,73 @@ def handle_object_773d(obj: dict, defn: dict, glb: dict) -> None:
         if _s16(defn["dD"]) >= _s16(obj["x"]):               # [77CA-77D1] past the left bound -> turn
             obj["state"] = 0
     elif st == 0xFF:                                         # [77DA jmp 7CDA]
+        dying_state(obj, defn, glb)
+
+
+# -- more shared helpers + handlers ------------------------------------------------------------------- #
+
+def saturating_counter(def6: int, def7: int) -> tuple[int, bool]:
+    """Recover ``1030:8001`` — saturating-increment the timer ``[def+7]`` (caps at 0xFF), and report whether
+    ``([def+7] >> 2) >= [def+6]`` (the ASM's ``cmp``; the caller branches ``jb``=not-ready / ``jae``=ready).
+    Returns ``(new_def7, ready)``."""
+    nd7 = def7 + 1 if def7 < 0xFF else 0xFF                  # [asm 8001 add+sbb = saturate]
+    ready = ((nd7 >> 2) & 0xFF) >= (def6 & 0xFF)             # [asm 8009-8010]
+    return nd7, ready
+
+
+def handle_object_7c8c(obj: dict, defn: dict, glb: dict, read_word=None) -> None:
+    """idx1 handler ``1030:7C8C`` = ``call 8084; ret`` — a passive object that only despawns when far."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+
+
+def _pounce(obj: dict, defn: dict, glb: dict, read_word) -> None:
+    """The pounce kick-off shared by idx8 states 0 and 0xC (1030:7827)."""
+    obj["yvel"] = (-((_s8(defn["dE"]) << 4))) & 0xFFFF       # [7827] jump up by [def+0xE]<<4
+    spd = (_s8(defn["dF"]) << 4) & 0xFFFF                    # [7832] horizontal pounce speed [def+0xF]<<4
+    obj["xvel"] = spd if _s16(glb["player_x"]) > _s16(obj["x"]) else (-spd) & 0xFFFF   # [7838-7842] toward player
+    obj["state"] = 0xA                                       # [7845]
+    defn["d4"] = (defn["d4"] & 0xD3) | 0x2C                  # [7849-7850]
+    obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)   # [7853]
+
+
+def handle_object_77de(obj: dict, defn: dict, glb: dict, read_word) -> None:
+    """Recover the idx8 AI handler ``1030:77DE..7897`` — a POUNCING enemy: wait (timer ``8001``) facing the
+    player, and when the player is within ``[def+0xD]`` (tile X) × ``[def+0x10]`` (tile Y) leap up+toward them
+    (``[def+0xE]`` height / ``[def+0xF]`` speed); states 0xA rise → 0xB land → 0xC cooldown → pounce again.
+
+    ``obj``: x, y, id, xvel, yvel, anim_ptr, state. ``defn``: d2, d4, d6, d7, dD, dE, dF, d10. ``glb``:
+    player_x, player_y. ``read_word`` for the anim seeks (8058/8048)."""
+    dr = despawn_check(obj["x"], obj["y"], obj["state"], (obj["id"] >> 8) & 0xFF, obj["id"],   # [77DE call 8084]
+                       glb["player_x"], glb["player_y"], defn["d2"], defn["d4"], defn["d7"])
+    obj["id"], defn["d2"], defn["d4"], defn["d7"] = dr.sprite_id, dr.def2, dr.def4, dr.def7
+    if obj["xvel"] == 0:                                     # [77E3-77F5] face the player when stationary
+        obj["xvel"] = 1 if _s16(obj["x"]) <= _s16(glb["player_x"]) else (-1) & 0xFFFF
+    st = obj["state"]
+    if st == 0:                                             # [77FF] wait, then pounce when the player is near
+        defn["d7"], ready = saturating_counter(defn["d6"], defn["d7"])
+        if not ready:                                       # [7802 jb 7825]
+            return
+        dist_x = (_abs16(glb["player_x"] - obj["x"]) >> 4) & 0xFF   # [7804-780F]
+        if (defn["dD"] & 0xFF) < dist_x:                    # [780F jb 7825] out of X range
+            return
+        dist_y = (_abs16(glb["player_y"] - obj["y"]) >> 4) & 0xFF   # [7814-7820]
+        if (defn["d10"] & 0xFF) >= dist_y:                  # [7820 jae 7827] in Y range -> pounce
+            _pounce(obj, defn, glb, read_word)
+    elif st == 0xA:                                         # [7857] rising -> until apex (yvel >= 0)
+        if _s16(obj["yvel"]) >= 0:
+            obj["state"] = 0xB
+            obj["anim_ptr"] = anim_script_forward(obj["anim_ptr"], read_word)
+    elif st == 0xB:                                         # [7869] falling -> until landed (yvel <= 0)
+        if _s16(obj["yvel"]) <= 0:
+            obj["state"] = 0xC
+            obj["anim_ptr"] = anim_script_rewind(anim_script_rewind(obj["anim_ptr"], read_word), read_word)
+            obj["xvel"] = 0                                 # [787D]
+            defn["d7"] = 0                                  # [7882] restart the cooldown timer
+    elif st == 0xC:                                         # [7887] cooldown -> pounce again when ready
+        defn["d7"], ready = saturating_counter(defn["d6"], defn["d7"])
+        if ready:                                           # [788E jae 7827]
+            _pounce(obj, defn, glb, read_word)
+    elif st == 0xFF:                                        # [7890 jmp 7CDA]
         dying_state(obj, defn, glb)
