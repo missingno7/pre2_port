@@ -74,11 +74,18 @@ def _write_def(mem, d, df):
 
 
 def _dispatch(tgt, fn, o, df, glb, mem):
-    """Call one AI handler with its type-specific callbacks (the same wiring as the shadow probe)."""
-    if tgt == 0x7B91:                                  # idx3 reads the level-map terrain property
-        fn(o, df, glb, mem.rw, tile_prop=mem.tile_prop)
-    elif tgt == 0x7ADF:                                # idx4 reads the cos/sin tables
-        fn(o, df, glb, mem.rw, cos_table=mem.cos_table, sin_table=mem.sin_table)
+    """Call one AI handler with its type-specific callbacks (the same wiring as the shadow probe).
+
+    The spawning handlers (idx2/3/4) emit trail/effect entries into the secondary effect list (``0x7DE6``)
+    via ``mem.spawn(def9, defB, arg, dl)`` -> ``spawn_effects``; ``mem`` without a ``spawn`` (e.g. dict-backed
+    tests) gets ``spawn=None`` (no emit), which never touches the acting object's own record."""
+    spawn = getattr(mem, "spawn", None)
+    if tgt == 0x7B91:                                  # idx3 reads the level-map terrain property + spawns
+        fn(o, df, glb, mem.rw, tile_prop=mem.tile_prop, spawn=spawn)
+    elif tgt == 0x7ADF:                                # idx4 reads the cos/sin tables + spawns
+        fn(o, df, glb, mem.rw, cos_table=mem.cos_table, sin_table=mem.sin_table, spawn=spawn)
+    elif tgt == 0x7C2D:                                # idx2 vertical-bob spawns trail effects
+        fn(o, df, glb, mem.rw, spawn=spawn)
     else:
         fn(o, df, glb, mem.rw)
 

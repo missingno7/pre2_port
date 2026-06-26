@@ -22,8 +22,11 @@ from dos_re.interrupts import deliver_scancode
 from play import _advance_frame_deterministic, _make_replay_runtime
 from pre2.recovered.object_tick import OBJ_BASE, OBJ_COUNT, OBJ_STRIDE, Pre2ObjectGap, object_tick
 from pre2.recovered.object_tick import _def_view, _obj_view
+from pre2.recovered.object_update import spawn_effects
 
 SEG = 0x1030
+_FX_LIST = 0x7DE6        # secondary effect list (6-byte entries); the walker spawns into it but never reads it
+_FX_BYTES = 0x200        # bytes of the effect list to diff (object_tick's spawns vs the ASM's)
 
 
 class LiveMem:
@@ -92,6 +95,30 @@ class LiveMem:
         self.wb(0x6BC1, g["bc1"]); self.ww(0x28C1, g["ror"]); self.wb(0x2CEC, g["la"])
         self.wb(0x2CED, g["lb"]); self.wb(0x2CEE, g["lc"]); self.ww(0x2CEF, g["ld"])
 
+    def spawn(self, def9, defB, arg, dl):     # idx2/3/4 trail emit -> the 0x7DE6 effect list (7FD9 + 8014)
+        def find_free():
+            di = 0x7DE6
+            while self.rw(di) != 0xFFFF:       # [8014] scan to the first free 6-byte slot
+                di = (di + 6) & 0xFFFF
+            return _Slot(self, di)
+        spawn_effects(def9, defB, arg, dl, find_free)
+
+
+class _Slot:
+    """A writable view of one 6-byte effect-list entry (x word, y word, b4 byte, b5 byte) for spawn_effects."""
+    def __init__(self, mem, off):
+        self.mem, self.off = mem, off
+
+    def __setitem__(self, i, v):
+        if i == 0:
+            self.mem.ww(self.off, v)
+        elif i == 1:
+            self.mem.ww(self.off + 2, v)
+        elif i == 2:
+            self.mem.wb(self.off + 4, v)
+        elif i == 3:
+            self.mem.wb(self.off + 5, v)
+
 
 def run(demo):
     pb = InputDemoPlayback.load(Path(demo))
@@ -137,6 +164,14 @@ def run(demo):
             res["glb_match" if gok else "glb_MISMATCH"] += 1
             if not gok and len(mism) < 12:
                 mism.append(("globals", {k: (hex(pg[k]), hex(ag[k])) for k in pg if pg[k] != ag[k]}))
+            # the spawned effect list (0x7DE6): object_tick's emits vs the ASM's
+            pfx = bytes(pred.img[_FX_LIST:_FX_LIST + _FX_BYTES])
+            afx = bytes(post.img[_FX_LIST:_FX_LIST + _FX_BYTES])
+            fok = (pfx == afx)
+            res["fx_match" if fok else "fx_MISMATCH"] += 1
+            if not fok and len(mism) < 14:
+                i = next(k for k in range(len(pfx)) if pfx[k] != afx[k])
+                mism.append((f"fx[{_FX_LIST + i:#06x}]", pfx[i:i + 8].hex(), afx[i:i + 8].hex()))
         interpret_current_instruction_without_hook(c)
 
     cpu.replacement_hooks[(SEG, 0x684E)] = entry
@@ -157,7 +192,8 @@ def run(demo):
         frame += 1
 
     print(f"{demo}  frames={frame}")
-    for k in ("ticks", "gap_ticks", "slot_match", "slot_MISMATCH", "glb_match", "glb_MISMATCH"):
+    for k in ("ticks", "gap_ticks", "slot_match", "slot_MISMATCH", "glb_match", "glb_MISMATCH",
+              "fx_match", "fx_MISMATCH"):
         if res[k]:
             print(f"  {k}: {res[k]}")
     for m in mism:
