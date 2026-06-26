@@ -18,9 +18,12 @@ from __future__ import annotations
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
+    "player_set_anim", "player_advance_anim",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
-    "XVEL_FLOOR",
+    "XVEL_FLOOR", "ANIM_SEQ_TABLE",
 ]
+
+ANIM_SEQ_TABLE = 0x7CDF   # [asm 6366/637D] base of the per-state animation-sequence pointer table
 
 XVEL_FLOOR = -0x60      # [asm 62FA] directional-friction floor on Xvel
 
@@ -125,6 +128,38 @@ def player_gravity(yvel: int, water: int, limit: int) -> int:
     if nv >= term:                                                     # [6325] jge -> cap
         nv = term
     return nv & 0xFFFF
+
+
+def player_set_anim(anim_id: int, seq_index: int, cur_state: int, cur_ptr: int, read_word) -> tuple:
+    """Recover the player animation-sequence selector ``1030:635D`` (== ``6374``, differing only in which
+    state byte it tracks: ``635D`` uses ``[0x4F2C]``, ``6374`` uses ``[0x4F27]``).
+
+    If the requested ``anim_id`` differs from the current state byte, switch: store ``anim_id`` and load a new
+    sequence pointer ``[0x4F28] = read_word(seq_index + 0x7CDF)``. Otherwise keep the running pointer. Returns
+    ``(new_state, new_ptr)`` — ``new_ptr`` is both the new ``[0x4F28]`` and the routine's returned ``bx`` (the
+    composition feeds it straight into :func:`player_advance_anim`)."""
+    anim_id &= 0xFF
+    if (cur_state & 0xFF) != anim_id:                                # [635D/6374] cmp; jne
+        return anim_id, read_word((seq_index + ANIM_SEQ_TABLE) & 0xFFFF)
+    return cur_state & 0xFF, cur_ptr & 0xFFFF                        # [636F] unchanged -> bx = [0x4F28]
+
+
+def player_advance_anim(anim_ptr: int, facing: int, read_word) -> tuple:
+    """Recover the player animation stepper ``1030:638B``.
+
+    Read the frame word at the sequence pointer; a negative word is a relative loop marker (rewind the pointer
+    by it and re-read). The frame's high byte is stashed raw in ``[0x6BCF]``, then masked to 5 bits and OR'd
+    with the facing sign bit (``[0x4F25]`` low byte ``& 0x80``) before the word is written to ``[0x4F20]``; the
+    pointer advances by 2. Returns ``(frame_0x4F20, new_ptr_0x4F28, bcf_0x6BCF)``."""
+    ax = read_word(anim_ptr & 0xFFFF)                               # [638E]
+    if ax & 0x8000:                                                 # [6390] jns -> negative = loop marker
+        anim_ptr = (anim_ptr + _s16(ax)) & 0xFFFF                   # [6394] bx += ax
+        ax = read_word(anim_ptr)                                    # [6396] reload
+    bcf = (ax >> 8) & 0xFF                                          # [6398] [0x6BCF] = high byte (raw)
+    ah = (bcf & 0x1F) | (facing & 0x80)                            # [639C-63A6] mask + merge facing
+    frame = ((ah << 8) | (ax & 0xFF)) & 0xFFFF                      # [63A8] [0x4F20] = ax
+    new_ptr = (anim_ptr + 2) & 0xFFFF                              # [63AB-63AD] [0x4F28] += 2
+    return frame, new_ptr, bcf
 
 
 def player_tick_timers(timers: dict) -> dict:

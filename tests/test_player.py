@@ -5,12 +5,15 @@ L6; player_y_integrate 2069/2069 + 299/299); these pin the kinematics formulas +
 from __future__ import annotations
 
 from pre2.recovered.player import (
+    ANIM_SEQ_TABLE,
     TIMER_BYTES,
     TIMER_WORD,
     player_accel,
+    player_advance_anim,
     player_friction_dir,
     player_friction_sym,
     player_gravity,
+    player_set_anim,
     player_tick_timers,
     player_x_integrate,
     player_y_integrate,
@@ -101,6 +104,31 @@ def test_gravity_adds_and_caps_terminal():
     assert player_gravity(0xB8, water=0, limit=0xC0) == 0xC0         # capped at terminal
     # water: gravity 4, terminal = limit>>3
     assert player_gravity(0x00, water=1, limit=0xC0) == min(4, 0xC0 >> 3)
+
+
+def test_set_anim_switches_and_loads_pointer():
+    table = {(0x24 + ANIM_SEQ_TABLE) & 0xFFFF: 0x9000}
+    rw = lambda off: table.get(off, 0)
+    # state changed -> store id, load new pointer from the seq table
+    assert player_set_anim(0x12, 0x24, cur_state=0x00, cur_ptr=0x1234, read_word=rw) == (0x12, 0x9000)
+    # state unchanged -> keep the running pointer (returns [0x4F28])
+    assert player_set_anim(0x12, 0x24, cur_state=0x12, cur_ptr=0x1234, read_word=rw) == (0x12, 0x1234)
+
+
+def test_advance_anim_frame_facing_and_pointer():
+    seq = {0x9000: 0x0577}                      # frame: high 0x05, low 0x77
+    rw = lambda off: seq.get(off, 0)
+    # facing right (low byte 0x01 -> &0x80 == 0)
+    assert player_advance_anim(0x9000, facing=0x01, read_word=rw) == (0x0577, 0x9002, 0x05)
+    # facing left (low byte 0xFF -> &0x80 == 0x80) sets the high facing bit
+    assert player_advance_anim(0x9000, facing=0xFF, read_word=rw) == (0x8577, 0x9002, 0x05)
+
+
+def test_advance_anim_negative_word_loops_back():
+    seq = {0x9000: 0xFFFC, 0x8FFC: 0x0103}     # 0x9000 holds -4 (loop marker) -> rewind to 0x8FFC
+    rw = lambda off: seq.get(off, 0)
+    frame, new_ptr, bcf = player_advance_anim(0x9000, facing=0x01, read_word=rw)
+    assert frame == 0x0103 and new_ptr == 0x8FFE and bcf == 0x01
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():
