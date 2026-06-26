@@ -25,6 +25,7 @@ _CATEGORY = {
                                               #        hybrid; fires only in verify mode (per-leaf oracle)
     "object_render": "live",                  # 26FA moving sprites
     "second_pass_project_entity": "live",     # 7F26 2nd-pass entity -> object-list projection
+    "player_x_integrate": "live",             # 5A0F first player-FSM leaf (horizontal kinematics, inline block)
     # --- gameplay frame renderer ---
     "frame_grid": "live", "frame_tile_row": "live", "frame_scroll_copy": "live",
     "frame_panel_copy": "live-passthrough",   # 3054 vsync-paced curtain reveal — ASM timing in live
@@ -43,6 +44,7 @@ _VERIFY_MODULES = {
     "sqz", "sprite_decode", "blit", "frame", "audio", "tracker", "object_render", "object_update",
     "object_inject", "sprite_classify", "palette", "animation", "camera_shake", "fireflies",
     "gameover_scroll", "tally_panel", "hud", "transition", "text", "present", "particles", "foreground_tiles",
+    "player",
 }
 
 # Recovered routines that are NOT their own live replacement hook — the rest of the runtime truth.
@@ -60,7 +62,7 @@ _NOT_SEPARATELY_HOOKED = [
     ("2nd-pass wrappers idx3/5-8/9/11", "7ED8/7EB5/7E97/7D6E", "ASM (calls live worker)", "4-insn stubs: call the live 7F26 + set mode; disasm'd, deliberately not accumulated as shadow code"),
     ("lookup_anim_frame", "1030:6954", "ASM (inline)", "anim-frame table lookup inline in the 2nd-pass loop; disasm'd, not hooked"),
     ("draw_hud", "1030:45B8", "verify-only", "recovered + diffed; the HUD stays ASM-drawn live (incremental, two-page)"),
-    ("player FSM", "1030:7D9B", "ASM / not recovered", "2nd-pass entry 0 (idx10) - the next island"),
+    ("player FSM (rest)", "1030:~5890..5A95", "ASM / partially recovered", "X integrate (5A0F) is live; Y integrate (5A36), ground collision (5A96) + cs:[0x7D2F] per-state handlers still ASM"),
     ("secondary lists 0x4F2E/0x50A8/0x5450/0x6BBE", "581E/6210/60FE/60DF", "ASM / not recovered", "other per-frame entity lists"),
 ]
 

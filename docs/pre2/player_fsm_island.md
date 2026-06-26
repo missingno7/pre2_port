@@ -38,11 +38,19 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
 | facing | `0x4F25` | +1 / -1 |
 | Yvel | `0x4F2A` | Y velocity (12.4 fixed; `>>4` per frame) |
 
-## Recovered + shadow-verified (Stage 2)
-- **`player_x_integrate` (1030:5A0F..5A33). VERIFIED** (`pre2/recovered/player.py`, `tests/test_player.py`;
-  shadow 1999/1999 on L1 demo 102854 + 299/299 on L6). `new_x = X + sar(Xvel,4)`; commit only if
+## Recovered + LIVE (Stage 2 + 3)
+- **`player_x_integrate` (1030:5A0F..5A33). LIVE + VERIFIED** (`pre2/recovered/player.py`,
+  `pre2/checkpoints/player.py`, `tests/test_player.py`). `new_x = X + sar(Xvel,4)`; commit only if
   `((cam_left+0x14)<<4) > new_x` and `8 <= new_x < 0xFF8` (signed) — else X unchanged (blocked). The player
-  counterpart of the object `apply_velocity`. NOT live-hooked (shadow-only).
+  counterpart of the object `apply_velocity`.
+  - **Shadow** (pre-live): 1999/1999 (L1 demo 102854) + 299/299 (L6).
+  - **Live hybrid**: installed at 5A0F, an inline-block swap that writes `[0x4F1C]` and jumps to 5A36;
+    reproduces the ASM block's FLAGS (final `cmp`) + per-path instruction count (10/12/14/15). Fires ~2069×
+    on L1 (alongside object_tick ~2130×).
+  - **Verify-mode oracle**: 486/486 (L1) + 66/66 (L6), zero divergences (per-call ASM diff at 5A36).
+  - Audit: classified `live`, verify-enabled, no drift. Demo byte-determinism is already affected upstream by
+    the live `object_tick` collapse, so this hook is verified the desync-immune way (verify-mode + audit), not
+    by demo byte-reproduction.
 
 ## Mismatch taxonomy (classes to watch as the FSM is recovered)
 1. **Fixed-point**: 12.4 velocities, arithmetic `sar` (floor toward -inf) — sign/rounding bugs.
@@ -54,10 +62,12 @@ time, shadow-before-live). The player is NOT in the object lists; it has its own
 6. **Collision-coupled**: `5A96` (ground/tile) overwrites Y/Yvel after the integrate — recover the integrate
    and the collision separately and compose.
 
-## Recommendation for the first live hook
-`player_x_integrate` (`5A0F..5A33`) is the safest first live hook: it is an isolated INLINE block (no CALL/RET,
-falls through to `5A36`), exactly the shape of the already-proven `object_velocity` hook. Wire it the same way
-(read `[0x4F1C]/[0x4F22]/[0x8164]`, write `[0x4F1C]`, set `ip=5A36`), verify-mode at `5A36`, and confirm via
-`hook_audit`. Because it changes the per-frame instruction count it is subject to the same demo-desync note as
-`object_tick`. Recommend doing it as its own small, reversible step (with user confirmation) — NOT bundled
-with deeper FSM recovery.
+## Next leaves (staged, shadow-before-live)
+With the X integrate live, the next safe leaves up the same routine, in order of risk:
+1. **Y integrate `5A36..5A3D`** — simpler (`Y += sar(Yvel,4)`, fewer clamps). Recover + shadow + live like the
+   X integrate.
+2. **Ground/tile collision `5A96`** — reads the tile-property table by `[0x4F20]`; recover the lookup + the
+   Y/Yvel response separately, then compose (collision-coupled mismatch class).
+3. **Per-state handlers `cs:[0x7D2F]`** — one state at a time (start with idle/run), each shadow-verified
+   before live. This is where facing/animation/action behaviour lives.
+Keep each its own small reversible step. No broad FSM rewrite; no guessed struct fields.
