@@ -7,6 +7,10 @@ from __future__ import annotations
 from pre2.recovered.player import (
     TIMER_BYTES,
     TIMER_WORD,
+    player_accel,
+    player_friction_dir,
+    player_friction_sym,
+    player_gravity,
     player_tick_timers,
     player_x_integrate,
     player_y_integrate,
@@ -65,6 +69,38 @@ def test_tick_timers_zero_stays_zero():
     out = player_tick_timers(t)
     assert all(out[a] == 0 for a in TIMER_BYTES)   # `sub;adc` clamps at 0, not 0xFF
     assert out[TIMER_WORD] == 0
+
+
+def test_accel_steps_toward_facing_and_clamps():
+    # facing +1, shift 0 -> step = +0x10 ; held
+    assert player_accel(0, facing=1, shift=0, input_held=True, limit=0x50) == 0x10
+    # facing -1 (0xFFFF), shift 0 -> step = -0x10
+    assert player_accel(0, facing=0xFFFF, shift=0, input_held=True, limit=0x50) == (-0x10) & 0xFFFF
+    # clamp to +limit
+    assert player_accel(0x4C, facing=1, shift=0, input_held=True, limit=0x50) == 0x50
+    # clamp to -limit
+    assert player_accel((-0x4C) & 0xFFFF, facing=0xFFFF, shift=0, input_held=True, limit=0x50) == (-0x50) & 0xFFFF
+    # no input -> step 0, still clamps existing speed to ±limit
+    assert player_accel(0x80, facing=1, shift=0, input_held=False, limit=0x50) == 0x50
+
+
+def test_friction_dir_decays_and_floors():
+    assert player_friction_dir(0x40, force=0x40) == 0x40 - 0x08      # -= 0x40>>3
+    assert player_friction_dir((-0x5E) & 0xFFFF, force=0x40) == (-0x60) & 0xFFFF  # floor at -0x60
+
+
+def test_friction_sym_pulls_toward_zero_keeping_sign():
+    assert player_friction_sym(0x40, shift=0) == 0x40 - 0xC          # |v|-0xC
+    assert player_friction_sym((-0x40) & 0xFFFF, shift=0) == (-(0x40 - 0xC)) & 0xFFFF
+    assert player_friction_sym(0x08, shift=0) == 0                   # |v|<0xC -> 0
+    assert player_friction_sym(0x40, shift=2) == 0x40 - (0xC >> 2)   # shift reduces the pull
+
+
+def test_gravity_adds_and_caps_terminal():
+    assert player_gravity(0x00, water=0, limit=0xC0) == 0x10         # +0x10
+    assert player_gravity(0xB8, water=0, limit=0xC0) == 0xC0         # capped at terminal
+    # water: gravity 4, terminal = limit>>3
+    assert player_gravity(0x00, water=1, limit=0xC0) == min(4, 0xC0 >> 3)
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():

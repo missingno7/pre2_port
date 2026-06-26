@@ -64,7 +64,8 @@ _NOT_SEPARATELY_HOOKED = [
     ("2nd-pass wrappers idx3/5-8/9/11", "7ED8/7EB5/7E97/7D6E", "ASM (calls live worker)", "4-insn stubs: call the live 7F26 + set mode; disasm'd, deliberately not accumulated as shadow code"),
     ("lookup_anim_frame", "1030:6954", "ASM (inline)", "anim-frame table lookup inline in the 2nd-pass loop; disasm'd, not hooked"),
     ("draw_hud", "1030:45B8", "verify-only", "recovered + diffed; the HUD stays ASM-drawn live (incremental, two-page)"),
-    ("player FSM (rest)", "1030:~5890..5A95", "ASM / partially recovered", "X+Y integrate + timers (5A0F/5A36/5A47) live; cs:[0x7D2F] per-state handlers, collision+tile-interaction (5A96/cs:[0x7D9B]), anim-select (484E) still ASM"),
+    ("player FSM (rest)", "1030:~5890..5A95", "ASM / partially recovered", "X+Y integrate + timers (5A0F/5A36/5A47) live; cs:[0x7D2F] per-input handlers + collision+tile-interaction (5A96/cs:[0x7D9B]) still ASM"),
+    ("player physics primitives", "1030:62B1/62EC/6333/6309", "recovered / shadow-only", "accel/friction_dir/friction_sym/gravity; pure+shadow-verified (go live via the handler/dispatch composition, not as separate hooks)"),
     ("secondary lists 0x4F2E/0x50A8/0x5450/0x6BBE", "581E/6210/60FE/60DF", "ASM / not recovered", "other per-frame entity lists"),
 ]
 

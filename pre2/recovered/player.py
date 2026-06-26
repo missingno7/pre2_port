@@ -17,8 +17,12 @@ from __future__ import annotations
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
+    "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
+    "XVEL_FLOOR",
 ]
+
+XVEL_FLOOR = -0x60      # [asm 62FA] directional-friction floor on Xvel
 
 # [asm 5A4A-5A87] per-frame countdown timers decremented at the tail of the player update, each clamped at 0
 # (`sub [x],1 ; adc [x],0` = decrement-but-not-below-zero). Seven byte counters + one word counter.
@@ -64,6 +68,63 @@ def _dec_floor(v: int, width: int) -> int:
     """One ``sub v,1 ; adc v,0`` saturating decrement (clamps at 0) for an ``width``-bit unsigned counter."""
     mask = (1 << width) - 1
     return (v - 1) & mask if (v & mask) != 0 else 0
+
+
+def player_accel(xvel: int, facing: int, shift: int, input_held: bool, limit: int) -> int:
+    """Recover the player horizontal accelerator ``1030:62B1``.
+
+    When a left/right key is held (``[0x6BDB]``), add a facing-directed step ``sar(facing<<4, [0x4F24])`` to
+    Xvel; then clamp the result to ``[-limit, +limit]`` (the per-state speed cap passed in ``bp``). ``facing``
+    is the word ``[0x4F25]`` (+1 / -1). Pure: returns the new ``[0x4F22]``."""
+    step = (_s16((facing << 4) & 0xFFFF) >> shift) if input_held else 0   # [62B9-62CF]
+    dx = _s16((xvel + step) & 0xFFFF)                                     # [62D1-62D5]
+    lim = _s16(limit & 0xFFFF)
+    if dx >= lim:                                                         # [62D7] jge
+        dx = lim
+    elif dx <= -lim:                                                      # [62DB-62DF] neg; jle
+        dx = -lim
+    return dx & 0xFFFF
+
+
+def player_friction_dir(xvel: int, force: int) -> int:
+    """Recover the player directional friction ``1030:62EC``.
+
+    Decay Xvel by ``force>>3`` (``force`` is the per-level constant ``[0x6BF6]``), floored at ``-0x60``."""
+    nv = _s16((xvel - (force >> 3)) & 0xFFFF)                            # [62ED-62F6]
+    if nv < XVEL_FLOOR:                                                  # [62FA] cmp,-0x60; jge
+        nv = XVEL_FLOOR
+    return nv & 0xFFFF
+
+
+def player_friction_sym(xvel: int, shift: int) -> int:
+    """Recover the player symmetric friction ``1030:6333``.
+
+    Reduce the magnitude of Xvel by ``0xC>>shift`` (``shift`` = ``[0x4F24]``), clamped toward 0, preserving
+    sign. Pure: returns the new ``[0x4F22]``."""
+    a = _s16(xvel)                                                       # [6337-6340]
+    neg = a < 0
+    a = -a if neg else a
+    a -= (0xC >> shift)                                                  # [6346-634B]
+    if a < 0:                                                            # [634D] jae / xor
+        a = 0
+    return ((-a) & 0xFFFF) if neg else (a & 0xFFFF)                      # [6351-6357]
+
+
+def player_gravity(yvel: int, water: int, limit: int) -> int:
+    """Recover the player gravity ``1030:6309``.
+
+    Add gravity to Yvel — ``0x10`` normally, ``4`` when the water flag ``[0x6BC7]==1`` (with the terminal
+    velocity ``limit`` also divided by 8) — then cap at the terminal velocity. Pure: returns the new
+    ``[0x4F2A]``."""
+    grav = 0x10                                                         # [6310]
+    term = _s16(limit & 0xFFFF)
+    if water == 1:                                                      # [6313-6321]
+        grav = 4
+        term = term >> 3
+    nv = _s16((yvel + grav) & 0xFFFF)                                   # [6323]
+    if nv >= term:                                                     # [6325] jge -> cap
+        nv = term
+    return nv & 0xFFFF
 
 
 def player_tick_timers(timers: dict) -> dict:

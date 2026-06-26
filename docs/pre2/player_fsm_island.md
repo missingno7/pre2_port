@@ -72,24 +72,40 @@ table `cs:[0x7D2F]`**, dispatched at `5A0B` (`call word ptr [bx+0x7D2F]`).
 gameplay it is **0** (1997/1997 L1, 299/299 L6), so the setup at `5960` does `jmp 5A0B` and the momentum
 block (`596A-5A0B`: run-counter `[0x7B1A]` accel/decel, `[0x6BC6]` deceleration, `[0x4F2A]` clamp) is SKIPPED.
 `bx` then holds the **5-bit input bitmask** packed at `58FC-591F` (bits from `[0x27EC],[0x27ED],[0x27EA],
-[0x27EB],[0x27E8]`), times 2. So the player FSM is **input-indexed**, not a stored-state machine. Witnessed
-handlers (L1, by frequency):
+[0x27EB],[0x27E8]`), times 2. So the player FSM is **input-indexed**, not a stored-state machine.
 
-| bx | handler | fires | role (hypothesis) |
+The `5A0B` call `call word ptr [bx+0x7D2F]` reads the pointer from **DS** (0x1A0F), not CS. The real
+handlers (verified via post-call CS:IP), by frequency (L1):
+
+| bx | handler | fires | role |
 |---|---|---|---|
-| 0x02 | `0x7D02` | 855 | run |
-| 0x00 | `0x803D` | 629 | idle / no input |
-| 0x04 | `0x3D38` | 248 | |
-| 0x10 | `0x683D` | 156 | |
-| 0x06 | `0x0140` | 58 | |
-| 0x08 | `0x107D` | 21 | |
+| 0x02 | `0x5EC4` | 856 | run |
+| 0x00 | `0x5CDB` | 629 | idle / no input |
+| 0x04 | `0x5F30` | 250 | |
+| 0x10 | `0x5CCE` | 156 | |
+| 0x06 | `0x5F96` | 58 | |
+| 0x08 | `0x5E62` | 20 | |
+| 0x0A | `0x5E96` | 16 | |
 
 (The momentum block `596A-5A0B` and `484E` anim-select only run when `[0x6BC5]!=0` — a scripted/cutscene pose;
 both are **dormant in normal play**, so they have no demo witness and are NOT recovery targets yet.)
 
-**Plan:** recover the witnessed handlers one at a time (most-hit first: `0x7D02`, `0x803D`), shadow-verify each
-(they set the player sprite `[0x4F0A/0x4F0C/0x4F0E]`, anim `[0x4F20]`, and velocities) before live — exactly
-like the object idx0-12 handler table.
+**The handlers are thin compositions of shared physics/animation primitives** — the original source structure.
+E.g. idle `0x5CCE` = `accel?; friction; advance_anim` (`62EC;6333;6374;638B`); run `0x5EC4` = inc a counter +
+`accel(0x50); friction; set_anim; advance_anim` (`62B1;62EC;6374;638B`). The shared primitives:
+
+| addr | primitive | effect |
+|---|---|---|
+| `62B1` | `player_accel(limit)` | Xvel += facing-step (when input held), clamp ±limit |
+| `62EC` | `player_friction_dir` | Xvel -= `[0x6BF6]`>>3, floor -0x60 |
+| `6333` | `player_friction_sym` | \|Xvel\| -= 0xC>>`[0x4F24]`, toward 0 |
+| `6309` | `player_gravity(limit)` | Yvel += 0x10 (4 in water `[0x6BC7]`), cap at terminal |
+| `635D`/`6374` | `set_anim_a/b(seq)` | load anim-sequence ptr `[0x4F28]` from table `[0x7CDF]` |
+| `638B` | `advance_anim` | step `[0x4F28]`, write frame `[0x4F20]` (+facing bit) |
+
+**Plan (collapses naturally):** recover the shared primitives first (pure, witnessed thousands of times), then
+each handler is a few calls to them, then the dispatch is a table of handlers — `player_update` collapses into
+one clean hook subsuming the X/Y/timer leaves.
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +
@@ -111,8 +127,8 @@ A single collapsed `player_update` hook (subsuming the X/Y/timer leaves, like `o
    and the collision separately and compose.
 
 ## Next, in order of value/tractability
-1. **FSM handlers `cs:[0x7D2F]`** — recover the witnessed ones most-hit-first (`0x7D02` run, `0x803D` idle),
-   each shadow-verified before live. The FSM brain.
+1. **Shared FSM primitives** (`62B1/62EC/6333/6309` physics + `635D/6374/638B` anim) — pure, witnessed; then
+   the handlers (`0x5EC4` run, `0x5CDB` idle, …) compose them. The FSM brain.
 2. **Collision/tile-interaction `5A96` + `cs:[0x7D9B]`** — the largest piece; recover the tile-property lookup
    + Y/Yvel response, then the tile-type handlers one at a time.
 Then collapse to a single `player_update` hook. Keep each its own small reversible step. No broad FSM rewrite;
