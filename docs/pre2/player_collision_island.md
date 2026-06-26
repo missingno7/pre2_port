@@ -14,9 +14,12 @@ Status: **boundary mapped (OBSERVED)** — recovery not started. Heavily witness
   off-top `63B5` 0×). Three parts:
   1. **Ground dispatch**: `di = bx+0x100` (tile below the player); tile id `es:[di]` remapped via `0x7F5E` →
      `bx = type*2`; dispatch the **ground tile handler `call [bx+0x7D9B]`** (`5C04`) — the land/fall/slope core.
-  2. **Eat-state** (`5BB8`, rare): the tile-eating mechanic — if `[0x6BAB]` (the tile-being-eaten ptr) ≠ `di`,
-     finish/start eating via the prop bit `0x20` (`[bx+0x805E]`), advancing the tile sprite id and dirtying the
-     grid (`5C7B`: `[0x2DF4]=1`/`[0x2DE0]=0x55AA` or `653D` draw).
+  2. **Eat-state** (`5BB8`, rare): the destructible-tile mechanic (breakable doors/barriers — NOT food). A tile
+     with prop bit `0x20` (`[bx+0x805E]`) is breakable; `[0x6BAB]` tracks the one currently morphing. On contact
+     it advances that tile's graphic by one (`es:[di]=id+1`) each frame and dirties the grid (`5C7B`:
+     `[0x2DF4]=1`/`[0x2DE0]=0x55AA` or `653D` draw); moving to a new breakable tile first finishes the old one.
+     Witnessed in the penguin/slope level (`001513`) as a horizontal door run (tiles `0xDE/0xE0`) the player
+     eats *through* while walking.
   3. **Ceiling collision** (`5C16`, common, when not falling): `bx-0x100` (tile above); remap via `0x7E5E`/
      `0x805E`; dispatch a **second table `call [bx+0x7DA9]`** (ceiling-tile handler) which returns "solid" in
      `ah&1`; if rising into a solid ceiling, nudge X by ±2 to slip past an open side (`es:[di±dx+0x100]`).
