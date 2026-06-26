@@ -35,13 +35,19 @@ entry (`0x8489`, idx 10): `0e 0a 72 01 00 14 05 ff 05 09 2d 1d 0a …`.
 | 11 | `7D6E` | wrapper: saturating timer `[+7]`/`[+6]`; project, `[+4]=0x37`, rng-jitter `record[+2]` |
 | 12 | `7D1B` | (complex) |
 
-## Recovered so far
-- **`project_entity` (1030:7F26). VERIFIED** (`pre2/recovered/object_inject.py`, `tests/test_object_inject.py`;
-  snapshot shadow 480/480 on 154531). On-screen cull (`on_screen_tile`/8022, already recovered) → allocate a
-  free object slot (`find_free_object_slot`/806C) → copy X `[+9]`, Y `[+0xB]`, sprite `[+2]`, back-ptr into the
-  record, zero velocity/state, flip byte from `[+5]`, set the entity mode `[+4]=0x17`. CF=1 (off-screen / no
-  slot) leaves everything untouched.
-- **`find_free_object_slot` (1030:806C). VERIFIED** — first `0x4FD0` slot with `[+4]==0xFFFF`.
+## Recovered + LIVE status
+- **`project_entity` (1030:7F26). VERIFIED + LIVE HOOK** (`pre2/recovered/object_inject.py` +
+  `pre2/checkpoints/object_inject.py`, `tests/test_object_inject.py`). On-screen cull (`on_screen_tile`/8022)
+  → allocate a free object slot (`find_free_object_slot`/806C) → copy X `[+9]`, Y `[+0xB]`, sprite `[+2]`,
+  back-ptr into the record, zero velocity/state, flip byte from `[+5]`, set the entity mode `[+4]=0x17`; CF=1
+  (off-screen / no slot) leaves everything untouched. **Installed by `install_pre2_replacements`, fires ~480×/
+  90 frames in gameplay, verify-mode 0 divergences.** Because the 6 thin wrappers + idx1 all *call* 7F26,
+  hooking this one routine makes the projection native for all of them.
+- **`find_free_object_slot` (1030:806C). VERIFIED** — first `0x4FD0` slot with `[+4]==0xFFFF` (live-in-parent,
+  inside the 7F26 hook).
+- The thin wrappers (idx3/5-8/9/11) + `lookup_anim_frame` (6954) are disasm'd + understood but run as **ASM**
+  in hybrid (the wrappers call the live 7F26 worker); deliberately NOT recovered as shadow-only code.
+- Runtime truth: `python pre2/probes/hook_audit.py <gameplay-snapshot> [frames]`.
 
 ## Remaining (next, in order)
 1. The thin wrappers (idx3, idx5–8, idx9, idx11) — each is `project_entity` + a mode-byte write (idx11 also a

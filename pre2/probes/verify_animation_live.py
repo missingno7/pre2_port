@@ -26,13 +26,13 @@ def main():
     cpu, dos = rt.cpu, rt.dos
     cpu.trace_enabled = False
 
-    counts = {"anim_advance": [0, 0]}
+    counts = {"bg_anim_advance": [0, 0]}
     first_div = []
 
     def on_result(name, ok, detail):
-        if name != "anim_advance":
+        if name != "bg_anim_advance":
             return
-        c = counts["anim_advance"]
+        c = counts["bg_anim_advance"]
         c[0 if ok else 1] += 1
         if not ok and len(first_div) < 5:
             first_div.append(detail)
@@ -71,11 +71,11 @@ def main():
     for _ in range(_FRAMES):
         frame(0x4D)   # hold Right -> scroll the level so the animated grid redraws every frame
 
-    ok, div = counts["anim_advance"]
-    print(f"anim_advance live shadow: frames driven={_FRAMES}  verified={ok}  divergences={div}")
+    ok, div = counts["bg_anim_advance"]
+    print(f"bg_anim_advance live shadow: frames driven={_FRAMES}  verified={ok}  divergences={div}")
     for d in first_div:
         print("  DIV", d)
-    assert ok > 0, "anim_advance never fired — the animated-grid redraw was not exercised"
+    assert ok > 0, "bg_anim_advance never fired — the animated-grid redraw was not exercised"
     print("ANIM_ADVANCE LIVE OWNERSHIP SHADOW:", "PASS" if div == 0 else "FAIL")
     return 0 if div == 0 else 1
 

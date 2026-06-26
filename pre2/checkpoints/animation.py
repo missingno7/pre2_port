@@ -61,8 +61,8 @@ def _run(mem):
         _rw(mem, _FRAME_PTR), _rb(mem, _THROTTLE), _rb(mem, _ACTIVE) != 0, _rw(mem, _SPEED))
 
 
-@registry.replace(*_ENTRY, "anim_advance")
-def anim_advance(cpu) -> None:
+@registry.replace(*_ENTRY, "bg_anim_advance")
+def bg_anim_advance(cpu) -> None:
     """Mode-2 replacement at 1030:367D (the cycle advance inside redraw_animated_grid 3668).
 
     Live hybrid: the recovered controller OWNS the cycle state — write its contract
@@ -97,8 +97,8 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
                 reason = f"frame_ptr: asm={a_fp:#06x} rec={new_fp:#06x}"
             elif a_thr != new_thr:
                 reason = f"throttle: asm={a_thr:#04x} rec={new_thr:#04x}"
-            report(stats, on_result, raise_on_divergence, "anim_advance", reason)
+            report(stats, on_result, raise_on_divergence, "bg_anim_advance", reason)
         interpret_current_instruction_without_hook(c)
 
     cpu.replacement_hooks[_EXIT] = _verify_at_exit
-    cpu.hook_names[_EXIT] = "anim_advance_verify"
+    cpu.hook_names[_EXIT] = "bg_anim_advance_verify"

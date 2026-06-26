@@ -279,6 +279,24 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   property tables `[0x7E5E]` (wall), `[0x7F5E]` (ground), `[0x8E1D]` (slope); resolves a horizontal
   collision / wall-climb (the `[def+4]` 0x40/0x80 climb-state bits) then a vertical/ground collision:
   solid -> snap onto the (slope-aware) surface + stop/bounce by `[def+4]&0x20`, empty -> gravity (cap 0x100).
+### Object-system RUNTIME STATUS (what is actually installed + firing in hybrid — see `pre2/probes/hook_audit.py`)
+
+| routine | origin | runtime status |
+|---|---|---|
+| `object_tick` (whole walker) | `1030:684E..6913` | **LIVE HOOK** (`checkpoints/object_tick.py`; fires ~1×/frame) |
+| `apply_velocity` | `1030:6861..6873` | live-in-parent (inside `object_tick`); ALSO installed at 6861 but **subsumed** — fires only when the ASM walker runs (never the same frame as `object_tick`; 0 double-integrate) |
+| `object` anim advance | `1030:6881..68E6` | live-in-parent (`advance_animation` inside `object_tick`) |
+| handler dispatch (idx0-12) | `1030:68FC` (`cs:[0x6AA9]`) | live-in-parent (inside `object_tick`) |
+| `second_pass_project_entity` | `1030:7F26` | **LIVE HOOK** (`checkpoints/object_inject.py`; 480 fires/90 frames; verify 0 div) |
+| `find_free_object_slot` | `1030:806C` | live-in-parent (inside the 7F26 hook) |
+| 2nd-pass wrappers idx3/5-8/9/11 | `7ED8/7EB5/7E97/7D6E` | **ASM** (4-insn stubs that call the live 7F26 worker; disasm'd, not accumulated as shadow code) |
+| `lookup_anim_frame` | `1030:6954` | **ASM** (inline in the 2nd-pass loop; disasm'd) |
+| second-pass walk `0x8489` | `1030:6913..698B` | **ASM** (only the `7F26` worker inside it is live) |
+| player FSM | `1030:7D9B` (2nd-pass idx10) | **ASM / not recovered** (the next island) |
+
+`bg_anim_advance` (`367D`) is the BACKGROUND animated-tile cycle (renamed from the ambiguous `anim_advance`),
+NOT object animation. The full hook audit: `python pre2/probes/hook_audit.py <snapshot> [frames]`.
+
 - **`object_tick` — the COMPOSED walker `1030:684E..6913`. VERIFIED + LIVE** (the coastline collapse).
   Live-hooked at `pre2/checkpoints/object_tick.py` (bridge `pre2/bridge/object_tick.py`): in production one hook
   replaces the WHOLE per-slot walker with the recovered pass and resumes at `0x6913` (inline — no CALL/RET),
