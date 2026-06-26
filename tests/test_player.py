@@ -15,9 +15,11 @@ from pre2.recovered.player import (
     player_friction_sym,
     player_gravity,
     player_charge_6bce,
+    player_emit_trail,
     player_select_anim_id,
     player_set_anim,
     player_state_anim5,
+    player_state_idle,
     player_state_run,
     player_tick_timers,
     player_x_integrate,
@@ -183,6 +185,24 @@ def test_state_anim5_composition_byte_exact():
     assert out[0x4F28] == 0x9102 and out[0x4F20] == 0x0312   # advance_anim
     assert out[0x4F22] == 0x40 - 0xC             # friction_sym
     assert out[0x6BCE] == 0x12                   # charge_6bce 0x10 + 2
+
+
+def test_emit_trail_gated_and_ring_wrap():
+    assert player_emit_trail(0x100, 0x200, blink=1, ring_ptr=0x4FBE) is None   # gated (blink & 3)
+    w, nptr = player_emit_trail(0x100, 0x200, blink=0, ring_ptr=0x4F76)
+    assert w[0x4F76] == 0x100 and w[0x4F78] == 0x200 and w[0x4F7A] == 0x35
+    assert nptr == 0x4FBE                          # 0x4F76 - 0x12 < 0x4F76 -> wraps to 0x4FBE
+    _, nptr2 = player_emit_trail(0, 0, blink=4, ring_ptr=0x4FBE)
+    assert nptr2 == 0x4FBE - 0x12                   # blink 4 -> &3 == 0 (not gated), normal step
+
+
+def test_state_idle_airborne_applies_friction_only():
+    mem = {0x4F22: 0x40, 0x6BF6: 0x40, 0x4F24: 0, 0x6BFE: 0, 0x4F2A: 0x10, 0x6BD1: 2}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    out = player_state_idle(rb, rw)
+    assert out[0x4F22] == 0x2C                      # friction_dir 0x40->0x38, friction_sym ->0x2C
+    assert 0x4F20 not in out and 0x4F27 not in out  # airborne: no anim, no [0x4F27] reset
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():

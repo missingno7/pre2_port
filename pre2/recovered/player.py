@@ -19,10 +19,16 @@ __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
-    "player_state_run", "player_state_anim5", "player_charge_6bce",
+    "player_state_run", "player_state_anim5", "player_state_idle", "player_charge_6bce", "player_emit_trail",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
+    "TRAIL_RING_LO", "TRAIL_RING_HI", "TRAIL_STRIDE", "TRAIL_SPRITE",
 ]
+
+TRAIL_RING_LO = 0x4F76    # [asm 5E31] lowest trail-ring slot; below it the ptr wraps to TRAIL_RING_HI
+TRAIL_RING_HI = 0x4FBE    # [asm 5E37] wrap target (highest trail-ring slot)
+TRAIL_STRIDE = 0x12       # [asm 5E2E] trail-ring slot stride
+TRAIL_SPRITE = 0x35       # [asm 5E29] trail sprite id written into slot+4
 
 RUN_ACCEL_LIMIT = 0x50    # [asm 5F03] the run state's horizontal speed cap passed to player_accel
 
@@ -231,6 +237,24 @@ def player_state_run(fields: dict, read_word) -> dict:
     return out
 
 
+def player_emit_trail(player_x: int, player_y: int, blink: int, ring_ptr: int):
+    """Recover the player trail-sprite emitter ``1030:5E11`` (called from the moving-idle path).
+
+    Gated to every 4th frame (``[0x6BD5] & 3 == 0``): push a sprite ``(x, y, id=0x35)`` into the ring buffer at
+    ``[0x6BBE]`` then step the pointer back by 0x12, wrapping below ``0x4F76`` to ``0x4FBE``. Returns ``None``
+    when gated, else ``(word_writes, new_ring_ptr)`` where ``word_writes`` maps ring offsets to 16-bit values."""
+    if blink & 3:                                               # [5E11-5E16] gated
+        return None
+    bx = ring_ptr & 0xFFFF
+    writes = {bx: player_x & 0xFFFF,                            # [5E1E-5E21] slot+0 = X
+              (bx + 2) & 0xFFFF: player_y & 0xFFFF,             # [5E23-5E26] slot+2 = Y
+              (bx + 4) & 0xFFFF: TRAIL_SPRITE}                  # [5E29] slot+4 = 0x35
+    bx = (bx - TRAIL_STRIDE) & 0xFFFF                           # [5E2E]
+    if bx < TRAIL_RING_LO:                                      # [5E31-5E37]
+        bx = TRAIL_RING_HI
+    return writes, bx
+
+
 def player_charge_6bce(v: int) -> int:
     """Recover the small shared helper ``1030:5EB7`` — grow the ``[0x6BCE]`` counter by 2 while it is <= 0x30
     (used by the anim_id 4 & 5 handlers; ``[0x6BCE]`` is also one of the per-frame timers)."""
@@ -260,6 +284,100 @@ def player_state_anim5(fields: dict, read_word) -> dict:
     out[0x4F22] = player_friction_sym(fields[0x4F22], fields[0x4F24])                     # [5EB0]
     out[0x6BCE] = player_charge_6bce(fields[0x6BCE])                                      # [5EB3->5EB7]
     return out
+
+
+def _idle_set_advance(out: dict, anim_id: int, seq: int, rb, rw, facing: int) -> None:
+    """Idle helper: ``set_anim_a`` (635D, tracks ``[0x4F2C]``) then ``advance_anim`` (638B)."""
+    state, ptr = player_set_anim(anim_id, seq, rb(0x4F2C), rw(0x4F28), rw)
+    out[0x4F2C] = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, facing & 0xFF, rw)
+    out[0x4F28] = new_ptr
+    out[0x4F20] = frame
+    out[0x6BCF] = bcf
+
+
+def _idle_default_anim(out: dict, facing: int, rw) -> None:
+    """Idle "default" anim path ``1030:5DED`` — load the idle sequence (entry bx==0) and write frame 0 WITHOUT
+    advancing and WITHOUT the 0x1F mask (only the facing bit is merged); resets ``[0x4F2C]``."""
+    ptr = rw(ANIM_SEQ_TABLE)                                     # [5DED] bx = [0 + 0x7CDF]
+    out[0x4F28] = ptr                                            # [5DF1]
+    ax = rw(ptr)                                                 # [5DF5]
+    ah = ((ax >> 8) | (facing & 0x80)) & 0xFF                    # [5DF7-5DFE] no 0x1F mask here
+    out[0x4F20] = ((ah << 8) | (ax & 0xFF)) & 0xFFFF            # [5E00]
+    out[0x4F2C] = 0                                              # [5E03]
+
+
+def player_state_idle(rb, rw) -> dict:
+    """Recover the ``anim_id==0`` "idle" FSM handler ``1030:5CDB`` (main path, gate ``[0x6BD0]==0``).
+
+    The grounded idle/landing/turn/fidget state. ``rb``/``rw`` read entry memory (byte/word); returns the dict
+    of writes. The witnessed paths (see docs/pre2/player_fsm_island.md): airborne, moving+turn (anim 0x12 +
+    trail), default (5DED), long-idle (anim 0x10), and fidget (anim 0x11 via the table at 0x79E0). The
+    short-idle anim-0x13 path + dust effects (3435/3414) never fire and are left unrecovered (fail loud)."""
+    out = {0x6BC8: 0}                                            # [5CE8]
+    xv = player_friction_dir(rw(0x4F22), rw(0x6BF6))            # [5CED]
+    xv = player_friction_sym(xv, rb(0x4F24))                    # [5CF0]
+    out[0x4F22] = xv
+
+    if rb(0x6BFE) == 0 and rw(0x4F2A) != 0:                     # [5CF3-5CFF] airborne (in the air)
+        if rb(0x6BD1) > 4:                                      # [5D01] jbe
+            out[0x4F22] = player_friction_dir(out[0x4F22], rw(0x6BF6))   # [5D08]
+        return out                                              # [5D0B] jmp 5E0D (no [0x4F27] reset)
+
+    facing = rb(0x4F25)
+    ax = abs(_s16(out[0x4F22]))                                 # [5D0E-5D15] |Xvel| (post-friction)
+    if ax >= 8:                                                 # [5D17] jb 5D42
+        if ((rb(0x4F21) >> 7) & 1) == ((out[0x4F22] >> 15) & 1):   # [5D1C-5D2C] facing == vel sign?
+            _idle_set_advance(out, 0x12, 0x24, rb, rw, facing)      # [5D31-5D39] anim 0x12
+            trail = player_emit_trail(rw(0x4F1C), rw(0x4F1E), rb(0x6BD5), rw(0x6BBE))  # [5D3C] call 5E11
+            if trail is not None:
+                out.update(trail[0])
+                out[0x6BBE] = trail[1]
+        else:
+            _idle_default_anim(out, facing, rw)                # [5D2E] jmp 5DED
+        out[0x4F27] = 0                                         # [5E08]
+        return out
+
+    if _s16(out[0x4F22]) != 0:                                  # [5D42-5D46] 0 < |Xvel| < 8 -> default
+        _idle_default_anim(out, facing, rw)
+        out[0x4F27] = 0
+        return out
+
+    # Xvel == 0 [5D49]
+    timer = rb(0x6BD3)
+    e9 = rb(0x27E9)
+    eced = rb(0x27EC) & rb(0x27ED)
+    if timer >= 0x1E:                                           # [5D49] jb 5D73
+        if e9 == 0 and eced == 0:                               # [5D50-5D5E] no input -> long idle
+            out[0x6BD3] = (timer - 3) & 0xFF                    # [5D60]
+            _idle_set_advance(out, 0x10, 0x20, rb, rw, facing)  # [5D65-5D6D] anim 0x10
+            out[0x4F27] = 0
+            return out
+        reach_5d83 = True                                      # input present -> 5D83
+    else:                                                       # [5D73]
+        if eced != 0:
+            reach_5d83 = True
+        elif e9 == 0:
+            reach_5d83 = False                                 # [5D7C] je 5DC9 (fidget)
+        else:
+            reach_5d83 = True
+
+    if reach_5d83 and rb(0x6BFE) == 0:                          # [5D83] jne 5DC9 ; else 5D8A
+        raise NotImplementedError("idle anim-0x13 path (5D8A) is unwitnessed/unrecovered")
+
+    # fidget [5DC9]: find the 0x79E0 range [lo,hi) containing key=[0x27F0]&0x1FF -> anim 0x11; below lo -> default
+    key = rw(0x27F0) & 0x1FF
+    si = 0x79E0
+    while True:
+        if key < rw(si):                                       # [5DD2] jb 5DED
+            _idle_default_anim(out, facing, rw)
+            out[0x4F27] = 0
+            return out
+        if key < rw((si + 2) & 0xFFFF):                        # [5DD6] jb 5DE0
+            _idle_set_advance(out, 0x11, 0x22, rb, rw, facing)  # [5DE0-5DE8] anim 0x11
+            out[0x4F27] = 0
+            return out
+        si = (si + 4) & 0xFFFF                                 # [5DDB]
 
 
 def player_tick_timers(timers: dict) -> dict:
