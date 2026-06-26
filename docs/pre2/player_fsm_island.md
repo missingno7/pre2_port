@@ -115,11 +115,23 @@ E.g. idle `0x5CCE` = `accel?; friction; advance_anim` (`62EC;6333;6374;638B`); r
 each handler is a few calls to them, then the dispatch is a table of handlers — `player_update` collapses into
 one clean hook subsuming the X/Y/timer leaves.
 
-**Proof the collapse works — first full handler composed:** `player_state_run` (`0x5EC4`, anim_id=1, the most
-common, 856×) is recovered purely as a composition of the primitives — `sat_inc[0x6BD3]; accel(0x50);
-friction_dir; set_anim(1); advance_anim` — and shadow-verifies **byte-exact 795/795 (L1) + 119/119 (L6)** on
-its main path. (The `[0x6BD0]!=0` override jumps to `0x5F93`, a separate gated tail, ~11/frame — not yet
-recovered.) The remaining handlers (anim_id 0,2,3,4,5,6,7,8 → `0x5CDB/0x5F30/…`) compose the same way.
+**Proof the collapse works — handlers compose from the primitives.** Each handler (gate `[0x6BD0]==0` main
+path) is a few primitive calls. Status of the 7 distinct handlers (anim_id 3/6/7 share `0x5F96`):
+
+| anim_id | handler | fires (L1) | status | shape |
+|---|---|---|---|---|
+| 1 | `0x5EC4` | 856 | **recovered+verified** 795/795 | `sat_inc; accel(0x50); friction_dir; set_anim; advance_anim` |
+| 5 | `0x5E96` | 16 | **recovered+verified** 14/14 | `set_anim; advance_anim; friction_sym; charge_6BCE` |
+| 0 | `0x5CDB` | 629 | scoped (complex) | landing/turn/idle-fidget table `0x79E0`, dust `3435/3414`, sub `5E11` |
+| 2 | `0x5F30` | 250 | scoped | `[0x6BE0]`→idle fall-through, table `0x79CE` walk |
+| 3/6/7 | `0x5F96` | 72 | scoped | `set_anim; advance; friction_sym; sat_inc; mul[0x7B18]; table 0x7B07; [0x7B19]` |
+| 4 | `0x5E62` | 20 | scoped | `accel(0x20); set_anim; advance` + `|Xvel|<=0x20`→idle fall-through (al clobbered) |
+| 8 | `0x5CCE` | 156 | scoped | `friction_dir; friction_sym; set_anim; advance` (al = post-friction value) |
+
+Note: handlers `0x5CCE`/`0x5E62` call `set_anim` *after* `friction_sym`/`|Xvel|` clobbers `ax`, so their
+`[0x4F27]` ends up velocity-derived (faithful, just not anim_id) — compose with the real register flow.
+The complex handlers (idle especially) carry game-specific logic (fidget tables, dust, fall-throughs) and are
+their own focused recoveries.
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +

@@ -18,7 +18,8 @@ from __future__ import annotations
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
-    "player_set_anim", "player_advance_anim", "player_select_anim_id", "player_state_run",
+    "player_set_anim", "player_advance_anim", "player_select_anim_id",
+    "player_state_run", "player_state_anim5", "player_charge_6bce",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
 ]
@@ -227,6 +228,37 @@ def player_state_run(fields: dict, read_word) -> dict:
     out[0x4F28] = new_ptr
     out[0x4F20] = frame
     out[0x6BCF] = bcf
+    return out
+
+
+def player_charge_6bce(v: int) -> int:
+    """Recover the small shared helper ``1030:5EB7`` — grow the ``[0x6BCE]`` counter by 2 while it is <= 0x30
+    (used by the anim_id 4 & 5 handlers; ``[0x6BCE]`` is also one of the per-frame timers)."""
+    v &= 0xFF
+    return (v + 2) & 0xFF if v <= 0x30 else v
+
+
+def player_state_anim5(fields: dict, read_word) -> dict:
+    """Recover the ``anim_id==5`` FSM handler ``1030:5E96`` (main path, gate ``[0x6BD0]==0``).
+
+    A clean composition (entry ``al==5``, ``bx==0x0A`` preserved into ``set_anim_b``)::
+
+        [0x6BC8]=0 ; [0x6BE1]=4                      # 5EA0/5EA5
+        ptr = set_anim_b(anim=5, seq=0x0A)           # 5EAA player_set_anim ([0x4F27]/[0x4F28])
+        advance_anim(ptr)                            # 5EAD player_advance_anim ([0x4F20]/[0x4F28]/[0x6BCF])
+        [0x4F22] = friction_sym([0x4F22])            # 5EB0 player_friction_sym
+        [0x6BCE] = charge_6bce([0x6BCE])             # 5EB3 -> 5EB7
+
+    ``fields`` supplies the initial words/bytes; returns the dict of writes. Pure."""
+    out = {0x6BC8: 0, 0x6BE1: 4}
+    state, ptr = player_set_anim(5, 0x0A, fields[0x4F27], fields[0x4F28], read_word)      # [5EAA]
+    out[0x4F27] = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, fields[0x4F25] & 0xFF, read_word)      # [5EAD]
+    out[0x4F28] = new_ptr
+    out[0x4F20] = frame
+    out[0x6BCF] = bcf
+    out[0x4F22] = player_friction_sym(fields[0x4F22], fields[0x4F24])                     # [5EB0]
+    out[0x6BCE] = player_charge_6bce(fields[0x6BCE])                                      # [5EB3->5EB7]
     return out
 
 

@@ -69,6 +69,7 @@ _NOT_SEPARATELY_HOOKED = [
     ("player anim primitives", "1030:635D/6374/638B", "recovered / shadow-only", "set_anim(a/b)/advance_anim; pure+shadow-verified (write [0x4F20] frame, [0x4F28] seq-ptr; go live via the handler composition)"),
     ("player FSM state-select", "1030:5921..595C", "recovered / shadow-only", "player_select_anim_id: input bitmask -> anim_id via table [0x7B7F] + reset; shadow-verified 1997/1997"),
     ("player FSM handler: run", "1030:5EC4 (anim_id=1)", "recovered / shadow-only", "player_state_run: composition of the primitives; shadow-verified 795/795 main path ([0x6BD0] override tail not yet recovered)"),
+    ("player FSM handler: anim5", "1030:5E96 (anim_id=5)", "recovered / shadow-only", "player_state_anim5: composition (set_anim/advance/friction_sym/charge_6BCE); shadow-verified 14/14"),
     ("secondary lists 0x4F2E/0x50A8/0x5450/0x6BBE", "581E/6210/60FE/60DF", "ASM / not recovered", "other per-frame entity lists"),
 ]
 
