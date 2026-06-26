@@ -5,6 +5,7 @@ L6; player_y_integrate 2069/2069 + 299/299); these pin the kinematics formulas +
 from __future__ import annotations
 
 from pre2.recovered.player import (
+    ANIM_ID_TABLE,
     ANIM_SEQ_TABLE,
     TIMER_BYTES,
     TIMER_WORD,
@@ -13,7 +14,9 @@ from pre2.recovered.player import (
     player_friction_dir,
     player_friction_sym,
     player_gravity,
+    player_select_anim_id,
     player_set_anim,
+    player_state_run,
     player_tick_timers,
     player_x_integrate,
     player_y_integrate,
@@ -129,6 +132,36 @@ def test_advance_anim_negative_word_loops_back():
     rw = lambda off: seq.get(off, 0)
     frame, new_ptr, bcf = player_advance_anim(0x9000, facing=0x01, read_word=rw)
     assert frame == 0x0103 and new_ptr == 0x8FFE and bcf == 0x01
+
+
+def test_select_anim_id_maps_bitmask_via_table():
+    table = {(ANIM_ID_TABLE + i) & 0xFFFF: v for i, v in enumerate([0, 3, 5, 7, 2, 6, 0, 0, 1])}
+    rb = lambda off: table.get(off, 0)
+    aid, w = player_select_anim_id(1, suppress=0, depth=0, anim_b_state=0, beb=0, read_byte=rb)
+    assert aid == 3                      # table[bitmask 1]
+    assert w[0x4F1B] == 0                # = depth
+    assert w[0x4F2C] == 0 and w[0x6BEB] == 1   # anim changed 0->3 -> reset, then inc
+    # depth >= 0x16 overrides anim_id to 8
+    assert player_select_anim_id(1, 0, depth=0x16, anim_b_state=0, beb=0, read_byte=rb)[0] == 8
+    # suppress -> bitmask forced to 0 -> table[0] == 0
+    assert player_select_anim_id(1, suppress=1, depth=0, anim_b_state=0, beb=0, read_byte=rb)[0] == 0
+    # no anim change -> no [0x4F2C] reset, beb keeps counting
+    _, w2 = player_select_anim_id(1, 0, 0, anim_b_state=3, beb=4, read_byte=rb)
+    assert 0x4F2C not in w2 and w2[0x6BEB] == 5
+
+
+def test_state_run_composes_primitives_byte_exact():
+    seq = {0x9000: 0x0177}
+    table = {(2 + ANIM_SEQ_TABLE) & 0xFFFF: 0x9000}  # seq_index 2 -> ptr 0x9000
+    rw = lambda off: table.get(off, seq.get(off, 0))
+    fields = {0x6BD3: 0x05, 0x4F22: 0x10, 0x4F25: 1, 0x4F24: 0,
+              0x6BDB: 1, 0x6BF6: 0x40, 0x4F27: 0x00, 0x4F28: 0x1234}
+    out = player_state_run(fields, rw)
+    assert out[0x6BD3] == 0x06                       # sat_inc frame counter
+    assert out[0x4F22] == 0x18                       # accel +0x10 -> 0x20, friction -8 -> 0x18
+    assert out[0x4F27] == 1                          # set_anim_b stored anim_id (changed 0->1)
+    assert out[0x4F28] == 0x9002                     # advance_anim ptr += 2
+    assert out[0x4F20] == 0x0177 and out[0x6BCF] == 0x01   # frame, raw high byte
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():

@@ -18,12 +18,15 @@ from __future__ import annotations
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
-    "player_set_anim", "player_advance_anim",
+    "player_set_anim", "player_advance_anim", "player_select_anim_id", "player_state_run",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
-    "XVEL_FLOOR", "ANIM_SEQ_TABLE",
+    "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
 ]
 
+RUN_ACCEL_LIMIT = 0x50    # [asm 5F03] the run state's horizontal speed cap passed to player_accel
+
 ANIM_SEQ_TABLE = 0x7CDF   # [asm 6366/637D] base of the per-state animation-sequence pointer table
+ANIM_ID_TABLE = 0x7B7F    # [asm 592E] base of the input-bitmask -> anim_id (FSM state index) table
 
 XVEL_FLOOR = -0x60      # [asm 62FA] directional-friction floor on Xvel
 
@@ -130,6 +133,42 @@ def player_gravity(yvel: int, water: int, limit: int) -> int:
     return nv & 0xFFFF
 
 
+def _sat_inc_byte(v: int) -> int:
+    """``add v,1 ; sbb v,0`` — increment a byte counter, saturating at 0xFF (the counterpart of the timers'
+    saturating *decrement*)."""
+    v &= 0xFF
+    return v if v == 0xFF else v + 1
+
+
+def _inc_wrap_word(v: int) -> int:
+    """``add v,1 ; adc v,0`` — increment a 16-bit counter; 0xFFFF wraps to 1 (the carry re-adds), not 0."""
+    v &= 0xFFFF
+    s = v + 1
+    return ((s & 0xFFFF) + (1 if s > 0xFFFF else 0)) & 0xFFFF
+
+
+def player_select_anim_id(bitmask: int, suppress: int, depth: int, anim_b_state: int, beb: int,
+                          read_byte) -> tuple:
+    """Recover the FSM state selection ``1030:5921..595C`` (the ``[0x6BC5]==0`` normal-play path).
+
+    Map the 5-bit input ``bitmask`` to the player ``anim_id`` (the FSM state index used to dispatch
+    ``cs:[anim_id*2 + 0x7D2F]``): ``anim_id = read_byte(0x7B7F + bitmask)``, forced to 0-bitmask when
+    ``suppress`` (``[0x6BCD]``) is set, and overridden to 8 when ``depth`` (``[0x4F2D]``) >= 0x16. On an
+    anim change (``anim_b_state`` ``[0x4F27]`` != anim_id) the run state resets (``[0x4F2C]``=0, ``[0x6BEB]``
+    cleared); ``[0x6BEB]`` then increments (wrap-to-1). Pure: returns ``(anim_id, writes)`` where ``writes``
+    maps ``{0x4F1B, 0x6BEB[, 0x4F2C]}`` to their new values (0x4F2C only on a change)."""
+    bm = 0 if (suppress & 0xFF) != 0 else (bitmask & 0xFF)       # [5921-592C]
+    anim_id = read_byte((bm + ANIM_ID_TABLE) & 0xFFFF) & 0xFF    # [592E]
+    writes = {0x4F1B: depth & 0xFF}                              # [5932-5936] [0x4F1B]=[0x4F2D]
+    if (depth & 0xFF) >= 0x16:                                   # [593A-593F]
+        anim_id = 8
+    if (anim_b_state & 0xFF) != anim_id:                         # [5941] anim changed -> reset run state
+        beb = 0                                                  # [5947]
+        writes[0x4F2C] = 0                                       # [594D]
+    writes[0x6BEB] = _inc_wrap_word(beb)                         # [5952-5957]
+    return anim_id, writes
+
+
 def player_set_anim(anim_id: int, seq_index: int, cur_state: int, cur_ptr: int, read_word) -> tuple:
     """Recover the player animation-sequence selector ``1030:635D`` (== ``6374``, differing only in which
     state byte it tracks: ``635D`` uses ``[0x4F2C]``, ``6374`` uses ``[0x4F27]``).
@@ -160,6 +199,35 @@ def player_advance_anim(anim_ptr: int, facing: int, read_word) -> tuple:
     frame = ((ah << 8) | (ax & 0xFF)) & 0xFFFF                      # [63A8] [0x4F20] = ax
     new_ptr = (anim_ptr + 2) & 0xFFFF                              # [63AB-63AD] [0x4F28] += 2
     return frame, new_ptr, bcf
+
+
+def player_state_run(fields: dict, read_word) -> dict:
+    """Recover the ``anim_id==1`` "run" FSM handler ``1030:5EC4`` (the normal-play main path).
+
+    The handler is a composition of the recovered primitives (the original source structure). With entry
+    ``al==1`` (anim_id) and ``bx==2`` (anim_id*2 = the sequence index) preserved through the calls, the main
+    path (gates ``[0x6BD0]==0`` no override, ``[0x6BC5]==0`` no scripted block) is::
+
+        [0x6BD3] = sat_inc([0x6BD3])              # 5EF9 frame counter (caps at 0xFF)
+        [0x4F22] = accel(limit=0x50)              # 5F03-5F06 player_accel
+        [0x4F22] = friction_dir([0x4F22])         # 5F09 player_friction_dir
+        ptr      = set_anim_b(anim=1, seq=2)      # 5F0C player_set_anim ([0x4F27]/[0x4F28])
+        advance_anim(ptr)                         # 5F0F player_advance_anim ([0x4F20]/[0x4F28]/[0x6BCF])
+
+    ``fields`` supplies the initial player words/bytes it reads; returns the dict of writes. Pure."""
+    out = {}
+    out[0x6BD3] = _sat_inc_byte(fields[0x6BD3])                                          # [5EF9-5EFE]
+    xvel = player_accel(fields[0x4F22], fields[0x4F25], fields[0x4F24],                  # [5F03-5F06]
+                        fields[0x6BDB] != 0, RUN_ACCEL_LIMIT)
+    xvel = player_friction_dir(xvel, fields[0x6BF6])                                     # [5F09]
+    out[0x4F22] = xvel
+    state, ptr = player_set_anim(1, 2, fields[0x4F27], fields[0x4F28], read_word)        # [5F0C] set_anim_b
+    out[0x4F27] = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, fields[0x4F25] & 0xFF, read_word)     # [5F0F]
+    out[0x4F28] = new_ptr
+    out[0x4F20] = frame
+    out[0x6BCF] = bcf
+    return out
 
 
 def player_tick_timers(timers: dict) -> dict:

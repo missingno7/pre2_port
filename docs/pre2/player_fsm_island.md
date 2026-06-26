@@ -74,8 +74,16 @@ block (`596A-5A0B`: run-counter `[0x7B1A]` accel/decel, `[0x6BC6]` deceleration,
 `bx` then holds the **5-bit input bitmask** packed at `58FC-591F` (bits from `[0x27EC],[0x27ED],[0x27EA],
 [0x27EB],[0x27E8]`), times 2. So the player FSM is **input-indexed**, not a stored-state machine.
 
+**The index is the anim_id, not the raw bitmask.** The setup `5921-595C` maps the bitmask through a table to
+the **anim_id** (the FSM state, 0..8): `anim_id = [0x7B7F + bitmask]` (forced to bitmask 0 when `[0x6BCD]`,
+overridden to 8 when `[0x4F2D] >= 0x16`); on a state change it resets the run state (`[0x4F2C]=0`,`[0x6BEB]`);
+then `bx = anim_id*2`. So at every handler's entry **`al`=anim_id and `bx`=anim_id*2** — exactly the args
+`set_anim` consumes. (`player_select_anim_id`, recovered + shadow-verified 1997/1997 L1 + 299/299 L6.) The
+bitmask→anim_id table `[0x7B7F]` (L1): `00 03 05 07 02 06 00 00 | 01 03 04 07 02 06 01 00 | 01 03 04 07 02 06
+00 00 …`.
+
 The `5A0B` call `call word ptr [bx+0x7D2F]` reads the pointer from **DS** (0x1A0F), not CS. The real
-handlers (verified via post-call CS:IP), by frequency (L1):
+handlers (verified via post-call CS:IP), keyed by `bx`=anim_id*2, by frequency (L1):
 
 | bx | handler | fires | role |
 |---|---|---|---|
@@ -106,6 +114,12 @@ E.g. idle `0x5CCE` = `accel?; friction; advance_anim` (`62EC;6333;6374;638B`); r
 **Plan (collapses naturally):** recover the shared primitives first (pure, witnessed thousands of times), then
 each handler is a few calls to them, then the dispatch is a table of handlers — `player_update` collapses into
 one clean hook subsuming the X/Y/timer leaves.
+
+**Proof the collapse works — first full handler composed:** `player_state_run` (`0x5EC4`, anim_id=1, the most
+common, 856×) is recovered purely as a composition of the primitives — `sat_inc[0x6BD3]; accel(0x50);
+friction_dir; set_anim(1); advance_anim` — and shadow-verifies **byte-exact 795/795 (L1) + 119/119 (L6)** on
+its main path. (The `[0x6BD0]!=0` override jumps to `0x5F93`, a separate gated tail, ~11/frame — not yet
+recovered.) The remaining handlers (anim_id 0,2,3,4,5,6,7,8 → `0x5CDB/0x5F30/…`) compose the same way.
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +
