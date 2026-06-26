@@ -124,7 +124,7 @@ path) is a few primitive calls. Status of the 7 distinct handlers (anim_id 3/6/7
 | 5 | `0x5E96` | 16 | **recovered+verified** 14/14 | `set_anim; advance_anim; friction_sym; charge_6BCE` |
 | 0 | `0x5CDB` | 629 | **recovered+verified** 719/719+88/88 | airborne/moving+trail(`5E11`)/default/long-idle/fidget(`0x79E0`); anim13+dust `3435/3414` unwitnessed |
 | 2 | `0x5F30` | 250 | **recovered+verified** 288/288+4/4 | jump-arc table `0x79CE`/gravity + horizontal + `set_anim(2)` + 2× friction; `[0x6BE0]`→idle |
-| 3/6/7 | `0x5F96` | 72 | scoped | `set_anim; advance; friction_sym; sat_inc; mul[0x7B18]; table 0x7B07; [0x7B19]` |
+| 3/6/7 | `0x5F96` | 72 | **recovered+verified** 100/100+88/88 | "eating": set_anim/advance/friction/`[0x7B19]`/`[0x6BD0]`; sound path = `play_sfx`+trail+Yvel+projectile-spawn (`0x4F2E`); main path = render-sprite via phase frame-table |
 | 4 | `0x5E62` | 20 | **recovered+verified** 11/11 | `[0x6BD3]=0;[0x6BE1]=4;charge`; `|Xvel|<=0x20`→accel(0x20)+set_anim+advance, else→idle (bx=8) |
 | 8 | `0x5CCE` | 156 | **recovered+verified** 134/134 | `friction_dir; friction_sym; set_anim; advance` (al = post-friction Xvel low byte) |
 
@@ -139,8 +139,14 @@ valid** (it compares recovered vs real ASM from an identical state). The rigorou
 verify-mode (`enable_pre2_hook_verification`, instruction-count-transparent) on the eventual live
 `player_update` — that is the final check before/as the collapse lands.
 
-The last handler `0x5F96` (anim_id 3/6/7, "eating") is audio-coupled: it plays a sound (`call 0x282`), writes
-the override flag `[0x6BD0]`, and branches to `0x6081` (the common path, 88×) — its own focused recovery.
+**The "eating" handler `0x5F96` IS the override tail `0x5F93`** — `5F93: mov al,[0x4F27]` falls straight into
+`5F96`, so the override path is the eating body entered with `al=[0x4F27]` (vs `al=anim_id` for the eating
+dispatch). Recovering `player_state_eating(al, bx)` closed BOTH gaps. It's audio+spawn+render coupled:
+`play_sfx 0x282` (`sfx` return), a projectile spawn into the `0x4F2E` list (`627C` find-free), the override
+flag `[0x6BD0]=(~[0x6BCF])&0x40`, and the render-sprite via the phase frame-table (`6081`). **Shadow-verified
+byte-exact: 100/100 (L1) + 88/88 (L6), sfx stream matched.** Dead-value note: when the player render slot is
+inactive (`[0x4F0E]==0xFFFF`) the ASM still fills `[0x4F0A]/[0x4F0C]` from a `play_sfx`-spilled register —
+excluded as dead (never rendered), like the object_render scratch.
 
 ## First full FSM dispatch composed (`player_dispatch_handler`)
 All 6 recovered handlers behind one uniform `(rb, rw) -> writes` entry, keyed by the `anim_id` from
@@ -163,10 +169,16 @@ override sends every handler (bar anim8) to the unrecovered tail `5F93` — now 
 101/88 per demo (override + eating 3/6/7 + idle anim13).
 
 ## Remaining to fully collapse `player_update`
-1. The eating handler `0x5F96` (anim_id 3/6/7) + idle's `5D8A` anim13 sub-path + the override tail `0x5F93`.
+1. **idle's `5D8A` anim13 sub-path** — the last FSM dispatch gap (its dust effects `3435/3414` are
+   out-of-FSM-scope spawns).
 2. Live-hook `player_update` (front-end → select → dispatch → X/Y integrate → collision → timers) and collapse
-   in **verify-mode** (the non-perturbing oracle), subsuming the X/Y/timer leaves.
+   in **verify-mode** (the non-perturbing oracle), subsuming the X/Y/timer leaves. NB: the full-step *standalone*
+   shadow shows perturbation-class residuals on the **stateful** eating sequence (`[0x4F28]` advances across
+   frames; the eating handler itself is byte-exact standalone) — verify-mode is the authority there.
 3. The collision sub-island `5A96`/`cs:[0x7D9B]`.
+
+(Done since the last revision: the eating handler `0x5F96` + the override tail `0x5F93` — recovered + byte-exact
+standalone; `player_dispatch_handler` routes anim_id 3/6/7 to it and `player_fsm_step` handles the override.)
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`
 A genuine sub-island, not a leaf. Witness (L1): fires 2006×/frame; calls the tile-interaction worker `5B81` +

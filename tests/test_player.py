@@ -22,6 +22,7 @@ from pre2.recovered.player import (
     player_set_anim,
     player_state_anim4,
     player_state_anim5,
+    player_state_eating,
     player_state_anim8,
     player_state_idle,
     player_state_jump,
@@ -281,17 +282,38 @@ def test_fsm_frontend_bitmask_and_facing():
     assert bm2 == 0x01 and 0x4F25 not in w2
 
 
-def test_dispatch_routes_to_recovered_handlers_and_gaps_eating():
-    import pytest
+def test_eating_sound_path_sets_override_flag_and_sfx():
+    # eating handler (anim_id 3): a frame whose anim high byte has bit6 set selects the sound path
+    # ([0x6BD0] = (~bcf)&0x40 == 0), which emits play_sfx and stores the phase sfx in [0x6BCD].
+    SEQ, FT = 0x9000, 0x9100
+    mem = {0x7B18: 0, 0x4F27: 0, 0x4F28: 0, 0x4F25: 1, 0x4F24: 0, 0x4F22: 0x40, 0x6BF6: 0x10,
+           0x6BD3: 0, 0x6BCE: 0, 0x6BFE: 1, 0x6BD2: 1, 0x7B06: 0x06, 0x7B07: 0x19, 0x7B08: 0}
+    words = {(6 + 0x7CDF) & 0xFFFF: SEQ,   # set_anim_b(al=3) seq lookup
+             SEQ: 0x4055,                  # anim frame word: high byte 0x40 (bit6 set) -> sound path
+             0x7B04: FT, FT: 0x55AA}       # phase frame-table ptr -> immediate terminator
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: words.get(o, mem.get(o, 0) | (mem.get(o + 1, 0) << 8)) & 0xFFFF
+    out, sfx = player_state_eating(3, 6, rb, rw)
+    assert out[0x6BD0] == 0          # bcf bit6 set -> override flag cleared (sound path)
+    assert sfx == [5]                # phase 0 -> play_sfx dl=5
+    assert out[0x6BCD] == 0x06       # phase sfx stored
+    assert out[0x4F27] == 3          # set_anim_b stored the anim id
+    assert out[0x7B19] == 0x19       # phase v19
+    assert out[0x4F0E] == 0xFFFF     # [0x6BD2]!=0 -> player render slot marked inactive
+
+
+def test_dispatch_returns_writes_and_sfx_and_routes_eating():
     mem = {0x4F22: 0x40, 0x6BF6: 0x40, 0x4F24: 0, 0x6BFE: 0, 0x4F2A: 0x10, 0x6BD1: 2, 0x4F25: 1}
     rb = lambda o: mem.get(o, 0) & 0xFF
     rw = lambda o: mem.get(o, 0) & 0xFFFF
-    # anim_id 0 routes to the idle handler (here its airborne path)
-    assert player_dispatch_handler(0, rb, rw)[0x4F22] == 0x2C
-    # the audio-coupled eating handler (anim_id 3/6/7 -> 0x5F96) is not recovered yet -> fails loud
-    for aid in (3, 6, 7):
-        with pytest.raises(NotImplementedError):
-            player_dispatch_handler(aid, rb, rw)
+    # anim_id 0 routes to the idle handler (here its airborne path); no sound
+    w0, s0 = player_dispatch_handler(0, rb, rw)
+    assert w0[0x4F22] == 0x2C and s0 == []
+    # anim_id 3/6/7 route to the recovered eating handler (no longer fails loud), and emit a play_sfx command
+    rb_t = lambda o: 0
+    rw_t = lambda o: 0x55AA   # every frame-table walk terminates immediately (0x55AA = the table sentinel)
+    w3, s3 = player_dispatch_handler(3, rb_t, rw_t)
+    assert isinstance(w3, dict) and s3 == [5]   # phase 0 -> play_sfx dl=5
 
 
 def test_tick_timers_byte_wraps_8bit_word_16bit():
