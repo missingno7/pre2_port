@@ -36,7 +36,12 @@ from dos_re.hooks import registry
 # Hooks whose non-verify path is intentionally an ASM pass-through (they cannot be
 # a pure replacement — e.g. panel_copy is a vsync-paced loop): there is nothing to
 # full-effect-diff because the "recovered" path *is* the ASM. Skip them.
-_PASSTHROUGH: set[tuple[int, int]] = {(0x1030, 0x3054)}  # frame_panel_copy
+_PASSTHROUGH: set[tuple[int, int]] = {
+    (0x1030, 0x3054),   # frame_panel_copy (vsync-paced ASM loop)
+    (0x1030, 0x684E),   # object_tick — an INLINE walker replacement (no CALL/RET) that resumes at 0x6913, so
+                        # the drive-to-ret oracle here doesn't apply; it is verified offline by the whole-tick
+                        # probe (pre2/probes/probe_object_tick_composed.py, whole-segment lockstep = 0 diff).
+}
 
 
 def _sqz_ignore(cpu):

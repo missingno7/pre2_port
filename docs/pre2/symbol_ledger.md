@@ -279,7 +279,16 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   property tables `[0x7E5E]` (wall), `[0x7F5E]` (ground), `[0x8E1D]` (slope); resolves a horizontal
   collision / wall-climb (the `[def+4]` 0x40/0x80 climb-state bits) then a vertical/ground collision:
   solid -> snap onto the (slope-aware) surface + stop/bounce by `[def+4]&0x20`, empty -> gravity (cap 0x100).
-- **`object_tick` — the COMPOSED walker `1030:684E..6913`. VERIFIED** (`pre2/recovered/object_tick.py`,
+- **`object_tick` — the COMPOSED walker `1030:684E..6913`. VERIFIED + LIVE** (the coastline collapse).
+  Live-hooked at `pre2/checkpoints/object_tick.py` (bridge `pre2/bridge/object_tick.py`): in production one hook
+  replaces the WHOLE per-slot walker with the recovered pass and resumes at `0x6913` (inline — no CALL/RET),
+  subsuming the per-leaf `object_velocity` hook; in verify mode it steps aside so the per-leaf oracles still
+  fire (--verify-hooks 0 divergences incl. object_velocity). NOT instruction-count-transparent (runs in one
+  host step vs the ASM's thousands) -> demos recorded against the interpreted walker DESYNC and must be
+  re-recorded; data effect byte-exact (whole-0x1A0F-segment lockstep = 0 diff over L6/earthquake/L7). Exit
+  regs reproduced: si=0x50A8, bp=0, cl=4 (the 2nd-list pass re-derives ax/bx/dx from si, leaves di/ds/es).
+  Live gameplay validated (pixel-identical to the per-leaf path before the clock desyncs; valid after).
+- **`object_tick` (OFFLINE proof)** (`pre2/recovered/object_tick.py`,
   `tests/test_object_tick.py`; whole-tick shadow `pre2/probes/probe_object_tick_composed.py`). One high-level
   pass over the 12 slots composing the verified leaves: per non-empty slot `apply_velocity` →
   (`terrain_collision` if `[def+4]&8`) → `advance_animation` → AI dispatch. Byte-exact over whole frames vs the
