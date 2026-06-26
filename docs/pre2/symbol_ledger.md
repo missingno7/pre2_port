@@ -446,3 +446,13 @@ oracle; `fireflies.firefly_color()` keeps the true flicker for the enhanced rend
 - A guessed invariant is not a verifier: a "decode length == header size" contract
   once falsely condemned a *correct* LZSS decoder (the header field is the output
   *reservation*, not the decode length). The authority is the lockstep vs ASM.
+
+### Level-password generator (recovered 2026-06-26)
+- **`1030:932F` — `level_code` / password generator. VERIFIED** (`pre2/recovered/password.py`,
+  `tests/test_password.py`, probe `pre2/probes/verify_password.py` invokes the ASM for idx 0..0x12 = all match).
+  `code(index) = rol16((index ^ 0x55A3) * seed, rot)`. `seed` = `[0xA333]`, a one-time BIOS-ROM checksum
+  fingerprint (932F 9343..9392; F000:FFF0 + video BIOS), `0x20` fallback when the sum is 0 → the value on the
+  zeroed-BIOS GOG/VM build (so codes are deterministic there: L1 = A305/A905). `rot` = `cs:[5]` (=3).
+- **`1030:9990` — "ENTER CODE" password menu.** Reads 4 HEX chars into `[0xB1B9]` (16-bit), validates by
+  looping levels 0..0x12 vs `932F(level)` (plus a master-code path at 9A53 checking a 3-word hash of
+  `[0xB1B3/5/7]` against 0x36C8/0x8BD1/0x8E71). Index→level: idx 0 = L1 beginner, idx 10 = L1 expert.
