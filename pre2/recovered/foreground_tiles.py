@@ -113,17 +113,22 @@ def render_foreground_tiles(planes: Sequence[bytearray], fg: ForegroundState) ->
     37F7 blit leaves the sequencer map-mask / read-map at plane 3, so only when a blit ran)."""
     n = 0
     for tile, cell in select_foreground_cells(fg):
-        _blit_tile(planes, tile, cell, fg)
-        n += 1
+        if _blit_tile(planes, tile, cell, fg):     # clipped tiles don't blit (and don't set the EGA exit state)
+            n += 1
     return n
 
 
-def _blit_tile(planes: Sequence[bytearray], tile: int, cell: int, fg: ForegroundState) -> None:
+def _blit_tile(planes: Sequence[bytearray], tile: int, cell: int, fg: ForegroundState) -> bool:
     gfx_off = (fg.gfx_index[tile] << 7) & 0xFFFF
     screen_row = ((cell >> 8) - (fg.cam_row & 0xFF)) & 0xFF
     screen_col = ((cell & 0xFF) - (fg.cam_col & 0xFF)) & 0xFFFF
     di = ((screen_row * 0x280) + (screen_col * 2) + fg.page) & 0xFFFF
     di = (di - 0x28 * fg.y_bias) & 0xFFFF
+    # [asm 3835-3846] destination clip: only blit if page <= di < page+0x1900 (a tile whose top falls
+    # outside the viewport window is skipped — without this the blit bleeds off-screen / into the HUD band).
+    page = fg.page & 0xFFFF
+    if not (page <= di < ((page + 0x1900) & 0xFFFF)):
+        return False
     gfx = fg.gfx
     for r in range(16):
         rowbase = (gfx_off + r * 2) & 0xFFFF
@@ -138,3 +143,4 @@ def _blit_tile(planes: Sequence[bytearray], tile: int, cell: int, fg: Foreground
             planes[p][o] = val & 0xFF
             planes[p][o2] = (val >> 8) & 0xFF
         di = (di + 0x28) & 0xFFFF
+    return True

@@ -81,3 +81,28 @@ def test_render_runs_full_pass_without_error():
                 gfx_index=[0] * 256)
     planes = [bytearray(0x10000) for _ in range(4)]
     render_foreground_tiles(planes, fg)      # exercises selection -> blit end to end
+
+
+def test_blit_clips_offscreen_destination():
+    # [asm 3835-3846] the blit only draws when page <= di < page+0x1900; a tile whose top falls outside
+    # that window is SKIPPED (without this it bleeds off-screen / into the HUD band — demo 144815 bug).
+    from pre2.recovered.foreground_tiles import _blit_tile
+    gfx = bytearray(0x10000); gfx[0] = 0xFF
+    fg = _state(sprites=[], grid_pairs=[], flag_pairs=[], gfx=bytes(gfx), gfx_index=[0] * 256, page=0)
+    planes = [bytearray(0x10000) for _ in range(4)]
+    # cell row 10 -> di = 10*0x280 = 0x1900 == page+0x1900 -> clipped (window is half-open)
+    assert _blit_tile(planes, tile=5, cell=0x0A00, fg=fg) is False
+    assert not any(any(p) for p in planes)          # nothing drawn off-screen
+    # cell row 9 -> di = 0x1680, inside the window -> blits
+    assert _blit_tile(planes, tile=5, cell=0x0900, fg=fg) is True
+    assert any(any(p) for p in planes)
+
+
+def test_render_count_excludes_clipped_blits():
+    # the live hook uses the blit count to decide the EGA exit state; a clipped 37F7 sets no port state,
+    # so render must NOT count off-screen tiles. A sprite far below the viewport selects only clipped cells.
+    fg = _state(sprites=[(10 * 16, 40 * 16, 0x2000)],     # tile row 40 -> way below the viewport
+                grid_pairs=[(0x270A, 7), (0x280A, 7)], flag_pairs=[(7, 0x40)], gfx_index=[0] * 256)
+    planes = [bytearray(0x10000) for _ in range(4)]
+    n = render_foreground_tiles(planes, fg)
+    assert n == 0 and not any(any(p) for p in planes)   # all clipped -> no blits, planes untouched
