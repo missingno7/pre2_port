@@ -25,9 +25,14 @@ Status: **boundary mapped (OBSERVED)** — recovery not started. Heavily witness
 wrappers over two shared core routines + the slope helper.
 
 ## Core routines
-- **`0x641F` land-on-ground**: `[0x4F24]=0`; if Yvel<0 (rising) → `0x6401` (airborne); else `[0x6BC7]=0`,
-  snap `[0x4F1E]&=0xF0` (Y to tile top), read the tile property (`es:[di]` → `[bx+0x8E1D]`), and on a slope tile
-  apply `0x661A`'s height offset clamped by `sar(Yvel,4)`.
+- **`0x641F` land-on-ground** (mapped, witnessed): `[0x4F24]=0`; if Yvel<0 (rising) → `0x6401` (airborne); else
+  `[0x6BC7]=0`, snap `[0x4F1E]&=0xF0` (Y to tile top). Foot tile prop (`es:[di]`→`[tile+0x8E1D]`) nonzero ⇒ add
+  `0x661A` slope offset capped by `sar(Yvel,4)`; else the below tile (`es:[di-0x100]`) nonzero ⇒ add `slope-0x10`.
+  Then the **landing impact** (`647C`): if the fall counter `[0x6BD2] <= 4` → soft land `64D9` (`[0x4F2A]=0`,
+  sat-dec `[0x6BE0]`, `[0x6BD1]=0`, `[0x6BF3]=2`, `[0x6BCA]=[0x4F1E]`); else emit landing dust (`5E18`), and if
+  the drop `[0x4F1E]-[0x6BCA] >= 0x20` and `Yvel >= 0x50`: update `[0x6BCA]`, on a hard fall
+  (`[0x6BD2]>=0x14` and `Yvel>0xA0`) set **camera shake `[0x6BEA]=8`**, and if `[0x6BD2]>0xA` bounce
+  (`[0x4F2A]=-0x20` unless `[0x8166]&1`) + set the land anim frame (`[0x4F20]=(…&0xE000)|0xC`) + `[0x6BD2]=0`.
 - **`0x6401` fall / no-ground**: `[0x6BF3]|=1` (set the airborne flag); `ret`.
 - **`0x6407` horizontal block**: `[0x4F1C]-=sar(Xvel,4)`; `[0x4F22]=0` (undo the X step, stop) — wall hit.
 - **`0x661A` slope height offset**: if `(prop&0x30)`: `quot=(X&0xF)//3`; `prop&0x10` ? `quot+(prop&0xF)` :
@@ -44,8 +49,16 @@ wrappers over two shared core routines + the slope helper.
 `[0x4F2A]` Yvel (852×, zeroed/clamped on contact), `[0x4F1E]` Y (34×, snapped), `[0x6BD2]`/`[0x6BD1]` (482×),
 `[0x6BF3]` airborne flag (92×), `[0x6BD0]` (29×), `[0x4F24]` slope shift (6×).
 
+## Witness demos
+- Flat (no slopes): `102854` (L1), `112253` (L6) — most ground is flat, so `0x661A`/slope paths are sparse here.
+- **Sloped/slippery ("penguin") level: `20260626_001513`** (slope ×16) + `102854` has a few (×8) — use these to
+  witness `0x661A` and `0x641F`'s slope branch.
+
 ## Recovery plan (next)
-1. Recover the leaves: `0x661A` slope offset, `0x6401` fall, `0x6407` h-block (pure, shadow-verifiable).
+1. ✅ Leaves recovered+verified: `0x6401` fall (791+138), `0x6407` h-block (98), `0x661A` slope (16+8 on the
+   slope demos).
+2. **`0x641F` land** — recover next (needs the map-read bridge `es=[0x2DDA]`/`di` + the `5E18` landing-dust
+   register state; the soft-land path is heavily witnessed on flat ground, the hard-land on jump+land frames).
 2. Recover `0x641F` land (reads the tile-property table `0x8E1D` + slopes) — the core ground response.
 3. Recover the 3 tile handlers (`65EF/6641/6657`) as thin compositions of the above.
 4. Recover `5B81` tile-interaction (map reads + the `0x6BAB` eat-state + the handler dispatch).
