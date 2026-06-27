@@ -208,9 +208,10 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
 
     Reads the tile above + the player's tile, dispatches the **ceiling-tile handler** (`cs:[0x7DA9]`) indexed by
     ``0x805E[tile_above] & 0xF``: idx 0 = no-op (`0x6672`); idx 1 = head-bump (`0x6673`: zero Yvel + snap Y down
-    below the ceiling). Then, if the player's tile is ceiling-solid (`0x7E5E[player_tile] & 1`) and Y>0, a
-    sideways corner-slip nudge. idx 2 (`0x65AF`, a special level trigger) and the side-nudge are unwitnessed and
-    fail loud. Returns the dict of writes. Pure."""
+    below the ceiling); idx 2 = hazard ceiling (`0x65AF` -> `0x65B3` = the off-camera death/respawn trigger, the
+    same routine the ground idx6 dispatches to). Then, if the player's tile is ceiling-solid
+    (`0x7E5E[player_tile] & 1`) and Y>0, a sideways corner-slip nudge. idx 3-15 are unwitnessed and fail loud.
+    Returns the dict of writes. Pure."""
     out: dict = {}
     tile_above = read_es(di & 0xFFFF)                            # [5C18]
     player_tile = read_es((di + 0x100) & 0xFFFF)                 # [5C1B]
@@ -223,8 +224,10 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
             out[0x4F1E] = ((rw(0x4F1E) & 0xFFF0) + 0x10) & 0xFFFF  # [6680-6685]
         else:                                                   # [668B] Yvel==0: push-out-of-solid-ceiling, unwitnessed
             raise NotImplementedError("ceiling head-bump Yvel==0 push-out (668B) not witnessed")
-    elif idx != 0:                                              # idx 2 -> 0x65AF (level trigger), unwitnessed
-        raise NotImplementedError(f"ceiling handler idx {idx} (0x65AF trigger) not recovered")
+    elif idx == 2:                                              # [65AF -> 65B3] hazard ceiling: off-camera death trigger
+        out.update(_offcamera_trigger(rb))                      # (the SAME routine the ground idx6 dispatches to)
+    elif idx != 0:                                              # idx 3-15 still unwitnessed
+        raise NotImplementedError(f"ceiling handler idx {idx} not recovered")
 
     if solid and _s16(out.get(0x4F1E, rw(0x4F1E))) > 0:          # [5C38-5C42] solid + Y>0 -> corner-slip nudge
         dx = -1 if _s16(rw(0x4F22)) > 0 else 1                    # [5C44-5C51] step away from the facing edge

@@ -103,10 +103,21 @@ def test_ceiling_head_bump_yvel0_fails_loud():
         collision_ceiling(rb, rw, read_es, 0)
 
 
-def test_ceiling_trigger_handler_fails_loud():
+def test_ceiling_trigger_idx2_is_offcamera_death():
+    # idx 2 (0x65AF -> 0x65B3) is the hazard-ceiling off-camera death trigger (the SAME routine the ground
+    # idx6 dispatches to). With no lives left ([0x27D8]=0 default) it sets the game-over flag.
     rb, rw, read_es = _ceil_mem(handler_idx=2)
-    with pytest.raises(NotImplementedError):
-        collision_ceiling(rb, rw, read_es, 0)
+    assert collision_ceiling(rb, rw, read_es, 0) == {0x6BE5: 1}
+
+
+def test_ceiling_trigger_idx2_consumes_a_life():
+    # idx 2 with lives remaining: consume one + reset + arm respawn (no game-over)
+    ds = {(0x805E + 1): 2, 0x27D8: 3}            # tile_above=1 -> idx 2 ; 3 lives
+    rb = lambda o: ds.get(o, 0) & 0xFF
+    rw = lambda o: ds.get(o, 0) & 0xFFFF
+    read_es = lambda o: 1 if o == 0 else (2 if o == 0x100 else 0)
+    out = collision_ceiling(rb, rw, read_es, 0)
+    assert out == {0x27D8: 2, 0x27D6: 0, 0x6BE4: 2}
 
 
 def test_ceiling_solid_side_nudge_slips_to_open_side():

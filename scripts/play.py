@@ -824,6 +824,14 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 status = f"exception: {type(exc).__name__}: {exc}"
                 import traceback as _tb
                 _tb.print_exc()       # full traceback to stderr to pinpoint the failure
+                # Auto-save a snapshot at the failure point — especially a Pre2HybridGap (an unrecovered
+                # routine) — so the exact state can be replayed + recovered immediately without re-playing.
+                try:
+                    gap_dir = _default_snapshot_dir(ROOT / "artifacts")
+                    write_snapshot(rt, gap_dir, status=status, steps=steps_done)
+                    print(f"gap snapshot saved: {gap_dir}", flush=True)
+                except Exception as _se:  # noqa: BLE001
+                    print(f"(could not save gap snapshot: {_se})", flush=True)
                 running = False
 
             # Audio is drained every game-frame (cheap, and pcm_out must not pile up).
