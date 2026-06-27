@@ -32,7 +32,7 @@ from pre2.recovered.renderer import ROW_STRIDE, WRAP_AT, WRAP_SPAN, blit_sprite
 
 __all__ = [
     "RowFlags", "GridResult", "VISIBLE_COLS", "VISIBLE_ROWS", "RING_COLS",
-    "BG_PTR_BIAS", "draw_tile_row", "draw_grid", "build_background_ring", "scroll_copy", "panel_copy",
+    "BG_PTR_BIAS", "draw_tile_row", "draw_tile_column", "draw_grid", "build_background_ring", "scroll_copy", "panel_copy",
     "calc_scroll_source", "redraw_animated_grid",
 ]
 
@@ -125,6 +125,58 @@ def draw_tile_row(planes, tilemap, tile_offset, di, scroll_src, col_ring,
             di = (di - ROW_STRIDE) & 0xFFFF
             dx = 0
     return di, flags
+
+
+@oracle_link("1030:350C",
+             "A000 framebuffer (one 12-tile vertical column) + OR-accumulated [0x6BBD]/[0x2DF2]/[0x2DF4] + "
+             "[0x2DF6]; the idle look-around scroll-reveal (3414/3435 -> 350C)",
+             "OBSERVED", merge_target="render_frame")
+def draw_tile_column(planes, tilemap, cell, col_param, scroll_src, camera_col,
+                     blit_type, mask_region, flags=None):
+    """Recover ``1030:350C`` — reveal one 12-tile vertical column during the idle look-around camera pan.
+
+    The vertical counterpart of :func:`draw_tile_row`: same ``lodsb`` -> OR-flags -> ``blit_sprite`` body, but
+    it walks 12 rows *down* the map column (``si += 0x100`` per row) and the screen pointer advances by
+    ``0x27E`` per row. Mutates ``planes`` + ``flags``; returns ``(bg_ptr, flags)`` (``bg_ptr`` = final
+    ``[0x2DF6]``).
+
+    STATUS (vs the anim13 offline oracle, artifacts/anim13_witness/): the control flow + OR-flags
+    ([0x6BBD]/[0x2DF2]/[0x2DF4]) + ``[0x2DF6]`` are byte-exact; the per-tile blit *plane content* is NOT yet
+    byte-exact (the ``0x27E`` column di-stride interacts with the EGA ring-buffer addressing differently from the
+    row variant — a constant di offset does not reconcile it). The plane-content addressing is the remaining work
+    before this can drive the FSM anim13 live-path; verify with scratchpad/verify_column*.py against the oracle.
+
+    * ``cell`` — the camera map cell (``[0x2DE6]<<8 | [0x2DE4]``; the ASM's incoming ``ax`` = ``si`` start).
+    * ``col_param`` — ``0`` for a left pan (``3414``), ``0x13`` for a right pan (``3435``).
+    * ``scroll_src`` — ``[0x2DBA]`` (from :func:`calc_scroll_source`).
+    * ``camera_col`` — ``[0x2DE8]`` (the ring column; gates the ``-0x28`` screen wrap).
+    """
+    if flags is None:
+        flags = RowFlags()
+    bg_ptr = (col_param + BG_PTR_BIAS) & 0xFFFF              # [asm 350C-3510] [0x2DF6] = col_param + 0x7E80
+    di = ((col_param << 1) + scroll_src) & 0xFFFF            # [asm 3521-3523] di = col_param*2 + [0x2DBA]
+    if ((col_param + camera_col) & 0xFFFF) >= 0x14:          # [asm 3527-352E] cmp ax,0x14
+        di = (di - 0x28) & 0xFFFF                            # [asm 3530]
+    si = cell & 0xFFFF                                       # [asm 351D] si = ax (camera cell)
+
+    for _ in range(VISIBLE_ROWS):                            # [asm 3537: cx = 0xC]
+        if di >= WRAP_AT:                                    # [asm 353A-3540]
+            di = (di - WRAP_SPAN) & 0xFFFF
+        tile = tilemap.tiles[si]                             # [asm 3544: lodsb]
+        flags.plane_attr |= tilemap.plane_attr[tile]        # [asm 3547-354C] -> [0x6BBD]
+        flags.tile_flags |= tilemap.tile_flags[tile]        # [asm 3553-3558] -> [0x2DF2]
+        flags.tile_type |= tilemap.tile_type[tile]          # [asm 355F-3564] -> [0x2DF4]
+
+        typ = blit_type[tile]
+        mask = b""
+        if typ >= 2:
+            off = (typ - 2) * 0x20
+            mask = mask_region[off:off + 0x20]
+        blit_sprite(planes, tile, di, typ, bg_ptr, mask)    # [asm 3571: call 3B88] bg_off = [0x2DF6]
+        bg_ptr = (bg_ptr + 0x40) & 0xFFFF                   # [asm 3575: add [0x2DF6],0x40]
+        si = (si + 0x100) & 0xFFFF                           # [asm 3544 lodsb si++ + 357B add si,0xFF]
+        di = (di + 0x27E) & 0xFFFF                           # [asm 357F: add di,0x27E]
+    return bg_ptr, flags
 
 
 @dataclass
