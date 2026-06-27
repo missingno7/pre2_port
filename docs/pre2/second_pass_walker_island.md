@@ -58,6 +58,28 @@ So ~9 handlers, all built on the live `7F26`. Several are thin wrappers; `7D9B` 
   for on-screen-projected entities; the handlers return CF=1 / off-screen in the current demos, so it is not yet
   live-witnessed). 2 unit tests.
 
+## ⚠ Witness finding (2026-06-27) — this island is witness-poor on its drawn paths
+
+A census of the projection result (`7F26` carry) + the anim-lookup (`697D`) shows **the 2nd-pass DRAWN path
+barely happens**:
+
+- In every gameplay demo (190542/115215/105310/190645): `7F26` is called 50-370× but **draws 0 times** — every
+  2nd-pass entity is off-screen/culled. So the handlers all take the trivial CF=1 (no-write) path, the
+  anim-lookup never runs, and `7D9B` itself never draws.
+- On snapshot `154531` (the only witness with draws): **only `7D9B` fires (15×) and draws (5×)** — no thin
+  wrapper fires at all (no special entities present).
+
+So: the thin wrappers' DRAWN path (project + mode) is **unwitnessed anywhere**, and the only witnessed-drawn
+handler is the **complex** player trail projector `7D9B` (level-5/earthquake gates, a saturating counter
+`[si+7]`, player-proximity tests vs `[0x4F1C]/[0x4F1E]`, a 16-entry position ring `[0xA341]`, terrain lookups
+via `[0x7F5E]` + `es=[0x2DDA]`, its own `806C` projection — it does NOT call `7F26`). ~0xFC bytes of real logic.
+
+**Implication:** the 25% is mostly the deterministic walk + skip + dispatch + stride-advance (well-witnessed,
+all handlers returning CF=1), so the *loop* is cleanly composable + verifiable. But making the whole thing
+byte-exact requires `7D9B` (its gate logic decides the CF even on the no-draw path) and ASM_MATCHED recovery of
+the wrappers' drawn paths (or new witnesses with on-screen projectiles/special entities). `7D9B` is the
+keystone of this island.
+
 ## Recovery plan (object_tick precedent)
 
 1. **Recover the handlers** bottom-up. Most are thin `7F26` wrappers (verify the arg setup + the `[+4]` mode +
