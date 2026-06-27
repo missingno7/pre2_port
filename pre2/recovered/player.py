@@ -423,11 +423,22 @@ def player_state_jump(rb, rw) -> dict:
     frictions. ``rb``/``rw`` read entry memory; returns the dict of writes."""
     if rb(0x6BE0) != 0:                                          # [5F37-5F3E] jmp 5CDB
         return player_state_idle(rb, rw, entry_bx=4)
+    return _jump_body(rb, rw)
+
+
+def _jump_body(rb, rw) -> dict:
+    """The jump-arc body ``1030:5F41`` — shared by :func:`player_state_jump` (after its ``[0x6BE0]`` prologue) and
+    the momentum-mode jump (``5F13``). Drives the rising arc (decaying impulse table for the first 9 frames, then
+    gravity), horizontal control, ``set_anim_b(2)``, and two directional frictions. Under the scripted-pose gate
+    (``[0x6BC5]!=0``) the impulse is halved (``5F5B-5F62``); when ``[0x6BC5]==0`` that is a no-op, so the normal
+    jump is unchanged."""
     out = {0x6BFE: 0}                                            # [5F41]
     counter = rb(0x6BD1)                                         # [5F46]
     out[0x6BD1] = (counter + 1) & 0xFF                          # [5F4C] inc
     if counter < JUMP_FRAMES:                                    # [5F50] jae
-        impulse = rw((JUMP_IMPULSE_TABLE + counter * 2) & 0xFFFF)   # [5F55-5F57] (no scripted halving: [0x6BC5]==0)
+        impulse = rw((JUMP_IMPULSE_TABLE + counter * 2) & 0xFFFF)   # [5F55-5F57]
+        if rb(0x6BC5) != 0:                                     # [5F5B-5F62] scripted pose -> halve the impulse
+            impulse = (_s16(impulse) >> 1) & 0xFFFF
         out[0x4F2A] = (rw(0x4F2A) + impulse) & 0xFFFF           # [5F64] Yvel += impulse
     else:
         out[0x4F2A] = player_gravity(rw(0x4F2A), rb(0x6BC7), 0xC0)   # [5F6A-5F6D] gravity
@@ -449,6 +460,82 @@ def player_state_jump(rb, rw) -> dict:
     xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8F]
     out[0x4F22] = xvel
     return out
+
+
+def _momentum_jump(rb, rw) -> dict:
+    """The momentum-mode jump ``1030:5F13`` (``cs:[0x7D6F][2]``). Once the hold counter ``[0x6BC8]`` reaches
+    0x18 the jump ends (arm the descent: ``[0x6BC7]=1``, ``[0x6BC6]=0x18``, nudge ``Y-=3``, reset ``[0x6BC8]``)
+    and only the two directional frictions run; otherwise it runs the shared jump body."""
+    if rb(0x6BC8) >= 0x18:                                      # [5F13-5F18]
+        out = {0x6BC7: 1, 0x6BC6: 0x18, 0x6BC8: 0,            # [5F1A-5F29]
+               0x4F1E: (rw(0x4F1E) - 3) & 0xFFFF}
+        xvel = player_friction_dir(rw(0x4F22), rw(0x6BF6))     # [5F2E jmp 5F8C]
+        xvel = player_friction_dir(xvel, rw(0x6BF6))           # [5F8F]
+        out[0x4F22] = xvel
+        return out
+    return _jump_body(rb, rw)                                   # [5F41]
+
+
+def player_fsm_momentum(rb, rw) -> tuple:
+    """Recover the scripted-pose / momentum state machine ``1030:596A`` (the ``[0x6BC5]!=0`` branch taken at the
+    FSM gate ``5960``). Returns ``(writes, do_dispatch)``: when ``do_dispatch`` is True the caller then runs the
+    **momentum** handler table ``cs:[0x7D6F]`` (the normal dispatch with ``bx += 0x40``).
+
+    Only the ``[0x6BC7]&1 == 0`` branch is witnessed (the scripted hold has not started): mask ``[0x6BC7]``,
+    arm the descent flag when Yvel exceeds 0xA0, then dispatch. The input-driven hold bookkeeping (``5977``,
+    over ``[0x6BC6]``/``[0x7B1A]`` from ``[0x27EA]``/``[0x27EB]``) is unwitnessed and fails loud."""
+    bc7 = rb(0x6BC7) & 1                                       # [596D] and [0x6BC7],1
+    out = {0x6BC7: bc7}
+    if bc7 == 0:                                              # [5972] not held -> 59FE then dispatch
+        if _s16(rw(0x4F2A)) > 0xA0:                            # [59FE-5A04] jg
+            out[0x6BC7] = 1                                    # [5A06]
+        return out, True                                      # [-> 5A0B] dispatch via cs:[0x7D6F]
+
+    # [5977] the scripted hold is active ([0x6BC7]&1): bookkeeping over [0x6BC6]/[0x7B1A]; never dispatches.
+    ea, eb = rb(0x27EA), rb(0x27EB)
+    bc6, b1a = rb(0x6BC6), rb(0x7B1A)
+    if ea != 0:                                               # [5977] held "up"
+        if b1a == 6:                                          # [597E]
+            if _s16(rw(0x4F2A)) > 0x10:                       # [5985] jle 5997
+                bc7 |= 2                                      # [598C]
+        else:
+            b1a = (b1a + 1) & 0xFF                            # [5993] inc [0x7B1A]
+        if bc6 != 0:                                          # [5997] je 59B1
+            out[0x6BC6] = bc6 = (bc6 - 1) & 0xFF              # [599E]
+            out[0x6BC7] = bc7
+            out[0x7B1A] = b1a
+            if b1a >= 4:                                      # [59A2] jb 5A0F
+                out[0x4F2A] = 0xFFC0                          # [59A9]
+            return out, False
+        out[0x6BC7] = bc7                                     # bc6 == 0 -> fall to 59B1
+        out[0x7B1A] = b1a
+    # [59B1] (ea==0, or held-up with [0x6BC6]==0)
+    if eb == 0:                                               # [59B1] not held "down"
+        out[0x6BC6] = _dec_floor(bc6, 8)                      # [59B8] saturating dec
+        return out, False
+    if b1a != 0:                                              # [59C4] held "down"
+        b1a = (b1a - 1) & 0xFF                                # [59CB] dec [0x7B1A]
+    out[0x6BC7] = (out.get(0x6BC7, bc7) | 2)                  # [59CF] or [0x6BC7],2
+    out[0x7B1A] = b1a
+    if b1a > 1:                                               # [59D4] ja 5A0F
+        return out, False
+    mag = abs(_s16(rw(0x4F22)) >> 4) & 0xFF                   # [59DC-59E9] |sar(Xvel,4)|
+    if bc6 < ((mag * 5) & 0xFF):                              # [59ED-59F5] cmp [0x6BC6],mag*5 ; jae
+        out[0x6BC6] = (bc6 + mag) & 0xFF                      # [59F7] add [0x6BC6],mag
+    return out, False
+
+
+def player_fsm_momentum_dispatch(anim_id: int, rb, rw) -> tuple:
+    """The momentum handler table ``cs:[0x7D6F]`` (``= cs:[0x7D2F] + 0x40``). Mostly reuses recovered handlers:
+    anim_id 1 -> run (5EC4), 2 -> the momentum jump (5F13), 8 -> no-op (454C = ret); everything else -> anim5
+    (5E96). Returns ``(writes, sfx)``."""
+    if anim_id == 1:
+        return player_state_run(rb, rw), []                    # [5EC4]
+    if anim_id == 2:
+        return _momentum_jump(rb, rw), []                      # [5F13]
+    if anim_id == 8:
+        return {}, []                                          # [454C] ret
+    return player_state_anim5(rb, rw), []                      # [5E96] idx 0/3/4/5/6/7
 
 
 def player_state_anim8(rb, rw) -> dict:
@@ -552,6 +639,19 @@ def player_fsm_step(rb, rw) -> tuple:
 
     def rw2(off):
         return (writes[off] & 0xFFFF) if off in writes else rw(off)
+
+    # [5960] scripted-pose / momentum gate: when [0x6BC5]!=0 the FSM runs the 596A state machine instead of the
+    # normal dispatch, then (if it falls through) dispatches the momentum handler table cs:[0x7D6F].
+    if rb(0x6BC5) != 0:
+        mwrites, do_dispatch = player_fsm_momentum(rb2, rw2)   # [596A]
+        writes.update(mwrites)
+        msfx: list = []
+        if do_dispatch:                                        # [-> 5A0B] dispatch via cs:[0x7D6F]
+            if rb2(0x6BD0) != 0:                               # the momentum handlers' [0x6BD0] override is unwitnessed
+                raise NotImplementedError("momentum dispatch with [0x6BD0]!=0 not witnessed")
+            hw, msfx = player_fsm_momentum_dispatch(anim_id, rb2, rw2)
+            writes.update(hw)
+        return writes, msfx, writes.pop(SCROLL_REQUEST, None)
 
     # Handlers for anim_id 0/1/2/4/5 begin with `cmp [0x6BD0],0 ; jne 5F93` — when the override flag is set they
     # run the shared override tail 0x5F93 (== the attack body with al=[0x4F27]). The attack handler itself

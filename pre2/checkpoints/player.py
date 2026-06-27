@@ -91,15 +91,9 @@ def _emit_sfx(cpu, sfx) -> None:
 
 @registry.replace(*_FSM_ENTRY, "player_fsm")
 def player_fsm_hook(cpu) -> None:
-    """Native replacement for the per-frame player FSM at 1030:58A7..5A0B (front-end -> select -> dispatch)."""
+    """Native replacement for the per-frame player FSM at 1030:58A7..5A0B (front-end -> select -> dispatch,
+    including the [0x6BC5]!=0 scripted-pose / momentum branch)."""
     mem = cpu.mem
-    if _rb(mem, 0x6BC5) != 0:                       # the dormant [0x6BC5]!=0 momentum path is unrecovered
-        if getattr(cpu, "pre2_verify_mode", False):
-            cpu.pre2_fsm_pending.append(None)       # skip the diff this frame (ASM runs the momentum path)
-            interpret_current_instruction_without_hook(cpu)
-            return
-        raise Pre2HybridGap("player FSM momentum path ([0x6BC5]!=0) not recovered")
-
     rb = lambda o: _rb(mem, o)
     rw = lambda o: _rw(mem, o)
 
