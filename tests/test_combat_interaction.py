@@ -6,7 +6,14 @@ rng_lcg; it is not yet witnessed live, so these tests check the wrapper logic ag
 """
 from __future__ import annotations
 
-from pre2.recovered.combat_interaction import pack_spawn_pos, roll_bonus_sprite_id
+from pre2.recovered.combat_interaction import (
+    HALF_LO,
+    HALF_WX,
+    PASS_FLAG,
+    hitbox_overlap,
+    pack_spawn_pos,
+    roll_bonus_sprite_id,
+)
 from pre2.recovered.prng import rng_lcg
 
 
@@ -37,3 +44,43 @@ def test_roll_bonus_sprite_id_matches_rng_lcg_rejection():
     sid, new_state = roll_bonus_sprite_id((0x9A, 0x01, 0xC4, 0x1234))
     assert sid == expect_id
     assert new_state == expect_state
+
+
+# ---- hitbox_overlap (8D7B) — shadow-verified byte-exact over 1895 live calls / 6 demos ----
+def _hb_mem(src, tgt, *, x_half=0x10, y_half=0x10, x_width=0x08, a312=0, f2a=0):
+    """Two sprite records (id 0 -> table index 0) at 0x100/0x200 plus the half-extent tables."""
+    kv = {0x100: src[0], 0x102: src[1], 0x104: src[2],
+          0x200: tgt[0], 0x202: tgt[1], 0x204: tgt[2],
+          HALF_LO: x_half, HALF_LO + 1: y_half, HALF_WX: x_width,
+          PASS_FLAG: a312, 0x4F2A: f2a}
+    rb = lambda o: kv.get(o, 0) & 0xFF
+    rw = lambda o: kv.get(o, 0) & 0xFFFF
+    return rb, rw
+
+
+def test_hitbox_coincident_overlaps():
+    rb, rw = _hb_mem((0x100, 0x100, 0), (0x100, 0x100, 0))
+    hit, writes = hitbox_overlap(rb, rw, 0x100, 0x200)
+    assert hit is True
+    assert writes[0xA330] == (0, 1)            # depth > y_half>>1 here -> detail not set
+
+
+def test_hitbox_far_apart_culled_by_coarse_gate():
+    rb, rw = _hb_mem((0x100, 0x100, 0), (0x200, 0x100, 0))   # |dX| = 0x100 >= 0x40
+    hit, writes = hitbox_overlap(rb, rw, 0x100, 0x200)
+    assert hit is False
+    assert writes == {0xA330: (0, 1)}
+
+
+def test_hitbox_far_y_culled():
+    rb, rw = _hb_mem((0x100, 0x100, 0), (0x100, 0x180, 0))   # |dY| = 0x80 >= 0x46
+    hit, _ = hitbox_overlap(rb, rw, 0x100, 0x200)
+    assert hit is False
+
+
+def test_hitbox_sets_vertical_detail_when_shallow():
+    # dY = 0x0A, y_half = 0x10 -> depth = 6 <= y_half>>1 (8) -> detail set (si != player)
+    rb, rw = _hb_mem((0x100, 0x100, 0), (0x100, 0x10A, 0))
+    hit, writes = hitbox_overlap(rb, rw, 0x100, 0x200)
+    assert writes[0xA330] == (1, 1)
+    assert writes[0xA331] == (0x06, 2)

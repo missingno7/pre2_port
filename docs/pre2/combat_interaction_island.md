@@ -19,7 +19,7 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 |------|------|--------|
 | `8BF6` | pack-spawn-pos: `[di+3]` cell coords → `[0xA336]=x<<4`,`[0xA338]=y<<4`; cx=1 | **VERIFIED** (`pack_spawn_pos`; shadow 1/1 demo 105310) |
 | `8C13` | roll-bonus-sprite-id: rejection-sample `rng_lcg` → `0x2080 + (ret&0x7F)`, reroll if `>=0x5F` | **ASM_MATCHED** (`roll_bonus_sprite_id`; composes verified rng_lcg; unwitnessed) |
-| `8D7B` | **enemy sprite-hitbox proximity test.** Coarse `|Δx|<0x40 & |Δy|<0x46`, then a per-sprite hitbox using half-width tables `[0x7190]/[0x7191]/[0x752A]` indexed by `(sprite-id & 0x1F)*2`. Writes `[0xA330]` (hit flag) + `[0xA331]`; returns CF. | TODO (the combat keystone) |
+| `8D7B` | **enemy sprite-hitbox proximity test** (the keystone). Coarse `|Δx|<0x40 & |Δy|<0x46`, then a Y- then X-axis AABB overlap using per-class half-extent tables `[0x7190]`/`[0x7191]` (stride 2) + `[0x752A]` (stride 2), indexed by `(id & 0x1FFF)*2` (low byte kept!). `[0xA312]` selects the full (un-halved) tolerance; `[0x4F2A]`/non-player gate the vertical-detail write `[0xA330]`/`[0xA331]`; returns CF. | **VERIFIED** (`hitbox_overlap`; shadow 1895 calls / 6 demos, 0 mismatch — CF + detail) |
 | `8C72` | death-debris spawner: id `[bx+8]+0x4A`, count from table `[bx-0x5C0F]` indexed by `[di+0x10]>>3 & 7`; loop calling `8875` scattering sprites (`+=9/+7` per step) | TODO |
 | `8D1B` | score/effect burst emitter: spawn `cx` sprites into free slots `0x50A8..0x52E8` (id `[0xA33A]`, pos `[0xA336]/[0xA338]`, alternating Xvel sign, stepping ax/dx by 0x10) | TODO |
 | `8B6E` | breakable-tile rewrite + redraw: `inc [0x2A76]`; write the tile map (es=`[0x2DDA]`); on-screen → `453B` + `3B77` blit; set dirty `[0x2DF4]/[0x2DE0]=0x55AA` | TODO (**unwitnessed** in current demos) |
@@ -37,8 +37,8 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 
 ## Recovery plan
 
-1. **`8D7B` (keystone)** — the sprite-hitbox proximity test; needed before `8C21`/`899E` can be predicted. Map
-   the three half-width tables; shadow against every `8C21` call (heavily witnessed).
+1. ✅ **`8D7B` (keystone)** — DONE, VERIFIED (`hitbox_overlap`, 1895 shadow calls 0 mismatch). The index keeps
+   the id low byte: `(id & 0x1FFF) << 1`.
 2. `8C72` + `8875` (death debris) and `8D1B` (score burst) — both witnessed via the kill/pickup demos.
 3. Compose `8C21` (enemy damage) — shadow its net contract (enemy HP/flag/knockback + projectile consume +
    sfx/debris) over the kill demos; then `899E` (bonus pickup); then the `88D7` orchestrator + live hook.

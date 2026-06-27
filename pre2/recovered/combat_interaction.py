@@ -30,6 +30,26 @@ SPAWN_X = 0xA336      # effect-spawn world X (cell << 4)
 SPAWN_Y = 0xA338      # effect-spawn world Y (cell << 4)
 RNG_STATE = 0x2CEC    # four bytes [0x2CEC..0x2CEF] = rng_lcg state
 
+# sprite-hitbox half-extent tables (DS), indexed by (sprite-id high byte & 0x1F) * 2
+HALF_LO = 0x7190      # [+idx] X half-extent (hw2) ; [+idx+1] (0x7191) = Y half-extent
+HALF_WX = 0x752A      # [+idx] X half-width
+HIT_FLAG = 0xA330     # byte: 1 when a vertical-detail hit was registered (else 0)
+HIT_DETAIL = 0xA331   # word: the vertical penetration depth when HIT_FLAG set
+PASS_FLAG = 0xA312    # set across the projectile/player pass -> full (un-halved) tolerance
+PLAYER_YVEL = 0x4F2A
+PLAYER_REC = 0x4F1C   # the player struct base (excluded from the vertical-detail set)
+
+
+def _s16(v: int) -> int:
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def _abs16(d: int) -> int:
+    """The ASM ``jns ; neg`` absolute value of a 16-bit subtraction (0x8000 stays 0x8000)."""
+    d &= 0xFFFF
+    return (0x10000 - d) if (d & 0x8000) else d
+
 
 @oracle_link("1030:8BF6",
              "pack-spawn-position: from a bonus/source entry's packed cell coords at [di+3] (x = low byte, "
@@ -57,3 +77,66 @@ def roll_bonus_sprite_id(rng_state):
         v = ret & 0x7F
         if v < 0x5F:
             return (0x2080 + v) & 0xFFFF, (a, b, c, d)
+
+
+@oracle_link("1030:8D7B",
+             "sprite-hitbox proximity/overlap test between source sprite `si` and target `di`: two coarse "
+             "gates (|dX|<0x40, |dY|<0x46), then a Y-axis and X-axis AABB overlap using per-class half-extent "
+             "tables [0x7190]/[0x7191] (stride 2 by id-hi&0x1F) + [0x752A], with [0xA312] selecting the full "
+             "(un-halved) tolerance and [0x4F2A]/non-player gating the vertical-detail write [0xA330]/[0xA331]. "
+             "Returns CF=overlap.",
+             "VERIFIED", merge_target="combat_interaction")
+def hitbox_overlap(rb, rw, si, di):
+    """[asm 8D7B] Sprite-hitbox overlap test. ``rb``/``rw`` read a byte/word from DS; ``si``/``di`` are the
+    source/target sprite-record offsets. Returns ``(hit, writes)`` — ``hit`` = the ASM's CF (True = overlap),
+    ``writes`` = the ``{offset: (value, width)}`` contract (always [0xA330]; [0xA331] only when set). Pure."""
+    writes: dict[int, tuple[int, int]] = {HIT_FLAG: (0, 1)}  # [asm 8D81] cleared
+
+    # [asm 8D86/8D96] coarse box gates
+    if _abs16(rw(si) - rw(di)) >= 0x40:
+        return False, writes
+    if _abs16(rw(si + 2) - rw(di + 2)) >= 0x46:
+        return False, writes
+
+    # [asm 8DA8] Y axis — orient so (ax, si) is the larger-Y object, (dx, di) the smaller
+    ax = rw(si + 2)
+    dx = rw(di + 2)
+    bx = rw(si + 4)
+    if _s16(ax) < _s16(dx):                       # jge keeps; else swap
+        bx = rw(di + 4)
+        ax, dx = dx, ax
+        si, di = di, si
+    idx = (bx & 0x1FFF) << 1                       # and bh,0x1F ; shl bx,1 (low byte kept)
+    half_h = rb((HALF_LO + 1 + idx) & 0xFFFF)     # bl = [bx + 0x7191]
+    ax = (ax - half_h) & 0xFFFF
+    if _s16(ax) >= _s16(dx):                       # [asm 8DCA] jge -> no overlap
+        return False, writes
+
+    a312 = rb(PASS_FLAG)
+    if a312 == 0:                                  # [asm 8DD1] jne skips the vertical-detail set
+        depth = (dx - ax) & 0xFFFF                 # sub dx,ax
+        do_set = False
+        if _s16(rw(PLAYER_YVEL)) >= 0x80:          # [asm 8DDB] jge -> set
+            do_set = True
+        elif not (depth > (half_h >> 1)):          # [asm 8DDF] ja -> skip (unsigned)
+            if si != PLAYER_REC:                   # [asm 8DE7] je -> skip
+                do_set = True
+        if do_set:
+            writes[HIT_FLAG] = (1, 1)              # inc byte [0xA330]
+            writes[HIT_DETAIL] = (depth, 2)        # mov word [0xA331],dx
+
+    # [asm 8DF1] X axis — left edges = pos - X half-width; overlap if min_left + hw2 > max_left
+    src_idx = (rw(si + 4) & 0x1FFF) << 1           # bp
+    src_left = (rw(si) - rb((HALF_WX + src_idx) & 0xFFFF)) & 0xFFFF
+    tgt_idx = (rw(di + 4) & 0x1FFF) << 1
+    tgt_left = (rw(di) - rb((HALF_WX + tgt_idx) & 0xFFFF)) & 0xFFFF
+    hw2 = rb((HALF_LO + tgt_idx) & 0xFFFF)         # bl = [bx + 0x7190]
+    ax, dx = tgt_left, src_left
+    if not (_s16(ax) < _s16(dx)):                  # [asm 8E1C] jl keeps; else swap to src's hw2
+        ax, dx = dx, ax
+        hw2 = rb((HALF_LO + src_idx) & 0xFFFF)
+    if a312 == 0:                                  # [asm 8E2B] jne skips the halving
+        hw2 >>= 1                                  # sar bx,1 (hw2 >= 0)
+    ax = (ax + hw2) & 0xFFFF
+    hit = _s16(ax) > _s16(dx)                       # [asm 8E33] jle -> no hit
+    return hit, writes
