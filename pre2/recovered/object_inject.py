@@ -31,6 +31,30 @@ def find_free_object_slot(read_id) -> int | None:
     return None                                         # [asm 807F stc -> CF=1]
 
 
+ANIM_FRAME_TABLE = 0xA86F   # the per-entity anim-frame descriptor table
+ANIM_SECTION_MARKER = 0x7D01
+
+
+def lookup_anim_frame(rw, entry_id: int, entry_type: int) -> int:
+    """Recover ``1030:6954..6981`` — resolve a projected entity's anim-frame descriptor pointer.
+
+    The second-pass walker runs this inline after a successful projection (when the handler returns CF=0):
+    scan the table at ``0xA86F`` for the ``0x7D01`` section marker whose following word matches the entity's
+    ``type`` (``[entry+1] & 0x7F``), then within that section find the entry whose word equals the entity id
+    (``[entry+2] - 0x138``). Returns the descriptor pointer the walker stores into the projected object slot's
+    ``[+0xC]`` (``di=[0xA32E]``). ``rw(off)`` reads a DS word."""
+    target = (entry_id - 0x138) & 0xFFFF
+    bx = ANIM_FRAME_TABLE
+    while True:                                          # [asm 6965] find the 0x7D01 marker for this type
+        bx = (bx + 2) & 0xFFFF
+        if rw(bx) == ANIM_SECTION_MARKER and rw((bx + 2) & 0xFFFF) == entry_type:
+            break
+    bx = (bx + 4) & 0xFFFF                                # [asm 6972] past the marker + type word
+    while rw(bx) != target:                              # [asm 6975] find the matching id
+        bx = (bx + 2) & 0xFFFF
+    return bx
+
+
 class ProjectResult:
     """The contract of one projection (1030:7F26): whether the entity was drawn, the render record written into
     the allocated object slot, and the entity-mode write-back. When NOT drawn (off-screen or no free slot) the

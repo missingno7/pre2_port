@@ -5,12 +5,27 @@ these pin the allocator + the projection record/cull/mode contract."""
 from __future__ import annotations
 
 from pre2.recovered.object_inject import (INJECT_MODE, ProjectResult, OBJ_COUNT,
-                                          find_free_object_slot, project_entity)
+                                          find_free_object_slot, lookup_anim_frame, project_entity)
 
 
 def test_find_free_first_empty_slot():
     ids = [0x140, 0x141, 0xFFFF, 0x142]          # slot 2 is free
     assert find_free_object_slot(lambda s: ids[s] if s < len(ids) else 0xFFFF) == 2
+
+
+def test_lookup_anim_frame_scans_section_then_id():
+    # table at 0xA86F: a 0x7D01 section for type 5, then id entries; id 0x200 -> target 0x200-0x138=0xC8
+    table = {0xA871: 0x7D01, 0xA873: 0x0005, 0xA875: 0x0100, 0xA877: 0x00C8}
+    rw = lambda o: table.get(o & 0xFFFF, 0)
+    assert lookup_anim_frame(rw, 0x200, 5) == 0xA877
+
+
+def test_lookup_anim_frame_skips_wrong_type_section():
+    # a 0x7D01 section for the WRONG type (3) first, then the right one (5)
+    table = {0xA871: 0x7D01, 0xA873: 0x0003, 0xA875: 0x00C8,        # type-3 section (skipped)
+             0xA877: 0x7D01, 0xA879: 0x0005, 0xA87B: 0x00C8}         # type-5 section -> match
+    rw = lambda o: table.get(o & 0xFFFF, 0)
+    assert lookup_anim_frame(rw, 0x200, 5) == 0xA87B
 
 
 def test_find_free_none_when_full():
