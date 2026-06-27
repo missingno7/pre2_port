@@ -527,10 +527,12 @@ def player_fsm_step(rb, rw) -> tuple:
     def rw2(off):
         return (writes[off] & 0xFFFF) if off in writes else rw(off)
 
-    # All handlers except anim_id 8 begin with `cmp [0x6BD0],0 ; jne 5F93` — when the override flag is set they
-    # run the shared override tail 0x5F93 (== the attack body with al=[0x4F27]).
-    if rb(0x6BD0) != 0 and anim_id != 8:                        # [5F35-etc] -> 5F93 override
-        hw, sfx = player_state_attack(rb(0x4F27), anim_id * 2, rb2, rw2)
+    # Handlers for anim_id 0/1/2/4/5 begin with `cmp [0x6BD0],0 ; jne 5F93` — when the override flag is set they
+    # run the shared override tail 0x5F93 (== the attack body with al=[0x4F27]). The attack handler itself
+    # (anim_id 3/6/7 = 5F96, the tail's own body) has no such prologue — it can't override into itself — and
+    # anim_id 8 (5CCE) has none either; both dispatch normally.
+    if rb(0x6BD0) != 0 and anim_id not in (3, 6, 7, 8):         # [5F35-etc] -> 5F93 override
+        hw, sfx = player_state_attack(rb2(0x4F27), anim_id * 2, rb2, rw2)
     else:
         hw, sfx = player_dispatch_handler(anim_id, rb2, rw2)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
     writes.update(hw)
