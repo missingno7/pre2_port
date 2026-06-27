@@ -75,39 +75,43 @@ def _pump(rt, *, now, pic, sound_blaster, timer_irq, input_irq_steps, tick_state
             guard += 1
 
 
-def _fast_forward_wait(rt, sample, stop_ic):
-    """Advance the CPU through the retrace wait it is currently inside, up to its ``ret`` or to ``stop_ic``
-    (the sub_batch boundary), whichever comes first, leaving ALL register / flag / memory state EXACTLY as
-    the interpreted loop would.
+def _fast_forward_wait(rt, sample, steps_left):
+    """Advance the CPU through the retrace wait it is currently inside, consuming at most ``steps_left`` of
+    the sub_batch's STEP budget, leaving ALL register / flag / memory state EXACTLY as the interpreted loop
+    would, and returning the steps still remaining.
 
-    Strategy: interpret every boundary instruction for real with ``cpu.step()`` — the entry setup
-    (push/push/mov[/cmp/mov]), each poll loop's first iteration, the loop-to-loop transitions, and the exit
-    (pop/pop/ret) — so all flags and registers are computed by the CPU itself. Only the long run of
-    *identical* poll iterations is collapsed in closed form: when we arrive at a loop-top via its back-edge
-    (so flags == ``test(continue_bit)``), advance ``instruction_count`` over the consecutive same-condition
-    iterations, since each returns to the same loop-top with identical registers/flags — only the
-    deterministic clock (hence the sampled retrace bit) moves."""
+    The budget is counted in cpu.step() units — identical to ``play._pump_and_step``'s ``for _ in
+    range(n_steps)`` — NOT in instruction_count: a hardware-interrupt entry advances ic by 0 but is still one
+    step, so an ic-based budget would desync from the reference whenever IF toggles (the gameplay drift bug).
+
+    Strategy: interpret every boundary instruction for real with ``cpu.step()`` — the entry setup, each poll
+    loop's first iteration, the loop-to-loop transitions, and the exit — so all flags/registers are computed
+    by the CPU itself. Only the long run of *identical* poll iterations is collapsed in closed form: arriving
+    at a loop-top via its back-edge (flags == ``test(continue_bit)``), advance over the consecutive
+    same-condition iterations — each is 3 instructions (in/test/jcc), so it costs 3 steps and 3 ic, with
+    ip/registers/flags unchanged; only the deterministic clock (hence the sampled retrace bit) moves."""
     cpu = rt.cpu
     prev_ip = None
-    while True:
-        if cpu.instruction_count >= stop_ic:
-            return                                  # sub_batch boundary reached mid-spin
+    while steps_left > 0:
         s = cpu.s
         if s.cs != _CS or s.ip not in ALL_NODES:
-            return                                  # executed the `ret` (or otherwise left the loop)
+            return steps_left                       # executed the `ret` (or otherwise left the loop)
         be = _POLL_BACKEDGE.get(prev_ip)
         if be is not None and s.ip == be[0]:        # arrived at a loop-top via its back-edge -> bulk-skip
             cond = be[1]
             ic = cpu.instruction_count              # at the loop-top `in al,dx`
             k = 0
-            while ic + 3 * (k + 1) <= stop_ic and sample(ic + 3 * k) == cond:
-                k += 1                              # iteration k is same-condition and fully fits
+            while 3 * (k + 1) <= steps_left and sample(ic + 3 * k) == cond:
+                k += 1                              # iteration k is same-condition and fits the step budget
             if k:
                 cpu.instruction_count = ic + 3 * k  # skip k identical iterations (ip/regs/flags unchanged)
+                steps_left -= 3 * k                 # ... costing 3 steps each, same as interpreting them
                 prev_ip = s.ip                      # still at the loop-top `in`
-                continue                            # re-check stop_ic / membership before stepping
+                continue                            # re-check budget / membership before stepping
         prev_ip = s.ip
         cpu.step()
+        steps_left -= 1
+    return steps_left
 
 
 def advance_frame_fast(rt, *, chunk_steps, sub_batch, clock, pic, sound_blaster, timer_irq,
@@ -122,11 +126,12 @@ def advance_frame_fast(rt, *, chunk_steps, sub_batch, clock, pic, sound_blaster,
         n = min(sub_batch, remaining)
         _pump(rt, now=clock(), pic=pic, sound_blaster=sound_blaster, timer_irq=timer_irq,
               input_irq_steps=input_irq_steps, tick_state=tick_state)
-        stop_ic = cpu.instruction_count + n
-        while cpu.instruction_count < stop_ic:
+        steps_left = n                              # STEP budget (cpu.step units), matching _pump_and_step
+        while steps_left > 0:
             s = cpu.s
             if s.cs == _CS and s.ip in ALL_NODES:
-                _fast_forward_wait(rt, sample, stop_ic)
+                steps_left = _fast_forward_wait(rt, sample, steps_left)
             else:
                 cpu.step()
+                steps_left -= 1
         remaining -= n

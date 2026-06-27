@@ -48,19 +48,22 @@ class _MockCPU:
         self.s.ip = nxt
 
 
-def _ref_advance(entry, sample, ic0, stop_ic):
-    """Naive reference: step the mock one instruction at a time until stop_ic or it leaves the loop."""
+def _ref_advance(entry, sample, ic0, budget):
+    """Naive reference: step the mock one instruction at a time, consuming a STEP budget (one step per
+    cpu.step(), matching play._pump_and_step's `for _ in range(n_steps)`) or until it leaves the loop."""
     cpu = _MockCPU(entry, sample, ic0)
-    while cpu.instruction_count < stop_ic and cpu.s.cs == _CS and cpu.s.ip in ALL_NODES:
+    steps = budget
+    while steps > 0 and cpu.s.cs == _CS and cpu.s.ip in ALL_NODES:
         cpu.step()
-    return cpu.instruction_count, cpu.s.ip
+        steps -= 1
+    return cpu.instruction_count, cpu.s.ip, steps
 
 
-def _fast_advance(entry, sample, ic0, stop_ic):
+def _fast_advance(entry, sample, ic0, budget):
     cpu = _MockCPU(entry, sample, ic0)
     rt = SimpleNamespace(cpu=cpu)
-    _fast_forward_wait(rt, sample, stop_ic)
-    return cpu.instruction_count, cpu.s.ip
+    left = _fast_forward_wait(rt, sample, budget)
+    return cpu.instruction_count, cpu.s.ip, left
 
 
 def test_fast_forward_equals_naive_stepping_all_phases():
@@ -72,9 +75,9 @@ def test_fast_forward_equals_naive_stepping_all_phases():
         # sweep ic0 across a couple of full refresh periods so every retrace phase (and the SET pulse) occurs
         for ic0 in range(0, det_speed // 35 + 1, 7):     # ~2 refresh periods, fine step
             for budget in (3, 4, 6, 9, 30, 300, 3000, 30000, 200000):
-                stop_ic = ic0 + budget
-                assert _fast_advance(entry, sample, ic0, stop_ic) == \
-                    _ref_advance(entry, sample, ic0, stop_ic), \
+                # identical final (instruction_count, ip) AND identical leftover step budget
+                assert _fast_advance(entry, sample, ic0, budget) == \
+                    _ref_advance(entry, sample, ic0, budget), \
                     f"divergence entry={entry:#06x} ic0={ic0} budget={budget}"
                 checked += 1
     assert checked > 5000
@@ -86,5 +89,5 @@ def test_fast_forward_reaches_ret_within_a_full_frame():
     sample = make_sample(det_speed, 0.0, 0.06)
     for entry in _ENTRIES:
         for ic0 in range(0, det_speed, 137):
-            ic, ip = _fast_advance(entry, sample, ic0, ic0 + det_speed)   # 1s of emulated time
+            ic, ip, _ = _fast_advance(entry, sample, ic0, det_speed)   # 1s of emulated time
             assert ip not in ALL_NODES, f"entry={entry:#06x} ic0={ic0} did not exit (ip={ip:#06x})"
