@@ -21,7 +21,7 @@ __all__ = [
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
     "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
     "player_state_anim4", "player_state_attack", "player_dispatch_handler", "PLAYER_HANDLERS",
-    "player_fsm_frontend", "player_fsm_step", "FSM_WORD_FIELDS",
+    "player_fsm_frontend", "player_fsm_step", "FSM_WORD_FIELDS", "SCROLL_REQUEST",
     "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE", "ATTACK_PHASE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
@@ -47,6 +47,9 @@ FSM_WORD_FIELDS = frozenset(
        for d in (0, 2, 4, 6, 0xC, 0xE)}                                            # words (the +8 field is a byte)
     | set(range(TRAIL_RING_LO, 0x4FC2, 2))                                         # trail/dust ring slots
 )
+
+SCROLL_REQUEST = "__scroll"  # sentinel key in the writes dict: the idle look-around camera-pan request the
+                             # caller executes against the VM planes (player_fsm_step pops it into its return)
 
 ANIM_SEQ_TABLE = 0x7CDF   # [asm 6366/637D] base of the per-state animation-sequence pointer table
 ANIM_ID_TABLE = 0x7B7F    # [asm 592E] base of the input-bitmask -> anim_id (FSM state index) table
@@ -383,8 +386,17 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         else:
             reach_5d83 = True
 
-    if reach_5d83 and rb(0x6BFE) == 0:                          # [5D83] jne 5DC9 ; else 5D8A
-        raise NotImplementedError("idle anim-0x13 path (5D8A) is unwitnessed/unrecovered")
+    if reach_5d83 and rb(0x6BFE) == 0:                          # [5D83] jne 5DC9 ; else 5D8A — look-around
+        _idle_set_advance(out, 0x13, 0x26, rb, rw, facing)     # [5D8A-5D92] set_anim_a 0x13 + advance
+        if not (rb(0x8166) & 2) and rb(0x6BD9) == 0:           # [5D95-5DA1] camera-pan gates
+            screen_x = (_s16(rw(0x4F1C)) >> 4) - _s16(rw(0x2DE4))   # [5DA3-5DAA] player tile X - camera X
+            if rb(0x4F21) & 0x80:                              # [5DAE] facing left -> 3414
+                if (screen_x & 0xFFFF) < 0x11:                 # [5DBF-5DC2] jae 5E08
+                    out[SCROLL_REQUEST] = "left"               # [5DC4 call 3414]
+            elif (screen_x & 0xFFFF) > 2:                      # [5DB5-5DB8] facing right, jbe 5E08 -> 3435
+                out[SCROLL_REQUEST] = "right"                  # [5DBA call 3435]
+        out[0x4F27] = 0                                         # [5E08]
+        return out
 
     # fidget [5DC9]: find the 0x79E0 range [lo,hi) containing key=[0x27F0]&0x1FF -> anim 0x11; below lo -> default
     key = rw(0x27F0) & 0x1FF
@@ -520,7 +532,9 @@ def player_fsm_frontend(rb, rw) -> tuple:
 
 def player_fsm_step(rb, rw) -> tuple:
     """Compose the full per-frame player FSM ``1030:58A7..5A0B`` (the ``[0x6BC5]==0`` normal-play path):
-    front-end -> ``select_anim_id`` -> dispatch to the recovered handler. Returns ``(writes, sfx)``.
+    front-end -> ``select_anim_id`` -> dispatch to the recovered handler. Returns ``(writes, sfx, scroll)`` where
+    ``scroll`` is ``None`` or ``"left"``/``"right"`` — the idle look-around (anim13) camera-pan request, which the
+    caller executes against the VM planes via :func:`pre2.bridge.camera_pan.apply_camera_pan`.
 
     Threads the intermediate writes the way the ASM does: the facing/state changes from the front-end and the
     ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``)."""
@@ -548,7 +562,8 @@ def player_fsm_step(rb, rw) -> tuple:
     else:
         hw, sfx = player_dispatch_handler(anim_id, rb2, rw2)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
     writes.update(hw)
-    return writes, sfx
+    scroll = writes.pop(SCROLL_REQUEST, None)                   # idle look-around (anim13) camera-pan request
+    return writes, sfx, scroll
 
 
 def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:

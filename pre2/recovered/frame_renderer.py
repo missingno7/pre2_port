@@ -144,7 +144,8 @@ def draw_tile_column(planes, tilemap, cell, col_param, scroll_src, camera_col,
     (artifacts/anim13_witness/). The per-row screen stride is ``0x280`` = the blit's ``di += 2`` contract
     (``3B88``) plus the ``+0x27E`` at ``357F``; row 6 then wraps (``-0x1E00`` at ``0x5D40``) to ``0x3F4E``.
 
-    * ``cell`` — the camera map cell (``[0x2DE6]<<8 | [0x2DE4]``; the ASM's incoming ``ax`` = ``si`` start).
+    * ``cell`` — the raw camera map cell (``[0x2DE6]<<8 | [0x2DE4]``). The map source ``si`` starts at
+      ``cell + col_param`` (``3478-347F``: ``ax = cell ; ax += di``).
     * ``col_param`` — ``0`` for a left pan (``3414``), ``0x13`` for a right pan (``3435``).
     * ``scroll_src`` — ``[0x2DBA]`` (from :func:`calc_scroll_source`).
     * ``camera_col`` — ``[0x2DE8]`` (the ring column; gates the ``-0x28`` screen wrap).
@@ -155,7 +156,7 @@ def draw_tile_column(planes, tilemap, cell, col_param, scroll_src, camera_col,
     di = ((col_param << 1) + scroll_src) & 0xFFFF            # [asm 3521-3523] di = col_param*2 + [0x2DBA]
     if ((col_param + camera_col) & 0xFFFF) >= 0x14:          # [asm 3527-352E] cmp ax,0x14
         di = (di - 0x28) & 0xFFFF                            # [asm 3530]
-    si = cell & 0xFFFF                                       # [asm 351D] si = ax (camera cell)
+    si = (cell + col_param) & 0xFFFF                         # [asm 351D] si = ax (= cell + col_param, from 347F)
 
     for _ in range(VISIBLE_ROWS):                            # [asm 3537: cx = 0xC]
         if di >= WRAP_AT:                                    # [asm 353A-3540]

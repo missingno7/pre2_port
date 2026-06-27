@@ -105,7 +105,7 @@ def player_fsm_hook(cpu) -> None:
 
     if getattr(cpu, "pre2_verify_mode", False):
         try:
-            writes, _sfx = player_fsm_step(rb, rw)
+            writes, _sfx, _scroll = player_fsm_step(rb, rw)   # the ASM oracle does the look-around pan itself
         except NotImplementedError as exc:
             cpu.pre2_fsm_pending.append(("gap", str(exc)))
             interpret_current_instruction_without_hook(cpu)
@@ -116,11 +116,14 @@ def player_fsm_hook(cpu) -> None:
         return
 
     try:
-        writes, sfx = player_fsm_step(rb, rw)
+        writes, sfx, scroll = player_fsm_step(rb, rw)
     except NotImplementedError as exc:
         raise Pre2HybridGap(f"player FSM (58A7): {exc}") from exc
     _apply_fsm_writes(mem, writes)
     cpu.s.ip = _FSM_EXIT[1]                          # jump to the X integrate (skip the ASM FSM body)
+    if scroll:                                       # idle look-around (anim13): pan + reveal the column
+        from pre2.bridge.camera_pan import apply_camera_pan
+        apply_camera_pan(mem, scroll)
     if sfx:
         _emit_sfx(cpu, sfx)
 
