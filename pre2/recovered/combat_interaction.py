@@ -629,7 +629,7 @@ def bonus_pickup_scan(rb, rw, si):
             ov.merge_bytes(ds_h)
             map_all.update(map_h)
             if onscr_h:
-                redraws.append(ov.rw((di + 3) & 0xFFFF))   # (cell already cleared by collect; record offset)
+                redraws.append(cell)                       # the original cell map offset (key in map_writes)
             if collected:                                 # [asm 89EE] CF=1 -> flood-fill the rest
                 self_map, self_redraws = _flood_collect(ov, cell)
                 map_all.update(self_map)

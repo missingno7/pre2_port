@@ -76,7 +76,10 @@ def _emit_sfx(cpu, sfx) -> None:
     routine isn't present (e.g. silent demo replay)."""
     for dl in sfx:
         save_ip = cpu.s.ip & 0xFFFF
-        cpu.s.dx = (cpu.s.dx & 0xFF00) | (dl & 0xFF)
+        # play_sfx (0x282) indexes by the FULL dx word (digital path: bx=dx ; [bx*4 + 0x1009]); every ASM
+        # caller does `mov dx, idx` (dh=0), so set the whole register, not just dl, or a stale dh picks the
+        # wrong SFX table entry (and the wrong [0x1004]/[0x1006] audio state).
+        cpu.s.dx = dl & 0xFF
         cpu.push(save_ip)
         sp_target = cpu.s.sp
         cpu.s.ip = _PLAY_SFX[1]
