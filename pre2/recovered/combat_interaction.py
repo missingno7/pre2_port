@@ -240,3 +240,21 @@ def spawn_debris_element(rb, rw, ax, si):
                 writes[(ref + 4) & 0xFFFF] = (0xFFFF, 2)
 
     return writes, slot
+
+
+DEATH_ANIM_MARKER = 0x7D00  # the anim-script word that marks the death sequence
+
+
+@oracle_link("1030:80CB",
+             "advance-to-death-anim: scan the enemy's anim script forward from [di+0xC] by 2 bytes at a time "
+             "until the word 0x7D00 (the death-sequence marker), then step 2 past it and store back to "
+             "[di+0xC]. Returns the new [di+0xC].",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def advance_death_anim(rw, di):
+    """[asm 80CB] ``rw`` reads a DS word; ``di`` is the enemy slot. Returns the new ``[di+0xC]`` value."""
+    si = rw((di + 0xC) & 0xFFFF)
+    for _ in range(0x4000):                        # guard (the script always has a 0x7D00)
+        si = (si + 2) & 0xFFFF
+        if rw(si) == DEATH_ANIM_MARKER:
+            return (si + 2) & 0xFFFF
+    raise ValueError("80CB: no 0x7D00 death marker in anim script")

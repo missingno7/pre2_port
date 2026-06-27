@@ -15,6 +15,7 @@ from pre2.recovered.combat_interaction import (
     SPAWN_X,
     SPAWN_Y,
     SPAWNED_PTR,
+    advance_death_anim,
     hitbox_overlap,
     pack_spawn_pos,
     roll_bonus_sprite_id,
@@ -123,3 +124,11 @@ def test_spawn_debris_element_fills_pool_and_bumps_score():
     assert w[POOL + 0xC] == (0x2C, 2)
     assert w[SPAWNED_PTR] == (POOL, 2)
     assert w[SCORE_LO] == (0x0100, 2) and w[SCORE_LO + 2] == (0, 2)
+
+
+# ---- advance_death_anim (80CB) — shadow byte-exact (3 launch-path kills) ----
+def test_advance_death_anim_jumps_past_marker():
+    # [di+0xC] = 0x400; script words at 0x402/0x404 non-marker, 0x406 = 0x7D00 -> new ptr 0x408
+    kv = {0x100 + 0xC: 0x400, 0x402: 0x1234, 0x404: 0x5678, 0x406: 0x7D00}
+    rw = lambda o: kv.get(o, 0) & 0xFFFF
+    assert advance_death_anim(rw, 0x100) == 0x408
