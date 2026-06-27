@@ -10,16 +10,17 @@ Status: **boundary mapped (OBSERVED)** — recovery not started. Heavily witness
 - **`5A96..5B80` main collision** (`ret` at `5B80`). Computes the player's tile cell from Y/X, reads the tile,
   range-checks vs the camera (`[0x2DE4]`/`[0x2DE6]`), calls the tile-interaction worker `5B81`, then a vertical
   tile-scan loop (`5B6F-5B7B` calling `5C92`/`5CAC`, ~3584×) and the fall-off-edge path `63B5` (~820×).
-- **`5B81` tile-interaction worker** (mapped; witnessed enter 2082×, dispatch 2082×, ceiling 1691×, eat 3-5×,
-  off-top `63B5` 0×). Three parts:
+- **`5B81` tile-interaction worker** (mapped; witnessed enter 2082×, dispatch 2082×, ceiling 1691×, bridge-dip
+  3-5×, off-top `63B5` 0×). Three parts:
   1. **Ground dispatch**: `di = bx+0x100` (tile below the player); tile id `es:[di]` remapped via `0x7F5E` →
      `bx = type*2`; dispatch the **ground tile handler `call [bx+0x7D9B]`** (`5C04`) — the land/fall/slope core.
-  2. **Eat-state** (`5BB8`, rare): the destructible-tile mechanic (breakable doors/barriers — NOT food). A tile
-     with prop bit `0x20` (`[bx+0x805E]`) is breakable; `[0x6BAB]` tracks the one currently morphing. On contact
-     it advances that tile's graphic by one (`es:[di]=id+1`) each frame and dirties the grid (`5C7B`:
-     `[0x2DF4]=1`/`[0x2DE0]=0x55AA` or `653D` draw); moving to a new breakable tile first finishes the old one.
-     Witnessed in the penguin/slope level (`001513`) as a horizontal door run (tiles `0xDE/0xE0`) the player
-     eats *through* while walking.
+  2. **Bridge-dip** (`5BB8`): the platform-sag-under-weight effect — a bridge/platform tile (prop bit `0x20`,
+     `[bx+0x805E]`) visually **dips down under the player's weight** and springs back when stepped off. NOT
+     eating, NOT a breakable door. `[0x6BAB]` tracks the one tile currently dipping; on contact it advances that
+     tile's graphic (`es:[di]=id+1` — the sag frames) and dirties the grid (`5C7B`: `[0x2DF4]=1`/`[0x2DE0]=
+     0x55AA` or `653D` draw); stepping onto a new bridge tile first runs the previous one back up (the
+     `5BC4-5BE6` loop, advancing it until its `0x20`-flagged cycle completes). Witnessed in the rocky slope
+     level (`001513`) as the grass/stone platform tiles (`0xDE/0xE0`) dipping as the caveman walks across.
   3. **Ceiling collision** (`5C16`, common, when not falling): `bx-0x100` (tile above); remap via `0x7E5E`/
      `0x805E`; dispatch a **second table `call [bx+0x7DA9]`** (ceiling-tile handler) which returns "solid" in
      `ah&1`; if rising into a solid ceiling, nudge X by ±2 to slip past an open side (`es:[di±dx+0x100]`).
@@ -76,12 +77,12 @@ wrappers over two shared core routines + the slope helper.
    over all three exits (rising/soft/hard). The `5E18` landing dust = `player_emit_trail` ungated; the map read
    is `read_es(di)` → `[tile+0x8E1D]`.
 3. **`5B81` composition** (mapped): the 3 ground tile handlers (`65EF/6641/6657`, thin over land/fall/slope) +
-   the ceiling table `cs:[0x7DA9]` + the side-nudge + the rare eat-state. Threads the `di` map pointer.
+   the ceiling table `cs:[0x7DA9]` + the side-nudge + the bridge-dip. Threads the `di` map pointer.
 4. `5A96` main body (tile-cell calc + camera range-check + the `5CAC` scan loop) → compose `collision(mem)`
    and shadow-verify the full write-contract → unblocks the player_update live collapse.
 2. Recover `0x641F` land (reads the tile-property table `0x8E1D` + slopes) — the core ground response.
 3. Recover the 3 tile handlers (`65EF/6641/6657`) as thin compositions of the above.
-4. Recover `5B81` tile-interaction (map reads + the `0x6BAB` eat-state + the handler dispatch).
+4. Recover `5B81` tile-interaction (map reads + the `0x6BAB` bridge-dip + the handler dispatch).
 5. Recover the `5A96` main body (tile-cell calc + camera range-check + the `5CAC` scan loop + `63B5`).
 6. Compose `collision(mem)` and shadow-verify the full write-contract byte-exact; then it unblocks the
    `player_update` live collapse.
