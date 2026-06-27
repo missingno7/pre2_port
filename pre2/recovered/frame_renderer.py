@@ -188,6 +188,7 @@ class GridResult:
     dirty: int            # new [0x2DF4]
     dirty_rows: int       # new [0x2DF5]
     tile_flags: int       # new [0x2DF2] (OR over all grid tiles, when redrawn)
+    final_bg_ptr: int = 0  # final [0x2DF6] after the redraw (only meaningful when redrew)
 
 
 @oracle_link("1030:35A1",
@@ -253,7 +254,7 @@ def draw_grid(planes, tilemap, camera_x, camera_y, prev_x, prev_y, dirty, dirty_
         di = (di + GRID_DI_ROW_ADVANCE) & 0xFFFF          # [asm 3630]
         si = (si + GRID_SI_ROW_ADVANCE) & 0xFFFF          # [asm 3634]
 
-    return GridResult(True, new_prev_x, new_prev_y, new_dirty, 0, tile_flags_acc & 0xFF)
+    return GridResult(True, new_prev_x, new_prev_y, new_dirty, 0, tile_flags_acc & 0xFF, bg_ptr)
 
 
 def build_background_ring(planes, tilemap, camera_x, camera_y, scroll_src, col_ring,

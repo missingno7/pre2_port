@@ -14,7 +14,15 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge import frame as _frame
 from pre2.bridge import sprites as _spr
-from pre2.recovered.frame_renderer import RowFlags, draw_grid, draw_tile_row, panel_copy, scroll_copy
+from pre2.recovered.frame_renderer import (
+    BG_PTR_BIAS,
+    VISIBLE_COLS,
+    RowFlags,
+    draw_grid,
+    draw_tile_row,
+    panel_copy,
+    scroll_copy,
+)
 
 from .common import report
 
@@ -53,8 +61,12 @@ def frame_tile_row(cpu) -> None:
         cpu.pre2_frame_pending.append((cpu.s.di & 0xFFFF, snap, flags))
         interpret_current_instruction_without_hook(cpu)
         return
+    di_entry = cpu.s.di & 0xFFFF
     _di, flags = _run_row(cpu, _spr.plane_views(mem))
     _frame.write_row_flags(mem, flags.plane_attr, flags.tile_flags, flags.tile_type)
+    # 348D leaves [0x2DF6] = di+0x7E80 advanced +2 per column (VISIBLE_COLS times); the live
+    # sprite_blit (3B88) reads bg_off from it, so persist it (live state, not scratch).
+    _frame.write_bg_ptr(mem, di_entry + BG_PTR_BIAS + 2 * VISIBLE_COLS)
     cpu.s.ip = cpu.pop()  # near ret; di and the other pushed regs are preserved
 
 
@@ -87,6 +99,10 @@ def frame_grid(cpu) -> None:
         dirty_rows=res.dirty_rows if res.redrew else None,
         tile_flags=res.tile_flags if res.redrew else None,
     )
+    # On redraw, 35A1 leaves [0x2DF6] = the final bg_ptr; the early-exit path never touches it.
+    # Persist it so a later sprite_blit (3B88) reads the right bg_off (live state, not scratch).
+    if res.redrew:
+        _frame.write_bg_ptr(mem, res.final_bg_ptr)
     cpu.s.ip = cpu.pop()  # near ret; di/regs preserved
 
 

@@ -143,6 +143,19 @@ def read_bg_off(mem) -> int:
     return (_rw(mem, VAR_BG_PTR) - 0x28 * _rb(mem, VAR_FINE_SCROLL)) & 0xFFFF
 
 
+def write_bg_ptr(mem, value: int) -> None:
+    """Persist the background-restore pointer ``[0x2DF6]`` (the value 348D/35A1 leave after a draw).
+
+    This is LIVE state, not scratch: the per-sprite blit (1030:3B88) reads it back as
+    ``bg_off = [0x2DF6] - 0x28 * [0x6BC4]`` (see :func:`read_bg_off`). The recovered tile/grid
+    routines carry ``bg_ptr`` as a local, so the live hooks must write the final value here for any
+    blit that runs before the next tile/grid call restarts it."""
+    base = (DATA_SEG << 4) & 0xFFFFF
+    v = value & 0xFFFF
+    mem.data[base + VAR_BG_PTR] = v & 0xFF
+    mem.data[base + VAR_BG_PTR + 1] = (v >> 8) & 0xFF
+
+
 def read_row_flags(mem) -> tuple[int, int, int]:
     """The three per-row attribute accumulators 348D ORs into:
     ``(plane_attr [0x6BBD], tile_flags [0x2DF2], tile_type [0x2DF4])``."""
