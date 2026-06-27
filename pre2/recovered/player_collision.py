@@ -14,9 +14,10 @@ from pre2.recovered.player import player_emit_trail
 
 __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "collision_land",
            "collision_ceiling", "collision_ground_handler", "collision_bridge_dip",
-           "collision_side_handler", "AIRBORNE_FLAG", "TILE_PROP_TABLE", "TILE_CEIL_SOLID_TABLE",
-           "TILE_CEIL_HANDLER_TABLE", "GROUND_REMAP_TABLE", "BRIDGE_FLAG_TABLE", "DIRTY_KIND_TABLE",
-           "SIDE_FLAG_TABLE", "WALL_MARKER_LIST", "WALL_MARKER_END"]
+           "collision_side_handler", "collision_airborne", "collision", "AIRBORNE_FLAG", "TILE_PROP_TABLE",
+           "TILE_CEIL_SOLID_TABLE", "TILE_CEIL_HANDLER_TABLE", "GROUND_REMAP_TABLE", "BRIDGE_FLAG_TABLE",
+           "DIRTY_KIND_TABLE", "SIDE_FLAG_TABLE", "WALL_MARKER_LIST", "WALL_MARKER_END",
+           "PLAYER_ANIM_HEIGHT_TABLE", "COLLISION_BYTE_FIELDS"]
 
 AIRBORNE_FLAG = 0x6BF3   # [asm 6401] the "no ground under the player" flag (bit0 set when airborne)
 TILE_PROP_TABLE = 0x8E1D  # [asm 643C] tile id -> property byte (solid / slope 0x30 / dir 0x10 / height 0x0F)
@@ -28,6 +29,16 @@ DIRTY_KIND_TABLE = 0x4DF8         # [asm 5C7B] tile id -> 0 redraw (653D) / >=1 
 SIDE_FLAG_TABLE = 0x805E          # [asm 6531] tile id -> bit 0x10 marks a side-solid (wall) tile
 WALL_MARKER_LIST = 0x6EA9         # [asm 64FA] 10x 8-byte wall-impact markers; slot free when word == 0x55AA
 WALL_MARKER_END = 0x6F49          # [asm 6525] one past the last marker slot
+PLAYER_ANIM_HEIGHT_TABLE = 0x7191  # [asm 5AAF] anim frame -> player vertical extent (scan-loop row count)
+
+# The byte-width DS fields the collision handlers write; every other DS write is a 16-bit word. Used by the
+# composition's byte-level overlay so a later read sees an earlier write at the correct width.
+COLLISION_BYTE_FIELDS = frozenset({
+    0x4F24, 0x4F25, 0x6BF3, 0x6BD2, 0x6BD1, 0x6BD0, 0x6BE0, 0x6BE1, 0x6BEA, 0x6BC7, 0x6BC8, 0x6BE5, 0x2DF4,
+    0x6BE4, 0x27D6, 0x27D8,  # off-camera trigger (65B3)
+    # wall-marker slot trailing bytes (+4/+5/+7 of each 8-byte record)
+    *(s + d for s in range(WALL_MARKER_LIST, WALL_MARKER_END, 8) for d in (4, 5, 7)),
+})
 
 
 def _s8(v: int) -> int:
@@ -69,6 +80,57 @@ def collision_hblock(x: int, xvel: int) -> tuple:
     """Recover the horizontal-block response ``1030:6407`` (wall hit): undo the X step and stop —
     ``[0x4F1C] -= sar(Xvel, 4)`` and ``[0x4F22] = 0``. Pure: returns ``(new_x, new_xvel)``."""
     return (x - (_s16(xvel) >> 4)) & 0xFFFF, 0           # [6408-6417]
+
+
+def _air_drift_x(rw, rb, bp: int) -> int:
+    """Air horizontal drift + clamp ``1030:62B1`` (``bp`` = max air X speed). When ``[0x6BDB]`` is set, add a
+    facing-direction accel (``(word[0x4F25] << 4) sar [0x4F24]``) to Xvel; clamp the result to ``[-bp, +bp]``.
+    Returns the new ``[0x4F22]``."""
+    ax = 0                                                          # [62B5]
+    if rb(0x6BDB) != 0:                                            # [62B9]
+        ax = (rw(0x4F25) << 4) & 0xFFFF                            # [62C0-62C9] facing << 4
+    ax = _s16(ax) >> (rb(0x4F24) & 0xFF)                           # [62CB-62CF] sar ax, [0x4F24]
+    dx = _s16(rw(0x4F22)) + ax                                     # [62D1-62D5]
+    bp = _s16(bp)
+    if dx >= bp:                                                   # [62D7]
+        return bp & 0xFFFF
+    if dx <= -bp:                                                  # [62DB-62DF]
+        return (-bp) & 0xFFFF
+    return dx & 0xFFFF                                             # [62E1]
+
+
+def _gravity_y(rw, rb, bp: int) -> int:
+    """Gravity + terminal-velocity clamp ``1030:6309`` (``bp`` = terminal). Add ``0x10`` to Yvel (``4`` and a
+    lighter terminal ``bp>>3`` when ``[0x6BC7]==1``); clamp up to ``bp``. Returns the new ``[0x4F2A]``."""
+    dx = _s16(rw(0x4F2A))                                          # [630C]
+    ax = 0x10                                                      # [6310]
+    bp = _s16(bp)
+    if rb(0x6BC7) == 1:                                            # [6313]
+        ax = 4                                                     # [631A]
+        bp = bp >> 3                                               # [631D-6321] sar bp,1 x3
+    dx += ax                                                       # [6323]
+    return (bp if dx >= bp else dx) & 0xFFFF                       # [6325-632B]
+
+
+def collision_airborne(rw, rb) -> dict:
+    """Recover the off-top / in-air physics ``1030:63B5`` (run after the worker when the player is airborne, and
+    from the `5B81` off-top path). Applies air drift (`62B1`, ±0x50) + gravity (`6309`, terminal 0xC0), then sets
+    the fall animation. Returns the dict of writes. Pure."""
+    out: dict = {0x4F22: _air_drift_x(rw, rb, 0x50),              # [63B7-63BA]
+                 0x4F2A: _gravity_y(rw, rb, 0xC0)}                 # [63BD-63C0]
+    yvel = _s16(out[0x4F2A])
+    if rb(0x6BC5) != 0:                                           # [63C3] (dormant momentum flag)
+        al = 0x2D if yvel < 0 else 0x2E                           # [63CA-63D3]
+        out[0x4F20] = (((rb(0x4F25) & 0x80) << 8) | al) & 0xFFFF  # [63F4-63FB]
+        return out
+    if yvel <= 0:                                                # [63D6] rising / apex -> no anim change
+        return out
+    out[0x6BE0] = 6                                               # [63DD]
+    if rb(0x6BD0) != 0:                                          # [63E2] gated -> no anim change
+        return out
+    al = 0x0D if rb(0x6BD2) >= 0x0C else 0x0C                     # [63E9-63F2] fall frames
+    out[0x4F20] = (((rb(0x4F25) & 0x80) << 8) | al) & 0xFFFF      # [63F4-63FB]
+    return out
 
 
 def _dec_floor8(v: int) -> int:
@@ -296,3 +358,149 @@ def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:
     if idx in (3, 4, 5, 6, 7, 8):                                  # ground handlers, unwitnessed in side scan
         raise NotImplementedError(f"side scan ground handler idx {idx} (0x7D95) not witnessed")
     raise NotImplementedError(f"side handler idx {idx} (0x65AF trigger) not recovered")  # idx 2
+
+
+class _Overlay:
+    """Byte-level read-through overlay used by ``collision`` so a read later in the routine observes a write made
+    earlier (the ASM mutates memory in place; the pure handlers return write dicts). DS writes are split into
+    bytes using ``COLLISION_BYTE_FIELDS`` for widths; map (es) writes are byte-keyed. ``ds``/``mp`` accumulate the
+    net byte writes = the routine's write-contract."""
+
+    def __init__(self, rb, rw, read_es):
+        self._rb, self._read_es = rb, read_es
+        self.ds: dict = {}
+        self.mp: dict = {}
+
+    def rb(self, a: int) -> int:
+        a &= 0xFFFF
+        return (self.ds[a] if a in self.ds else self._rb(a)) & 0xFF
+
+    def rw(self, a: int) -> int:
+        a &= 0xFFFF
+        return self.rb(a) | (self.rb((a + 1) & 0xFFFF) << 8)
+
+    def read_es(self, o: int) -> int:
+        o &= 0xFFFF
+        return (self.mp[o] if o in self.mp else self._read_es(o)) & 0xFF
+
+    def apply_ds(self, writes: dict) -> None:
+        for a, v in writes.items():
+            a &= 0xFFFF
+            self.ds[a] = v & 0xFF
+            if a not in COLLISION_BYTE_FIELDS:
+                self.ds[(a + 1) & 0xFFFF] = (v >> 8) & 0xFF
+
+    def apply_map(self, writes: dict) -> None:
+        for o, v in writes.items():
+            self.mp[o & 0xFFFF] = v & 0xFF
+
+
+def _offcamera_trigger(rb) -> dict:
+    """The off-camera death/respawn trigger ``1030:65B3`` (called as `65AF`). If not already triggered
+    (``[0x6BE4]==0``): consume a life (``[0x27D8]-=1``, reset ``[0x27D6]=0``, arm respawn ``[0x6BE4]=2``); if no
+    lives remain, set the game-over flag ``[0x6BE5]=1``. Returns the dict of writes. Pure."""
+    if rb(0x6BE4) != 0:                                            # [65B3] already triggered
+        return {}
+    if rb(0x27D8) == 0:                                           # [65BA] no lives left -> game over
+        return {0x6BE5: 1}                                        # [65D0]
+    return {0x27D8: (rb(0x27D8) - 1) & 0xFF, 0x27D6: 0, 0x6BE4: 2}  # [65C1-65CA]
+
+
+def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
+    """The tile-interaction worker ``1030:5B81`` composed onto the overlay ``ov`` (``cell_bx`` = the tile one row
+    above the foot). Off-top (`Y<=-1`) + foot-tile remap + bridge-dip + ground dispatch + ceiling."""
+    if _s16(ov.rw(0x4F1E)) <= -1:                                  # [5B84] above the top of the level
+        raise NotImplementedError("collision worker off-top (5B8B, Y<=-1) not witnessed")
+    di = (cell_bx + 0x100) & 0xFFFF                                # [5B97] foot tile
+    foot_tile = ov.read_es(di) if ov.rb(0x2CF5) > (di >> 8) else 0  # [5B9D-5BA6] map-bounds clamp
+    idx = ov.rb((GROUND_REMAP_TABLE + foot_tile) & 0xFFFF)         # [5BA8] cs:[0x7D9B] index
+    if ov.rw(0x6BAB) != di:                                        # [5BB2] not already dipping here -> bridge-dip
+        bds, bmp = collision_bridge_dip(di, ov.read_es, ov.rw, ov.rb)  # [5BB8]
+        ov.apply_ds(bds)
+        ov.apply_map(bmp)
+    ov.apply_ds(collision_ground_handler(idx, ov.rb, ov.rw, ov.read_es, di))   # [5C04]
+    cbx = cell_bx - 0x100                                          # [5C09]
+    if cbx >= 0 and _s16(ov.rw(0x4F2A)) <= 0:                      # [5C0D jb / 5C0F jg] in-bounds + not falling
+        ov.apply_ds(collision_ceiling(ov.rb, ov.rw, ov.read_es, cbx & 0xFFFF))  # [5C16]
+
+
+def _side_scan(ov: _Overlay, cell: int, conditional: bool) -> None:
+    """One vertical scan-loop cell ``5C92`` (first, unconditional) / ``5CAC`` (rest, only tile types 2 & 4)."""
+    tile = ov.read_es(cell & 0xFFFF)                              # [5C97 / 5CB1]
+    idx = ov.rb((TILE_CEIL_SOLID_TABLE + tile) & 0xFFFF)          # [5C9A / 5CB4] remap 0x7E5E
+    if conditional and idx not in (2, 4):                         # [5CB8-5CBE] 5CAC dispatch filter
+        return
+    ov.apply_ds(collision_side_handler(idx, ov.read_es, ov.rw, ov.rb, cell & 0xFFFF))
+
+
+def collision(rb, rw, read_es) -> tuple:
+    """Recover the full player ground/tile collision ``1030:5A96`` (called from the player update at `5A41` after
+    the Y integrate). ``rb``/``rw`` read DS; ``read_es(off)`` reads the live tile map (``es=[0x2DDA]``). Returns
+    ``(ds_writes, map_writes)`` as byte-keyed dicts (the routine's complete write-contract). Pure.
+
+    Computes the player's tile cell from X/Y, range-checks vs the camera, runs the tile-interaction worker
+    (`5B81`: bridge-dip + ground dispatch + ceiling), resolves the post-worker fall/land state, then scans the
+    player's vertical extent for horizontal/body collisions (`cs:[0x7D95]`)."""
+    ov = _Overlay(rb, rw, read_es)
+
+    # --- tile cell + scan parameters [5A99-5AC4] ---
+    row_m1 = ((_s16(rw(0x4F1E)) >> 4) - 1) & 0xFFFF                # (Y>>4) - 1
+    cell_high = ((row_m1 & 0xFF) << 8) | ((row_m1 >> 8) & 0xFF)    # [5AA4] xchg al,ah
+    cell_bx = ((_s16(rw(0x4F1C)) >> 4) + cell_high) & 0xFFFF       # [5AC5-5ACB] X>>4 + (row<<8)
+    anim_idx = ((rw(0x4F20) & 0x1FFF) << 1) & 0xFFFF               # [5AA6-5AAD] anim frame *2
+    dh = rb((PLAYER_ANIM_HEIGHT_TABLE + anim_idx) & 0xFFFF)        # [5AAF] player vertical extent
+    xvel = _s16(rw(0x4F22))
+    x_edge = 9 if xvel > 0 else (-9 if xvel < 0 else 0)            # [5AB3-5AC1] leading-edge X offset
+
+    # --- camera range check [5ACD-5B16] ---
+    if _out_of_camera_range(rb, rw):                              # writes only on the out-of-range branch
+        if rb(0x2D8A) == 0x0E:                                    # [5B18]
+            ov.apply_ds({0x6BE5: 0xFF})                           # [5B1F]
+        else:
+            ov.apply_ds(_offcamera_trigger(ov.rb))               # [5B26 -> 65B3]
+
+    ov.apply_ds({0x6BF3: 0})                                      # [5B29] clear the airborne flag
+    _collision_worker(ov, cell_bx)                               # [5B2E]
+
+    # --- post-worker fall / land [5B31-5B54] ---
+    if ov.rb(0x6BF3) == 1:                                        # [5B31] airborne after the worker
+        if ov.rb(0x6BFE) == 0:                                    # [5B38]
+            ov.apply_ds(collision_airborne(ov.rw, ov.rb))        # [5B44 -> 63B5]
+            if _s16(ov.rw(0x4F2A)) > 0:                           # [5B47] still descending
+                ov.apply_ds({0x6BD2: (ov.rb(0x6BD2) + 1) & 0xFF})  # [5B4E]
+        else:                                                    # [5B3F -> 64DF] soft-land tail
+            ov.apply_ds({0x6BE0: _dec_floor8(ov.rb(0x6BE0)), 0x6BD1: 0, 0x6BF3: 2,
+                         0x6BCA: ov.rw(0x4F1E), 0x6BD2: 0})
+    else:
+        ov.apply_ds({0x6BD2: 0})                                  # [5B54]
+
+    # --- vertical side-collision scan [5B5B-5B7B] ---
+    if _s16(ov.rw(0x4F1E)) > 0:                                   # [5B5B]
+        bx = ((_s16(ov.rw(0x4F1C)) + x_edge) >> 4) & 0xFFFF       # [5B62-5B66]
+        bx = (bx + cell_high) & 0xFFFF                            # [5B68]
+        _side_scan(ov, bx, conditional=False)                    # [5B6A] first cell
+        dh_left = dh
+        while True:
+            if bx < 0x100:                                       # [5B72-5B76] sub bx,0x100 ; jb
+                break
+            bx = (bx - 0x100) & 0xFFFF
+            dh_left = (dh_left - 0x10) & 0xFF                     # [5B78]
+            if dh_left == 0 or dh_left > 0x80:                   # [5B7B] ja (unsigned >0 after sub means no borrow)
+                break
+            _side_scan(ov, bx, conditional=True)                 # [5B6F] subsequent cells
+
+    return ov.ds, ov.mp
+
+
+def _out_of_camera_range(rb, rw) -> bool:
+    """The camera visibility test ``1030:5ACD-5B16`` — True when the player is off the visible map (the only
+    branch with side effects). Pure."""
+    if abs((_s16(rw(0x4F1E)) >> 4) - _s16(rw(0x2DE6))) > 0x0B:    # [5ACD-5ADD]
+        return True
+    if abs((_s16(rw(0x4F1C)) >> 4) - _s16(rw(0x2DE4))) > 0x14:    # [5ADF-5AEF]
+        return True
+    if (rb(0x8166) & 4) and _s16(rw(0x4F1E)) < ((_s16(rw(0x2DE6)) << 4) & 0xFFFF):  # [5AF1-5B01]
+        return True
+    if _s16(rw(0x4F1E)) < 0:                                      # [5B03] above the top -> in range (no trigger)
+        return False
+    return _s16(rw(0x4F1E)) > (((rb(0x2CF5) + 1) << 4) & 0xFFFF)  # [5B0A-5B16] below the map bottom

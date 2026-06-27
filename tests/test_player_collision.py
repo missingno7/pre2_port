@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from pre2.recovered.player_collision import (
+    collision_airborne,
     collision_bridge_dip,
     collision_ceiling,
     collision_fall,
@@ -239,3 +240,34 @@ def test_side_idx0_wall_marker_pushed_when_side_solid():
 def test_side_idx2_trigger_fails_loud():
     with pytest.raises(NotImplementedError):
         collision_side_handler(2, lambda o: 0, lambda o: 0, lambda o: 0, 0)
+
+
+# --- airborne physics 0x63B5 (collision_airborne) ---
+# ASM equivalence proven byte-exact: 1444 calls across 4 demos (gravity + air drift + fall anim).
+
+def test_airborne_applies_gravity_and_clamps_terminal():
+    # Yvel below terminal: += 0x10. [0x6BC5]=0, [0x6BDB]=0, [0x6BC7]=0.
+    mem = {0x4F2A: 0x20, 0x4F22: 0, 0x4F25: 0x01, 0x6BD0: 0, 0x6BD2: 0}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    out = collision_airborne(rw, rb)
+    assert out[0x4F2A] == 0x30                  # 0x20 + gravity 0x10
+    assert out[0x6BE0] == 6                     # descending -> fall-dust counter armed
+    assert out[0x4F20] == 0x000C                # fall anim frame 0xC (fall counter < 0xC)
+
+
+def test_airborne_gravity_clamped_to_terminal():
+    mem = {0x4F2A: 0xB8, 0x4F22: 0, 0x6BD0: 0, 0x6BD2: 0, 0x4F25: 0}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    out = collision_airborne(rw, rb)
+    assert out[0x4F2A] == 0xC0                  # 0xB8 + 0x10 = 0xC8 clamped to terminal 0xC0
+
+
+def test_airborne_rising_no_anim_change():
+    # Yvel < 0 (rising) with [0x6BC5]=0 -> no anim / fall-dust writes
+    mem = {0x4F2A: (-0x40) & 0xFFFF, 0x4F22: 0}
+    rb = lambda o: mem.get(o, 0) & 0xFF
+    rw = lambda o: mem.get(o, 0) & 0xFFFF
+    out = collision_airborne(rw, rb)
+    assert 0x4F20 not in out and 0x6BE0 not in out

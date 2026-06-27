@@ -4,7 +4,10 @@ The player ground/tile collision, called from the player update at `5A41` (after
 per player frame (~2006×/L1). This is a bounded sub-island with a small tile-type handler table — the last big
 ASM piece of `player_update` and the prerequisite for the full `player_update` live collapse.
 
-Status: **boundary mapped (OBSERVED)** — recovery not started. Heavily witnessed (so cleanly verifiable).
+Status: **✅ FULLY RECOVERED + byte-exact VERIFIED** (`collision(rb, rw, read_es)` in
+`pre2/recovered/player_collision.py`). The whole `5A96` routine reproduces the ASM write-contract byte-for-byte:
+**3515 calls, 0 mismatches, 0 gaps** across 6 demos (correctness on every predicted DS+map byte write, plus
+DS-completeness — every actual change is predicted). Unblocks the `player_update` live collapse.
 
 ## Boundary + structure
 - **`5A96..5B80` main collision** (`ret` at `5B80`). Computes the player's tile cell from Y/X, reads the tile,
