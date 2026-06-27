@@ -13,6 +13,7 @@ build on it. Each block is annotated with its ``[asm <offset>]`` origin and prov
 from __future__ import annotations
 
 from pre2.recovered.object_update import on_screen_tile
+from pre2.recovered.prng import rng_lcg
 
 __all__ = ["OBJ_BASE", "OBJ_STRIDE", "OBJ_COUNT", "find_free_object_slot", "ProjectResult", "project_entity"]
 
@@ -178,15 +179,19 @@ class ProjectResult:
         return f"ProjectResult(drawn={self.drawn}, slot={self.slot}, record={self.record}, mode={self.mode})"
 
 
-def project_entity(entry_x, entry_y, entry_sprite, entry_aux5, entry_ptr, cam_x, cam_y, find_free) -> ProjectResult:
+def project_entity(entry_x, entry_y, entry_sprite, entry_aux5, entry_ptr, cam_x, cam_y, find_free,
+                   cull=True) -> ProjectResult:
     """Recover ``1030:7F26`` — project a 2nd-pass entity into a free object-list slot for rendering.
 
     Culls off-screen via ``on_screen_tile`` (``8022``); allocates a free object slot via ``find_free`` (the
     recovered ``806C``); copies the entity X (``[entry+9]``), Y (``[entry+0xB]``), sprite id (``[entry+2]``) and
     a back-pointer (``[entry] -> record[+6]``) into the record, zeroes the velocity/state fields, and sets the
     record's flip byte from ``[entry+5]``. On success returns ``drawn=True`` with the record + ``mode=0x17``
-    (the entity's ``[+4]`` write); off-screen or no free slot -> ``drawn=False`` (no writes)."""
-    if not on_screen_tile(entry_x, entry_y, cam_x, cam_y):       # [7F26-7F2F] off-screen -> CF=1
+    (the entity's ``[+4]`` write); off-screen or no free slot -> ``drawn=False`` (no writes).
+
+    ``cull=False`` enters at the ``0x7F31`` mid-routine label (skip the on-screen test) — the proximity-gated
+    handler ``7D1B`` calls it that way after doing its own player-relative range check."""
+    if cull and not on_screen_tile(entry_x, entry_y, cam_x, cam_y):   # [7F26-7F2F] off-screen -> CF=1
         return ProjectResult(False)
     slot = find_free()                                           # [7F31-7F34] no free slot -> CF=1
     if slot is None:
@@ -203,3 +208,193 @@ def project_entity(entry_x, entry_y, entry_sprite, entry_aux5, entry_ptr, cam_x,
         0x10: 0x00,                    # [7F36] (byte, cleared first)
     }
     return ProjectResult(True, slot=slot, record=record, mode=INJECT_MODE)   # [7F52] [entry+4]=0x17
+
+
+# --- the per-type walker handlers (cs:[bx+0x6AC3], bx = ([entry+1]<<1)&0xFF) --------------------------------
+# Each returns ``(writes, drawn)`` — ``writes`` the DS ``{offset: (value, width)}`` contract, ``drawn`` the ASM
+# CF==0. Most are thin wrappers around :func:`project_entity` that override the entity mode byte ``[entry+4]``.
+LEVEL = 0x2D8A               # [0x2D8A] current level byte
+AURA_TOGGLE = 0x6BCC        # [0x6BCC] idx0 alternating ±0xC0 side flag
+ENTITY_LIST = 0x8489        # the variable-stride 2nd-pass entity list (entry 0 = the player)
+_BYTE_FIELDS = (0x0E, 0x0F, 0x10)
+
+
+def _project_writes(pr: ProjectResult, si: int):
+    """Turn a drawn :class:`ProjectResult` into the absolute DS write contract: the record fields into the
+    allocated slot (``base = 0x4FD0 + slot*0x12``), ``[0xA32E]=base`` and the entity mode ``[si+4]=pr.mode``
+    (``0x17``; wrappers override it). Returns ``(writes, base)``."""
+    base = (OBJ_BASE + pr.slot * OBJ_STRIDE) & 0xFFFF
+    w = {(base + f) & 0xFFFF: (v, 1 if f in _BYTE_FIELDS else 2) for f, v in pr.record.items()}
+    w[PROJ_SLOT_PTR] = (base, 2)
+    w[(si + 4) & 0xFFFF] = (pr.mode, 1)
+    return w, base
+
+
+def _entry_project(rb, rw, si, cam_x, cam_y, find_free, cull=True) -> ProjectResult:
+    """Call :func:`project_entity` for the entity record at ``si`` (X=[si+9], Y=[si+0xB], sprite=[si+2],
+    aux/flip=[si+5], back-ptr=si)."""
+    return project_entity(rw((si + 9) & 0xFFFF), rw((si + 0xB) & 0xFFFF), rw((si + 2) & 0xFFFF),
+                          rb((si + 5) & 0xFFFF), si & 0xFFFF, cam_x, cam_y, find_free, cull=cull)
+
+
+def handler_project_mode(rb, rw, si, cam_x, cam_y, find_free, mode):
+    """idx1/2/3/5-8 (``7F26``/``7EE2``/``7ED8``/``7EB5``) — project + set the entity mode byte. ``mode`` is the
+    only difference: 0x17 (idx1 worker), 5 (idx2 ``7EE2`` inline / idx5-8 ``7EB5``), 0x37 (idx3 ``7ED8``).
+    (``7EE2`` inlines the projection writing mode 5 directly; net memory state is identical to project+override.)"""
+    pr = _entry_project(rb, rw, si, cam_x, cam_y, find_free)
+    if not pr.drawn:
+        return {}, False
+    w, _ = _project_writes(pr, si)
+    w[(si + 4) & 0xFFFF] = (mode & 0xFF, 1)
+    return w, True
+
+
+def handler_7ebf(rb, rw, si, cam_x, cam_y, find_free):
+    """idx4 (``7EBF``) — project, mode 5, and clear the entity's ``[+0xF]`` and ``[+0x10]`` bytes."""
+    pr = _entry_project(rb, rw, si, cam_x, cam_y, find_free)
+    if not pr.drawn:
+        return {}, False
+    w, _ = _project_writes(pr, si)
+    w[(si + 4) & 0xFFFF] = (5, 1)            # [7EC4]
+    w[(si + 0xF) & 0xFFFF] = (0, 1)          # [7EC8/7ECF]
+    w[(si + 0x10) & 0xFFFF] = (0, 1)         # [7ED3]
+    return w, True
+
+
+def handler_7e97(rb, rw, si, cam_x, cam_y, find_free):
+    """idx9 (``7E97``) — clear ``[si+0x11]`` unconditionally; on a draw set the mode to ``(old [si+4] | 5)``,
+    OR-ing bit7 on level 6."""
+    out = {(si + 0x11) & 0xFFFF: (0, 1)}     # [7E97] cleared unconditionally
+    old_mode = rb((si + 4) & 0xFFFF)         # [7E9B] saved before project
+    pr = _entry_project(rb, rw, si, cam_x, cam_y, find_free)
+    if not pr.drawn:
+        return out, False
+    w, _ = _project_writes(pr, si)
+    w.update(out)
+    m = old_mode | 5                          # [7EA5]
+    if rb(LEVEL) == 6:                        # [7EA7] level 6 -> bit7
+        m |= 0x80
+    w[(si + 4) & 0xFFFF] = (m & 0xFF, 1)
+    return w, True
+
+
+def _saturating_inc(rb, off):
+    """``add [off],1 ; sbb [off],0`` — increment a byte counter saturating at 0xFF."""
+    c = rb(off & 0xFFFF) + 1
+    return 0xFF if c > 0xFF else c
+
+
+def handler_7d6e(rb, rw, si, cam_x, cam_y, find_free):
+    """idx11 (``7D6E``) — saturating counter ``[si+7]`` throttle vs ``[si+6]``; on a draw set mode 0x37 and
+    jitter the projected Y down by ``rng_lcg() & 0x3F`` (advancing the shared generator)."""
+    counter = _saturating_inc(rb, (si + 7) & 0xFFFF)
+    out = {(si + 7) & 0xFFFF: (counter, 1)}
+    if rb((si + 6) & 0xFFFF) > (counter >> 2):   # [7D7D]
+        return out, False
+    pr = _entry_project(rb, rw, si, cam_x, cam_y, find_free)
+    if not pr.drawn:
+        return out, False
+    w, base = _project_writes(pr, si)
+    w.update(out)
+    w[(si + 4) & 0xFFFF] = (0x37, 1)          # [7D87]
+    a, b, c, d, ret = rng_lcg(rb(0x2CEC), rb(0x2CED), rb(0x2CEE), rw(0x2CEF))   # [7D8B call 39DF]
+    w[0x2CEC] = (a, 1); w[0x2CED] = (b, 1); w[0x2CEE] = (c, 1); w[0x2CEF] = (d, 2)
+    w[(base + 0x02) & 0xFFFF] = ((pr.record[0x02] - (ret & 0x3F)) & 0xFFFF, 2)   # [7D8E/7D91] Y -= rng&0x3f
+    return w, True
+
+
+def handler_7d1b(rb, rw, si, cam_x, cam_y, find_free):
+    """idx12 (``7D1B``) — player-proximity gate (player below the entity; |dx|<0x280; if |dx|<0x140 also a
+    0xB4<dy<0x168 Y-band) + saturating-counter throttle; then a no-cull projection (``7F31``), mode 0x8F,
+    and reset ``[si+7]``."""
+    if _s16(rw(PLAYER_Y)) <= _s16(rw((si + 0xB) & 0xFFFF)):   # [7D1E/7D22] player not below entity
+        return {}, False
+    dxv = _s16(rw((si + 9) & 0xFFFF)) - _s16(rw(PLAYER_X))    # [7D24/7D27]
+    if dxv < 0:
+        dxv = -dxv                                           # [7D2D]
+    if dxv >= 0x280:                                         # [7D2F/7D32]
+        return {}, False
+    if dxv < 0x140:                                         # [7D34] near -> apply the Y-band
+        dyv = _s16(rw(PLAYER_Y)) - _s16(rw((si + 0xB) & 0xFFFF))   # [7D39/7D3C]
+        if dyv >= 0x168 or dyv <= 0xB4:                     # [7D3F/7D44]
+            return {}, False
+    counter = _saturating_inc(rb, (si + 7) & 0xFFFF)         # [7D49]
+    out = {(si + 7) & 0xFFFF: (counter, 1)}
+    if rb((si + 6) & 0xFFFF) > (counter >> 2):              # [7D58]
+        return out, False
+    pr = _entry_project(rb, rw, si, cam_x, cam_y, find_free, cull=False)   # [7D5D] 7F31 (no on-screen cull)
+    if not pr.drawn:
+        return out, False
+    w, _ = _project_writes(pr, si)
+    w.update(out)
+    w[(si + 4) & 0xFFFF] = (0x8F, 1)                        # [7D62]
+    w[(si + 7) & 0xFFFF] = (0, 1)                           # [7D66] counter reset on draw
+    return w, True
+
+
+def handler_7f6c(rb, rw, si, cam_x, cam_y, find_free):
+    """idx0 (``7F6C``) — a player-relative aura: if the player tile is within the entity's window
+    (origin [si+9]/[si+0xA], extent [si+0xB]/[si+0xC]), project a sprite at ``playerX ± 0xC0`` (the side
+    alternating via the ``[0x6BCC]`` toggle), ``playerY - 0xB0``, mode 7. Own projection (does not call 7F26)."""
+    entry9 = rw((si + 9) & 0xFFFF)
+    al = ((_s16(rw(PLAYER_X)) >> 4) & 0xFF)                  # [7F6E/7F71] playerX tile (low byte)
+    if al < (entry9 & 0xFF):                                 # [7F76/7F78]
+        return {}, False
+    al = (al - (entry9 & 0xFF)) & 0xFF
+    if rb((si + 0xB) & 0xFFFF) < al:                         # [7F7A/7F7D]
+        return {}, False
+    al2 = ((_s16(rw(PLAYER_Y)) >> 4) & 0xFF)                 # [7F7F/7F82] playerY tile (low byte)
+    if al2 < ((entry9 >> 8) & 0xFF):                        # [7F84/7F86]
+        return {}, False
+    al2 = (al2 - ((entry9 >> 8) & 0xFF)) & 0xFF
+    if rb((si + 0xC) & 0xFFFF) < al2:                       # [7F88/7F8B]
+        return {}, False
+    slot = find_free()                                      # [7F8D]
+    if slot is None:
+        return {}, False
+    toggle = rb(AURA_TOGGLE) ^ 1                            # [7F9D] xor [0x6bcc],1
+    off = 0xC0 if toggle == 0 else (-0xC0 & 0xFFFF)         # [7FA2/7FA4] je keeps +0xC0 else neg
+    base = (OBJ_BASE + slot * OBJ_STRIDE) & 0xFFFF
+    w = {
+        (base + 0x10) & 0xFFFF: (0, 1),                     # [7F92]
+        AURA_TOGGLE: (toggle, 1),                           # [7F9D]
+        (base + 0x00) & 0xFFFF: ((rw(PLAYER_X) + off) & 0xFFFF, 2),   # [7FA6/7FAB] X = playerX ± 0xC0
+        (base + 0x02) & 0xFFFF: ((rw(PLAYER_Y) - 0xB0) & 0xFFFF, 2),  # [7FAD/7FB3] Y = playerY - 0xB0
+        (base + 0x04) & 0xFFFF: (rw((si + 2) & 0xFFFF), 2),          # [7FB6] sprite id
+        (base + 0x06) & 0xFFFF: (si & 0xFFFF, 2),                    # [7FBC] back-pointer
+        (si + 4) & 0xFFFF: (7, 1),                                   # [7FBF] entity mode
+        (base + 0x0E) & 0xFFFF: (0, 1),                              # [7FC3]
+        (base + 0x0A) & 0xFFFF: (0, 2),                              # [7FC7]
+        (base + 0x08) & 0xFFFF: (0, 2),                              # [7FCC]
+        (base + 0x0F) & 0xFFFF: (rb((si + 5) & 0xFFFF), 1),          # [7FD1] flip
+        PROJ_SLOT_PTR: (base, 2),                                    # [7F96]
+    }
+    return w, True
+
+
+# idx -> handler. idx10 (player trail) has a different signature (needs read_es) — dispatched specially.
+_HANDLERS = {
+    0: handler_7f6c,
+    1: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, INJECT_MODE),
+    2: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, 5),
+    3: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, 0x37),
+    4: handler_7ebf,
+    5: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, 5),
+    6: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, 5),
+    7: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, 5),
+    8: lambda rb, rw, si, cx, cy, ff: handler_project_mode(rb, rw, si, cx, cy, ff, 5),
+    9: handler_7e97,
+    11: handler_7d6e,
+    12: handler_7d1b,
+}
+
+
+def dispatch_handler(idx, rb, rw, read_es, si, cam_x, cam_y, find_free):
+    """Dispatch the 2nd-pass per-type handler (cs:[bx+0x6AC3]). Returns ``(writes, drawn)``. Fails loud on an
+    unknown index (no silent fallback)."""
+    if idx == 10:
+        return handler_player_trail(rb, rw, read_es, si, find_free)
+    h = _HANDLERS.get(idx)
+    if h is None:
+        raise ValueError(f"second-pass walker: unrecovered handler index {idx}")
+    return h(rb, rw, si, cam_x, cam_y, find_free)

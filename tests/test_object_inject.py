@@ -6,7 +6,9 @@ from __future__ import annotations
 
 from pre2.recovered.object_inject import (INJECT_MODE, ProjectResult, OBJ_COUNT, OBJ_BASE,
                                           find_free_object_slot, handler_player_trail,
-                                          lookup_anim_frame, project_entity)
+                                          lookup_anim_frame, project_entity, dispatch_handler,
+                                          handler_project_mode, handler_7e97, handler_7d6e,
+                                          handler_7d1b, handler_7f6c)
 
 
 def test_find_free_first_empty_slot():
@@ -100,3 +102,77 @@ def test_project_no_free_slot_not_drawn():
     pr = project_entity(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0,
                         entry_ptr=0x8489, cam_x=_CAMX, cam_y=_CAMY, find_free=lambda: None)
     assert not pr.drawn and pr.record is None
+
+
+# --- the per-type walker handlers (cs:[bx+0x6AC3]) — shadow byte-exact vs ASM (probe_second_pass_handlers);
+#     these pin the gate/mode contracts with synthetic fixtures. cam (_CAMX,_CAMY) puts (0x100,0x80) on-screen.
+def _readers(kv):
+    return (lambda o: kv.get(o & 0xFFFF, 0) & 0xFF, lambda o: kv.get(o & 0xFFFF, 0) & 0xFFFF)
+
+
+def _free0(rw):
+    return lambda: find_free_object_slot(lambda s: rw(OBJ_BASE + s * 0x12 + 4))
+
+
+def test_handler_project_mode_overrides_mode():
+    SI = 0x8500
+    kv = {SI + 9: 0x100, SI + 0xB: 0x80, SI + 2: 0x172, SI + 5: 0x40, OBJ_BASE + 4: 0xFFFF}
+    rb, rw = _readers(kv)
+    w, drawn = handler_project_mode(rb, rw, SI, _CAMX, _CAMY, _free0(rw), 0x37)
+    assert drawn
+    assert w[OBJ_BASE + 0] == (0x100, 2) and w[OBJ_BASE + 4] == (0x172, 2)
+    assert w[SI + 4] == (0x37, 1) and w[0xA32E] == (OBJ_BASE, 2)
+
+
+def test_handler_project_mode_offscreen_no_writes():
+    SI = 0x8500
+    kv = {SI + 9: 0x100, SI + 0xB: 0x80, OBJ_BASE + 4: 0xFFFF}
+    rb, rw = _readers(kv)
+    w, drawn = handler_project_mode(rb, rw, SI, 0x80, _CAMY, _free0(rw), 5)   # cam far -> off-screen
+    assert not drawn and w == {}
+
+
+def test_handler_7e97_level6_ors_old_mode_and_bit7():
+    SI = 0x8500
+    kv = {SI + 9: 0x100, SI + 0xB: 0x80, SI + 2: 0x172, SI + 5: 0, SI + 4: 0x20,
+          OBJ_BASE + 4: 0xFFFF, 0x2D8A: 6}
+    rb, rw = _readers(kv)
+    w, drawn = handler_7e97(rb, rw, SI, _CAMX, _CAMY, _free0(rw))
+    assert drawn and w[SI + 0x11] == (0, 1)
+    assert w[SI + 4] == (((0x20 | 5) | 0x80) & 0xFF, 1)
+
+
+def test_handler_7e97_clears_si11_even_when_not_drawn():
+    SI = 0x8500
+    w, drawn = handler_7e97(*_readers({}), SI, _CAMX, _CAMY, lambda: None)
+    assert not drawn and w == {SI + 0x11: (0, 1)}
+
+
+def test_handler_7d6e_throttle_writes_counter_no_draw():
+    SI = 0x8500                                   # counter 0->1; [si+6]=5 > (1>>2)=0 -> throttle skip
+    w, drawn = handler_7d6e(*_readers({SI + 7: 0, SI + 6: 5}), SI, _CAMX, _CAMY, lambda: 0)
+    assert not drawn and w == {SI + 7: (1, 1)}
+
+
+def test_handler_7d1b_gate_player_not_below_entity():
+    SI = 0x8500                                   # playerY(0x50) <= entityY [si+0xB](0x80) -> skip
+    w, drawn = handler_7d1b(*_readers({0x4F1E: 0x50, SI + 0xB: 0x80}), SI, _CAMX, _CAMY, lambda: 0)
+    assert not drawn and w == {}
+
+
+def test_handler_7f6c_aura_alternates_side():
+    SI = 0x8500
+    kv = {0x4F1C: 0x100, 0x4F1E: 0x100, SI + 9: 0, SI + 0xB: 0xFF, SI + 0xC: 0xFF,
+          SI + 2: 0x172, SI + 5: 0, OBJ_BASE + 4: 0xFFFF, 0x6BCC: 0}
+    rb, rw = _readers(kv)
+    w, drawn = handler_7f6c(rb, rw, SI, _CAMX, _CAMY, _free0(rw))
+    assert drawn and w[0x6BCC] == (1, 1)          # toggle 0^1=1 -> -0xC0 side
+    assert w[OBJ_BASE + 0] == ((0x100 - 0xC0) & 0xFFFF, 2)
+    assert w[OBJ_BASE + 2] == ((0x100 - 0xB0) & 0xFFFF, 2)
+    assert w[SI + 4] == (7, 1)
+
+
+def test_dispatch_unknown_index_fails_loud():
+    import pytest
+    with pytest.raises(ValueError):
+        dispatch_handler(13, lambda o: 0, lambda o: 0, lambda o: 0, 0x8500, 0, 0, lambda: 0)
