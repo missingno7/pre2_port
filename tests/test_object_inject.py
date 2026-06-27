@@ -8,7 +8,7 @@ from pre2.recovered.object_inject import (INJECT_MODE, ProjectResult, OBJ_COUNT,
                                           find_free_object_slot, handler_player_trail,
                                           lookup_anim_frame, project_entity, dispatch_handler,
                                           handler_project_mode, handler_7e97, handler_7d6e,
-                                          handler_7d1b, handler_7f6c)
+                                          handler_7d1b, handler_7f6c, second_pass_tick)
 
 
 def test_find_free_first_empty_slot():
@@ -176,3 +176,40 @@ def test_dispatch_unknown_index_fails_loud():
     import pytest
     with pytest.raises(ValueError):
         dispatch_handler(13, lambda o: 0, lambda o: 0, lambda o: 0, 0x8500, 0, 0, lambda: 0)
+
+
+# --- second_pass_tick composition (walk + skip predicates + dispatch + stride advance) ---
+# Byte-exact-vs-ASM is proven by pre2/probes/probe_second_pass_tick.py (66 ticks); this pins the walk shape.
+def _dictmem():
+    mem = {}
+    rb = lambda o: mem.get(o & 0xFFFF, 0) & 0xFF
+    rw = lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)
+
+    def apply(w):
+        for off, (v, width) in w.items():
+            for k in range(width):
+                mem[(off + k) & 0xFFFF] = (v >> (8 * k)) & 0xFF
+    return mem, rb, rw, apply
+
+
+def test_second_pass_tick_dispatches_skips_and_advances():
+    mem, rb, rw, apply = _dictmem()
+    E = 0x8489
+    # entry 0 @E (stride 8, idx9=7E97, off-screen so not drawn): the handler still clears [E+0x11]
+    mem[E] = 8; mem[E + 1] = 9; mem[E + 2] = 0x00; mem[E + 3] = 0x02   # [+2]=0x200 (not empty)
+    mem[E + 9] = 0x00; mem[E + 0xA] = 0x01                              # X=0x100 (off-screen vs far cam)
+    mem[E + 0xB] = 0x80; mem[E + 0x11] = 0xAA                           # [E+0x11] should be cleared to 0
+    # entry 1 @E+8 (stride 8) marked skip via [si+4]&4 — must NOT be dispatched (would touch [E+8+0x11])
+    mem[E + 8] = 8; mem[E + 8 + 1] = 9; mem[E + 8 + 2] = 0x00; mem[E + 8 + 3] = 0x02
+    mem[E + 8 + 4] = 0x04; mem[E + 8 + 0x11] = 0xBB
+    mem[E + 16] = 0x32                                                  # terminator (stride >= 0x32)
+    second_pass_tick(rb, rw, apply, lambda o: 0, cam_x=0x80, cam_y=0x08)   # far cam -> off-screen
+    assert mem[E + 0x11] == 0          # entry 0 dispatched (idx9 cleared [E+0x11])
+    assert mem[E + 8 + 0x11] == 0xBB   # entry 1 skipped ([si+4]&4) -> untouched
+
+
+def test_second_pass_tick_stops_at_stride_terminator():
+    mem, rb, rw, apply = _dictmem()
+    mem[0x8489] = 0x32                  # immediate terminator -> no dispatch, no crash
+    second_pass_tick(rb, rw, apply, lambda o: 0, cam_x=0, cam_y=0)
+    assert mem.get(0xA32E) is None      # nothing projected

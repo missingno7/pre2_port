@@ -398,3 +398,40 @@ def dispatch_handler(idx, rb, rw, read_es, si, cam_x, cam_y, find_free):
     if h is None:
         raise ValueError(f"second-pass walker: unrecovered handler index {idx}")
     return h(rb, rw, si, cam_x, cam_y, find_free)
+
+
+B198 = 0xB198               # [0xB198] != 1 -> entries with the [si+1]&0x80 skip flag are skipped
+ENTITY_STRIDE_END = 0x32    # [si] >= this ends the walk
+
+
+def second_pass_tick(rb, rw, apply_writes, read_es, cam_x, cam_y):
+    """Compose the SECOND per-frame pass (1030:6913..698B) — the variable-stride entity-list walk + per-type
+    dispatch + anim-frame resolve + stride advance.
+
+    Walks the list at ``0x8489``: per entry, skip if stride ``[si] >= 0x32`` (end), ``[si+2]==-1`` (empty),
+    ``[si+4] & 4``, or (``[0xB198]!=1`` and ``[si+1] & 0x80``). Otherwise dispatch handler index
+    ``[si+1] & 0x7F`` (it projects the entity into a free object slot + sets the mode), apply its writes, and
+    on a draw resolve the anim-frame descriptor (``lookup_anim_frame``) into the projected slot's ``[+0xC]``
+    (``di=[0xA32E]``). Advance ``si`` by the stride. ``apply_writes(dict)`` commits a handler's
+    ``{offset:(value,width)}`` so later entries' ``find_free`` sees the slots already taken; ``rb``/``rw`` read
+    through those committed writes."""
+    b198 = rb(B198)
+    find_free = lambda: find_free_object_slot(lambda s: rw(OBJ_BASE + s * OBJ_STRIDE + 4))   # noqa: E731
+    si = ENTITY_LIST
+    while True:
+        stride = rb(si & 0xFFFF)                                  # [6916]
+        if stride >= ENTITY_STRIDE_END:
+            return
+        flags1 = rb((si + 1) & 0xFFFF)
+        skip = (rw((si + 2) & 0xFFFF) == 0xFFFF                   # [691B] empty
+                or (rb((si + 4) & 0xFFFF) & 4)                   # [6921] skip flag
+                or (b198 != 1 and (flags1 & 0x80)))             # [6927/692E] off-screen-cull flag
+        if not skip:
+            idx = flags1 & 0x7F                                   # [6934/6939] bx = ([si+1]<<1)&0xFF -> idx
+            writes, drawn = dispatch_handler(idx, rb, rw, read_es, si, cam_x, cam_y, find_free)
+            apply_writes(writes)
+            if drawn:                                            # [6952] CF==0 -> resolve the anim frame
+                desc = lookup_anim_frame(rw, rw((si + 2) & 0xFFFF), idx)   # [6954..697B]
+                di = rw(PROJ_SLOT_PTR)                            # [697D] di = [0xA32E]
+                apply_writes({(di + 0x0C) & 0xFFFF: (desc, 2)})  # [6981] [di+0xC] = descriptor
+        si = (si + stride) & 0xFFFF                               # [6984] advance by the (positive) stride
