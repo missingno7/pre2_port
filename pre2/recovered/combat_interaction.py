@@ -140,3 +140,103 @@ def hitbox_overlap(rb, rw, si, di):
     ax = (ax + hw2) & 0xFFFF
     hit = _s16(ax) > _s16(dx)                       # [asm 8E33] jle -> no hit
     return hit, writes
+
+
+# effect/score-burst object slots (the free pool after the 12 main objects at 0x4FD0)
+BURST_SLOT_LO = 0x50A8
+BURST_SLOT_HI = 0x52E8
+BURST_STRIDE = 0x12
+BURST_SPRITE = 0xA33A   # [0xA33A] the sprite id to spawn (set by 899E before the call)
+
+
+@oracle_link("1030:8D1B",
+             "score/effect-burst emitter: spawn `cx` sprites into the free object slots 0x50A8..0x52E8 "
+             "(stride 0x12); each gets sprite id [0xA33A], pos [0xA336]/[0xA338], Xvel=ax, Yvel/state=dx, "
+             "[+0xC]=0xC6, [+0x11]=0, [+9]=0xFFFF. After each spawn ax is negated (alternating spread) and on "
+             "every even spawn ax,dx step down 0x10 (ax zeroed past the 12th).",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def spawn_effect_burst(rb, rw, ax, dx, cx):
+    """[asm 8D1B] ``ax``=initial Xvel, ``dx``=initial Yvel/state, ``cx``=count. ``rb``/``rw`` read DS.
+    Returns the ``{offset: (value, width)}`` writes into the free effect slots (the spawned objects)."""
+    sprite = rw(BURST_SPRITE)
+    px = rw(SPAWN_X)
+    py = rw(SPAWN_Y)
+    ax &= 0xFFFF
+    dx &= 0xFFFF
+    writes: dict[int, tuple[int, int]] = {}
+    di = 0
+    bx = BURST_SLOT_LO
+    while bx < BURST_SLOT_HI:                       # [asm 8D6F] cmp bx,0x52E8 ; jb
+        if rw((bx + 4) & 0xFFFF) == 0xFFFF:        # [asm 8D25] free slot
+            writes[bx + 4] = (sprite, 2)
+            writes[bx + 0x11] = (0, 1)
+            writes[bx + 0xC] = (0xC6, 2)
+            writes[bx] = (px, 2)
+            writes[bx + 2] = (py, 2)
+            writes[bx + 6] = (ax, 2)
+            writes[bx + 0xE] = (dx, 2)
+            writes[bx + 9] = (0xFFFF, 2)
+            ax = (-ax) & 0xFFFF                     # [asm 8D53] neg ax
+            di += 1
+            if di & 1 == 0:                         # [asm 8D56] even spawn
+                if di > 0xC:                        # [asm 8D5C] jbe skips
+                    ax = 0                          # [asm 8D61] xor ax,ax
+                ax = (ax - 0x10) & 0xFFFF           # [asm 8D63]
+                dx = (dx - 0x10) & 0xFFFF           # [asm 8D66]
+            cx -= 1
+            if cx == 0:                             # [asm 8D6A] je -> done
+                break
+        bx += BURST_STRIDE
+    return writes
+
+
+DEBRIS_POOL_LO = 0x5450  # the debris-element object pool (16 slots, stride 0x12)
+DEBRIS_POOL_N = 0x10
+SCORE_LO = 0x6C0E        # 32-bit score accumulator [0x6C0E:0x6C10]
+SCORE_TABLE = 0x5CAD     # per-sprite score table base (read as DS:[(sprite-0x4A)*2 - 0x5CAD])
+SPAWNED_PTR = 0xA33E     # [0xA33E] = the just-spawned element pointer (8C72 reads it back)
+
+
+@oracle_link("1030:8875",
+             "spawn one debris element (sprite `ax`, position from `si`) into the 0x5450 pool (16 slots, "
+             "stride 0x12): set [+4]=sprite, [+0]/[+2]=pos, [+0xC]=0x2C, [0xA33E]=slot; bump the 32-bit score "
+             "[0x6C0E:0x6C10] by the per-sprite value at [(sprite-0x4A)*2 - 0x5CAD] when sprite-0x4A in "
+             "[0,0x10]; if `si` is an effect slot (>=0x50A8) free its back-referenced slot ([si+9]).",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def spawn_debris_element(rb, rw, ax, si):
+    """[asm 8875] Returns ``(writes, slot)`` — the ``{offset: (value, width)}`` writes and the spawned slot
+    offset (or None if the pool was full). ``ax``=sprite id, ``si``=position-source record offset."""
+    ax &= 0xFFFF
+    si &= 0xFFFF
+    writes: dict[int, tuple[int, int]] = {}
+
+    # [asm 8879] score bump for sprite ids 0x4A..0x5A
+    bx = (ax - 0x4A) & 0xFFFF
+    if not (bx & 0x8000) and bx <= 0x10:          # jb (negative) / ja (>0x10) skip
+        val = rw(((bx << 1) - 0x5CAD) & 0xFFFF)   # shl bx,1 ; mov bx,[bx-0x5CAD]
+        total = (rw(SCORE_LO) | (rw(SCORE_LO + 2) << 16)) + val   # add [6C0E] ; adc [6C10],0
+        writes[SCORE_LO] = (total & 0xFFFF, 2)
+        writes[SCORE_LO + 2] = ((total >> 16) & 0xFFFF, 2)
+
+    # [asm 8894] find a free debris slot
+    slot = None
+    b = DEBRIS_POOL_LO
+    for _ in range(DEBRIS_POOL_N):
+        if rw((b + 4) & 0xFFFF) == 0xFFFF:
+            slot = b
+            break
+        b += 0x12
+
+    if slot is not None:                           # [asm 88A7] fill it
+        writes[slot + 4] = (ax, 2)
+        writes[slot] = (rw(si), 2)
+        writes[slot + 2] = (rw((si + 2) & 0xFFFF), 2)
+        writes[slot + 0xC] = (0x2C, 2)
+        writes[SPAWNED_PTR] = (slot, 2)            # [asm 88B9] [0xA33E]=di
+        # [asm 88BD] if the pos source is an effect slot, free its back-referenced slot
+        if si >= 0x50A8:
+            ref = rw((si + 9) & 0xFFFF)
+            if ref != 0xFFFF:
+                writes[(ref + 4) & 0xFFFF] = (0xFFFF, 2)
+
+    return writes, slot

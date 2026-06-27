@@ -7,12 +7,19 @@ rng_lcg; it is not yet witnessed live, so these tests check the wrapper logic ag
 from __future__ import annotations
 
 from pre2.recovered.combat_interaction import (
+    BURST_SPRITE,
     HALF_LO,
     HALF_WX,
     PASS_FLAG,
+    SCORE_LO,
+    SPAWN_X,
+    SPAWN_Y,
+    SPAWNED_PTR,
     hitbox_overlap,
     pack_spawn_pos,
     roll_bonus_sprite_id,
+    spawn_debris_element,
+    spawn_effect_burst,
 )
 from pre2.recovered.prng import rng_lcg
 
@@ -84,3 +91,35 @@ def test_hitbox_sets_vertical_detail_when_shallow():
     hit, writes = hitbox_overlap(rb, rw, 0x100, 0x200)
     assert writes[0xA330] == (1, 1)
     assert writes[0xA331] == (0x06, 2)
+
+
+# ---- spawn_effect_burst (8D1B) — shadow byte-exact (6-spawn burst in demo 140619) ----
+def test_spawn_effect_burst_alternates_velocity_into_free_slots():
+    LO = 0x50A8
+    kv = {LO + 4: 0xFFFF, LO + 0x12 + 4: 0xFFFF,        # two free slots
+          BURST_SPRITE: 0x2046, SPAWN_X: 0x140, SPAWN_Y: 0x80}
+    rb = lambda o: kv.get(o, 0) & 0xFF
+    rw = lambda o: kv.get(o, 0) & 0xFFFF
+    w = spawn_effect_burst(rb, rw, 0x20, 0x10, 2)
+    assert w[LO + 4] == (0x2046, 2) and w[LO] == (0x140, 2) and w[LO + 2] == (0x80, 2)
+    assert w[LO + 6] == (0x20, 2)                        # slot0 Xvel = ax
+    assert w[LO + 0x12 + 6] == ((-0x20) & 0xFFFF, 2)     # slot1 Xvel = negated ax
+    assert w[LO + 0x12 + 0xE] == (0x10, 2)               # slot1 Yvel = dx (step-down applies after)
+
+
+# ---- spawn_debris_element (8875) — shadow byte-exact (7 kills) ----
+def test_spawn_debris_element_fills_pool_and_bumps_score():
+    POOL = 0x5450
+    # sprite 0x4C -> bx=2 -> score word at (4 - 0x5CAD) & 0xFFFF
+    score_addr = (4 - 0x5CAD) & 0xFFFF
+    kv = {POOL + 4: 0xFFFF,                              # pool slot 0 free
+          0x300: 0x111, 0x302: 0x222,                   # position source (si, non-effect)
+          score_addr: 0x0100, SCORE_LO: 0, SCORE_LO + 2: 0}
+    rb = lambda o: kv.get(o, 0) & 0xFF
+    rw = lambda o: kv.get(o, 0) & 0xFFFF
+    w, slot = spawn_debris_element(rb, rw, 0x4C, 0x300)
+    assert slot == POOL
+    assert w[POOL + 4] == (0x4C, 2) and w[POOL] == (0x111, 2) and w[POOL + 2] == (0x222, 2)
+    assert w[POOL + 0xC] == (0x2C, 2)
+    assert w[SPAWNED_PTR] == (POOL, 2)
+    assert w[SCORE_LO] == (0x0100, 2) and w[SCORE_LO + 2] == (0, 2)
