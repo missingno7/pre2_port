@@ -22,7 +22,8 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 | `8D7B` | **enemy sprite-hitbox proximity test** (the keystone). Coarse `|Δx|<0x40 & |Δy|<0x46`, then a Y- then X-axis AABB overlap using per-class half-extent tables `[0x7190]`/`[0x7191]` (stride 2) + `[0x752A]` (stride 2), indexed by `(id & 0x1FFF)*2` (low byte kept!). `[0xA312]` selects the full (un-halved) tolerance; `[0x4F2A]`/non-player gate the vertical-detail write `[0xA330]`/`[0xA331]`; returns CF. | **VERIFIED** (`hitbox_overlap`; shadow 1895 calls / 6 demos, 0 mismatch — CF + detail) |
 | `8D1B` | score/effect burst emitter: spawn `cx` sprites into free slots `0x50A8..0x52E8` (id `[0xA33A]`, pos `[0xA336]/[0xA338]`, alternating Xvel sign, stepping ax/dx by 0x10 on even spawns, ax zeroed past the 12th) | **ASM_MATCHED** (`spawn_effect_burst`; shadow 2 calls incl. a 6-spawn burst, 0 mismatch; `di>0xC` zero-branch unwitnessed) |
 | `8875` | debris-element spawn into the `0x5450` pool (16 slots): `[+4]=sprite`,`[+0]/[+2]=pos`,`[+0xC]=0x2C`,`[0xA33E]=slot`; bump 32-bit score `[0x6C0E]` via `[(sprite-0x4A)*2-0x5CAD]`; free a back-ref effect slot if `si>=0x50A8` | **ASM_MATCHED** (`spawn_debris_element`; shadow 7 kills, 0 mismatch) |
-| `8C72` | **enemy-death handler**: loop `8875` ×count (count table `[bx-0x5C0F]` by `[di+0x10]>>3 & 7`, scattering pos `+=9/+7`, staggering `[elem+0xC]`), mark dead `[di+0xE]=0xFF`, then either (`[def+4]&1==0`) spawn 6 death-bonus sprites id 0x2046 via `8D1B`, or (`&1`) the `80CB` + knockback-launch path (`[di+0xA]` Yvel, `[di+8]` Xvel from `[0x7B19]` damage) | TODO (composes 8875+8D1B; needs `80CB`; which path the kills take TBD) |
+| `80CB` | advance the dying enemy's anim-script pointer `[di+0xC]` past the next `0x7D00` death marker | **ASM_MATCHED** (`advance_death_anim`; shadow 3 kills, 0 mismatch) |
+| `8C72` | **enemy-death handler**: loop `8875` ×count (count table `[bx-0x5C0F]` by `[di+0x10]>>3 & 7`, scattering pos `+=9/+7`, staggering `[elem+0xC]`), restore enemy pos, mark dead `[di+0xE]=0xFF`, then either (`[def+4]&1==0`) spawn 6 death-bonus sprites id 0x2046 via `8D1B`, or (`&1`) the `80CB` + knockback-launch path (`[di+0xA]` Yvel, `[di+8]` Xvel from `[0x7B19]` damage, signed by the **attacker's** facing `[src_si+5]`) | **ASM_MATCHED** (`death_handler`; shadow byte-exact BOTH paths — 3 launch kills (115215) + 1 bonus kill (140619), 0 mismatch; overlay compose) |
 | `8B6E` | breakable-tile rewrite + redraw: `inc [0x2A76]`; write the tile map (es=`[0x2DDA]`); on-screen → `453B` + `3B77` blit; set dirty `[0x2DF4]/[0x2DE0]=0x55AA` | TODO (**unwitnessed** in current demos) |
 | `8A5A` | bonus hit handler (→ `5E41`) | TODO |
 
@@ -39,11 +40,12 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 
 1. ✅ **`8D7B` (keystone)** — DONE, VERIFIED (`hitbox_overlap`, 1895 shadow calls 0 mismatch). The index keeps
    the id low byte: `(id & 0x1FFF) << 1`.
-2. ✅ `8D1B` (score burst, `spawn_effect_burst`) + `8875` (debris element, `spawn_debris_element`) — DONE,
-   shadow byte-exact. Remaining leaf: `8C72` (enemy-death handler) — composes both, plus `80CB` on the launch
-   path; first determine which path the witnessed kills take.
-3. Compose `8C21` (enemy damage) — shadow its net contract (enemy HP/flag/knockback + projectile consume +
-   sfx/debris) over the kill demos; then `899E` (bonus pickup); then the `88D7` orchestrator + live hook.
+2. ✅ `8D1B` (`spawn_effect_burst`) + `8875` (`spawn_debris_element`) + `80CB` (`advance_death_anim`) +
+   `8C72` (`death_handler`, both paths) — ALL DONE, shadow byte-exact.
+3. **Next: compose `8C21`** (enemy damage) — for each enemy slot: `8D7B` proximity → `[di+5]|=0x40`,
+   `[di+0xF] -= [0x7B19]` HP; on underflow (kill) `play_sfx(2)` + `death_handler` (8C72); else knockback
+   `[di] -= [di+8]>>2`; consume the projectile `[si+4]=0xFFFF`; return CF=hit. All leaves are recovered.
+4. Then `899E` (bonus pickup; needs `8A5A`→`5E41`, `8B6E` tile-rewrite); then the `88D7` orchestrator + live hook.
 
 Gated flags to respect: `[0x6BC5]` (scripted pose — skips the player pass), `[0xA312]` (set across the pass;
 read by `8D7B` to relax the player-vs-enemy bounce test).

@@ -45,10 +45,51 @@ def _s16(v: int) -> int:
     return v - 0x10000 if v & 0x8000 else v
 
 
+def _s8(v: int) -> int:
+    v &= 0xFF
+    return v - 0x100 if v & 0x80 else v
+
+
+def _sar16(v: int, n: int) -> int:
+    """Arithmetic (sign-preserving) right shift of a 16-bit value (Python ``>>`` on the signed value)."""
+    return (_s16(v) >> n) & 0xFFFF
+
+
 def _abs16(d: int) -> int:
     """The ASM ``jns ; neg`` absolute value of a 16-bit subtraction (0x8000 stays 0x8000)."""
     d &= 0xFFFF
     return (0x10000 - d) if (d & 0x8000) else d
+
+
+class _Overlay:
+    """A byte-level read-through write buffer over base DS memory, so a composed routine's later reads see
+    its own earlier writes (the 8C72 debris loop fills the pool + scatters the enemy pos in place)."""
+
+    __slots__ = ("_rb", "b")
+
+    def __init__(self, rb):
+        self._rb = rb
+        self.b: dict[int, int] = {}
+
+    def rb(self, o: int) -> int:
+        o &= 0xFFFF
+        return self.b[o] if o in self.b else self._rb(o)
+
+    def rw(self, o: int) -> int:
+        o &= 0xFFFF
+        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
+
+    def wb(self, o: int, v: int) -> None:
+        self.b[o & 0xFFFF] = v & 0xFF
+
+    def ww(self, o: int, v: int) -> None:
+        v &= 0xFFFF
+        self.b[o & 0xFFFF] = v & 0xFF
+        self.b[(o + 1) & 0xFFFF] = (v >> 8) & 0xFF
+
+    def apply(self, writes: dict) -> None:
+        for off, (val, width) in writes.items():
+            (self.ww if width == 2 else self.wb)(off, val)
 
 
 @oracle_link("1030:8BF6",
@@ -258,3 +299,69 @@ def advance_death_anim(rw, di):
         if rw(si) == DEATH_ANIM_MARKER:
             return (si + 2) & 0xFFFF
     raise ValueError("80CB: no 0x7D00 death marker in anim script")
+
+
+DEBRIS_COUNT_TABLE = 0x5C0F  # death-debris count, read as DS:[((di+0x10)>>3 & 7) - 0x5C0F]
+DEF_FLAGS = 4                # [def+4] flag byte (bit0 selects launch vs bonus death)
+DAMAGE = 0x7B19             # [0x7B19] current weapon damage
+DEATH_BONUS_SPRITE = 0x2046  # the death-bonus sprite spawned on the non-launch path
+
+
+@oracle_link("1030:8C72",
+             "enemy-death handler: spawn `count` debris elements (8875) scattering the death point "
+             "(pos +=9/+7, [elem+0xC] staggered by remaining*4), restore the enemy pos, mark it dead "
+             "([di+0xE]=0xFF); then if [def+4]&1 the launch path (80CB death-anim, conditional [def+4] bit3 "
+             "clear, knockback [di+0xA]=-min(dmg,0x19)*8 / [di+8]=+/-half), else spawn 6 death-bonus sprites "
+             "(8D1B, id 0x2046) at the enemy pos. Composes the verified leaves over a read-through overlay.",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def death_handler(rb, rw, bx, di, src_si):
+    """[asm 8C72] ``bx``=enemy def-ptr, ``di``=enemy slot, ``src_si``=the attacker's sprite record (the
+    caller's si — restored by the ASM's final ``pop si``, used for the knockback facing). Returns the
+    byte-level ``{offset: value}`` write contract. ``rb``/``rw`` read base DS; all mutation is staged on an
+    overlay so the composed leaves (8875/8D1B/80CB) see each other's writes."""
+    ov = _Overlay(rb)
+    sprite = (_s8(rb((bx + 8) & 0xFFFF)) + 0x4A) & 0xFFFF      # [asm 8C72] [def+8] signed + 0x4A
+    cnt_idx = (rb((di + 0x10) & 0xFFFF) >> 3) & 7              # [asm 8C7A]
+    count = rb((cnt_idx - DEBRIS_COUNT_TABLE) & 0xFFFF)
+
+    enemy = di                                                 # [asm 8C8E] si = enemy slot (the debris source)
+    orig_x = ov.rw(enemy)                                      # [asm 8C90/8C92] saved pos (restored later)
+    orig_y = ov.rw((enemy + 2) & 0xFFFF)
+
+    rem = count
+    while rem != 0:                                            # [asm 8C96] debris loop
+        w, slot = spawn_debris_element(ov.rb, ov.rw, sprite, enemy)
+        ov.apply(w)
+        if slot is not None:
+            elem = ov.rw(SPAWNED_PTR)                          # [asm 8C99] di = [0xA33E]
+            cur = ov.rw((elem + 0xC) & 0xFFFF)                 # [asm 8CA2] [elem+0xC] -= rem*4
+            ov.ww((elem + 0xC) & 0xFFFF, (cur - (rem << 2)) & 0xFFFF)
+        ov.ww((enemy + 2) & 0xFFFF, (ov.rw((enemy + 2) & 0xFFFF) + 7) & 0xFFFF)  # [asm 8CA6] scatter
+        ov.ww(enemy, (ov.rw(enemy) + 9) & 0xFFFF)                               # [asm 8CAA]
+        rem = (rem - 1) & 0xFFFF
+
+    ov.ww((enemy + 2) & 0xFFFF, orig_y)                       # [asm 8CB1/8CB4] restore enemy pos
+    ov.ww(enemy, orig_x)
+    ov.wb((di + 0xE) & 0xFFFF, 0xFF)                          # [asm 8CB7] mark dead
+
+    def_flags = ov.rb((bx + DEF_FLAGS) & 0xFFFF)
+    if def_flags & 1:                                          # [asm 8CBB] jne -> launch path
+        ov.ww((di + 0xC) & 0xFFFF, advance_death_anim(ov.rw, di))   # [asm 8CE1] 80CB
+        if (def_flags & 0xC8) != 0x88:                        # [asm 8CE4-8CF2] conditional bit3 clear
+            ov.wb((bx + DEF_FLAGS) & 0xFFFF, def_flags & 0xF7)
+        dmg = ov.rb(DAMAGE)                                   # [asm 8CF5]
+        if dmg > 0x19:
+            dmg = 0x19
+        yvel = ((-dmg) << 3) & 0xFFFF                          # [asm 8D02-8D08] -min(dmg,0x19)*8
+        ov.ww((di + 0xA) & 0xFFFF, yvel)
+        xvel = _sar16(yvel, 1)                                 # [asm 8D0D] ax sar 1
+        if not (ov.rb((src_si + 5) & 0xFFFF) & 0x80):         # [asm 8D0F] test attacker [si+5],0x80 ; jne keep
+            xvel = (-xvel) & 0xFFFF
+        ov.ww((di + 8) & 0xFFFF, xvel)
+    else:                                                      # [asm 8CC1] bonus path
+        ov.ww(SPAWN_X, ov.rw(di))                             # [0xA336] = enemy X
+        ov.ww(SPAWN_Y, ov.rw((di + 2) & 0xFFFF))             # [0xA338] = enemy Y
+        ov.ww(BURST_SPRITE, DEATH_BONUS_SPRITE)              # [0xA33A] = 0x2046
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFF80, 6))   # [asm 8CDC] 8D1B
+
+    return ov.b

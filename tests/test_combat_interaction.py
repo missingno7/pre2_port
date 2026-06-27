@@ -16,6 +16,7 @@ from pre2.recovered.combat_interaction import (
     SPAWN_Y,
     SPAWNED_PTR,
     advance_death_anim,
+    death_handler,
     hitbox_overlap,
     pack_spawn_pos,
     roll_bonus_sprite_id,
@@ -132,3 +133,47 @@ def test_advance_death_anim_jumps_past_marker():
     kv = {0x100 + 0xC: 0x400, 0x402: 0x1234, 0x404: 0x5678, 0x406: 0x7D00}
     rw = lambda o: kv.get(o, 0) & 0xFFFF
     assert advance_death_anim(rw, 0x100) == 0x408
+
+
+# ---- death_handler (8C72) — shadow byte-exact on both paths (3 launch + 1 bonus kill) ----
+def _byte_mem(words=None, byts=None):
+    m = {}
+    for o, v in (byts or {}).items():
+        m[o & 0xFFFF] = v & 0xFF
+    for o, v in (words or {}).items():
+        m[o & 0xFFFF] = v & 0xFF
+        m[(o + 1) & 0xFFFF] = (v >> 8) & 0xFF
+    rb = lambda o: m.get(o & 0xFFFF, 0)
+    rw = lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)
+    return rb, rw
+
+
+def test_death_handler_launch_path():
+    DI, BX, SRC = 0x4FD0, 0x600, 0x4F0A
+    cnt_addr = (0 - 0x5C0F) & 0xFFFF        # cnt_idx 0 -> count 0 (no debris loop)
+    rb, rw = _byte_mem(
+        words={DI + 0xC: 0x700, 0x702: 0x7D00},   # anim script: marker at 0x702 -> new ptr 0x704
+        byts={DI + 0x10: 0, cnt_addr: 0, BX + 8: 0,
+              BX + 4: 0x01,                  # [def+4] bit0 set -> launch path
+              0x7B19: 0x10,                  # damage -> yvel = -0x10*8 = 0xFF80
+              SRC + 5: 0x80})                # attacker facing bit set -> keep xvel sign
+    b = death_handler(rb, rw, BX, DI, SRC)
+    word = lambda o: b.get(o, 0) | (b.get(o + 1, 0) << 8)
+    assert b[DI + 0xE] == 0xFF               # marked dead
+    assert word(DI + 0xC) == 0x704           # anim advanced past the 0x7D00 marker
+    assert word(DI + 0xA) == 0xFF80          # Yvel = -min(dmg,0x19)*8
+    assert word(DI + 8) == 0xFFC0            # Xvel = sar(0xFF80,1), facing-bit set -> kept negative
+
+
+def test_death_handler_bonus_path_marks_dead_and_sets_spawn_globals():
+    DI, BX, SRC = 0x4FD0, 0x600, 0x4F0A
+    cnt_addr = (0 - 0x5C0F) & 0xFFFF
+    rb, rw = _byte_mem(
+        words={DI: 0x123, DI + 2: 0x456, 0x50A8 + 4: 0xFFFF},  # enemy pos + one free effect slot
+        byts={DI + 0x10: 0, cnt_addr: 0, BX + 8: 0, BX + 4: 0x00})  # bit0 clear -> bonus path
+    b = death_handler(rb, rw, BX, DI, SRC)
+    word = lambda o: b.get(o, 0) | (b.get(o + 1, 0) << 8)
+    assert b[DI + 0xE] == 0xFF               # marked dead
+    assert word(SPAWN_X) == 0x123 and word(SPAWN_Y) == 0x456   # [0xA336]/[0xA338] = enemy pos
+    assert word(BURST_SPRITE) == 0x2046      # [0xA33A] = death-bonus sprite
+    assert word(0x50A8 + 4) == 0x2046        # the free slot got a bonus sprite
