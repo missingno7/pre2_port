@@ -7,8 +7,9 @@ ASM piece of `player_update` and the prerequisite for the full `player_update` l
 Status: **✅ FULLY RECOVERED + LIVE** (`collision(rb, rw, read_es)` in `pre2/recovered/player_collision.py`,
 hooked at `5A96` by `pre2/checkpoints/player_collision.py`). The whole `5A96` routine reproduces the ASM
 write-contract byte-for-byte. Live-hybrid mode runs the native routine (apply `(ds_writes, map_writes)` + emulate
-the RET); verify mode diffs every predicted byte vs the ASM oracle at the `5B80` ret — **clean across the
-gameplay demo suite, 0 divergences**. The off-camera trigger (`65B3`, ground idx6 + `5B26`) and the ceiling solid
+the RET); verify mode diffs every predicted byte vs the ASM oracle at the `5B80` ret — **clean across all 28
+gameplay demos, 0 divergences** (`--verify-hooks` sweep). The off-camera trigger (`65B3`, ground idx6 + `5B26`)
+and the ceiling solid
 side-nudge (`5C44`) — initially fail-loud — were surfaced by the live verify trajectory and recovered. This was
 the largest remaining ASM chunk of `player_update`.
 
