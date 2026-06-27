@@ -439,3 +439,39 @@ def spawn_pickup_sparkle(rw, ax, dx):
         bx = SPARKLE_RING_TOP
     writes[SPARKLE_RING_PTR] = (bx, 2)                   # [asm 5E5C] new pointer
     return writes
+
+
+COLLECTED_COUNTER = 0x2A76  # bumped once per bonus collected
+MAP_SEG_PTR = 0x2DDA        # [0x2DDA] holds the level-map segment (the es for the tile write)
+REDRAW_DIRTY = (0x6BBD, 0x2DF4, 0x2DE0)  # set when the consumed tile is redrawn on-screen
+
+
+@oracle_link("1030:8B6E",
+             "bonus collect tail (the 8B77 body, reached by jmp from 8A5A): bump the collected counter "
+             "[0x2A76], clear the cell ([di+3]=0xFFFF), restore the underlying tile id [di+1] into the level "
+             "map (es=[0x2DDA]) at the cell's map offset (the old [di+3]); if that cell is on-screen, set the "
+             "redraw-dirty flags [0x6BBD]/[0x2DF4]/[0x2DE0] (the actual 453B+3B77 tile blit is a render "
+             "side-effect the live hook performs). Returns CF=1.",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def bonus_collect_tail(rb, rw, di):
+    """[asm 8B6E/8B77] Returns ``(ds_writes, map_writes, onscreen)`` — ``ds_writes`` the DS ``{offset:
+    (value, width)}`` contract, ``map_writes`` the ``{offset: (value, width)}`` writes into the level-map
+    segment (es=[0x2DDA]), and ``onscreen`` whether the consumed tile must be re-blitted."""
+    ds = {COLLECTED_COUNTER: ((rw(COLLECTED_COUNTER) + 1) & 0xFFFF, 2)}   # [asm 8B77] inc [0x2A76]
+    old = rw((di + 3) & 0xFFFF)                          # [asm 8B7E] old [di+3] = the map offset
+    ds[(di + 3) & 0xFFFF] = (0xFFFF, 2)                  # clear the cell
+    tile = rb((di + 1) & 0xFFFF)                         # [asm 8B81] tile id to restore
+    map_writes = {old & 0xFFFF: (tile, 1)}              # [asm 8B8A] level_map[old] = tile
+
+    al = old & 0xFF                                      # map X cell
+    ah = (old >> 8) & 0xFF                               # map Y cell
+    cam_x = rb(0x2DE4)
+    cam_y = rb(0x2DE6)
+    sx = (al - cam_x) & 0xFF                             # [asm 8B8D] sub al,[0x2DE4]
+    sy = (ah - cam_y) & 0xFF                             # [asm 8B97] sub ah,[0x2DE6]
+    onscreen = (al >= cam_x and sx < 0x14 and ah >= cam_y and sy < 0x0C)
+    if onscreen:                                         # [asm 8BD8-8BE2] redraw-dirty flags
+        ds[0x6BBD] = (1, 1)
+        ds[0x2DF4] = (1, 1)
+        ds[0x2DE0] = (0x55AA, 2)
+    return ds, map_writes, onscreen

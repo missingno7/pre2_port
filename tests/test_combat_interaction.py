@@ -14,10 +14,12 @@ from pre2.recovered.combat_interaction import (
     SCORE_LO,
     SPAWN_X,
     SPAWN_Y,
+    COLLECTED_COUNTER,
     SPARKLE_RING_PTR,
     SPARKLE_RING_TOP,
     SPAWNED_PTR,
     advance_death_anim,
+    bonus_collect_tail,
     death_handler,
     hitbox_overlap,
     pack_spawn_pos,
@@ -221,3 +223,26 @@ def test_spawn_pickup_sparkle_wraps_at_ring_bottom():
     rb, rw = _byte_mem(words={SPARKLE_RING_PTR: 0x4F80})   # 0x4F80 - 0x12 = 0x4F6E < 0x4F76 -> wrap
     w = spawn_pickup_sparkle(rw, 0, 0)
     assert w[SPARKLE_RING_PTR] == (SPARKLE_RING_TOP, 2)
+
+
+# ---- bonus_collect_tail (8B6E/8B77) — shadow byte-exact on the witnessed collect (demo 105310) ----
+def test_bonus_collect_onscreen():
+    DI = 0x600
+    rb, rw = _byte_mem(
+        words={DI + 3: 0x0A05, COLLECTED_COUNTER: 0x10},   # map offset X=5,Y=0x0A; counter
+        byts={DI + 1: 0x42, 0x2DE4: 4, 0x2DE6: 8})         # tile id; camera (cell on-screen)
+    ds, mp, onscreen = bonus_collect_tail(rb, rw, DI)
+    assert onscreen is True
+    assert ds[COLLECTED_COUNTER] == (0x11, 2)              # counter bumped
+    assert ds[DI + 3] == (0xFFFF, 2)                       # cell cleared
+    assert mp[0x0A05] == (0x42, 1)                         # tile restored into the level map
+    assert ds[0x6BBD] == (1, 1) and ds[0x2DF4] == (1, 1) and ds[0x2DE0] == (0x55AA, 2)
+
+
+def test_bonus_collect_offscreen_no_redraw():
+    DI = 0x600
+    rb, rw = _byte_mem(words={DI + 3: 0x0A05}, byts={DI + 1: 0x42, 0x2DE4: 0x40, 0x2DE6: 8})
+    ds, mp, onscreen = bonus_collect_tail(rb, rw, DI)
+    assert onscreen is False                               # X cell 5 < camera 0x40 -> off-screen
+    assert mp[0x0A05] == (0x42, 1)                         # map still restored
+    assert 0x6BBD not in ds and 0x2DE0 not in ds           # but no redraw-dirty flags
