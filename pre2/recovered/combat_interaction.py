@@ -412,3 +412,30 @@ def projectile_vs_enemies(rb, rw, si):
         di = (di + 0x12) & 0xFFFF
 
     return writes, sfx, False, None
+
+
+SPARKLE_RING_PTR = 0x6BBE  # write pointer into the effect/sparkle ring [0x4F76..0x4FBE]
+SPARKLE_RING_LO = 0x4F76
+SPARKLE_RING_TOP = 0x4FBE   # wrap target (the ring grows downward, stride 0x12)
+SPARKLE_SPRITE = 0x35
+
+
+@oracle_link("1030:5E41",
+             "spawn a pickup-sparkle effect (sprite 0x35) at (ax, dx) into the downward-growing ring at "
+             "[0x4F76..0x4FBE] (stride 0x12): write [ptr]=X, [ptr+2]=Y, [ptr+4]=0x35, then advance the pointer "
+             "[0x6BBE] down 0x12, wrapping to 0x4FBE when it would drop below 0x4F76.",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def spawn_pickup_sparkle(rw, ax, dx):
+    """[asm 5E41] ``rw`` reads a DS word. ``ax``/``dx`` = the effect X/Y. Returns the ``{offset: (value,
+    width)}`` writes (the ring record + the advanced [0x6BBE] pointer)."""
+    bx = rw(SPARKLE_RING_PTR)
+    writes = {
+        bx & 0xFFFF: (ax & 0xFFFF, 2),                  # [asm 5E46] [bx]   = X
+        (bx + 2) & 0xFFFF: (dx & 0xFFFF, 2),            # [asm 5E48] [bx+2] = Y
+        (bx + 4) & 0xFFFF: (SPARKLE_SPRITE, 2),         # [asm 5E4B] [bx+4] = sprite id
+    }
+    bx = (bx - 0x12) & 0xFFFF                            # [asm 5E50]
+    if bx < SPARKLE_RING_LO:                             # [asm 5E53] jae keeps; else wrap
+        bx = SPARKLE_RING_TOP
+    writes[SPARKLE_RING_PTR] = (bx, 2)                   # [asm 5E5C] new pointer
+    return writes

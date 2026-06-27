@@ -25,7 +25,8 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 | `80CB` | advance the dying enemy's anim-script pointer `[di+0xC]` past the next `0x7D00` death marker | **ASM_MATCHED** (`advance_death_anim`; shadow 3 kills, 0 mismatch) |
 | `8C72` | **enemy-death handler**: loop `8875` ×count (count table `[bx-0x5C0F]` by `[di+0x10]>>3 & 7`, scattering pos `+=9/+7`, staggering `[elem+0xC]`), restore enemy pos, mark dead `[di+0xE]=0xFF`, then either (`[def+4]&1==0`) spawn 6 death-bonus sprites id 0x2046 via `8D1B`, or (`&1`) the `80CB` + knockback-launch path (`[di+0xA]` Yvel, `[di+8]` Xvel from `[0x7B19]` damage, signed by the **attacker's** facing `[src_si+5]`) | **ASM_MATCHED** (`death_handler`; shadow byte-exact BOTH paths — 3 launch kills (115215) + 1 bonus kill (140619), 0 mismatch; overlay compose) |
 | `8B6E` | breakable-tile rewrite + redraw: `inc [0x2A76]`; write the tile map (es=`[0x2DDA]`); on-screen → `453B` + `3B77` blit; set dirty `[0x2DF4]/[0x2DE0]=0x55AA` | TODO (**unwitnessed** in current demos) |
-| `8A5A` | bonus hit handler (→ `5E41`) | TODO |
+| `8A5A` | **bonus hit handler**: spawn a pickup sparkle (`5E41`) at the cell; then a debounce on `[0xA33C]` vs frame `[0x6BD5]` (ignore re-touch within 6 frames → CF=0), level-dependent (`[0x2D8A]`) score-popup type + sparkle bursts (`8D1B`), and a jmp into `8B6E` to actually collect (score + tile rewrite). Returns CF = real collect. | TODO (debounce + bonus-type branches) |
+| `5E41` | spawn a pickup-sparkle (sprite 0x35) at (ax,dx) into the `[0x4F76..0x4FBE]` effect ring; advance `[0x6BBE]` down 0x12 with wrap | **ASM_MATCHED** (`spawn_pickup_sparkle`; shadow 80 calls / 2 demos, 0 mismatch) |
 
 ## Witnesses (census across demos, scratchpad census_88d7.py)
 

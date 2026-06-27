@@ -14,6 +14,8 @@ from pre2.recovered.combat_interaction import (
     SCORE_LO,
     SPAWN_X,
     SPAWN_Y,
+    SPARKLE_RING_PTR,
+    SPARKLE_RING_TOP,
     SPAWNED_PTR,
     advance_death_anim,
     death_handler,
@@ -23,6 +25,7 @@ from pre2.recovered.combat_interaction import (
     roll_bonus_sprite_id,
     spawn_debris_element,
     spawn_effect_burst,
+    spawn_pickup_sparkle,
 )
 from pre2.recovered.prng import rng_lcg
 
@@ -204,3 +207,17 @@ def test_projectile_knockback_hit_consumes_source():
     assert writes[DI + 0xF] == 0x0B              # HP 0x10 - 5
     assert word(DI) == 0xFC                      # knockback: 0x100 - (0x10 >> 2)
     assert word(SI + 4) == 0xFFFF                # source (projectile) consumed
+
+
+# ---- spawn_pickup_sparkle (5E41) — shadow byte-exact (75 calls in demo 190542) ----
+def test_spawn_pickup_sparkle_writes_ring_and_advances_pointer():
+    rb, rw = _byte_mem(words={SPARKLE_RING_PTR: 0x4F8A})   # pointer mid-ring
+    w = spawn_pickup_sparkle(rw, 0x100, 0x200)
+    assert w[0x4F8A] == (0x100, 2) and w[0x4F8C] == (0x200, 2) and w[0x4F8E] == (0x35, 2)
+    assert w[SPARKLE_RING_PTR] == (0x4F78, 2)              # 0x4F8A - 0x12, no wrap
+
+
+def test_spawn_pickup_sparkle_wraps_at_ring_bottom():
+    rb, rw = _byte_mem(words={SPARKLE_RING_PTR: 0x4F80})   # 0x4F80 - 0x12 = 0x4F6E < 0x4F76 -> wrap
+    w = spawn_pickup_sparkle(rw, 0, 0)
+    assert w[SPARKLE_RING_PTR] == (SPARKLE_RING_TOP, 2)
