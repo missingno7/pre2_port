@@ -4,10 +4,13 @@ The player ground/tile collision, called from the player update at `5A41` (after
 per player frame (~2006×/L1). This is a bounded sub-island with a small tile-type handler table — the last big
 ASM piece of `player_update` and the prerequisite for the full `player_update` live collapse.
 
-Status: **✅ FULLY RECOVERED + byte-exact VERIFIED** (`collision(rb, rw, read_es)` in
-`pre2/recovered/player_collision.py`). The whole `5A96` routine reproduces the ASM write-contract byte-for-byte:
-**3515 calls, 0 mismatches, 0 gaps** across 6 demos (correctness on every predicted DS+map byte write, plus
-DS-completeness — every actual change is predicted). Unblocks the `player_update` live collapse.
+Status: **✅ FULLY RECOVERED + LIVE** (`collision(rb, rw, read_es)` in `pre2/recovered/player_collision.py`,
+hooked at `5A96` by `pre2/checkpoints/player_collision.py`). The whole `5A96` routine reproduces the ASM
+write-contract byte-for-byte. Live-hybrid mode runs the native routine (apply `(ds_writes, map_writes)` + emulate
+the RET); verify mode diffs every predicted byte vs the ASM oracle at the `5B80` ret — **clean across the
+gameplay demo suite, 0 divergences**. The off-camera trigger (`65B3`, ground idx6 + `5B26`) and the ceiling solid
+side-nudge (`5C44`) — initially fail-loud — were surfaced by the live verify trajectory and recovered. This was
+the largest remaining ASM chunk of `player_update`.
 
 ## Boundary + structure
 - **`5A96..5B80` main collision** (`ret` at `5B80`). Computes the player's tile cell from Y/X, reads the tile,

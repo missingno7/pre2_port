@@ -28,6 +28,7 @@ _CATEGORY = {
     "player_x_integrate": "live",             # 5A0F player-FSM leaf (horizontal kinematics, inline block)
     "player_y_integrate": "live",             # 5A36 player-FSM leaf (vertical kinematics; collision 5A96 corrects)
     "player_tick_timers": "live",             # 5A47 player-FSM leaf (8 saturating per-frame countdown timers)
+    "player_collision": "live",               # 5A96 ground/tile collision (the big call/ret subroutine)
     # --- gameplay frame renderer ---
     "frame_grid": "live", "frame_tile_row": "live", "frame_scroll_copy": "live",
     "frame_panel_copy": "live-passthrough",   # 3054 vsync-paced curtain reveal — ASM timing in live
@@ -46,7 +47,7 @@ _VERIFY_MODULES = {
     "sqz", "sprite_decode", "blit", "frame", "audio", "tracker", "object_render", "object_update",
     "object_inject", "sprite_classify", "palette", "animation", "camera_shake", "fireflies",
     "gameover_scroll", "tally_panel", "hud", "transition", "text", "present", "particles", "foreground_tiles",
-    "player",
+    "player", "player_collision",
 }
 
 # Recovered routines that are NOT their own live replacement hook — the rest of the runtime truth.
@@ -64,8 +65,8 @@ _NOT_SEPARATELY_HOOKED = [
     ("2nd-pass wrappers idx3/5-8/9/11", "7ED8/7EB5/7E97/7D6E", "ASM (calls live worker)", "4-insn stubs: call the live 7F26 + set mode; disasm'd, deliberately not accumulated as shadow code"),
     ("lookup_anim_frame", "1030:6954", "ASM (inline)", "anim-frame table lookup inline in the 2nd-pass loop; disasm'd, not hooked"),
     ("draw_hud", "1030:45B8", "verify-only", "recovered + diffed; the HUD stays ASM-drawn live (incremental, two-page)"),
-    ("player FSM (rest)", "1030:~5890..5A95", "ASM / partially recovered", "X+Y integrate + timers (5A0F/5A36/5A47) live; cs:[0x7D2F] per-input handlers + collision+tile-interaction (5A96/cs:[0x7D9B]) still ASM"),
-    ("player physics primitives", "1030:62B1/62EC/6333/6309", "recovered / shadow-only", "accel/friction_dir/friction_sym/gravity; pure+shadow-verified (go live via the handler/dispatch composition, not as separate hooks)"),
+    ("player FSM (rest)", "1030:~5890..5A95", "ASM / partially recovered", "X+Y integrate + timers (5A0F/5A36/5A47) live; collision (5A96) now live too; cs:[0x7D2F] per-input FSM handlers still ASM"),
+    ("player physics primitives", "1030:62EC/6333", "recovered / shadow-only", "accel/friction_dir/friction_sym; pure+shadow-verified (go live via the FSM handler composition). NOTE 62B1 air-drift + 6309 gravity now live inside player_collision (63B5)"),
     ("player anim primitives", "1030:635D/6374/638B", "recovered / shadow-only", "set_anim(a/b)/advance_anim; pure+shadow-verified (write [0x4F20] frame, [0x4F28] seq-ptr; go live via the handler composition)"),
     ("player FSM state-select", "1030:5921..595C", "recovered / shadow-only", "player_select_anim_id: input bitmask -> anim_id via table [0x7B7F] + reset; shadow-verified 1997/1997"),
     ("player FSM handler: run", "1030:5EC4 (anim_id=1)", "recovered / shadow-only", "player_state_run: composition of the primitives; shadow-verified 795/795 main path ([0x6BD0] override tail not yet recovered)"),

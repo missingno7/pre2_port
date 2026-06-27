@@ -227,7 +227,15 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
         raise NotImplementedError(f"ceiling handler idx {idx} (0x65AF trigger) not recovered")
 
     if solid and _s16(out.get(0x4F1E, rw(0x4F1E))) > 0:          # [5C38-5C42] solid + Y>0 -> corner-slip nudge
-        raise NotImplementedError("ceiling side-nudge (0x7E5E-solid tile) not witnessed")
+        dx = -1 if _s16(rw(0x4F22)) > 0 else 1                    # [5C44-5C51] step away from the facing edge
+        n1 = rb((TILE_CEIL_SOLID_TABLE + read_es((di + dx + 0x100) & 0xFFFF)) & 0xFFFF)  # [5C54-5C5C]
+        if n1 == 0:                                              # [5C5E] this side is open -> slip into it
+            out[0x4F1C] = (rw(0x4F1C) + dx * 2) & 0xFFFF          # [5C70-5C72]
+        else:                                                    # [5C60-5C64] other side
+            n2 = rb((TILE_CEIL_SOLID_TABLE + read_es((di - dx + 0x100) & 0xFFFF)) & 0xFFFF)  # [5C66-5C6B]
+            if n2 == 0:                                          # [5C6E] only the far side is open
+                out[0x4F1C] = (rw(0x4F1C) - dx * 2) & 0xFFFF      # [5C70-5C72] (dx negated)
+            # else: wedged between two solid tiles -> no nudge
     return out
 
 
@@ -273,9 +281,11 @@ def collision_ground_handler(idx: int, rb, rw, read_es, di: int) -> dict:
         out = collision_land(rb, rw, read_es, di)                  # [6651 -> 0x641F]
         out[0x4F24] = 0                                            # [6645] (641F also zeroes it)
         return out
+    if idx == 6:                                                   # [65AF] off-camera / special trigger
+        return _offcamera_trigger(rb)
     if idx == 7:                                                   # [6672] no-op
         return {}
-    raise NotImplementedError(f"ground handler idx {idx} (0x65AF trigger) not recovered")  # idx 6
+    raise NotImplementedError(f"ground handler idx {idx} not recovered")
 
 
 def _bridge_dirty(new_tile: int, ds_w: dict, rb) -> None:

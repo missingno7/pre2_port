@@ -109,11 +109,12 @@ def test_ceiling_trigger_handler_fails_loud():
         collision_ceiling(rb, rw, read_es, 0)
 
 
-def test_ceiling_solid_side_nudge_fails_loud():
-    # idx 0 (no head-bump) but player tile is ceiling-solid and Y>0 -> side-nudge, unwitnessed
+def test_ceiling_solid_side_nudge_slips_to_open_side():
+    # idx 0 (no head-bump) but player tile is ceiling-solid and Y>0 -> corner-slip nudge. Xvel==0 -> dx=+1; the
+    # neighbour tile (read_es != 0/0x100 -> 0, not ceiling-solid) is open, so X is nudged +2 toward it.
     rb, rw, read_es = _ceil_mem(handler_idx=0, player_tile_ceil_solid=1, y=0x100)
-    with pytest.raises(NotImplementedError):
-        collision_ceiling(rb, rw, read_es, 0)
+    out = collision_ceiling(rb, rw, read_es, 0)
+    assert out[0x4F1C] == 0x102           # X (0x100) nudged +2 toward the open side
 
 
 # --- ground tile-handler dispatch cs:[0x7D9B] (collision_ground_handler) ---
@@ -160,12 +161,12 @@ def test_ground_idx2_land_plus_slope_shift():
     assert out[0x4F24] == 1                # 6657 sets the slope-shift byte to 1
 
 
-def test_ground_idx7_noop_and_idx6_fails_loud():
+def test_ground_idx7_noop_and_idx6_is_offcamera_trigger():
     rb = lambda o: 0
     rw = lambda o: 0
-    assert collision_ground_handler(7, rb, rw, lambda o: 0, 0) == {}
-    with pytest.raises(NotImplementedError):
-        collision_ground_handler(6, rb, rw, lambda o: 0, 0)
+    assert collision_ground_handler(7, rb, rw, lambda o: 0, 0) == {}      # idx7 6672 = ret
+    # idx6 65AF = off-camera trigger; with no lives ([0x27D8]==0) and not already armed -> game over
+    assert collision_ground_handler(6, rb, rw, lambda o: 0, 0) == {0x6BE5: 1}
 
 
 # --- bridge / platform sag-under-weight 0x5BB8 (collision_bridge_dip) ---

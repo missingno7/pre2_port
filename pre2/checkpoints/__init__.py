@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dos_re.hooks import registry
 
-from . import animation, audio, blit, camera_shake, fireflies, foreground_tiles, frame, gameover_scroll, hud, object_inject, object_render, object_tick, object_update, oldies_text, palette, particles, player, present, sprite_classify, sprite_decode, sqz, tally_panel, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
+from . import animation, audio, blit, camera_shake, fireflies, foreground_tiles, frame, gameover_scroll, hud, object_inject, object_render, object_tick, object_update, oldies_text, palette, particles, player, player_collision, present, sprite_classify, sprite_decode, sqz, tally_panel, text, tracker, transition  # noqa: F401 — import to register @registry.replace hooks
 from .common import HookTraceStats, HookVerifyStats, Pre2HybridGap  # noqa: F401 — re-exported
 from .sprite_decode import sprite_decode_local, sprite_decode_shared  # noqa: F401 — re-exported
 from .sqz import sqz_decompress  # noqa: F401 — re-exported
@@ -98,6 +98,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     cpu.pre2_player_pending = []
     cpu.pre2_player_y_pending = []
     cpu.pre2_player_t_pending = []
+    cpu.pre2_collision_pending = []
     stats = HookVerifyStats()
     sqz.register_verify(cpu, stats, on_result, raise_on_divergence)
     sprite_decode.register_verify(cpu, stats, on_result, raise_on_divergence)
@@ -122,6 +123,7 @@ def enable_pre2_hook_verification(rt, *, on_result=None, raise_on_divergence=Fal
     particles.register_verify(cpu, stats, on_result, raise_on_divergence)
     foreground_tiles.register_verify(cpu, stats, on_result, raise_on_divergence)
     player.register_verify(cpu, stats, on_result, raise_on_divergence)
+    player_collision.register_verify(cpu, stats, on_result, raise_on_divergence)
     return stats
 
 
