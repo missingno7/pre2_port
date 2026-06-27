@@ -288,6 +288,7 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
 | `object` anim advance | `1030:6881..68E6` | live-in-parent (`advance_animation` inside `object_tick`) |
 | handler dispatch (idx0-12) | `1030:68FC` (`cs:[0x6AA9]`) | live-in-parent (inside `object_tick`) |
 | `second_pass_project_entity` | `1030:7F26` | **LIVE HOOK** (`checkpoints/object_inject.py`; 480 fires/90 frames; verify 0 div) |
+| `project_particles` (effect-sprite projector) | `1030:8922..899D` | **LIVE HOOK** (`checkpoints/object_particles.py`; `recovered/object_particles.py`; shadow 456 calls/6 demos 0 mismatch, live verify 0 div). Walks the 70-entry float-effect list `0x8F1D` (X/Y/sprite/bounce, stride 7), camera-culls, ping-pong bounce anim → world Y, projects on-screen ones into render slots `0x52E8` (stride 0x12, max 20). NOT player projectiles (those = `0x4F2E`, drawn by `88D7`). |
 | `find_free_object_slot` | `1030:806C` | live-in-parent (inside the 7F26 hook) |
 | 2nd-pass wrappers idx3/5-8/9/11 | `7ED8/7EB5/7E97/7D6E` | **ASM** (4-insn stubs that call the live 7F26 worker; disasm'd, not accumulated as shadow code) |
 | `lookup_anim_frame` | `1030:6954` | **ASM** (inline in the 2nd-pass loop; disasm'd) |
