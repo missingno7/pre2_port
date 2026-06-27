@@ -475,3 +475,117 @@ def bonus_collect_tail(rb, rw, di):
         ds[0x2DF4] = (1, 1)
         ds[0x2DE0] = (0x55AA, 2)
     return ds, map_writes, onscreen
+
+
+RNG_LCG = 0x2CEC          # rng_lcg state: a/b/c bytes [0x2CEC..0x2CEE], d = WORD [0x2CEF]
+BONUS_DEBOUNCE = 0xA33C   # last-collect frame timestamp ([0x6BD5])
+LEVEL_ID = 0x2D8A
+PLAYER_STRUCT = 0x4F1C
+
+
+def _ov_rng(ov):
+    """Advance rng_lcg over the overlay state ([0x2CEC..0x2CF0]; d is the WORD at 0x2CEF); return new b."""
+    a, b, c, d, ret = rng_lcg(ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF))
+    ov.wb(0x2CEC, a)
+    ov.wb(0x2CED, b)
+    ov.wb(0x2CEE, c)
+    ov.ww(0x2CEF, d)
+    return ret
+
+
+def _bonus_popup_cx(lvl):
+    """[asm 8ADF-8AF4 / 8B19-8B2E] the level-dependent score-popup sprite id."""
+    if lvl == 3:
+        return 0x132
+    if lvl in (6, 7):
+        return 0x12C
+    return 0x134
+
+
+def _bonus_facing_xvel(ov, src_si):
+    """[asm 8B46-8B5C] popup Xvel = 0x30, negated unless the source's facing value is negative."""
+    if src_si >= PLAYER_STRUCT:
+        v = ov.rw((src_si + 6) & 0xFFFF)
+    else:
+        v = ov.rw(0x4F25)
+    return 0x30 if _s16(v) < 0 else (-0x30) & 0xFFFF   # jl keeps 0x30; else neg
+
+
+def _bonus_finish(ov, di):
+    """[asm 8B66] decrement the cell counter; collect (8B77) on underflow. Returns (map_writes, onscreen,
+    collected)."""
+    cnt = ov.rb((di + 2) & 0xFFFF)
+    ov.wb((di + 2) & 0xFFFF, (cnt - 1) & 0xFF)
+    if cnt == 0:                                          # sub borrow -> collect
+        ds_c, map_c, onscreen = bonus_collect_tail(ov.rb, ov.rw, di)
+        ov.apply(ds_c)
+        return map_c, onscreen, True
+    return {}, False, False
+
+
+@oracle_link("1030:8A5A",
+             "bonus hit handler: spawn a pickup sparkle (5E41) at the cell; then a counter (bit7) path "
+             "(dec [cell+2]; on underflow collect, else a random-id sparkle + collect), or the normal path "
+             "with a frame debounce ([0xA33C] vs [0x6BD5], <6 -> ignore CF=0), level-dependent ([0x2D8A]) "
+             "score-popup bursts (8D1B) keyed on [cell+2]&0x40, then decrement+collect (8B6E) on underflow. "
+             "Returns CF = real collect.",
+             "ASM_MATCHED", merge_target="combat_interaction")
+def bonus_hit_handler(rb, rw, di, src_si):
+    """[asm 8A5A] ``di`` = the bonus-cell record, ``src_si`` = the source sprite (for the popup facing).
+    Returns ``(ds_writes, map_writes, onscreen, collected)`` — the byte-level DS contract, the level-map
+    writes (es=[0x2DDA]), whether the consumed tile needs an on-screen re-blit, and the ASM's CF."""
+    ov = _Overlay(rb)
+    # [8A64] sparkle at the cell centre (x*16+8, y*16+0xC)
+    cell = ov.rw((di + 3) & 0xFFFF)
+    ov.apply(spawn_pickup_sparkle(
+        ov.rw, (((cell & 0xFF) << 4) + 8) & 0xFFFF, ((((cell >> 8) & 0xFF) << 4) + 0xC) & 0xFFFF))
+
+    t = ov.rb((di + 2) & 0xFFFF)
+    if t & 0x80:                                          # [8A83] counter bonus
+        newt = (t - 1) & 0xFF
+        ov.wb((di + 2) & 0xFFFF, newt)
+        if newt & 0x80:                                  # underflow -> stc, no collect
+            return ov.b, {}, False, True
+        px, py = pack_spawn_pos(ov.rw((di + 3) & 0xFFFF))   # [8A8D] 8BF6
+        ov.ww(SPAWN_X, px)
+        ov.ww(SPAWN_Y, py)
+        r = _ov_rng(ov) & 7                              # [8A90] reroll until nonzero
+        while r == 0:
+            r = _ov_rng(ov) & 7
+        ov.ww(BURST_SPRITE, (r + 0x6E) & 0xFFFF)
+        ov.ww(SPAWN_Y, (ov.rw(SPAWN_Y) - 0x70) & 0xFFFF)
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0, 0, 1))   # [8AA9] 8D1B
+        ds_c, map_c, onscreen = bonus_collect_tail(ov.rb, ov.rw, di)   # [8AAE] collect
+        ov.apply(ds_c)
+        return ov.b, map_c, onscreen, True
+
+    # [8AB1] normal bonus: frame debounce
+    frame = ov.rw(0x6BD5)
+    if _abs16(frame - ov.rw(BONUS_DEBOUNCE)) < 6:
+        return ov.b, {}, False, False                    # recently collected -> ignore
+    ov.ww(BONUS_DEBOUNCE, frame)
+    px, py = pack_spawn_pos(ov.rw((di + 3) & 0xFFFF))   # [8ACC] 8BF6
+    ov.ww(SPAWN_X, px)
+    ov.ww(SPAWN_Y, py)
+    lvl = ov.rb(LEVEL_ID)
+    t2 = ov.rb((di + 2) & 0xFFFF)
+
+    if not (t2 & 0x40):                                  # [8B40] regular bonus: random sprite (8C13)
+        r = _ov_rng(ov) & 0x7F
+        while r >= 0x5F:
+            r = _ov_rng(ov) & 0x7F
+        ov.ww(BURST_SPRITE, (0x2080 + r) & 0xFFFF)
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, _bonus_facing_xvel(ov, src_si), 0xFF90, 1))
+    elif t2 == 0x40:                                     # [8AD5] two-burst bonus
+        ov.wb((di + 2) & 0xFFFF, 0)
+        ov.ww(BURST_SPRITE, _bonus_popup_cx(lvl))
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x20, 0xFFD0, 2))   # [8B04]
+        ov.ww(BURST_SPRITE, 0x136 if lvl == 8 else 0xE5)             # [8B07]
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, _bonus_facing_xvel(ov, src_si),
+                                    0xFF90, 2 if lvl == 8 else 4))    # [8B61]
+    else:                                                # [8B19] bit6 set, single burst, no facing
+        ov.ww(BURST_SPRITE, _bonus_popup_cx(lvl))
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFFA0, 4))
+
+    map_writes, onscreen, collected = _bonus_finish(ov, di)
+    return ov.b, map_writes, onscreen, collected

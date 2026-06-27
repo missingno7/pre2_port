@@ -14,12 +14,14 @@ from pre2.recovered.combat_interaction import (
     SCORE_LO,
     SPAWN_X,
     SPAWN_Y,
+    BONUS_DEBOUNCE,
     COLLECTED_COUNTER,
     SPARKLE_RING_PTR,
     SPARKLE_RING_TOP,
     SPAWNED_PTR,
     advance_death_anim,
     bonus_collect_tail,
+    bonus_hit_handler,
     death_handler,
     hitbox_overlap,
     pack_spawn_pos,
@@ -246,3 +248,22 @@ def test_bonus_collect_offscreen_no_redraw():
     assert onscreen is False                               # X cell 5 < camera 0x40 -> off-screen
     assert mp[0x0A05] == (0x42, 1)                         # map still restored
     assert 0x6BBD not in ds and 0x2DE0 not in ds           # but no redraw-dirty flags
+
+
+# ---- bonus_hit_handler (8A5A) — shadow byte-exact (190542 !=0x40 x75, 105310 bit7+collect x5) ----
+def test_bonus_hit_debounce_ignores_recent_touch():
+    DI = 0x600
+    rb, rw = _byte_mem(
+        words={DI + 3: 0x0A05, 0x6BD5: 0x100, BONUS_DEBOUNCE: 0x0FE, SPARKLE_RING_PTR: 0x4F90},
+        byts={DI + 2: 0x00})
+    ds, mp, onscreen, collected = bonus_hit_handler(rb, rw, DI, 0x4F0A)
+    assert collected is False and mp == {}      # |0x100 - 0xFE| = 2 < 6 -> debounce, no collect
+    assert 0x4F90 in ds                          # the sparkle still spawned (before the debounce check)
+
+
+def test_bonus_hit_counter_underflow_collects_without_tile_rewrite():
+    DI = 0x600
+    rb, rw = _byte_mem(words={DI + 3: 0x0A05, SPARKLE_RING_PTR: 0x4F90}, byts={DI + 2: 0x81})
+    ds, mp, onscreen, collected = bonus_hit_handler(rb, rw, DI, 0x4F0A)
+    assert collected is True and mp == {}        # [cell+2] 0x81 -> 0x80 underflow -> stc, no map write
+    assert ds[DI + 2] == 0x80                     # counter decremented
