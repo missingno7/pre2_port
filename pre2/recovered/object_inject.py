@@ -55,6 +55,109 @@ def lookup_anim_frame(rw, entry_id: int, entry_type: int) -> int:
     return bx
 
 
+def _s16(v: int) -> int:
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+# 7D9B (idx10) — the player after-image / enemy-phase-change effect projector
+PLAYER_X = 0x4F1C
+PLAYER_Y = 0x4F1E
+TRAIL_RING = 0xA341          # 16-slot ring index into the X-offset table
+TRAIL_OFFSET_TABLE = 0x5CBD  # the offset table, read as DS:[(ring - 0x5CBD) & 0xFFFF]
+TERRAIN_TABLE = 0x7F5E       # tile id -> terrain solidity (for the ground-snap scan)
+MAP_HEIGHT = 0x2CF5          # [0x2CF5] level-map height (rows)
+PROJ_SLOT_PTR = 0xA32E       # [0xA32E] = the last projected object slot
+
+
+def handler_player_trail(rb, rw, read_es, si, find_free):
+    """Recover ``1030:7D9B`` — the 2nd-pass player-relative, ground-snapped effect projector (the
+    enemy-phase-change / player after-image effect: entities placed at ``playerX + a rotating offset`` and
+    snapped onto a standable ground surface near the player).
+
+    Gated by: level-5 + earthquake/`[0xA326]`; a per-entity saturating counter ``[si+7]`` throttle vs
+    ``[si+6]``; and a player-proximity window (`[si+9]/[si+0xA]` origin, `[si+0xB]/[si+0xC]` extent, in tile
+    cells). On a pass it allocates a free object slot, advances the offset ring, scans the terrain map
+    (es=`[0x2DDA]`, table `[0x7F5E]`) upward for a solid-with-2-empty-above cell, and writes the projection
+    record. ``read_es`` reads the level-map byte ``es:[off]``; ``find_free`` allocates a slot. Returns
+    ``(writes, drawn)`` — ``writes`` the DS ``{offset: value}`` byte/word contract (the counter is updated
+    whenever the level gate passes), ``drawn`` the ASM CF==0 (projected)."""
+    out: dict = {}
+
+    if rb(0x2D8A) == 5:                                   # [7D9B] level-5 special gates
+        if rb(0x6BEA) != 0:                              # [7DA2] earthquake active -> no draw
+            return out, False
+        if rw(0xA326) == 3:                              # [7DA9]
+            return out, False
+
+    counter = rb((si + 7) & 0xFFFF) + 1                   # [7DB0] saturating ++ (add ; sbb)
+    if counter > 0xFF:
+        counter = 0xFF
+    out[(si + 7) & 0xFFFF] = (counter, 1)
+    if rb((si + 6) & 0xFFFF) > (counter >> 2):            # [7DBB] throttle
+        return out, False
+
+    px_cell = (_s16(rw(PLAYER_X)) >> 4) & 0xFF            # [7DC8] player X in tile cells
+    if px_cell < rb((si + 9) & 0xFFFF):                  # [7DD0] jb
+        return out, False
+    rel_x = (px_cell - rb((si + 9) & 0xFFFF)) & 0xFF
+    if rb((si + 0xB) & 0xFFFF) < rel_x:                  # [7DD4] jb
+        return out, False
+    py_cell = (_s16(rw(PLAYER_Y)) >> 4) & 0xFF            # [7DD9]
+    if py_cell < rb((si + 0xA) & 0xFFFF):                # [7DDE] jb (dh = [si+0xA])
+        return out, False
+    rel_y = (py_cell - rb((si + 0xA) & 0xFFFF)) & 0xFF
+    if rb((si + 0xC) & 0xFFFF) < rel_y:                  # [7DE2] jb
+        return out, False
+
+    slot = find_free()                                    # [7DE7] no free slot -> no draw
+    if slot is None:
+        return out, False
+
+    # [7DF4] place at playerX + the next ring offset, advance the ring
+    ring = rw(TRAIL_RING)
+    player_x = rw(PLAYER_X)
+    new_x = (player_x + rw((ring - TRAIL_OFFSET_TABLE) & 0xFFFF)) & 0xFFFF
+    out[TRAIL_RING] = ((ring + 2) & 0x0F, 2)
+    xvel = 0 if _s16(player_x) >= _s16(new_x) else 0xFFFF  # [7E0C] dx=0 / not dx (sign toward the player)
+
+    # [7E18] scan the terrain map upward for a standable surface (solid here, 2 empty above)
+    start = (((py_cell + 4) & 0xFF) << 8) | ((new_x >> 4) & 0xFF)   # bp = ((playerY>>4)+4):(newX>>4)
+    limit = (rb(MAP_HEIGHT) << 8)                                    # dx = mapheight*0x100
+    bp = start
+    ground_row = None
+    for _ in range(0x0A):                                # [7E66] ah = 0xA tries
+        if bp < limit:                                   # [7E3B] bp below the map bottom?
+            t0 = rb((TERRAIN_TABLE + read_es(bp)) & 0xFFFF)
+            if t0 != 0:                                  # [7E3F] solid here
+                t1 = rb((TERRAIN_TABLE + read_es((bp - 0x100) & 0xFFFF)) & 0xFFFF)
+                if t1 == 0:                              # [7E48] empty one above
+                    t2 = rb((TERRAIN_TABLE + read_es((bp - 0x200) & 0xFFFF)) & 0xFFFF)
+                    if t2 == 0:                          # [7E52] empty two above -> standable
+                        ground_row = (bp >> 8) & 0xFF
+                        break
+        bp = (bp - 0x100) & 0xFFFF                        # [7E5C] up a row
+        if bp < 0x300:                                   # [7E60] ran off the top -> give up
+            break
+
+    if ground_row is None:                               # [7E95] no surface -> no draw
+        return out, False
+
+    base = OBJ_BASE + slot * OBJ_STRIDE
+    out[base + 0x10] = (0, 1)                             # [7DEC]
+    out[base + 0x00] = (new_x, 2)                         # [7E0A] X
+    out[base + 0x08] = (xvel, 2)                          # [7E15] Xvel sign
+    out[base + 0x02] = ((ground_row << 4) & 0xFFFF, 2)    # [7E74] Y = surface row * 16
+    out[base + 0x04] = (rw((si + 2) & 0xFFFF), 2)         # [7E77] sprite id
+    out[base + 0x06] = (si & 0xFFFF, 2)                   # [7E7D] back-pointer
+    out[base + 0x0E] = (0, 1)                             # [7E84] state byte
+    out[base + 0x0A] = (0, 2)                             # [7E88] Yvel
+    out[base + 0x0F] = (rb((si + 5) & 0xFFFF), 1)         # [7E90] flip byte
+    out[(si + 4) & 0xFFFF] = (0x17, 1)                    # [7E80] entity mode
+    out[PROJ_SLOT_PTR] = (base & 0xFFFF, 2)               # [7DF0] [0xA32E] = the projected slot
+    return out, True
+
+
 class ProjectResult:
     """The contract of one projection (1030:7F26): whether the entity was drawn, the render record written into
     the allocated object slot, and the entity-mode write-back. When NOT drawn (off-screen or no free slot) the
