@@ -81,9 +81,33 @@ def _sqz_ignore(cpu):
     ]
 
 
+def _object_render_ignore(cpu):
+    """Don't-care regions for object_render (1030:26FA).
+
+    The ASM renderer is **self-modifying**: it patches immediate operands into its own
+    code template at ``cs:[0x26E0..0x26FA]`` (``mov cs:[0x26EC],dh`` / ``add cs:[0x26E0],ax`` …)
+    and then executes that patched block as the blit inner loop, plus a per-sprite scratch
+    word at ``[0x2DEC]`` (clipped extent). The recovered renderer blits straight onto the EGA
+    planes with no self-modifying code, so it legitimately leaves both stale — a mechanism-only
+    difference, not a result difference. Both regions are written **and** read only inside the
+    routine (read/write-watch: the SMC block + ``[0x2DEC..0x2DEF]`` are touched solely by IPs in
+    ``26FA..2DF9``; nothing downstream consumes them), so the visible contract — the four EGA
+    planes + the ``[+5]/[+0x11]`` record mutations — is still fully diffed. ``cpu`` is unused
+    (the regions are fixed program addresses)."""
+    code = (0x1030 << 4) & 0xFFFFF
+    data = (0x1A0F << 4) & 0xFFFFF
+    return [
+        (code + 0x26E0, code + 0x26FA),   # self-modified blit-code template (patched every sprite)
+        (data + 0x2DEC, data + 0x2DF0),   # per-sprite clipped-extent scratch word(s)
+    ]
+
+
 # Per-hook don't-care regions: ``(cs, ip) -> fn(cpu_at_entry) -> [(phys_lo, phys_hi), ...]``.
 # Only for routines that legitimately differ from the ASM in *mechanism*, not result.
-_IGNORE = {(0x1030, 0x107B): _sqz_ignore}
+_IGNORE = {
+    (0x1030, 0x107B): _sqz_ignore,
+    (0x1030, 0x26FA): _object_render_ignore,
+}
 
 # phys-range -> human name, for localising a diff. DGROUP is listed before the code
 # segment so addresses in their overlap read as game data (the usual culprit).
