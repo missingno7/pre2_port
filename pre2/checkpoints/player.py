@@ -16,12 +16,15 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.recovered.player import (
-    TIMER_BYTES, TIMER_WORD, VIEW_TILES, X_MAX, X_MIN, _s16,
-    player_tick_timers, player_x_integrate, player_y_integrate,
+    FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, VIEW_TILES, X_MAX, X_MIN, _s16,
+    player_fsm_step, player_tick_timers, player_x_integrate, player_y_integrate,
 )
 
-from .common import report
+from .common import Pre2HybridGap, report
 
+_FSM_ENTRY = (0x1030, 0x58A7)  # after the input-decode call (DC1); start of the FSM front-end
+_FSM_EXIT = (0x1030, 0x5A0F)   # == the X-integrate entry: the FSM handler dispatch (5A0B) returns here
+_PLAY_SFX = (0x1030, 0x0282)   # play_sfx(dl): the audio command the attack handler emits
 _ENTRY = (0x1030, 0x5A0F)     # mov ax,[0x4F22]  (start of the X integrate)
 _NEXT = (0x1030, 0x5A36)      # mov ax,[0x4F2A]  (the Y integrate — first instruction after the X block)
 _ENTRY_Y = (0x1030, 0x5A36)   # mov ax,[0x4F2A]  (start of the Y integrate)
@@ -31,6 +34,12 @@ _NEXT_T = (0x1030, 0x5A8C)    # pop bp           (the routine epilogue — first
 _DS = 0x1A0F
 _PX = 0x4F1C
 _PY = 0x4F1E
+
+# The FSM write-contract window (the player struct + the FSM scratch flags + the projectile/trail rings). Diffed
+# for completeness in verify mode: every byte that changed must be one player_fsm_step predicted.
+_FSM_WATCH = (tuple(range(0x4F00, 0x4F30)) + tuple(range(0x4F74, 0x4FC2))
+              + (0x6BC8, 0x6BCF, 0x6BD1, 0x6BD3, 0x6BE1, 0x6BCE, 0x6BBE, 0x6BBF, 0x6BFE,
+                 0x6BDB, 0x6BDC, 0x6BEB, 0x6BEC, 0x4F1B, 0x6BCD, 0x6BD0))
 
 
 def _rb(mem, off):
@@ -52,14 +61,117 @@ def _ww(mem, off, v):
     mem.data[b + 1] = (v >> 8) & 0xFF
 
 
+def _apply_fsm_writes(mem, writes) -> None:
+    """Apply player_fsm_step's write dict to DS memory at the right width (FSM_WORD_FIELDS = words)."""
+    for a, v in writes.items():
+        base = ((_DS << 4) + (a & 0xFFFF)) & 0xFFFFF
+        mem.data[base] = v & 0xFF
+        if a in FSM_WORD_FIELDS:
+            mem.data[(base + 1) & 0xFFFFF] = (v >> 8) & 0xFF
+
+
+def _emit_sfx(cpu, sfx) -> None:
+    """Preserve the attack handler's sound by invoking play_sfx(dl) (1030:0282) as a controlled near-call: the
+    audio observer hooked at its entry then emits the event and the game's audio state updates. No-op when the
+    routine isn't present (e.g. silent demo replay)."""
+    for dl in sfx:
+        save_ip = cpu.s.ip & 0xFFFF
+        cpu.s.dx = (cpu.s.dx & 0xFF00) | (dl & 0xFF)
+        cpu.push(save_ip)
+        sp_target = cpu.s.sp
+        cpu.s.ip = _PLAY_SFX[1]
+        guard = 0
+        while not (cpu.s.sp == ((sp_target + 2) & 0xFFFF) and (cpu.s.cs & 0xFFFF) == _PLAY_SFX[0]
+                   and (cpu.s.ip & 0xFFFF) == save_ip):
+            cpu.step()
+            guard += 1
+            if guard > 200_000:
+                raise Pre2HybridGap("play_sfx did not return")
+
+
+@registry.replace(*_FSM_ENTRY, "player_fsm")
+def player_fsm_hook(cpu) -> None:
+    """Native replacement for the per-frame player FSM at 1030:58A7..5A0B (front-end -> select -> dispatch)."""
+    mem = cpu.mem
+    if _rb(mem, 0x6BC5) != 0:                       # the dormant [0x6BC5]!=0 momentum path is unrecovered
+        if getattr(cpu, "pre2_verify_mode", False):
+            cpu.pre2_fsm_pending.append(None)       # skip the diff this frame (ASM runs the momentum path)
+            interpret_current_instruction_without_hook(cpu)
+            return
+        raise Pre2HybridGap("player FSM momentum path ([0x6BC5]!=0) not recovered")
+
+    rb = lambda o: _rb(mem, o)
+    rw = lambda o: _rw(mem, o)
+
+    if getattr(cpu, "pre2_verify_mode", False):
+        try:
+            writes, _sfx = player_fsm_step(rb, rw)
+        except NotImplementedError as exc:
+            cpu.pre2_fsm_pending.append(("gap", str(exc)))
+            interpret_current_instruction_without_hook(cpu)
+            return
+        entry = {a: _rb(mem, a) for a in _FSM_WATCH}
+        cpu.pre2_fsm_pending.append(("writes", writes, entry))
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    try:
+        writes, sfx = player_fsm_step(rb, rw)
+    except NotImplementedError as exc:
+        raise Pre2HybridGap(f"player FSM (58A7): {exc}") from exc
+    _apply_fsm_writes(mem, writes)
+    cpu.s.ip = _FSM_EXIT[1]                          # jump to the X integrate (skip the ASM FSM body)
+    if sfx:
+        _emit_sfx(cpu, sfx)
+
+
+def _diff_fsm(cpu) -> None:
+    """At the FSM exit (5A0F), diff player_fsm_step's prediction (from 58A7) against the ASM over the watch
+    window. ``cpu.pre2_fsm_verify`` carries the (stats, on_result, raise) reporter config."""
+    pending = getattr(cpu, "pre2_fsm_pending", None)
+    if not pending:
+        return
+    rec = pending.pop()
+    cfg = getattr(cpu, "pre2_fsm_verify", None)
+    if cfg is None or rec is None or rec[0] is None:    # not verifying, or [0x6BC5]!=0 skip frame
+        return
+    stats, on_result, raise_on_div = cfg
+    if rec[0] == "gap":
+        report(stats, on_result, raise_on_div, "player_fsm", f"gap: {rec[1]}")
+        return
+    _, writes, entry = rec
+    mem = cpu.mem
+    pred = {}
+    for a, v in writes.items():
+        pred[a] = v & 0xFF
+        if a in FSM_WORD_FIELDS:
+            pred[(a + 1) & 0xFFFF] = (v >> 8) & 0xFF
+    # the render-sprite position bytes are don't-care when the sprite is suppressed ([0x4F0E]==0xFFFF)
+    dead = {0x4F0A, 0x4F0B, 0x4F0C, 0x4F0D} if _rw(mem, 0x4F0E) == 0xFFFF else set()
+    reason = None
+    for a in _FSM_WATCH:
+        if a in dead:
+            continue
+        want = pred.get(a, entry.get(a, _rb(mem, a)))
+        got = _rb(mem, a)
+        if got != want:
+            reason = f"[{a:#06x}] rec={want:#04x} asm={got:#04x}"
+            break
+    report(stats, on_result, raise_on_div, "player_fsm", reason)
+
+
 @registry.replace(*_ENTRY, "player_x_integrate")
 def player_x_integrate_hook(cpu) -> None:
-    """Native replacement for the player horizontal kinematics at 1030:5A0F..5A33."""
+    """Native replacement for the player horizontal kinematics at 1030:5A0F..5A33.
+
+    5A0F is also the FSM exit, so in verify mode this hook first diffs the FSM prediction (made at 58A7, now all
+    committed by the ASM) before predicting X."""
     mem = cpu.mem
     x, xvel, cam_left = _rw(mem, _PX), _rw(mem, 0x4F22), _rw(mem, 0x8164)
     new_x = player_x_integrate(x, xvel, cam_left)
 
     if getattr(cpu, "pre2_verify_mode", False):
+        _diff_fsm(cpu)
         cpu.pre2_player_pending.append(new_x)
         interpret_current_instruction_without_hook(cpu)
         return
@@ -135,7 +247,9 @@ def player_tick_timers_hook(cpu) -> None:
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
-    """Install the lockstep verify hooks: diff the recovered X (5A36) / Y (5A41) / timers (5A8C) vs the ASM."""
+    """Install the lockstep verify hooks: diff the recovered FSM (5A0F) / X (5A36) / Y (5A41) / timers (5A8C) vs
+    the ASM. The FSM diff runs inside the X-integrate hook at the shared 5A0F boundary (see _diff_fsm)."""
+    cpu.pre2_fsm_verify = (stats, on_result, raise_on_divergence)
 
     def _verify_x_at_next(c) -> None:
         # 0x5A36 is the X-integrate EXIT *and* the Y-integrate ENTRY. In verify mode this hook shadows the

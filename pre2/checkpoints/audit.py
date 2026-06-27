@@ -28,6 +28,9 @@ _CATEGORY = {
     "player_x_integrate": "live",             # 5A0F player-FSM leaf (horizontal kinematics, inline block)
     "player_y_integrate": "live",             # 5A36 player-FSM leaf (vertical kinematics; collision 5A96 corrects)
     "player_tick_timers": "live",             # 5A47 player-FSM leaf (8 saturating per-frame countdown timers)
+    "player_fsm": "live",                     # 58A7 input->FSM front-end + state-select + handler dispatch
+                                              #      (verify 28/28 clean; live-drive fails loud on the unrecovered
+                                              #       idle look-around anim-0x13 camera-pan @5D8A -> 3435/3414)
     "player_collision": "live",               # 5A96 ground/tile collision (the big call/ret subroutine)
     # --- gameplay frame renderer ---
     "frame_grid": "live", "frame_tile_row": "live", "frame_scroll_copy": "live",

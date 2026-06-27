@@ -21,7 +21,7 @@ __all__ = [
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
     "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
     "player_state_anim4", "player_state_attack", "player_dispatch_handler", "PLAYER_HANDLERS",
-    "player_fsm_frontend", "player_fsm_step",
+    "player_fsm_frontend", "player_fsm_step", "FSM_WORD_FIELDS",
     "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE", "ATTACK_PHASE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
@@ -38,6 +38,15 @@ JUMP_IMPULSE_TABLE = 0x79CE   # [asm 5F57] 9 words of per-frame Yvel impulse for
 JUMP_FRAMES = 9               # [asm 5F50] frames driven by the impulse table before gravity takes over
 ATTACK_PHASE_TABLE = 0x7B04      # [asm 5FAF/6081] 5-byte per-phase records {frametbl_ptr w, sfx b, v19 b, flag b}
 ATTACK_SPAWN_LIST = 0x4F2E       # [asm 627D] the projectile list the attack handler spawns into (4 slots, 0x12)
+
+# 16-bit-word DS fields written by player_fsm_step; every other write in its contract is a byte. Used by the
+# live FSM checkpoint to apply / diff each write at the right width (the byte-vs-word lesson from collision).
+FSM_WORD_FIELDS = frozenset(
+    {0x4F0A, 0x4F0C, 0x4F0E, 0x4F20, 0x4F22, 0x4F25, 0x4F28, 0x4F2A, 0x6BBE, 0x6BEB}
+    | {s + d for s in range(ATTACK_SPAWN_LIST, ATTACK_SPAWN_LIST + 4 * 0x12, 0x12)  # projectile slots:
+       for d in (0, 2, 4, 6, 0xC, 0xE)}                                            # words (the +8 field is a byte)
+    | set(range(TRAIL_RING_LO, 0x4FC2, 2))                                         # trail/dust ring slots
+)
 
 ANIM_SEQ_TABLE = 0x7CDF   # [asm 6366/637D] base of the per-state animation-sequence pointer table
 ANIM_ID_TABLE = 0x7B7F    # [asm 592E] base of the input-bitmask -> anim_id (FSM state index) table
@@ -322,7 +331,10 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
     bx (e.g. the jump handler with 4), which only affects the 5DED default-anim sequence. Returns the dict of
     writes. The witnessed paths (see docs/pre2/player_fsm_island.md): airborne, moving+turn (anim 0x12 +
     trail), default (5DED), long-idle (anim 0x10), and fidget (anim 0x11 via the table at 0x79E0). The
-    short-idle anim-0x13 path + dust effects (3435/3414) never fire and are left unrecovered (fail loud)."""
+    short-idle look-around anim-0x13 path (5D8A) — set_anim(0x13)+advance then the camera-pan effect
+    (3435/3414 -> the scroll/render sub-island 3588/350c) — is NOT recovered and fails loud. It does fire under
+    the live-collapse trajectory (idle look-around), so it gates the FSM *live-drive*; recovering it (the camera
+    pan) is the next step. The verify oracle is unaffected (28/28 demos clean)."""
     out = {0x6BC8: 0}                                            # [5CE8]
     xv = player_friction_dir(rw(0x4F22), rw(0x6BF6))            # [5CED]
     xv = player_friction_sym(xv, rb(0x4F24))                    # [5CF0]
@@ -646,10 +658,10 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
     a27 = out[0x4F27]                                                         # [5FF0] (post set_anim)
     if a27 == 6:                                                             # [5FF3-5FF5]
         dy = 0
-    elif a27 == 3:                                                           # [5FFA-5FFC]
+    elif a27 == 3:                                                           # [5FF7/5FFA-5FFC] dx=0xFFE0
         dy = (-0x20) & 0xFFFF
-    else:
-        dy = (-0x10) & 0xFFFF
+    else:                                                                    # [5FFE] dx=0xFFD0
+        dy = (-0x30) & 0xFFFF
         trail = player_emit_trail(rw(0x4F1C), rw(0x4F1E), rb(0x6BD5), rw(0x6BBE))  # [6001] call 5E11
         if trail is not None:
             out.update(trail[0])
