@@ -26,19 +26,53 @@ Status: **boundary mapped (OBSERVED)** — recovery not started. Heavily witness
      `ah&1`; if rising into a solid ceiling, nudge X by ±2 to slip past an open side (`es:[di±dx+0x100]`).
   Above-the-top (`Y<=-1`): `63B5` + `[0x6BF3]=0xFF` (never witnessed).
 
-## Two handler tables (DS-relative, bx = type*2)
-- `cs:[0x7D9B]` — **ground** tile handlers (land/fall/slope), dispatched at `5C04`.
-- `cs:[0x7DA9]` — **ceiling** tile handlers, dispatched at `5C33`; returns "solid" in `ah&1`.
+## Three handler tables (DS-relative, bx = type*2)
+- `cs:[0x7D9B]` — **ground** tile handlers (land/fall/slope), dispatched at `5C04` (remap `0x7F5E`).
+- `cs:[0x7DA9]` — **ceiling** tile handlers, dispatched at `5C33`; returns "solid" in `ah&1` (remap `0x805E`).
+- `cs:[0x7D95]` — **side/body** handlers (horizontal wall collision), dispatched at `5CA4`/`5CC6` from the
+  vertical scan loop (remap `0x7E5E`). Note `0x7D95 = 0x7D9B - 6`, so idx≥3 alias the ground handlers.
 
-## Tile-type handler table `cs:[0x7D9B]` (bx = tile_type*2) — witnessed
-| bx | handler | fires (L1) | role |
+### Side table `cs:[0x7D95]` (`collision_side_handler`, ✅ VERIFIED 3208 byte-exact)
+| idx | handler | role | confidence |
 |---|---|---|---|
-| 0x00 | `0x65EF` | 811 | type 0 — snap-down-if-solid-below else fall (slope-aware) |
-| 0x02 | `0x6641` | 1225 | type 1 — land (`call 0x641F`) |
-| 0x04 | `0x6657` | 46 | type 2 — land + slope shift `[0x4F24]=1` |
+| 0 | `0x652C` | if tile side-solid (`0x805E[tile]&0x10`) push a wall-impact marker `(X<<3,Y<<3)` into `0x6EA9` (`64FA`); else no-op | VERIFIED (no-op path); ASM_MATCHED (the `64FA` marker push never fires) |
+| 1 | `0x6539` | wall block = `collision_hblock` (undo X step, stop) | VERIFIED (22+83+1+4) |
+| 2 | `0x65AF` | special level trigger | fail loud |
+| 3-8 | ground `65EF`… | alias the ground handlers | unwitnessed in side scan |
 
-(`0x6660`/`0x6669` are the `[0x4F24]=2`/`=3` slope variants — not yet witnessed.) The handlers are thin
-wrappers over two shared core routines + the slope helper.
+The scan loop walks `dh/0x10` cells up from the foot cell (`dh` = anim height from `0x7191`); `5C92` dispatches
+the first cell unconditionally, `5CAC` the rest only for remapped tile types 2/4. The wall-marker list `0x6EA9`
+is 10×8-byte records (slot free when leading word `0x55AA`); `64FA` writes `(X<<3, Y<<3)` + three zero bytes.
+
+### Ceiling table `cs:[0x7DA9]` (`collision_ceiling`, ✅ VERIFIED 247+53+97 byte-exact)
+| idx | handler | role |
+|---|---|---|
+| 0 | `0x6672` | `ret` — no-op (no ceiling tile) |
+| 1 | `0x6673` | head-bump: if rising (Yvel≠0) zero Yvel + snap Y below the ceiling (`(&0xFFF0)+0x10`); if Yvel==0 the `668B` push-out-of-solid branch (unwitnessed → fail loud) |
+| 2 | `0x65AF` | special level trigger (`[0x27D8]`/`[0x6BE4]`) — unwitnessed → fail loud |
+
+The handler index is `0x805E[tile_above]&0xF`; tiles 5/6/7/8 → idx1, tile 0x26 → idx2, rest → idx0. The "solid"
+flag for the side-nudge is `0x7E5E[player_tile]&1` (read pre-dispatch, saved across the call). The `5C44-5C72`
+corner-slip (X±2) and the Yvel==0 push-out are both gated on `0x7E5E`-solid tiles, which are absent in all three
+head-collision demos (`015602`/`015822`/`015934`, table all-zero) → unwitnessed, fail loud.
+
+## Tile-type handler table `cs:[0x7D9B]` (`collision_ground_handler`, ✅ idx0/1 VERIFIED 3216 byte-exact)
+| idx | handler | role | confidence |
+|---|---|---|---|
+| 0 | `0x65EF` | snap-down-if-reachable-tile-below else fall (slope-aware) | VERIFIED (190+532+761+16+76) |
+| 1 | `0x6641` | plain land (`call 0x641F`) | VERIFIED (154+149+1236+85+17) |
+| 2 | `0x6657` | land + slope shift `[0x4F24]=1` | ASM_MATCHED (unwitnessed) |
+| 3 | `0x6660` | land + slope shift `[0x4F24]=2` | ASM_MATCHED (unwitnessed) |
+| 4 | `0x6669` | land + slope shift `[0x4F24]=3` | ASM_MATCHED (unwitnessed) |
+| 5 | `0x6645` | `[0x4F24]=0`; `[0x6BE1]!=0` ? fall : land | ASM_MATCHED (unwitnessed) |
+| 6 | `0x65AF` | special level trigger | fail loud (unwitnessed) |
+| 7 | `0x6672` | `ret` no-op | trivial |
+
+idx 0 (`65EF`): at rest (Yvel==0), if a reachable solid/slope tile sits one row below (prop≠0 and slope offset
+`< 0x10`), step the player down a row (`[0x4F1E]+=0x10`) and land on it; otherwise mark airborne. The handler
+index is `0x7F5E[foot_tile]*2`; the foot tile is `es:[bx+0x100]` (player tile + one row). The handlers are thin
+wrappers over the verified land/fall/slope cores — the byte-exact shadow (5C04→5C08) carries the landing-dust
+ring writes too (the `5E18` ungated trail emit, full-word X/Y/id).
 
 ## Core routines
 - **`0x641F` land-on-ground** (mapped, witnessed): `[0x4F24]=0`; if Yvel<0 (rising) → `0x6401` (airborne); else
@@ -76,8 +110,32 @@ wrappers over two shared core routines + the slope helper.
 2. ✅ **`0x641F` land recovered+verified** (`collision_land`): 1272/1272 (L1) + 149/149 (slope demo), byte-exact
    over all three exits (rising/soft/hard). The `5E18` landing dust = `player_emit_trail` ungated; the map read
    is `read_es(di)` → `[tile+0x8E1D]`.
-3. **`5B81` composition** (mapped): the 3 ground tile handlers (`65EF/6641/6657`, thin over land/fall/slope) +
-   the ceiling table `cs:[0x7DA9]` + the side-nudge + the bridge-dip. Threads the `di` map pointer.
+3. ✅ **Ceiling collision recovered+verified** (`collision_ceiling`, `5C16`): 247+53+97 byte-exact on the
+   head-collision demos. Witnessed = idx0 noop + idx1 head-bump (always rising); the Yvel==0 push-out, idx2
+   trigger, and `0x7E5E`-solid side-nudge are unwitnessed and fail loud.
+4. ✅ **Ground tile-handler dispatch recovered+verified** (`collision_ground_handler`, `5C04`): 3216 byte-exact
+   across 5 demos for idx 0/1 (the only witnessed indices); idx 2-5 ASM-matched, idx 6 fail-loud, idx 7 noop.
+5. ✅ **Bridge-dip recovered+verified** (`collision_bridge_dip`, `5BB8`): 3011 calls byte-exact (7 real dip/spring
+   events on `001513`, tiles 0xDE-0xE1). Returns `(ds_writes, map_writes)`; writes the tile map (`es:[di]`±1 sag
+   frames) + `[0x6BAB]` + grid-dirty flags (`5C7B`→`[0x2DF4]`/`[0x2DE0]`; the `653D` direct-redraw path is
+   unwitnessed → fail loud).
+6. ✅ **Side-scan dispatch recovered+verified** (`collision_side_handler`, `cs:[0x7D95]`): 3208 byte-exact.
+
+### Remaining: the `5A96` main-body composition (the capstone → unblocks the `player_update` collapse)
+All three handler tables + the bridge-dip + every leaf core are now recovered & byte-exact. The main body
+(`5A96..5B80`) glues them:
+1. **Cell calc** (`5A99-5ACB`): `row=(Y>>4)-1`, `col=X>>4`, cell `bx=col+(row<<8)`; `dh=0x7191[anim&0x1F00>>...]`
+   (player height extent); X edge offset `9/-9/0` from `sign([0x4F22])`.
+2. **Camera range check** (`5ACD-5B16`): if `|Y>>4-[0x2DE6]|>0xB` or `|X>>4-[0x2DE4]|>0x14` or off the vertical
+   map bounds → out-of-range: `[0x2D8A]==0xE` ? `[0x6BE5]=0xFF` : `65AF` trigger.
+3. `[0x6BF3]=0`; **call the `5B81` worker** (bridge + ground dispatch + ceiling — all done).
+4. **Post-worker fall** (`5B31-5B54`): if the worker set airborne (`[0x6BF3]==1`): `[0x6BFE]==0` ? `64DF`
+   (soft-land tail) : `63B5` (off-top fall anim) + if `Yvel>0` inc the fall counter `[0x6BD2]`; else `[0x6BD2]=0`.
+5. **Side scan loop** (`5B5B-5B7B`): from the X-edge-offset foot cell, call `5C92`/`5CAC` (side dispatch, done)
+   for `dh/0x10` rows upward.
+Sub-leaves still to transcribe for the compose: `63B5` off-top fall-anim (calls `62B1`/`6309` dust spawners),
+`64DF` soft-land tail (disasm'd: sat-dec `[0x6BE0]`, `[0x6BD1]=0`, `[0x6BF3]=2`, `[0x6BCA]=Y`). Then assemble
+`collision(mem) -> (ds_writes, map_writes)` and shadow-verify the whole `5A96` write-contract at the `5B80` ret.
 4. `5A96` main body (tile-cell calc + camera range-check + the `5CAC` scan loop) → compose `collision(mem)`
    and shadow-verify the full write-contract → unblocks the player_update live collapse.
 2. Recover `0x641F` land (reads the tile-property table `0x8E1D` + slopes) — the core ground response.
