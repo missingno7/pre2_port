@@ -81,29 +81,66 @@ def _sqz_ignore(cpu):
     ]
 
 
-def _object_render_ignore(cpu):
-    """Don't-care regions for object_render (1030:26FA).
+# =====================================================================================
+# IGNORE-REGION POLICY (strict — read before adding any entry to `_IGNORE`)
+#
+# An ignore region is ONLY for a PROVEN mechanism-only difference: the recovered routine
+# reaches the same EXTERNAL result by a different internal mechanism than the ASM, so a
+# whole-memory diff flags machine bytes that carry no behaviour. It is NEVER a way to mute
+# an unexplained or unrecovered divergence.
+#
+# ACCEPTABLE to ignore:
+#   - self-modifying-code templates used only inside the replaced routine
+#   - temporary scratch buffers read/written only inside the replaced routine
+#   - staging memory with no downstream reads
+#   - mechanism-only diffs where visible output AND the state contract are proven identical
+#
+# NEVER ignore (these are behaviour — fix the hook or widen the contract instead):
+#   - visible planes, object slots, player state, timers, collision flags,
+#     score/HUD state, scroll/camera state, animation state,
+#     anything read after the routine returns,
+#     anything not proven dead by read/write-watch.
+#
+# Each entry MUST document all 7: (1) exact byte range, (2) owning routine, (3) why the
+# ASM writes it, (4) why the recovered routine needn't, (5) read/write-watch proof, (6)
+# proof downstream state/output still matches, (7) why it is mechanism-only, not behaviour.
+# Keep ranges TIGHT. We do NOT reproduce dead scratch — the recovery goal is same visible
+# output / live state / contract / downstream behaviour, not byte-identical internal scratch.
+# =====================================================================================
 
-    The ASM renderer is **self-modifying**: it patches immediate operands into its own
-    code template at ``cs:[0x26E0..0x26FA]`` (``mov cs:[0x26EC],dh`` / ``add cs:[0x26E0],ax`` …)
-    and then executes that patched block as the blit inner loop, plus a per-sprite scratch
-    word at ``[0x2DEC]`` (clipped extent). The recovered renderer blits straight onto the EGA
-    planes with no self-modifying code, so it legitimately leaves both stale — a mechanism-only
-    difference, not a result difference. Both regions are written **and** read only inside the
-    routine (read/write-watch: the SMC block + ``[0x2DEC..0x2DEF]`` are touched solely by IPs in
-    ``26FA..2DF9``; nothing downstream consumes them), so the visible contract — the four EGA
-    planes + the ``[+5]/[+0x11]`` record mutations — is still fully diffed. ``cpu`` is unused
-    (the regions are fixed program addresses)."""
+
+def _object_render_ignore(cpu):
+    """Don't-care regions for object_render (1030:26FA). (`cpu` unused — fixed program addresses.)
+
+    (1) EXACT RANGE: code-seg 0x26E0..0x26FA (the 0x1A bytes between the prior routine's RET at
+        26DE and this entry at 26FA) + DGROUP 0x2DEC..0x2DF0 (two scratch words).
+    (2) OWNER: object_render (1030:26FA..2DF9), the moving-sprite renderer.
+    (3) WHY ASM WRITES IT: the ASM blit is SELF-MODIFYING — per sprite it patches immediate
+        operands into its own code template at cs:[0x26E0..0x26FA] (mov cs:[0x26EC],dh ;
+        mov word cs:[0x26E8],ax ; add word cs:[0x26E0],ax …) then executes that block as the
+        inner blit loop; [0x2DEC] holds the per-sprite clipped extent (written 27DE/27E1).
+    (4) WHY RECOVERED NEEDN'T: the recovered renderer (paint_sprite) blits straight onto the
+        EGA planes in Python — no self-modifying code, no clip-scratch word — so it reaches the
+        same pixels without those bytes.
+    (5) READ/WRITE-WATCH PROOF: the SMC operands are written only by IPs 27E1/27E6/27F8/2845/
+        2851/2858 and the only reader is the routine executing them; [0x2DEC..0x2DEF] is written
+        only at 2713/27E1 and read only at 284C/2DE4 — every accessor IP is inside 26FA..2DF9.
+    (6) DOWNSTREAM MATCH: with these regions neutralised, full-verify is 0-divergence for
+        object_render on demos 165111 + 015602; the four EGA planes and the [+5]/[+0x11] record
+        mutations (the routine's real contract) are still diffed in full and match.
+    (7) MECHANISM-ONLY: nothing outside the routine ever reads these bytes (proof 5), so they
+        are dead the instant the routine returns — an artifact of the ASM's blit acceleration,
+        not game behaviour."""
     code = (0x1030 << 4) & 0xFFFFF
     data = (0x1A0F << 4) & 0xFFFFF
     return [
-        (code + 0x26E0, code + 0x26FA),   # self-modified blit-code template (patched every sprite)
-        (data + 0x2DEC, data + 0x2DF0),   # per-sprite clipped-extent scratch word(s)
+        (code + 0x26E0, code + 0x26FA),   # (1) self-modified blit-code template (re-patched per sprite)
+        (data + 0x2DEC, data + 0x2DF0),   # (1) per-sprite clipped-extent scratch word(s)
     ]
 
 
 # Per-hook don't-care regions: ``(cs, ip) -> fn(cpu_at_entry) -> [(phys_lo, phys_hi), ...]``.
-# Only for routines that legitimately differ from the ASM in *mechanism*, not result.
+# Add an entry ONLY under the IGNORE-REGION POLICY above (proven mechanism-only).
 _IGNORE = {
     (0x1030, 0x107B): _sqz_ignore,
     (0x1030, 0x26FA): _object_render_ignore,
