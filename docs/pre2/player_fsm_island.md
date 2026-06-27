@@ -124,7 +124,7 @@ path) is a few primitive calls. Status of the 7 distinct handlers (anim_id 3/6/7
 | 5 | `0x5E96` | 16 | **recovered+verified** 14/14 | `set_anim; advance_anim; friction_sym; charge_6BCE` |
 | 0 | `0x5CDB` | 629 | **recovered+verified** 719/719+88/88 | airborne/moving+trail(`5E11`)/default/long-idle/fidget(`0x79E0`); anim13+dust `3435/3414` unwitnessed |
 | 2 | `0x5F30` | 250 | **recovered+verified** 288/288+4/4 | jump-arc table `0x79CE`/gravity + horizontal + `set_anim(2)` + 2× friction; `[0x6BE0]`→idle |
-| 3/6/7 | `0x5F96` | 72 | **recovered+verified** 100/100+88/88 | "eating": set_anim/advance/friction/`[0x7B19]`/`[0x6BD0]`; sound path = `play_sfx`+trail+Yvel+projectile-spawn (`0x4F2E`); main path = render-sprite via phase frame-table |
+| 3/6/7 | `0x5F96` | 72 | **recovered+verified** 100/100+88/88 | "attack": set_anim/advance/friction/`[0x7B19]`/`[0x6BD0]`; sound path = `play_sfx`+trail+Yvel+projectile-spawn (`0x4F2E`); main path = render-sprite via phase frame-table |
 | 4 | `0x5E62` | 20 | **recovered+verified** 11/11 | `[0x6BD3]=0;[0x6BE1]=4;charge`; `|Xvel|<=0x20`→accel(0x20)+set_anim+advance, else→idle (bx=8) |
 | 8 | `0x5CCE` | 156 | **recovered+verified** 134/134 | `friction_dir; friction_sym; set_anim; advance` (al = post-friction Xvel low byte) |
 
@@ -139,9 +139,9 @@ valid** (it compares recovered vs real ASM from an identical state). The rigorou
 verify-mode (`enable_pre2_hook_verification`, instruction-count-transparent) on the eventual live
 `player_update` — that is the final check before/as the collapse lands.
 
-**The "eating" handler `0x5F96` IS the override tail `0x5F93`** — `5F93: mov al,[0x4F27]` falls straight into
-`5F96`, so the override path is the eating body entered with `al=[0x4F27]` (vs `al=anim_id` for the eating
-dispatch). Recovering `player_state_eating(al, bx)` closed BOTH gaps. It's audio+spawn+render coupled:
+**The "attack" handler `0x5F96` IS the override tail `0x5F93`** — `5F93: mov al,[0x4F27]` falls straight into
+`5F96`, so the override path is the attack body entered with `al=[0x4F27]` (vs `al=anim_id` for the attack
+dispatch). Recovering `player_state_attack(al, bx)` closed BOTH gaps. It's audio+spawn+render coupled:
 `play_sfx 0x282` (`sfx` return), a projectile spawn into the `0x4F2E` list (`627C` find-free), the override
 flag `[0x6BD0]=(~[0x6BCF])&0x40`, and the render-sprite via the phase frame-table (`6081`). **Shadow-verified
 byte-exact: 100/100 (L1) + 88/88 (L6), sfx stream matched.** Dead-value note: when the player render slot is
@@ -153,7 +153,7 @@ All 6 recovered handlers behind one uniform `(rb, rw) -> writes` entry, keyed by
 `player_select_anim_id` (the recovered `cs:[anim_id*2 + 0x7D2F]` table). **Full-dispatch shadow (hook the real
 `5A0B` dispatch, compare the whole contract at the `5A0F` return): 1980/1980 (L1) + 211/211 (L6), byte-exact,
 zero divergences** across anim_ids 0,1,2,4,5,8. (This 2-hook probe perturbs far less than the per-handler ones:
-a0=637 here vs 629 unhooked.) Remaining gaps, both fail-loud: the eating handler (anim_id 3/6/7, ~69×) and the
+a0=637 here vs 629 unhooked.) Remaining gaps, both fail-loud: the attack handler (anim_id 3/6/7, ~69×) and the
 idle anim13 sub-path (`5D8A`, timeline-reachable but rare — its dust effects `3435/3414` are out-of-FSM-scope).
 
 ## Full FSM step composed (`player_fsm_step`) — front-end + select + dispatch
@@ -166,7 +166,7 @@ code. (`DC1` input-decode + `6294` sync are upstream; `6294` is a no-op when `[0
 Two real composition bugs the shadow caught (not perturbation): the handler reads `[0x6BDB]` (input-held, for
 `accel`) which the front-end writes — needed a full read-overlay of pending writes; and the `[0x6BD0]!=0`
 override sends every handler (bar anim8) to the unrecovered tail `5F93` — now a fail-loud gap. Gaps total
-101/88 per demo (override + eating 3/6/7 + idle anim13).
+101/88 per demo (override + attack 3/6/7 + idle anim13).
 
 ## Remaining to fully collapse `player_update`
 1. **idle's `5D8A` anim13 sub-path = the "idle look-around"** — anim `0x13` + a CAMERA PAN (`3435` scrolls the
@@ -177,11 +177,11 @@ override sends every handler (bar anim8) to the unrecovered tail `5F93` — now 
    cross-cutting camera state (`[0x2DE4]`/`[0x2DE8]`), so it's a small sub-island, not a leaf.
 2. Live-hook `player_update` (front-end → select → dispatch → X/Y integrate → collision → timers) and collapse
    in **verify-mode** (the non-perturbing oracle), subsuming the X/Y/timer leaves. NB: the full-step *standalone*
-   shadow shows perturbation-class residuals on the **stateful** eating sequence (`[0x4F28]` advances across
-   frames; the eating handler itself is byte-exact standalone) — verify-mode is the authority there.
+   shadow shows perturbation-class residuals on the **stateful** attack sequence (`[0x4F28]` advances across
+   frames; the attack handler itself is byte-exact standalone) — verify-mode is the authority there.
 3. The collision sub-island `5A96`/`cs:[0x7D9B]`.
 
-(Done since the last revision: the eating handler `0x5F96` + the override tail `0x5F93` — recovered + byte-exact
+(Done since the last revision: the attack handler `0x5F96` + the override tail `0x5F93` — recovered + byte-exact
 standalone; `player_dispatch_handler` routes anim_id 3/6/7 to it and `player_fsm_step` handles the override.)
 
 ## Other sub-island still ASM: collision + tile-interaction `5A96`

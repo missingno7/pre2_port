@@ -22,7 +22,7 @@ from pre2.recovered.player import (
     player_set_anim,
     player_state_anim4,
     player_state_anim5,
-    player_state_eating,
+    player_state_attack,
     player_state_anim8,
     player_state_idle,
     player_state_jump,
@@ -282,8 +282,8 @@ def test_fsm_frontend_bitmask_and_facing():
     assert bm2 == 0x01 and 0x4F25 not in w2
 
 
-def test_eating_sound_path_sets_override_flag_and_sfx():
-    # eating handler (anim_id 3): a frame whose anim high byte has bit6 set selects the sound path
+def test_attack_sound_path_sets_override_flag_and_sfx():
+    # attack handler (anim_id 3): a frame whose anim high byte has bit6 set selects the sound path
     # ([0x6BD0] = (~bcf)&0x40 == 0), which emits play_sfx and stores the phase sfx in [0x6BCD].
     SEQ, FT = 0x9000, 0x9100
     mem = {0x7B18: 0, 0x4F27: 0, 0x4F28: 0, 0x4F25: 1, 0x4F24: 0, 0x4F22: 0x40, 0x6BF6: 0x10,
@@ -293,7 +293,7 @@ def test_eating_sound_path_sets_override_flag_and_sfx():
              0x7B04: FT, FT: 0x55AA}       # phase frame-table ptr -> immediate terminator
     rb = lambda o: mem.get(o, 0) & 0xFF
     rw = lambda o: words.get(o, mem.get(o, 0) | (mem.get(o + 1, 0) << 8)) & 0xFFFF
-    out, sfx = player_state_eating(3, 6, rb, rw)
+    out, sfx = player_state_attack(3, 6, rb, rw)
     assert out[0x6BD0] == 0          # bcf bit6 set -> override flag cleared (sound path)
     assert sfx == [5]                # phase 0 -> play_sfx dl=5
     assert out[0x6BCD] == 0x06       # phase sfx stored
@@ -302,14 +302,14 @@ def test_eating_sound_path_sets_override_flag_and_sfx():
     assert out[0x4F0E] == 0xFFFF     # [0x6BD2]!=0 -> player render slot marked inactive
 
 
-def test_dispatch_returns_writes_and_sfx_and_routes_eating():
+def test_dispatch_returns_writes_and_sfx_and_routes_attack():
     mem = {0x4F22: 0x40, 0x6BF6: 0x40, 0x4F24: 0, 0x6BFE: 0, 0x4F2A: 0x10, 0x6BD1: 2, 0x4F25: 1}
     rb = lambda o: mem.get(o, 0) & 0xFF
     rw = lambda o: mem.get(o, 0) & 0xFFFF
     # anim_id 0 routes to the idle handler (here its airborne path); no sound
     w0, s0 = player_dispatch_handler(0, rb, rw)
     assert w0[0x4F22] == 0x2C and s0 == []
-    # anim_id 3/6/7 route to the recovered eating handler (no longer fails loud), and emit a play_sfx command
+    # anim_id 3/6/7 route to the recovered attack handler (no longer fails loud), and emit a play_sfx command
     rb_t = lambda o: 0
     rw_t = lambda o: 0x55AA   # every frame-table walk terminates immediately (0x55AA = the table sentinel)
     w3, s3 = player_dispatch_handler(3, rb_t, rw_t)

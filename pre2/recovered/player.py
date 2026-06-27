@@ -20,9 +20,9 @@ __all__ = [
     "player_accel", "player_friction_dir", "player_friction_sym", "player_gravity",
     "player_set_anim", "player_advance_anim", "player_select_anim_id",
     "player_state_run", "player_state_anim5", "player_state_idle", "player_state_jump", "player_state_anim8",
-    "player_state_anim4", "player_state_eating", "player_dispatch_handler", "PLAYER_HANDLERS",
+    "player_state_anim4", "player_state_attack", "player_dispatch_handler", "PLAYER_HANDLERS",
     "player_fsm_frontend", "player_fsm_step",
-    "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE", "EAT_PHASE_TABLE",
+    "player_charge_6bce", "player_emit_trail", "JUMP_IMPULSE_TABLE", "ATTACK_PHASE_TABLE",
     "X_MIN", "X_MAX", "VIEW_TILES", "TIMER_BYTES", "TIMER_WORD",
     "XVEL_FLOOR", "ANIM_SEQ_TABLE", "ANIM_ID_TABLE", "RUN_ACCEL_LIMIT",
     "TRAIL_RING_LO", "TRAIL_RING_HI", "TRAIL_STRIDE", "TRAIL_SPRITE",
@@ -36,8 +36,8 @@ TRAIL_SPRITE = 0x35       # [asm 5E29] trail sprite id written into slot+4
 RUN_ACCEL_LIMIT = 0x50    # [asm 5F03] the run state's horizontal speed cap passed to player_accel
 JUMP_IMPULSE_TABLE = 0x79CE   # [asm 5F57] 9 words of per-frame Yvel impulse for the jump arc (decaying)
 JUMP_FRAMES = 9               # [asm 5F50] frames driven by the impulse table before gravity takes over
-EAT_PHASE_TABLE = 0x7B04      # [asm 5FAF/6081] 5-byte per-phase records {frametbl_ptr w, sfx b, v19 b, flag b}
-EAT_SPAWN_LIST = 0x4F2E       # [asm 627D] the projectile list the eating handler spawns into (4 slots, 0x12)
+ATTACK_PHASE_TABLE = 0x7B04      # [asm 5FAF/6081] 5-byte per-phase records {frametbl_ptr w, sfx b, v19 b, flag b}
+ATTACK_SPAWN_LIST = 0x4F2E       # [asm 627D] the projectile list the attack handler spawns into (4 slots, 0x12)
 
 ANIM_SEQ_TABLE = 0x7CDF   # [asm 6366/637D] base of the per-state animation-sequence pointer table
 ANIM_ID_TABLE = 0x7B7F    # [asm 592E] base of the input-bitmask -> anim_id (FSM state index) table
@@ -470,7 +470,7 @@ def player_state_anim4(rb, rw) -> dict:
 
 
 # The per-anim_id FSM handler table (the recovered counterpart of ``cs:[anim_id*2 + 0x7D2F]``). anim_ids 3/6/7
-# share the audio-coupled "eating" handler 0x5F96 (not yet recovered).
+# share the audio-coupled "attack" (door-bash/secret-reveal) handler 0x5F96 (not yet recovered).
 PLAYER_HANDLERS = {
     0: player_state_idle,     # 0x5CDB
     1: player_state_run,      # 0x5EC4
@@ -528,16 +528,16 @@ def player_fsm_step(rb, rw) -> tuple:
         return (writes[off] & 0xFFFF) if off in writes else rw(off)
 
     # All handlers except anim_id 8 begin with `cmp [0x6BD0],0 ; jne 5F93` — when the override flag is set they
-    # run the shared override tail 0x5F93 (== the eating body with al=[0x4F27]).
+    # run the shared override tail 0x5F93 (== the attack body with al=[0x4F27]).
     if rb(0x6BD0) != 0 and anim_id != 8:                        # [5F35-etc] -> 5F93 override
-        hw, sfx = player_state_eating(rb(0x4F27), anim_id * 2, rb2, rw2)
+        hw, sfx = player_state_attack(rb(0x4F27), anim_id * 2, rb2, rw2)
     else:
         hw, sfx = player_dispatch_handler(anim_id, rb2, rw2)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
     writes.update(hw)
     return writes, sfx
 
 
-def _eating_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
+def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     """1030:6081 — map the current anim frame to the player render sprite via the phase's frame table (8-byte
     records {frame, sprite_id, x_off, y_off}, 0x55AA terminator). Sets [0x4F0E]/[0x4F0A]/[0x4F0C] with the
     facing flip; leaves them unchanged if the frame is not in the table."""
@@ -563,12 +563,12 @@ def _eating_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     out[0x4F0C] = (rw(0x4F1E) + (_s16(rw(0x4F2A)) >> 4) - _s16(yoff)) & 0xFFFF  # [60C7-60DB]
 
 
-def _eating_spawn(out: dict, rec: int, rb, rw) -> bool:
+def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     """1030:6017-6070 — spawn a projectile into the first free 0x4F2E slot (stride 0x12, 4 slots; free = [+4]
     ==0xFFFF). Reads the projectile's sprite/offsets from just past the phase frame-table's terminator.
     Returns True if a slot was taken (the caller then sets [0x4F0E]=0xFFFF)."""
     si = None                                                  # [627C-6293] find a free 0x4F2E slot
-    p = EAT_SPAWN_LIST
+    p = ATTACK_SPAWN_LIST
     for _ in range(4):
         if rw((p + 4) & 0xFFFF) == 0xFFFF:
             si = p
@@ -596,10 +596,12 @@ def _eating_spawn(out: dict, rec: int, rb, rw) -> bool:
     return True
 
 
-def player_state_eating(al: int, bx: int, rb, rw) -> tuple:
-    """Recover the ``anim_id 3/6/7`` "eating" FSM handler ``1030:5F96`` AND the shared override tail ``5F93``
-    (same code; ``5F93`` just sets ``al=[0x4F27]`` first). ``al``=entry anim id / state, ``bx``=anim_id*2 (the
-    set_anim sequence index). Returns ``(writes, sfx)`` where ``sfx`` is a list of ``play_sfx`` dl values.
+def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
+    """Recover the ``anim_id 3/6/7`` "attack" FSM handler ``1030:5F96`` AND the shared override tail ``5F93``
+    (same code; ``5F93`` just sets ``al=[0x4F27]`` first). This is the caveman's club-bash action — witnessed
+    driving the door-bashing (`demo …015934`) and secret-tile reveal (`…015822`); the spawned `0x4F2E`
+    projectile is the bash hitbox. ``al``=entry anim id / state, ``bx``=anim_id*2 (the set_anim sequence
+    index). Returns ``(writes, sfx)`` where ``sfx`` is a list of ``play_sfx`` dl values.
 
     Common: set_anim_b + advance + friction_sym + sat_inc[0x6BD3]; ``[0x7B19]`` = phase.v19 (x4 if [0x6BCE]);
     ``[0x6BD0]`` = (~[0x6BCF])&0x40 (the advance_anim high byte's bit6) — which selects the branch:
@@ -616,7 +618,7 @@ def player_state_eating(al: int, bx: int, rb, rw) -> tuple:
     out[0x6BD3] = _sat_inc_byte(rb(0x6BD3))                                   # [5F9F]
 
     phase = rb(0x7B18)                                                        # [5FA9-5FAF]
-    rec = (EAT_PHASE_TABLE + 5 * phase) & 0xFFFF
+    rec = (ATTACK_PHASE_TABLE + 5 * phase) & 0xFFFF
     v19 = rb((rec + 3) & 0xFFFF)                                              # [5FB1] phase.v19
     if rb(0x6BCE) != 0:                                                       # [5FB5-5FBE]
         v19 = (v19 << 2) & 0xFF
@@ -633,7 +635,7 @@ def player_state_eating(al: int, bx: int, rb, rw) -> tuple:
         return (out[off] & 0xFFFF) if off in out else rw(off)
 
     if bd0 != 0:                                                              # [5FCD-5FCF] -> 6081 main
-        _eating_render_sprite(out, rec, frame, rb_ov, rw_ov)
+        _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)
         return out, sfx
 
     # sound path [5FD2+]
@@ -652,10 +654,10 @@ def player_state_eating(al: int, bx: int, rb, rw) -> tuple:
             out[0x6BBE] = trail[1]
     if rb(0x6BFE) == 0:                                                       # [6004-600B]
         out[0x4F2A] = (rw(0x4F2A) + dy) & 0xFFFF
-    if (rb((rec + 4) & 0xFFFF) & 1) and _eating_spawn(out, rec, rb_ov, rw_ov):  # [600F-6017] flag bit0 + free slot
+    if (rb((rec + 4) & 0xFFFF) & 1) and _attack_spawn(out, rec, rb_ov, rw_ov):  # [600F-6017] flag bit0 + free slot
         out[0x4F0E] = 0xFFFF                                                  # [6070]
     elif rb(0x6BD2) == 0:                                                     # [6075-607A]
-        _eating_render_sprite(out, rec, frame, rb_ov, rw_ov)                  # [6081]
+        _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)                  # [6081]
     else:
         out[0x4F0E] = 0xFFFF                                                  # [607C]
     return out, sfx
@@ -665,10 +667,10 @@ def player_dispatch_handler(anim_id: int, rb, rw) -> tuple:
     """Dispatch the player FSM to the recovered per-state handler (the ``cs:[anim_id*2 + 0x7D2F]`` table).
 
     Every recovered handler behind one uniform ``(rb, rw) -> (writes, sfx)`` entry point, keyed by the
-    ``anim_id`` from :func:`player_select_anim_id`. anim_ids 3/6/7 share the audio-coupled "eating" handler
+    ``anim_id`` from :func:`player_select_anim_id`. anim_ids 3/6/7 share the audio-coupled "attack" (door-bash/secret-reveal) handler
     (``0x5F96``), which also emits ``play_sfx`` commands (``sfx``); the others emit no sound (``[]``)."""
     if anim_id in (3, 6, 7):
-        return player_state_eating(anim_id, anim_id * 2, rb, rw)
+        return player_state_attack(anim_id, anim_id * 2, rb, rw)
     handler = PLAYER_HANDLERS.get(anim_id)
     if handler is None:
         raise NotImplementedError(f"player FSM handler for anim_id={anim_id} not recovered")
