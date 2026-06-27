@@ -10,7 +10,7 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 | addr | role |
 |------|------|
 | `88D7` | orchestrator. `[0xA312]=1`; for the 4 projectile slots `0x4F2E` (stride 0x12): if `[si+4]!=-1` → `8C21`; if it did **not** hit an enemy (CF=0) → `899E`. Then unless `[0x6BC5]` (scripted pose): the player sprite `0x4F0A` → `8C21`/`899E`, with a special `[0x4F2A]` (player Yvel) bounce on a miss. `[0xA312]=0`; ret. |
-| `8C21` | **source-vs-ENEMY collision/damage.** Scan the 12 object slots `0x4FD0` (stride 0x12). Skip empty (`[di+4]==-1`), dead (`[di+0xE]==0xFF`), or non-collidable (`[bx+4]&0x10`, bx=`[di+6]` def-ptr). `8D7B` proximity; on hit: `[di+5]|=0x40`, `[di+0xF] -= [0x7B19]` (HP). If HP underflows (kill): `dx=2; call 0x282` (play_sfx) + `8C72` (death debris). Else knockback `[di] -= [di+8]>>2`. Consume source `[si+4]=0xFFFF`; **return CF=1**. |
+| `8C21` | **source-vs-ENEMY collision/damage.** Scan the 12 object slots `0x4FD0` (stride 0x12). Skip empty (`[di+4]==-1`), dead (`[di+0xE]==0xFF`), or non-collidable (`[bx+4]&0x10`, bx=`[di+6]` def-ptr). `8D7B` proximity; on hit: `[di+5]|=0x40`, `[di+0xF] -= [0x7B19]` (HP). If HP underflows (kill): `dx=2; call 0x282` (play_sfx) + `8C72` (death). Else knockback `[di] -= [di+8]>>2`. Consume source `[si+4]=0xFFFF`; **return CF=1**. — **RECOVERED** (`projectile_vs_enemies`; shadow 170 calls / 5 demos, 0 mismatch, incl. 4 kills→death_handler) |
 | `899E` | **source-vs-BONUS pickup.** Scan the 80-entry bonus-cell list `0x8C8D` (stride 5: `[+3]`=x cell, `[+4]`=y cell). Coarse gate `|Δx|<=1` and a `0x10` y window vs `bp=[si+2]-0x10`. On a candidate: `[si+4]=0xFFFF`, `8A5A` (the hit handler → `5E41`); on confirm, walk a secondary on-screen list and `8B6E` per breakable cell. Picks a score-popup id into `[0xA33A]` (branching on `[0x2D8A]` level id), bursts effects via `8D1B`, accumulates `[0xA336]/0xA338/0xA33C`. |
 
 ## Sub-routines (leaves)
@@ -42,10 +42,10 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
    the id low byte: `(id & 0x1FFF) << 1`.
 2. ✅ `8D1B` (`spawn_effect_burst`) + `8875` (`spawn_debris_element`) + `80CB` (`advance_death_anim`) +
    `8C72` (`death_handler`, both paths) — ALL DONE, shadow byte-exact.
-3. **Next: compose `8C21`** (enemy damage) — for each enemy slot: `8D7B` proximity → `[di+5]|=0x40`,
-   `[di+0xF] -= [0x7B19]` HP; on underflow (kill) `play_sfx(2)` + `death_handler` (8C72); else knockback
-   `[di] -= [di+8]>>2`; consume the projectile `[si+4]=0xFFFF`; return CF=hit. All leaves are recovered.
-4. Then `899E` (bonus pickup; needs `8A5A`→`5E41`, `8B6E` tile-rewrite); then the `88D7` orchestrator + live hook.
+3. ✅ `8C21` (enemy damage, `projectile_vs_enemies`) — DONE, shadow byte-exact (both kill + knockback paths).
+   The whole projectile/player-vs-ENEMY side of the island is now recovered.
+4. **Next: `899E`** (source-vs-bonus pickup) — needs the bonus hit handler `8A5A`→`5E41` and the breakable-tile
+   rewrite `8B6E` (the latter still unwitnessed). Then the `88D7` orchestrator + live hook.
 
 Gated flags to respect: `[0x6BC5]` (scripted pose — skips the player pass), `[0xA312]` (set across the pass;
 read by `8D7B` to relax the player-vs-enemy bounce test).

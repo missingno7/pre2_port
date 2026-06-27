@@ -365,3 +365,50 @@ def death_handler(rb, rw, bx, di, src_si):
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFF80, 6))   # [asm 8CDC] 8D1B
 
     return ov.b
+
+
+ENEMY_SLOTS_LO = 0x4FD0   # the 12 active object/enemy slots (stride 0x12)
+ENEMY_SLOTS_N = 0x0C
+DEF_NONCOLLIDE = 0x10     # [def+4] bit4 -> the object ignores projectile/player collision
+KILL_SFX = 2              # play_sfx index on a kill
+
+
+def projectile_vs_enemies(rb, rw, si):
+    """[asm 8C21] Scan the 12 enemy slots (0x4FD0) for the first the source sprite ``si`` (a projectile or
+    the player) overlaps; on a hit mark + damage it, kill (SFX + death_handler) or knock it back, and consume
+    the source. Returns ``(writes, sfx, hit, slot)`` — ``writes`` is the byte-level ``{offset: value}``
+    contract, ``sfx`` the SFX indices to emit, ``hit`` the ASM's CF, ``slot`` the enemy hit (or None)."""
+    damage = rb(DAMAGE)
+    writes: dict[int, int] = {}
+    sfx: list[int] = []
+
+    di = ENEMY_SLOTS_LO
+    for _ in range(ENEMY_SLOTS_N):
+        if rw((di + 4) & 0xFFFF) != 0xFFFF and rb((di + 0xE) & 0xFFFF) != 0xFF:  # [asm 8C27/8C2D]
+            bx = rw((di + 6) & 0xFFFF)
+            if not (rb((bx + 4) & 0xFFFF) & DEF_NONCOLLIDE):                     # [asm 8C36] collidable
+                hit, hb = hitbox_overlap(rb, rw, si, di)                         # [asm 8C3C] 8D7B
+                for off, (val, width) in hb.items():                            # 8D7B's [0xA330]/[0xA331]
+                    writes[off & 0xFFFF] = val & 0xFF
+                    if width == 2:
+                        writes[(off + 1) & 0xFFFF] = (val >> 8) & 0xFF
+                if hit:                                                          # [asm 8C3F] jae skips
+                    writes[(di + 5) & 0xFFFF] = rb((di + 5) & 0xFFFF) | 0x40     # [asm 8C41] mark hit
+                    hp = rb((di + 0xF) & 0xFFFF)
+                    writes[(di + 0xF) & 0xFFFF] = (hp - damage) & 0xFF           # [asm 8C48] HP -= damage
+                    if hp < damage:                                             # [asm 8C4B] borrow -> kill
+                        sfx.append(KILL_SFX)                                     # [asm 8C50] play_sfx(2)
+                        for off, val in death_handler(rb, rw, bx, di, si).items():
+                            writes[off & 0xFFFF] = val & 0xFF
+                    else:                                                        # [asm 8C58] knockback
+                        kb = _s16(rw((di + 8) & 0xFFFF)) >> 2                     # ax = [di+8] >> 2 (arith)
+                        nx = (rw(di) - kb) & 0xFFFF
+                        writes[di] = nx & 0xFF
+                        writes[(di + 1) & 0xFFFF] = (nx >> 8) & 0xFF
+                    cons = (si + 4) & 0xFFFF                                      # [asm 8C61] consume source
+                    writes[cons] = 0xFF
+                    writes[(cons + 1) & 0xFFFF] = 0xFF
+                    return writes, sfx, True, di
+        di = (di + 0x12) & 0xFFFF
+
+    return writes, sfx, False, None

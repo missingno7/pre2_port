@@ -19,6 +19,7 @@ from pre2.recovered.combat_interaction import (
     death_handler,
     hitbox_overlap,
     pack_spawn_pos,
+    projectile_vs_enemies,
     roll_bonus_sprite_id,
     spawn_debris_element,
     spawn_effect_burst,
@@ -177,3 +178,29 @@ def test_death_handler_bonus_path_marks_dead_and_sets_spawn_globals():
     assert word(SPAWN_X) == 0x123 and word(SPAWN_Y) == 0x456   # [0xA336]/[0xA338] = enemy pos
     assert word(BURST_SPRITE) == 0x2046      # [0xA33A] = death-bonus sprite
     assert word(0x50A8 + 4) == 0x2046        # the free slot got a bonus sprite
+
+
+# ---- projectile_vs_enemies (8C21) — shadow byte-exact (170 calls / 5 demos, incl. 4 kills) ----
+def test_projectile_no_hit_when_all_slots_empty():
+    rb, rw = _byte_mem(words={0x4FD0 + i * 0x12 + 4: 0xFFFF for i in range(12)}, byts={0x7B19: 5})
+    writes, sfx, hit, slot = projectile_vs_enemies(rb, rw, 0x4F0A)
+    assert hit is False and slot is None and sfx == []
+
+
+def test_projectile_knockback_hit_consumes_source():
+    SI, DI = 0x4F0A, 0x4FD0
+    rb, rw = _byte_mem(
+        words={SI: 0x100, SI + 2: 0x100, SI + 4: 0x0000,    # source pos + id 0
+               DI: 0x100, DI + 2: 0x100, DI + 4: 0x0000,    # enemy pos + id 0 (not 0xFFFF -> occupied)
+               DI + 6: 0x600, DI + 8: 0x10},                # def ptr + Xvel for knockback
+        byts={DI + 0xE: 0x00, DI + 0xF: 0x10,               # alive, HP 0x10 (> damage -> survives)
+              0x604: 0x00, 0x7B19: 0x05,                    # [def+4] collidable, damage 5
+              0x4FD5: 0x00,                                  # [di+5] starts 0
+              0xA312: 1, HALF_LO: 0x10, HALF_LO + 1: 0x10, HALF_WX: 0x08})
+    writes, sfx, hit, slot = projectile_vs_enemies(rb, rw, SI)
+    word = lambda o: writes.get(o, 0) | (writes.get(o + 1, 0) << 8)
+    assert hit is True and slot == DI and sfx == []
+    assert writes[DI + 5] == 0x40                # hit flag OR'd in
+    assert writes[DI + 0xF] == 0x0B              # HP 0x10 - 5
+    assert word(DI) == 0xFC                      # knockback: 0x100 - (0x10 >> 2)
+    assert word(SI + 4) == 0xFFFF                # source (projectile) consumed
