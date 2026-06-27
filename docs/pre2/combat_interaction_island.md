@@ -11,7 +11,7 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
 |------|------|
 | `88D7` | orchestrator. `[0xA312]=1`; for the 4 projectile slots `0x4F2E` (stride 0x12): if `[si+4]!=-1` → `8C21`; if it did **not** hit an enemy (CF=0) → `899E`. Then unless `[0x6BC5]` (scripted pose): the player sprite `0x4F0A` → `8C21`/`899E`, with a special `[0x4F2A]` (player Yvel) bounce on a miss. `[0xA312]=0`; ret. |
 | `8C21` | **source-vs-ENEMY collision/damage.** Scan the 12 object slots `0x4FD0` (stride 0x12). Skip empty (`[di+4]==-1`), dead (`[di+0xE]==0xFF`), or non-collidable (`[bx+4]&0x10`, bx=`[di+6]` def-ptr). `8D7B` proximity; on hit: `[di+5]|=0x40`, `[di+0xF] -= [0x7B19]` (HP). If HP underflows (kill): `dx=2; call 0x282` (play_sfx) + `8C72` (death). Else knockback `[di] -= [di+8]>>2`. Consume source `[si+4]=0xFFFF`; **return CF=1**. — **RECOVERED** (`projectile_vs_enemies`; shadow 170 calls / 5 demos, 0 mismatch, incl. 4 kills→death_handler) |
-| `899E` | **source-vs-BONUS pickup.** Scan the 80-entry bonus-cell list `0x8C8D` (stride 5: `[+3]`=x cell, `[+4]`=y cell). Coarse gate `|Δx|<=1` and a `0x10` y window vs `bp=[si+2]-0x10`. On a candidate: `[si+4]=0xFFFF`, `8A5A` (the hit handler → `5E41`); on confirm, walk a secondary on-screen list and `8B6E` per breakable cell. Picks a score-popup id into `[0xA33A]` (branching on `[0x2D8A]` level id), bursts effects via `8D1B`, accumulates `[0xA336]/0xA338/0xA33C`. |
+| `899E` | **source-vs-BONUS pickup.** Scan the 80-entry bonus-cell list `0x8C8D` (stride 5, `[+3]`=packed x/y map offset). Coarse gate `|Δx_cell|<=1` and a `0x10` y window vs `bp=[si+2]-0x10`. On a candidate: `[si+4]=0xFFFF`, call `8A5A`; if it collects (CF=1), **flood-fill** all connected cells (8-adjacency, deduped via `0xA2A8`) calling `8B6E` per cell. Returns CF=collect. — **RECOVERED** (`bonus_pickup_scan` + `_flood_collect`; shadow 150 calls / 4 demos, 0 mismatch, incl. 6 collects; the flood-fill *inner* 8B6E-entry collect is unwitnessed but disasm-faithful) |
 
 ## Sub-routines (leaves)
 
@@ -45,8 +45,12 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
    `8C72` (`death_handler`, both paths) — ALL DONE, shadow byte-exact.
 3. ✅ `8C21` (enemy damage, `projectile_vs_enemies`) — DONE, shadow byte-exact (both kill + knockback paths).
    The whole projectile/player-vs-ENEMY side of the island is now recovered.
-4. **Next: `899E`** (source-vs-bonus pickup) — needs the bonus hit handler `8A5A`→`5E41` and the breakable-tile
-   rewrite `8B6E` (the latter still unwitnessed). Then the `88D7` orchestrator + live hook.
+4. ✅ `899E` (source-vs-bonus pickup, `bonus_pickup_scan`) — DONE, shadow byte-exact. The whole bonus side
+   (`8A5A` + `5E41` + `8B6E` + the flood-fill) is recovered.
+5. **Next: live-hook `88D7`** — the orchestrator (`8C21` then `899E` per projectile + the player). Both
+   `projectile_vs_enemies` and `bonus_pickup_scan` are recovered; the live hook applies their write contracts,
+   emits the SFX, performs the on-screen tile re-blit for collects (the render side-effect), and the player
+   `[0x4F2A]` bounce on a miss. Then verify-mode coverage.
 
 Gated flags to respect: `[0x6BC5]` (scripted pose — skips the player pass), `[0xA312]` (set across the pass;
 read by `8D7B` to relax the player-vs-enemy bounce test).

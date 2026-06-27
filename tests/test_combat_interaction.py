@@ -22,6 +22,7 @@ from pre2.recovered.combat_interaction import (
     advance_death_anim,
     bonus_collect_tail,
     bonus_hit_handler,
+    bonus_pickup_scan,
     death_handler,
     hitbox_overlap,
     pack_spawn_pos,
@@ -267,3 +268,14 @@ def test_bonus_hit_counter_underflow_collects_without_tile_rewrite():
     ds, mp, onscreen, collected = bonus_hit_handler(rb, rw, DI, 0x4F0A)
     assert collected is True and mp == {}        # [cell+2] 0x81 -> 0x80 underflow -> stc, no map write
     assert ds[DI + 2] == 0x80                     # counter decremented
+
+
+# ---- bonus_pickup_scan (899E) — shadow byte-exact (150 calls / 4 demos, incl. 6 collects) ----
+def test_bonus_pickup_scan_no_cells_in_range():
+    SI = 0x4F0A
+    words = {0x8C8D + i * 5 + 3: 0xFFFF for i in range(0x50)}  # all 80 cells empty
+    words[SI] = 0x100
+    words[SI + 2] = 0x100
+    rb, rw = _byte_mem(words=words)
+    ds, mp, redraws, hit = bonus_pickup_scan(rb, rw, SI)
+    assert hit is False and mp == {} and redraws == []

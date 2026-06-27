@@ -61,6 +61,11 @@ def _abs16(d: int) -> int:
     return (0x10000 - d) if (d & 0x8000) else d
 
 
+def _abs8(d: int) -> int:
+    d &= 0xFF
+    return (0x100 - d) if (d & 0x80) else d
+
+
 class _Overlay:
     """A byte-level read-through write buffer over base DS memory, so a composed routine's later reads see
     its own earlier writes (the 8C72 debris loop fills the pool + scatters the enemy pos in place)."""
@@ -90,6 +95,11 @@ class _Overlay:
     def apply(self, writes: dict) -> None:
         for off, (val, width) in writes.items():
             (self.ww if width == 2 else self.wb)(off, val)
+
+    def merge_bytes(self, byte_writes: dict) -> None:
+        """Merge a byte-level {offset: value} dict (e.g. another routine's overlay buffer)."""
+        for off, val in byte_writes.items():
+            self.b[off & 0xFFFF] = val & 0xFF
 
 
 @oracle_link("1030:8BF6",
@@ -589,3 +599,70 @@ def bonus_hit_handler(rb, rw, di, src_si):
 
     map_writes, onscreen, collected = _bonus_finish(ov, di)
     return ov.b, map_writes, onscreen, collected
+
+
+BONUS_CELL_LIST = 0x8C8D  # 80 bonus cells, stride 5 ([+3] = packed x/y map offset)
+BONUS_CELL_N = 0x50
+DEDUP_BUF = 0xA2A8        # flood-fill dedup buffer (one byte per cell index)
+
+
+def bonus_pickup_scan(rb, rw, si):
+    """[asm 899E] Scan the 80-cell bonus list (0x8C8D) for cells near the source sprite ``si``; call
+    bonus_hit_handler for each in range; on the first that collects, flood-fill-collect all connected cells
+    (8-adjacency in cell coords, deduped via 0xA2A8). Returns ``(ds_writes, map_writes, redraws, hit)`` —
+    the byte-level DS contract, the level-map ``{offset: (value, width)}`` writes, the list of on-screen
+    map offsets whose tile must be re-blitted (render side-effect for the live hook), and the ASM's CF."""
+    ov = _Overlay(rb)
+    src_x_lo = (_s16(ov.rw(si)) >> 4) & 0xFF              # [asm 89A4] (ax = [si]>>4); only the low byte used
+    bp_y = (ov.rw((si + 2) & 0xFFFF) - 0x10) & 0xFFFF     # [asm 89A8] bp = [si+2] - 0x10
+    map_all: dict[int, tuple[int, int]] = {}
+    redraws: list[int] = []
+
+    di = BONUS_CELL_LIST
+    for _ in range(BONUS_CELL_N):
+        cell = ov.rw((di + 3) & 0xFFFF)
+        if cell != 0xFFFF \
+                and _abs8((cell & 0xFF) - src_x_lo) <= 1 \
+                and _abs16(((cell >> 8) & 0xFF) * 16 - bp_y) < 0x10:   # [asm 89BC/89CC] in range
+            ov.ww((si + 4) & 0xFFFF, 0xFFFF)             # [asm 89E3] consume the source
+            ds_h, map_h, onscr_h, collected = bonus_hit_handler(ov.rb, ov.rw, di, si)   # [asm 89EB] 8A5A
+            ov.merge_bytes(ds_h)
+            map_all.update(map_h)
+            if onscr_h:
+                redraws.append(ov.rw((di + 3) & 0xFFFF))   # (cell already cleared by collect; record offset)
+            if collected:                                 # [asm 89EE] CF=1 -> flood-fill the rest
+                self_map, self_redraws = _flood_collect(ov, cell)
+                map_all.update(self_map)
+                redraws.extend(self_redraws)
+                return ov.b, map_all, redraws, True
+        di = (di + 5) & 0xFFFF
+
+    return ov.b, map_all, redraws, False                  # [asm 8A57] clc
+
+
+def _flood_collect(ov, center):
+    """[asm 89F0-8A4B] Flood-fill collect of cells connected (8-adjacency in cell coords) to ``center``,
+    deduped by cell index in the 0xA2A8 buffer. Returns (map_writes, redraws)."""
+    for k in range(BONUS_CELL_N):                         # [asm 89F4] clear dedup buffer
+        ov.wb((DEDUP_BUF + k) & 0xFFFF, 0)
+    map_all: dict[int, tuple[int, int]] = {}
+    redraws: list[int] = []
+    stack = [center]
+    while stack:                                          # [asm 8A44] pop a center, re-scan
+        cur = stack.pop()
+        si = BONUS_CELL_LIST
+        for idx in range(BONUS_CELL_N):                   # [asm 8A06] scan all cells
+            ax = ov.rw((si + 3) & 0xFFFF)
+            if ax != 0xFFFF and ax != cur \
+                    and _abs8((ax & 0xFF) - (cur & 0xFF)) <= 1 \
+                    and _abs8(((ax >> 8) & 0xFF) - ((cur >> 8) & 0xFF)) <= 1 \
+                    and ov.rb((DEDUP_BUF + idx) & 0xFFFF) == 0:   # [asm 8A27] dedup
+                ov.wb((DEDUP_BUF + idx) & 0xFFFF, 1)
+                stack.append(ax)                          # [asm 8A37] push as a new center
+                ds_c, map_c, onscreen = bonus_collect_tail(ov.rb, ov.rw, si)   # [asm 8A3C] 8B6E
+                ov.apply(ds_c)
+                map_all.update(map_c)
+                if onscreen:
+                    redraws.append(ax)
+            si = (si + 5) & 0xFFFF
+    return map_all, redraws
