@@ -35,6 +35,7 @@ PLAYER_ANIM_HEIGHT_TABLE = 0x7191  # [asm 5AAF] anim frame -> player vertical ex
 # composition's byte-level overlay so a later read sees an earlier write at the correct width.
 COLLISION_BYTE_FIELDS = frozenset({
     0x4F24, 0x4F25, 0x6BF3, 0x6BD2, 0x6BD1, 0x6BD0, 0x6BE0, 0x6BE1, 0x6BEA, 0x6BC7, 0x6BC8, 0x6BE5, 0x2DF4,
+    0x6BBD,                  # bridge-dip 653D direct-redraw page-dirty byte (mov byte [0x6bbd],1)
     0x6BE4, 0x27D6, 0x27D8,  # off-camera trigger (65B3)
     # wall-marker slot trailing bytes (+4/+5/+7 of each 8-byte record)
     *(s + d for s in range(WALL_MARKER_LIST, WALL_MARKER_END, 8) for d in (4, 5, 7)),
@@ -291,22 +292,28 @@ def collision_ground_handler(idx: int, rb, rw, read_es, di: int) -> dict:
     raise NotImplementedError(f"ground handler idx {idx} not recovered")
 
 
-def _bridge_dirty(new_tile: int, ds_w: dict, rb) -> None:
-    """The bridge sag/spring grid-dirty step ``1030:5C7B`` (`bx = new_tile`). For ``[0x4DF8+tile] >= 1`` mark the
-    grid dirty (``[0x2DF4]=1``, ``[0x2DE0]=0x55AA``); ``== 0`` would redraw the tile directly (`653D`), which is
-    unwitnessed here and fails loud."""
+def _bridge_dirty(new_tile: int, off: int, ds_w: dict, redraws: list, rb) -> None:
+    """The bridge sag/spring dirty step ``1030:5C7B`` (`bx = new_tile`, the tile at map offset `off` = the foot
+    `di`). For ``[0x4DF8+tile] >= 1`` mark the whole grid dirty (``[0x2DF4]=1``, ``[0x2DE0]=0x55AA``). For
+    ``== 0`` the ASM redraws that ONE tile directly (`5C8E -> 653D`): if the cell is on-screen (col in
+    ``[cam_x, cam_x+0x14)``, row in ``[cam_y, cam_y+0x0C)``) queue an on-page re-blit of `off` — the same shared
+    3B77 tile blit the bonus-collect redraw uses, reading the tile's new frame from the live map — and set the
+    page-dirty flag ``[0x6BBD]=1``; an off-screen cell does nothing (the 653D `stc` early-out)."""
     if rb((DIRTY_KIND_TABLE + new_tile) & 0xFFFF) >= 1:            # [5C7B-5C80] jb 5c8e
         ds_w[0x2DF4] = 1                                            # [5C82]
         ds_w[0x2DE0] = 0x55AA                                       # [5C87]
-    else:
-        raise NotImplementedError("bridge-dip 653D direct tile-redraw path not witnessed")
+        return
+    col, row = off & 0xFF, (off >> 8) & 0xFF                       # [6546-6558] 653D on-screen test vs camera
+    if ((col - rb(0x2DE4)) & 0xFF) < 0x14 and ((row - rb(0x2DE6)) & 0xFF) < 0x0C:
+        redraws.append(off & 0xFFFF)                               # [6599 -> 3B77] re-blit the one tile
+        ds_w[0x6BBD] = 1                                           # [659C]
 
 
 def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
     """Recover the bridge/platform sag-under-weight ``1030:5BB8..5C01`` (runs when the foot tile differs from the
     one currently dipping, ``[0x6BAB] != di``). ``read_es(off)`` reads the live tile map; ``di`` is the foot-tile
-    pointer. Returns ``(ds_writes, map_writes)`` where ``map_writes`` maps an es-relative tile offset to its new
-    byte. Pure (no live writes).
+    pointer. Returns ``(ds_writes, map_writes, redraws)`` where ``map_writes`` maps an es-relative tile offset to
+    its new byte and ``redraws`` lists the (type-0) tile offsets to re-blit on-page. Pure (no live writes).
 
     First spring the previously-dipping tile (`[0x6BAB]`) back up — walk its graphic id **down** one frame at a
     time while the tile is still a sag frame (`0x805E[id-1] & 0x20`), writing+dirtying each, until it clears, then
@@ -314,6 +321,7 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
     (graphic id+1), mark it as the dipping tile (`[0x6BAB]=di`), and dirty it."""
     ds_w: dict = {}
     map_w: dict = {}
+    redraws: list = []
     bab = rw(0x6BAB)
     if bab != 0x55AA:                                              # [5BBB] something is currently dipping
         sdi = bab & 0xFFFF
@@ -324,14 +332,14 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
                 ds_w[0x6BAB] = 0x55AA                               # [5BD5] sprung fully back -> none dipping
                 break
             map_w[sdi] = cur                                       # [5BDE-5BE0] es:[di] = id-1
-            _bridge_dirty(cur, ds_w, rb)                           # [5BE3]
+            _bridge_dirty(cur, sdi, ds_w, redraws, rb)            # [5BE3]
     cur = read_es(di & 0xFFFF)                                     # [5BE8] the new foot tile
     if rb((BRIDGE_FLAG_TABLE + cur) & 0xFFFF) & 0x20:             # [5BEB-5BF2] is it a bridge frame?
         ds_w[0x6BAB] = di & 0xFFFF                                 # [5BF4] now dipping
         nw = (cur + 1) & 0xFF                                      # [5BF8] inc -> next sag frame
         map_w[di & 0xFFFF] = nw                                    # [5BFB] es:[di] = id+1
-        _bridge_dirty(nw, ds_w, rb)                                # [5BFE]
-    return ds_w, map_w
+        _bridge_dirty(nw, di & 0xFFFF, ds_w, redraws, rb)        # [5BFE]
+    return ds_w, map_w, redraws
 
 
 def _wall_marker_push(rw) -> dict:
@@ -383,6 +391,7 @@ class _Overlay:
         self._rb, self._read_es = rb, read_es
         self.ds: dict = {}
         self.mp: dict = {}
+        self.redraws: list = []   # map offsets the bridge-dip queued for a direct on-page tile re-blit (653D)
 
     def rb(self, a: int) -> int:
         a &= 0xFFFF
@@ -428,9 +437,10 @@ def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
     foot_tile = ov.read_es(di) if ov.rb(0x2CF5) > (di >> 8) else 0  # [5B9D-5BA6] map-bounds clamp
     idx = ov.rb((GROUND_REMAP_TABLE + foot_tile) & 0xFFFF)         # [5BA8] cs:[0x7D9B] index
     if ov.rw(0x6BAB) != di:                                        # [5BB2] not already dipping here -> bridge-dip
-        bds, bmp = collision_bridge_dip(di, ov.read_es, ov.rw, ov.rb)  # [5BB8]
+        bds, bmp, bredraws = collision_bridge_dip(di, ov.read_es, ov.rw, ov.rb)  # [5BB8]
         ov.apply_ds(bds)
         ov.apply_map(bmp)
+        ov.redraws.extend(bredraws)
     ov.apply_ds(collision_ground_handler(idx, ov.rb, ov.rw, ov.read_es, di))   # [5C04]
     cbx = cell_bx - 0x100                                          # [5C09]
     if cbx >= 0 and _s16(ov.rw(0x4F2A)) <= 0:                      # [5C0D jb / 5C0F jg] in-bounds + not falling
@@ -449,7 +459,8 @@ def _side_scan(ov: _Overlay, cell: int, conditional: bool) -> None:
 def collision(rb, rw, read_es) -> tuple:
     """Recover the full player ground/tile collision ``1030:5A96`` (called from the player update at `5A41` after
     the Y integrate). ``rb``/``rw`` read DS; ``read_es(off)`` reads the live tile map (``es=[0x2DDA]``). Returns
-    ``(ds_writes, map_writes)`` as byte-keyed dicts (the routine's complete write-contract). Pure.
+    ``(ds_writes, map_writes, redraws)`` — the byte-keyed DS + map write-contract plus the list of tile offsets a
+    bridge-dip queued for a direct on-page re-blit (the 653D render side-effect). Pure (no live writes/blits).
 
     Computes the player's tile cell from X/Y, range-checks vs the camera, runs the tile-interaction worker
     (`5B81`: bridge-dip + ground dispatch + ceiling), resolves the post-worker fall/land state, then scans the
@@ -502,7 +513,7 @@ def collision(rb, rw, read_es) -> tuple:
                 break
             _side_scan(ov, bx, conditional=True)                 # [5B6F] subsequent cells
 
-    return ov.ds, ov.mp
+    return ov.ds, ov.mp, ov.redraws
 
 
 def _out_of_camera_range(rb, rw) -> bool:

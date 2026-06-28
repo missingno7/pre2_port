@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
+from pre2.bridge.object_interaction import redraw_tiles   # shared 3B77 direct tile re-blit (also the bonus redraw)
 from pre2.recovered.player_collision import collision
 
 from .common import Pre2HybridGap, report
@@ -53,7 +54,7 @@ def player_collision_hook(cpu) -> None:
 
     if getattr(cpu, "pre2_verify_mode", False):
         try:
-            ds_w, map_w = collision(rb, rw, read_es)
+            ds_w, map_w, _redraws = collision(rb, rw, read_es)
         except NotImplementedError as exc:
             ds_w = map_w = None
             cpu.pre2_collision_gap = str(exc)
@@ -64,13 +65,15 @@ def player_collision_hook(cpu) -> None:
     # Live hybrid: run the recovered routine, apply the write-contract, emulate the RET (pop the return address
     # pushed by `call 0x5A96` at 5A41). An unrecovered path must fail loud, never silently run the ASM.
     try:
-        ds_w, map_w = collision(rb, rw, read_es)
+        ds_w, map_w, redraws = collision(rb, rw, read_es)
     except NotImplementedError as exc:
         raise Pre2HybridGap(f"player collision (5A96): {exc}") from exc
     for a, v in ds_w.items():
         mem.data[(ds_base + (a & 0xFFFF)) & 0xFFFFF] = v & 0xFF
     for o, v in map_w.items():
         mem.data[(es_base + (o & 0xFFFF)) & 0xFFFFF] = v & 0xFF
+    if redraws:                                  # bridge-dip's direct single-tile re-blit (653D -> 3B77 staging)
+        redraw_tiles(mem, redraws, {o: (map_w[o], 1) for o in redraws})
     cpu.s.ip = cpu.pop()
 
 

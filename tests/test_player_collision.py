@@ -196,18 +196,19 @@ def _bridge_mem(bab=0x55AA, bridge_tiles=()):
 def test_bridge_no_dip_when_not_a_bridge_tile():
     ds, rb, rw = _bridge_mem(bab=0x55AA, bridge_tiles=())
     read_es = lambda o: 0x10            # plain tile, no 0x20 bit
-    ds_w, map_w = collision_bridge_dip(0x200, read_es, rw, rb)
-    assert ds_w == {} and map_w == {}
+    ds_w, map_w, redraws = collision_bridge_dip(0x200, read_es, rw, rb)
+    assert ds_w == {} and map_w == {} and redraws == []
 
 
 def test_bridge_dips_new_tile_down():
     # foot tile 0x20 is a bridge frame -> dip down to 0x21, mark dipping, dirty
     ds, rb, rw = _bridge_mem(bab=0x55AA, bridge_tiles={0x20, 0x21})
     read_es = lambda o: 0x20
-    ds_w, map_w = collision_bridge_dip(0x300, read_es, rw, rb)
+    ds_w, map_w, redraws = collision_bridge_dip(0x300, read_es, rw, rb)
     assert map_w == {0x300: 0x21}                       # es:[di] = id + 1
     assert ds_w[0x6BAB] == 0x300                        # now the dipping tile
     assert ds_w[0x2DF4] == 1 and ds_w[0x2DE0] == 0x55AA  # grid dirtied
+    assert redraws == []                                # [0x4DF8+id]>=1 -> grid dirty, not a direct redraw
 
 
 def test_bridge_springs_previous_tile_back_up():
@@ -215,10 +216,48 @@ def test_bridge_springs_previous_tile_back_up():
     ds, rb, rw = _bridge_mem(bab=0x280, bridge_tiles={0x21})  # 0x21 is still a sag frame, 0x20 is not
     es = {0x280: 0x22, 0x300: 0x10}
     read_es = lambda o: es[o]
-    ds_w, map_w = collision_bridge_dip(0x300, read_es, rw, rb)
+    ds_w, map_w, redraws = collision_bridge_dip(0x300, read_es, rw, rb)
     # springback: 0x22-1=0x21 is a sag frame -> write 0x21; 0x21-1=0x20 not a sag frame -> stop, clear
     assert map_w == {0x280: 0x21}
     assert ds_w[0x6BAB] == 0x55AA
+    assert redraws == []
+
+
+def _bridge_type0_mem(cam_x, cam_y, dip=0xEA, new=0xEB):
+    # foot tile `dip` is a sag frame (0x805E bit 0x20); the dipped frame `new` has blit-type 0 ([0x4DF8+new]==0)
+    # so the bridge-dip redraws it directly via 653D instead of dirtying the whole grid.
+    ds = {0x6BAB: 0x55AA, 0x2DE4: cam_x, 0x2DE6: cam_y}
+
+    def rb(o):
+        if 0x805E <= o < 0x805E + 0x100:
+            return 0x20 if (o - 0x805E) == dip else 0
+        if 0x4DF8 <= o < 0x4DF8 + 0x100:
+            return 0 if (o - 0x4DF8) == new else 1
+        return ds.get(o, 0) & 0xFF
+
+    return rb, (lambda o: ds.get(o, 0) & 0xFFFF), (lambda o: dip)
+
+
+def test_bridge_dip_type0_tile_queues_direct_redraw():
+    # the level-9 bridge-dip witness (snapshot_pre2_bridge_dip_20260628_195736): dip 0xEA -> 0xEB; [0x4DF8+0xEB]==0
+    # so 653D re-blits that one tile. Cell di=0x3515 (row 53, col 21), camera (7,45) -> on-screen.
+    rb, rw, read_es = _bridge_type0_mem(cam_x=7, cam_y=45)
+    di = 0x3515
+    ds_w, map_w, redraws = collision_bridge_dip(di, read_es, rw, rb)
+    assert map_w == {di: 0xEB}                          # es:[di] = id + 1
+    assert ds_w[0x6BAB] == di                           # now dipping here
+    assert redraws == [di]                              # the one on-screen tile to re-blit (its new frame 0xEB)
+    assert ds_w[0x6BBD] == 1                            # page-dirty flag
+    assert 0x2DF4 not in ds_w                           # NOT the grid-dirty path
+
+
+def test_bridge_dip_type0_offscreen_no_redraw():
+    # same dip, camera far away -> the 653D on-screen test fails (stc early-out): map still changes, no blit/flag
+    rb, rw, read_es = _bridge_type0_mem(cam_x=0, cam_y=0)
+    di = 0x3515
+    ds_w, map_w, redraws = collision_bridge_dip(di, read_es, rw, rb)
+    assert map_w == {di: 0xEB}
+    assert redraws == [] and 0x6BBD not in ds_w
 
 
 # --- horizontal/body side-collision dispatch cs:[0x7D95] (collision_side_handler) ---
