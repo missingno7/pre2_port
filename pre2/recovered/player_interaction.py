@@ -301,10 +301,12 @@ def _kill_all_screen(rb, rw, si, per_enemy):
     return ov
 
 
-def loop2_handler(num, rb, rw, si, find_free):
+def loop2_handler(num, rb, rw, si, find_free, strict=False):
     """Dispatch a pickup hit (ax=num=(spr_num&0x1FFF)-0x35) to its effect, in the ASM's chain order. Returns
     (writes, sfx). Raises Loop2NeedsHelper for the rare paths whose sub-routines aren't recovered yet.
-    (Names per cyxx level.c.)"""
+    ``strict`` (the LIVE hook) makes the ASM_MATCHED-only paths (trap 864F) fail loud instead of running an
+    unwitnessed recovery; the offline shadow keeps ``strict=False`` so it still verifies them. (Names per
+    cyxx level.c.)"""
     if num == 0x91:                                        # id 0xc6 [885F] "tap": clear fly timers, then count
         out = {}
         for k in range(0x14):                              # [8861] table 0x6EA9, 0x14 * 8
@@ -400,6 +402,8 @@ def loop2_handler(num, rb, rw, si, find_free):
             return out, [4]
         return out, []                                    # full -> nothing (the 8509 ret)
     if num in (0xA7, 0xA8):                               # ids 0xdc/0xdd [864F] trap hit (scatter bones)
+        if strict:                                        # LIVE: ASM_MATCHED, unwitnessed -> fail loud
+            raise Loop2NeedsHelper("trap-hit 864F ASM_MATCHED, not yet witnessed")
         ov = _Overlay(rb)                                 # ASM_MATCHED (unwitnessed): faithful 864F transcribe
         ov.wb(PLAYER_DEATH, 0x2C)                         # [8655] enter hurt/death state
         ov.wb(0x4F2C, 0)                                  # [865A]
@@ -442,11 +446,13 @@ def loop2_handler(num, rb, rw, si, find_free):
     raise Loop2NeedsHelper(f"unmapped num {num:#x}")
 
 
-def _boss_projectile(rb, rw):
+def _boss_projectile(rb, rw, strict=False):
     """[asm 8618] boss-projectile hit (loop2 ids 0x1CA/0x1CB). ENERGY==0 -> 65B3 _offcamera_trigger (lose a
     life / game over); else enter the hurt state, lose 1 energy, and 867E bone-burst (forced to a 6-bone
     scatter). No pickup-effect / no link-consume — the ASM jmps straight to the loop advance. Returns
-    (writes, sfx). ASM_MATCHED (unwitnessed)."""
+    (writes, sfx). ASM_MATCHED (unwitnessed); ``strict`` (LIVE) fails loud rather than run it."""
+    if strict:
+        raise Loop2NeedsHelper("boss-projectile 8618 ASM_MATCHED, not yet witnessed")
     ov = _Overlay(rb)
     if ov.rb(ENERGY) < 1:                                  # [8618] cmp [0x27D6],1 ; jae
         ov.merge_bytes(_offcamera_trigger(ov.rb))         # [861F] 65B3 death/respawn (byte-level dict)
@@ -464,10 +470,11 @@ def _boss_projectile(rb, rw):
 _EARLY_SKIP = (0xE5, 0x12C, 0x132, 0x134, 0x136)          # [840A] ids that pass through (no consume, no effect)
 
 
-def loop2(rb, rw, apply, emit_sfx, find_free):
+def loop2(rb, rw, apply, emit_sfx, find_free, strict=False):
     """[asm 83D7..8617] walk the 52-entry pickup list (0x50A8) vs the player; on a hitbox overlap of a
     collectible (`[si+5]&0x20`) entity, consume it and dispatch its effect. Applies writes via ``apply``;
-    plays sounds via ``emit_sfx``. Raises Loop2NeedsHelper if a not-yet-recovered effect path is hit."""
+    plays sounds via ``emit_sfx``. Raises Loop2NeedsHelper if a not-yet-recovered (or, under ``strict``, an
+    ASM_MATCHED-only) effect path is hit."""
     si = ENTITY2
     for _ in range(0x34):                                  # cx=0x34 (52)
         sid = rw((si + 4) & 0xFFFF)
@@ -482,18 +489,20 @@ def loop2(rb, rw, apply, emit_sfx, find_free):
                     # only for the dispatch), so the 0x2000 collectible flag stays in its high byte.
                     apply({(si + 4) & 0xFFFF: (0xFFFF, 2), A33A: (sid, 2)})
                     if aid in (0x1CA, 0x1CB):                        # [8432] boss projectile (8618)
-                        writes, sfx = _boss_projectile(rb, rw)
+                        writes, sfx = _boss_projectile(rb, rw, strict)
                     else:
-                        writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free)
+                        writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free, strict)
                     apply(writes)
                     for s in sfx:
                         emit_sfx(s)
         si = (si + 0x12) & 0xFFFF                                    # [860E]
 
 
-def player_interaction_tick(rb, rw, apply, emit_sfx, find_free):
+def player_interaction_tick(rb, rw, apply, emit_sfx, find_free, strict=False):
     """[asm 8295..8617] the whole player<->world interaction subsystem: loop1 (player-vs-enemy) then, unless
-    loop1 took an early return, loop2 (player-vs-pickup)."""
+    loop1 took an early return, loop2 (player-vs-pickup). ``strict`` (LIVE hook) makes the ASM_MATCHED-only
+    loop2 paths (trap/boss) raise Loop2NeedsHelper rather than run unwitnessed; loop1 + the VERIFIED loop2
+    handlers always run."""
     if loop1(rb, rw, apply, emit_sfx):
         return
-    loop2(rb, rw, apply, emit_sfx, find_free)
+    loop2(rb, rw, apply, emit_sfx, find_free, strict)
