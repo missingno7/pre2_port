@@ -131,7 +131,8 @@ def _death(rb, rw, di):
         n = (rb(0x27D6) - 1) & 0xFF                        # [83C4] dec
         out[0x27D6] = (n, 1)
         if n & 0x80:                                       # [83C8] jns skip -> call only if went negative
-            out.update(_offcamera_trigger(rb))             # [83CA] 65B3
+            # 65B3 returns byte-level {off:value}; out holds (val,width) tuples -> wrap as width-1
+            out.update({o: (v, 1) for o, v in _offcamera_trigger(rb).items()})   # [83CA]
     return out, sfx
 
 

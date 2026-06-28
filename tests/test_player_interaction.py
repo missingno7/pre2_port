@@ -182,6 +182,17 @@ def test_loop2_bomb_kills_enemy_and_spawns_food():          # num 0xAA (id 0xdf)
     assert w[0x5450 + 4] == (0xE7, 1) and w[0x5450 + 5] == (0x00, 1)  # the 0xE7 pickup effect
 
 
+def test_death_offcamera_path_returns_tuples():             # the no-energy game-over death (uncovered by demos)
+    # [83C8] energy goes negative -> _death calls 65B3 _offcamera_trigger, whose byte-level {off:int} must be
+    # wrapped as (val,width) tuples or the live apply crashes ("cannot unpack non-iterable int").
+    from pre2.recovered.player_interaction import _death
+    rb, rw = _mem({0x6BC5: 0, 0x27D6: 0, 0x27D8: 3, 0x6BE4: 0,   # energy 0 -> dec negative -> respawn trigger
+                   0x4FD0 + 6: 0x00, 0x4FD0 + 7: 0x70})           # [di+6] def ptr = 0x7000
+    out, sfx = _death(rb, rw, 0x4FD0)
+    assert all(isinstance(v, tuple) and len(v) == 2 for v in out.values()), out
+    assert out[0x27D8] == (2, 1)                             # _offcamera_trigger lives 3->2, wrapped
+
+
 def test_loop2_extra_life():                                # num 0xAE (id 0xe3) [87E6] +1 life (byte-exact in probe)
     kv = {0x27D8: 3,                                         # current lives = 3
           0x4F1C: 0x00, 0x4F1D: 0x02, 0x4F1E: 0x40, 0x4F1F: 0x01,  # player at (0x200, 0x140)
