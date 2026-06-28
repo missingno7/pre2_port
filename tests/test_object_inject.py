@@ -5,7 +5,7 @@ these pin the allocator + the projection record/cull/mode contract."""
 from __future__ import annotations
 
 from pre2.recovered.object_inject import (INJECT_MODE, ProjectResult, OBJ_COUNT, OBJ_BASE,
-                                          find_free_object_slot, handler_player_trail,
+                                          find_free_object_slot, handler_ground_snap_spawn,
                                           lookup_anim_frame, project_entity, dispatch_handler,
                                           handler_project_mode, handler_7e97, handler_7d6e,
                                           handler_7d1b, handler_7f6c, second_pass_tick)
@@ -23,14 +23,14 @@ def test_lookup_anim_frame_scans_section_then_id():
     assert lookup_anim_frame(rw, 0x200, 5) == 0xA877
 
 
-# --- handler_player_trail (7D9B) — shadow byte-exact vs ASM (witness demo 213332: gates + 1 full draw) ---
+# --- handler_ground_snap_spawn (7D9B) — shadow byte-exact vs ASM (witness demo 213332: gates + 1 full draw) ---
 def test_player_trail_throttle_gate_updates_counter_no_draw():
     SI = 0x4000
     # not level 5; counter 0->1, throttle [si+6]=5 > (1>>2)=0 -> not drawn (but counter is written)
     kv = {0x2D8A: 8, SI + 7: 0, SI + 6: 5}
     rb = lambda o: kv.get(o, 0) & 0xFF
     rw = lambda o: kv.get(o, 0) & 0xFFFF
-    out, drawn = handler_player_trail(rb, rw, lambda o: 0, SI, lambda: None)
+    out, drawn = handler_ground_snap_spawn(rb, rw, lambda o: 0, SI, lambda: None)
     assert drawn is False
     assert out == {SI + 7: (1, 1)}
 
@@ -50,7 +50,7 @@ def test_player_trail_full_draw_snaps_to_ground():
     # a standable surface: solid tile (1) at bp=0x1410, empty (0) one + two above
     read_es = lambda o: 1 if (o & 0xFFFF) == 0x1410 else 0
     find_free = lambda: find_free_object_slot(lambda s: rw(0x4FD0 + s * 0x12 + 4))
-    out, drawn = handler_player_trail(rb, rw, read_es, SI, find_free)
+    out, drawn = handler_ground_snap_spawn(rb, rw, read_es, SI, find_free)
     assert drawn is True
     base = OBJ_BASE                                        # slot 0
     assert out[base + 0x00] == (0x100, 2)                 # X = playerX + offset

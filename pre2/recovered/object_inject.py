@@ -61,28 +61,33 @@ def _s16(v: int) -> int:
     return v - 0x10000 if v & 0x8000 else v
 
 
-# 7D9B (idx10) — the player after-image / enemy-phase-change effect projector
+# 7D9B (idx10) — second-pass player-proximity-gated, ground-snapped sprite projector
 PLAYER_X = 0x4F1C
 PLAYER_Y = 0x4F1E
-TRAIL_RING = 0xA341          # 16-slot ring index into the X-offset table
-TRAIL_OFFSET_TABLE = 0x5CBD  # the offset table, read as DS:[(ring - 0x5CBD) & 0xFFFF]
+SPAWN_OFFSET_RING = 0xA341    # 16-slot ring index into the X-offset table
+SPAWN_OFFSET_TABLE = 0x5CBD   # the offset table, read as DS:[(ring - 0x5CBD) & 0xFFFF]
 TERRAIN_TABLE = 0x7F5E       # tile id -> terrain solidity (for the ground-snap scan)
 MAP_HEIGHT = 0x2CF5          # [0x2CF5] level-map height (rows)
 PROJ_SLOT_PTR = 0xA32E       # [0xA32E] = the last projected object slot
 
 
-def handler_player_trail(rb, rw, read_es, si, find_free):
-    """Recover ``1030:7D9B`` — the 2nd-pass player-relative, ground-snapped effect projector (the
-    enemy-phase-change / player after-image effect: entities placed at ``playerX + a rotating offset`` and
-    snapped onto a standable ground surface near the player).
+def handler_ground_snap_spawn(rb, rw, read_es, si, find_free):
+    """Recover ``1030:7D9B`` — second-pass handler idx10: a player-proximity-gated, ground-snapped
+    sprite projector.
 
-    Gated by: level-5 + earthquake/`[0xA326]`; a per-entity saturating counter ``[si+7]`` throttle vs
-    ``[si+6]``; and a player-proximity window (`[si+9]/[si+0xA]` origin, `[si+0xB]/[si+0xC]` extent, in tile
-    cells). On a pass it allocates a free object slot, advances the offset ring, scans the terrain map
-    (es=`[0x2DDA]`, table `[0x7F5E]`) upward for a solid-with-2-empty-above cell, and writes the projection
-    record. ``read_es`` reads the level-map byte ``es:[off]``; ``find_free`` allocates a slot. Returns
-    ``(writes, drawn)`` — ``writes`` the DS ``{offset: value}`` byte/word contract (the counter is updated
-    whenever the level gate passes), ``drawn`` the ASM CF==0 (projected)."""
+    Gated by: on level 5, the `[0x6BEA]`/`[0xA326]` state gates; a per-entity saturating counter
+    ``[si+7]`` throttle vs ``[si+6]``; and a player-proximity window (`[si+9]/[si+0xA]` origin,
+    `[si+0xB]/[si+0xC]` extent, in tile cells). On a pass it allocates a free object slot, advances the
+    offset ring, and projects a sprite at ``playerX + a rotating ring offset`` snapped onto a standable
+    ground surface (scans the terrain map es=`[0x2DDA]`, table `[0x7F5E]` upward for a solid-with-2-empty-
+    above cell), then writes the projection record. ``read_es`` reads the level-map byte ``es:[off]``;
+    ``find_free`` allocates a slot. Returns ``(writes, drawn)`` — ``writes`` the DS ``{offset: value}``
+    byte/word contract (the counter is updated whenever the level gate passes), ``drawn`` the ASM CF==0
+    (projected).
+
+    NAME CAVEAT: recovered byte-exact (witness demo 213332), but this second-pass projection does not map
+    cleanly to a [[pre2-cyxx-reference]] routine, so it is named for its *verified mechanism* (ground-snap
+    spawn), not a confirmed in-game identity."""
     out: dict = {}
 
     if rb(0x2D8A) == 5:                                   # [7D9B] level-5 special gates
@@ -116,10 +121,10 @@ def handler_player_trail(rb, rw, read_es, si, find_free):
         return out, False
 
     # [7DF4] place at playerX + the next ring offset, advance the ring
-    ring = rw(TRAIL_RING)
+    ring = rw(SPAWN_OFFSET_RING)
     player_x = rw(PLAYER_X)
-    new_x = (player_x + rw((ring - TRAIL_OFFSET_TABLE) & 0xFFFF)) & 0xFFFF
-    out[TRAIL_RING] = ((ring + 2) & 0x0F, 2)
+    new_x = (player_x + rw((ring - SPAWN_OFFSET_TABLE) & 0xFFFF)) & 0xFFFF
+    out[SPAWN_OFFSET_RING] = ((ring + 2) & 0x0F, 2)
     xvel = 0 if _s16(player_x) >= _s16(new_x) else 0xFFFF  # [7E0C] dx=0 / not dx (sign toward the player)
 
     # [7E18] scan the terrain map upward for a standable surface (solid here, 2 empty above)
@@ -393,7 +398,7 @@ def dispatch_handler(idx, rb, rw, read_es, si, cam_x, cam_y, find_free):
     """Dispatch the 2nd-pass per-type handler (cs:[bx+0x6AC3]). Returns ``(writes, drawn)``. Fails loud on an
     unknown index (no silent fallback)."""
     if idx == 10:
-        return handler_player_trail(rb, rw, read_es, si, find_free)
+        return handler_ground_snap_spawn(rb, rw, read_es, si, find_free)
     h = _HANDLERS.get(idx)
     if h is None:
         raise ValueError(f"second-pass walker: unrecovered handler index {idx}")
