@@ -68,3 +68,6 @@ nuked_opl3/*.lib
 
 # generated audio renders
 artifacts/*.wav
+
+# witness capture dumps (regenerable oracle/crash pickles; recovery scripts stay tracked)
+artifacts/*_witness/
