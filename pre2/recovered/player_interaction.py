@@ -81,7 +81,7 @@ KNOCKBACK_Y = 0xA331       # [0xA331] hurt/knockback Y delta
 HURT_SFX_TABLE = 0xA3E5    # [bx-0x5C1B] escalating hurt-effect ids
 SCALE_LEVEL = 0x6BE2       # object_update's sprite "scale" level (decremented 16/frame by player.py); non-zero
                            # (a scale/zoom transition active) -> touching an enemy = instant death_handler
-_DEATH_FLAG_A330 = 0xA330  # [0xA330]!=0 -> die on touch
+_VERT_DETAIL = 0xA330      # hitbox vertical-detail/"survivable" flag; [0xA330]==0 (side/below hit) -> die
 _DEATH_FLAG_4F2B = 0x4F2B  # [0x4F2B]<0 (signed byte) -> die on touch
 _ATTACK = 0x6BC7           # [0x6BC7]!=0 -> player attacking/invulnerable (can stomp)
 
@@ -162,8 +162,8 @@ def _stomp(rb, rw, di):
 def _loop1_hit_outcome(rb, rw, di):
     """[asm 82C8..82F7] dispatch a player-vs-object hit (instant-death case handled by the walk). Returns
     ``(writes, sfx)``."""
-    if rb(_DEATH_FLAG_A330) != 0 or (rb(_DEATH_FLAG_4F2B) & 0x80):    # [82D5/82DF] die
-        return _death(rb, rw, di)
+    if rb(_VERT_DETAIL) == 0 or (rb(_DEATH_FLAG_4F2B) & 0x80):        # [82D5 je / 82DF] die: no survivable
+        return _death(rb, rw, di)                                     #   vertical-detail (jne skips) OR [0x4F2B]<0
     if rb(_ATTACK) == 0:                                              # [82E9] hurt
         return _hurt(rb, rw, di)
     if _s16(rw(PLAYER_YVEL)) <= 0x20:                                 # [82F0] not falling -> bump
