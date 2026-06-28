@@ -57,7 +57,7 @@ def test_advance_anim_script_skips_to_after_marker():
 # --- loop1 (player-vs-enemy collision) — byte-exact shadow in probe_player_interaction (107 ticks); these
 #     pin the control flow without the VM.
 def test_knockback_player_up():
-    rb, rw = _mem({0x4F1E: 0x0100, 0xA331: 0x0010})          # player Y=0x100, knockback delta=0x10
+    rb, rw = _mem({0x4F1E: 0x00, 0x4F1F: 0x01, 0xA331: 0x10})   # player Y=0x100 (word), knockback delta=0x10
     w = _knockback(rb, rw, 0xFFC0)
     assert w[0x4F2A] == (0xFFC0, 2) and w[0x6BD2] == (0, 1) and w[0x4F1E] == (0x00F0, 2)
 
