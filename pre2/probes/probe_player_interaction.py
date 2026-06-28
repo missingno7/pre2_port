@@ -202,7 +202,8 @@ def main():
                  ("artifacts/demo_pre2_20260626_115215", False, 600),
                  ("artifacts/demo_pre2_20260626_140619", False, 600),
                  ("artifacts/demo_pre2_20260628_142652", False, 2000),   # bomb 870A (pure-ASM reproduces)
-                 ("artifacts/demo_pre2_20260628_142910", True, 200)]     # grenade 86B7 (hybrid-recorded)
+                 ("artifacts/demo_pre2_20260628_151845", True, 500),     # grenade 86B7 (hybrid; long, 100 hits)
+                 ("artifacts/demo_pre2_20260628_152002", True, 300)]     # extra-life 87E6 (hybrid)
     stats = Counter(); mism = []
     for d, native, mf in demos:
         _run(d, mf, stats, mism, native_replacements=native)

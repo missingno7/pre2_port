@@ -205,6 +205,7 @@ def loop1(rb, rw, apply, emit_sfx):
 # Offsets confirmed from the ASM handler bodies (cross-checked vs cyxx level_update_player_collision):
 ENTITY2 = 0x50A8           # the 52-entry pickup/entity list (objects 23+i in cyxx)
 ENERGY = 0x27D6           # player energy (0..3)  [NOT lives — my earlier mislabel]
+LIVES = 0x27D8            # [65DA] 1-up count (cap 0x63=99)
 BONUS_ENERGY_CTR = 0x6BC9  # small-energy-bonus accumulator (6 -> +1 energy)
 LETTERS_MASK = 0x6CA7     # BONUS letters bitmask
 UTENSILS_MASK = 0x6CA8    # utensils/tools bitmask
@@ -314,8 +315,14 @@ def loop2_handler(num, rb, rw, si, find_free):
         if bx != 0xFFFF:
             out[(bx + 4) & 0xFFFF] = ((rw((bx + 4) & 0xFFFF) - 1) & 0xFFFF, 2)
         return out, []
-    if num == 0xAE:                                       # id 0xe3 [87E6] extra life
-        raise Loop2NeedsHelper("extra-life 65D6")
+    if num == 0xAE:                                       # id 0xe3 [87E6] extra life (+1 life, spawn effect)
+        out = {}
+        lives = rb(LIVES)                                 # [65D6] 65DA cmp [0x27D8],0x63
+        if lives < 0x63:                                  # [65DF je / 65E1 jb] <99 -> inc (==99 caps; the
+            out[LIVES] = ((lives + 1) & 0xFF, 1)          #   65E3 >99 cs:[0x26FA] self-mod path is unreachable)
+        out.update(spawn_pickup_effect(rb, rw, 0xE3, PLAYER))   # [87F6] 0xe3 effect at the player pos
+        out.update(_consume_link(rw, si))                 # [87FA] jmp 853F consume the linked entity
+        return out, [4]
     if num in (0xD, 0xB6, 0x2C, 0xE0):                    # ids 0x42/0xeb/0x61/0x115 [87AE..] club/weapon 0-3
         ct = {0xD: 0, 0xB6: 1, 0x2C: 2, 0xE0: 3}[num]
         w = {CLUB_TYPE: (ct, 1)}; w.update(_consume_link(rw, si))

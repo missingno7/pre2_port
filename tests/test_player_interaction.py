@@ -106,10 +106,10 @@ def test_loop2_light_off():                                 # num 0xB5 (id 0xea)
     assert w[LIGHT_STATE] == (1, 1) and w[0x6C01] == (1, 1) and sfx == [1]
 
 
-def test_loop2_deferred_path_raises():                      # num 0xAE (id 0xe3) extra-life -> 65D6 not recovered
+def test_loop2_deferred_path_raises():                      # num 0xA7 (id 0xdc) trap -> 867E not recovered yet
     import pytest
     with pytest.raises(Loop2NeedsHelper):
-        loop2_handler(0xAE, *_mem({}), 0x50A8, lambda: None)
+        loop2_handler(0xA7, *_mem({}), 0x50A8, lambda: None)
 
 
 def _bomb_fixture():
@@ -141,6 +141,29 @@ def test_loop2_bomb_kills_enemy_and_spawns_food():          # num 0xAA (id 0xdf)
     sid0, _ = roll_bonus_sprite_id((0x12, 0x34, 0x56, 0x789A))
     assert 0x2080 <= sid0 <= 0x20DE                          # first food id in range
     assert w[0x5450 + 4] == (0xE7, 1) and w[0x5450 + 5] == (0x00, 1)  # the 0xE7 pickup effect
+
+
+def test_loop2_extra_life():                                # num 0xAE (id 0xe3) [87E6] +1 life (byte-exact in probe)
+    kv = {0x27D8: 3,                                         # current lives = 3
+          0x4F1C: 0x00, 0x4F1D: 0x02, 0x4F1E: 0x40, 0x4F1F: 0x01,  # player at (0x200, 0x140)
+          0x50A8 + 9: 0xFF, 0x50A8 + 0xA: 0xFF}              # entity, no link
+    for s in range(0x10):
+        kv[0x5450 + s * 0x12 + 4] = 0xFF; kv[0x5450 + s * 0x12 + 5] = 0xFF
+    rb, rw = _mem(kv)
+    w, sfx = loop2_handler(0xAE, rb, rw, 0x50A8, lambda: None)
+    assert sfx == [4]
+    assert w[0x27D8] == (4, 1)                               # lives 3 -> 4 (byte)
+    assert w[0x5454] == (0xE3, 2)                            # 0xe3 effect spawned (spawn_pickup_effect word)
+    assert w[0x5450] == (0x200, 2)                           # effect X = player X 0x200 (word)
+    assert w[0x5452] == (0x140, 2)                           # effect Y = player Y 0x140 (word)
+
+
+def test_loop2_extra_life_caps_at_99():                     # lives == 99 -> no increment
+    rb, rw = _mem({0x27D8: 0x63, 0x50A8 + 9: 0xFF, 0x50A8 + 0xA: 0xFF,
+                   **{0x5450 + s * 0x12 + 4: 0xFF for s in range(0x10)},
+                   **{0x5450 + s * 0x12 + 5: 0xFF for s in range(0x10)}})
+    w, sfx = loop2_handler(0xAE, rb, rw, 0x50A8, lambda: None)
+    assert 0x27D8 not in w                                   # capped, no life write
 
 
 def test_loop2_grenade_no_enemies_shake_and_effect():       # num 0xA9 (id 0xde) [86B7] grenade, walk skips
