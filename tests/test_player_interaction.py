@@ -106,7 +106,52 @@ def test_loop2_light_off():                                 # num 0xB5 (id 0xea)
     assert w[LIGHT_STATE] == (1, 1) and w[0x6C01] == (1, 1) and sfx == [1]
 
 
-def test_loop2_deferred_path_raises():                      # num 0xAA (id 0xdf) bomb -> not recovered yet
+def test_loop2_deferred_path_raises():                      # num 0xAE (id 0xe3) extra-life -> 65D6 not recovered
     import pytest
     with pytest.raises(Loop2NeedsHelper):
-        loop2_handler(0xAA, *_mem({}), 0x50A8, lambda: None)
+        loop2_handler(0xAE, *_mem({}), 0x50A8, lambda: None)
+
+
+def _bomb_fixture():
+    """One active on-screen enemy (object slot 0) at (0x100,0x80); all entity/effect slots free; rng seeded."""
+    kv = {0x4FD0 + 4: 0x46, 0x4FD0 + 5: 0x20,               # slot0 active + on-screen
+          0x4FD0 + 6: 0x00, 0x4FD0 + 7: 0x70,               # def ptr = 0x7000 ([0x7004]=0 -> no 0x10 flag)
+          0x4FD0 + 0: 0x00, 0x4FD0 + 1: 0x01,               # X = 0x100
+          0x4FD0 + 2: 0x80, 0x4FD0 + 3: 0x00,               # Y = 0x80
+          0x2CEC: 0x12, 0x2CED: 0x34, 0x2CEE: 0x56, 0x2CEF: 0x78, 0x2CF0: 0x9A}  # rng state
+    for s in range(1, 12):                                   # other object slots inactive
+        kv[0x4FD0 + s * 0x12 + 4] = 0xFF; kv[0x4FD0 + s * 0x12 + 5] = 0xFF
+    for s in range(52):                                      # entity list free
+        kv[0x50A8 + s * 0x12 + 4] = 0xFF; kv[0x50A8 + s * 0x12 + 5] = 0xFF
+    for s in range(0x10):                                    # effect list free
+        kv[0x5450 + s * 0x12 + 4] = 0xFF; kv[0x5450 + s * 0x12 + 5] = 0xFF
+    return kv
+
+
+def test_loop2_bomb_kills_enemy_and_spawns_food():          # num 0xAA (id 0xdf) [870A] bomb (byte-exact in probe)
+    from pre2.recovered.combat_interaction import roll_bonus_sprite_id
+    rb, rw = _mem(_bomb_fixture())
+    w, sfx = loop2_handler(0xAA, rb, rw, 0x50A8, lambda: None)
+    assert sfx == [0]
+    assert w[0x4FD0 + 0xE] == (0xFF, 1)                      # enemy marked dead
+    assert w[0x4FD0 + 4] == (0xFF, 1) and w[0x4FD0 + 5] == (0xFF, 1)  # enemy slot freed
+    assert w[0xA336] == (0x00, 1) and w[0xA337] == (0x01, 1)  # SPAWN_X = enemy X 0x100
+    assert w[0xA338] == (0x80, 1) and w[0xA339] == (0x00, 1)  # SPAWN_Y = enemy Y 0x80
+    assert w[0x2CEC] != (0x12, 1)                            # rng advanced by the food rolls
+    sid0, _ = roll_bonus_sprite_id((0x12, 0x34, 0x56, 0x789A))
+    assert 0x2080 <= sid0 <= 0x20DE                          # first food id in range
+    assert w[0x5450 + 4] == (0xE7, 1) and w[0x5450 + 5] == (0x00, 1)  # the 0xE7 pickup effect
+
+
+def test_loop2_grenade_no_enemies_shake_and_effect():       # num 0xA9 (id 0xde) [86B7] grenade, walk skips
+    kv = {}
+    for s in range(12):                                      # no active enemies
+        kv[0x4FD0 + s * 0x12 + 4] = 0xFF; kv[0x4FD0 + s * 0x12 + 5] = 0xFF
+    kv[0x50A8 + 9] = 0xFF; kv[0x50A8 + 0xA] = 0xFF           # bomb entity, no link
+    for s in range(0x10):
+        kv[0x5450 + s * 0x12 + 4] = 0xFF; kv[0x5450 + s * 0x12 + 5] = 0xFF
+    rb, rw = _mem(kv)
+    w, sfx = loop2_handler(0xA9, rb, rw, 0x50A8, lambda: None)
+    assert sfx == [0]
+    assert w[0x6BEA] == (9, 1)                               # screen shake set
+    assert w[0x5450 + 4] == (0xE6, 1) and w[0x5450 + 5] == (0x00, 1)  # the 0xE6 effect

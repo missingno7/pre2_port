@@ -11,8 +11,10 @@ Recovered so far (the shared keystones used by both loops + the loop2 handlers):
 """
 from __future__ import annotations
 
-from pre2.recovered.combat_interaction import death_handler, hitbox_overlap
+from pre2.recovered.combat_interaction import (death_handler, hitbox_overlap, roll_bonus_sprite_id,
+                                               spawn_effect_burst, _Overlay)
 from pre2.recovered.player_collision import _offcamera_trigger
+from pre2.recovered.prng import rng_lcg
 
 SCORE = 0x6C0E              # [asm 888B] 32-bit player score (low 0x6C0E, high 0x6C10)
 SCORE_TABLE = 0xA353        # [asm 8887] score values, indexed ((id-0x4a)<<1); = (-0x5CAD)&0xFFFF
@@ -214,11 +216,16 @@ LIGHT_STATE = 0x6C04      # 0=on,1=off
 LEVEL = 0x2D8A            # level number
 LEVEL_DONE = 0x6BE6       # 1=level complete, 0xFF=game complete
 SHAKE = 0x6BEA           # screen-shake counter
-A33A = 0xA33A            # scratch: last consumed spr_num
+A33A = 0xA33A            # scratch: last consumed spr_num / last burst sprite id
+SPAWN_X = 0xA336         # [8736] the dying enemy's pos, read by the 8D1B burst
+SPAWN_Y = 0xA338         # [873C]
+OBJ_LIST = 0x4FD0        # the 12-slot object (enemy) list
+OBJ_COUNT = 12
 
 
 class Loop2NeedsHelper(Exception):
-    """A loop2 handler path needs an as-yet-unrecovered sub-routine (8D1B bones / 94F3 bomb / 65D6 life)."""
+    """A loop2 handler path needs an as-yet-unrecovered sub-routine (trap-hit 867E / extra-life 65D6 /
+    boss-projectile 8618)."""
 
 
 def _consume_link(rw, si):                                  # [853F] level_clear_item: consume [si+9] entity
@@ -239,10 +246,47 @@ def _count_and_score(rb, rw, si, num):
     return out
 
 
+def _food_fountain(ov):
+    """[asm 94F3] erupt 4 food sprites from [0xA336]/[0xA338] with an alternating-spread fountain velocity.
+    Each draws a random food sprite id (8C13 :func:`roll_bonus_sprite_id`) into [0xA33A] then bursts one
+    entity (8D1B :func:`spawn_effect_burst`). ``ov`` is the bomb's read-through :class:`_Overlay`."""
+    ax, dx = 0x20, 0xFF60                                  # [94F9/94FC] initial X/Y velocity
+    for _ in range(4):                                    # [94F6] cx=4
+        sid, (a, b, c, d) = roll_bonus_sprite_id(         # [9504] 8C13 advances the rng state
+            (ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF)))
+        ov.wb(0x2CEC, a); ov.wb(0x2CED, b); ov.wb(0x2CEE, c); ov.ww(0x2CEF, d)
+        ov.ww(A33A, sid)                                  # [9507] burst sprite id
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [950B] 8D1B, one sprite
+        ax = (-ax) & 0xFFFF                               # [950E] neg ax (alternating spread)
+        if not (ax & 0x8000):                             # [9510] js not taken (positive) -> step down
+            ax = (ax - 0x10) & 0xFFFF                     # [9512]
+            dx = (dx - 0x10) & 0xFFFF                     # [9515]
+
+
+def _kill_all_screen(rb, rw, si, per_enemy):
+    """[asm 86B7/870A shared walk] walk the 12 object slots (0x4FD0); for every on-screen enemy
+    (``[di+4]!=-1`` & ``![def+4]&0x10`` (def=`[di+6]`) & ``[di+5]&0x20``) run ``per_enemy(ov, di)``; finally
+    consume the linked entity ``[si+9]``. Composed over a read-through :class:`_Overlay` (so the per-enemy
+    bursts see each other's slot/rng/pos writes). Returns the overlay; the caller adds the spawn-effect tail.
+    The leading ``play_sfx(0)`` is returned as the handler's sfx, not a memory write."""
+    ov = _Overlay(rb)
+    di = OBJ_LIST
+    for _ in range(OBJ_COUNT):                            # [86C9/871C] cx=0xC
+        if ov.rw((di + 4) & 0xFFFF) != 0xFFFF:           # [86CC/871F] slot active
+            bx = ov.rw((di + 6) & 0xFFFF)                # [86D2/8725] def ptr
+            if not (ov.rb((bx + 4) & 0xFFFF) & 0x10) and (ov.rb((di + 5) & 0xFFFF) & 0x20):  # [86D5/86DB]
+                per_enemy(ov, di)                        # [86E1/8734] death_handler / fountain
+        di = (di + 0x12) & 0xFFFF                         # [86E4/874B]
+    link = ov.rw((si + 9) & 0xFFFF)                       # [86F7/8759] consume the linked entity
+    if link != 0xFFFF:
+        ov.ww((link + 4) & 0xFFFF, 0xFFFF)
+    return ov
+
+
 def loop2_handler(num, rb, rw, si, find_free):
     """Dispatch a pickup hit (ax=num=(spr_num&0x1FFF)-0x35) to its effect, in the ASM's chain order. Returns
-    (writes, sfx). Raises Loop2NeedsHelper for the 3 paths whose bones/bomb/life sub-routines aren't recovered
-    yet. (Names per cyxx level.c.)"""
+    (writes, sfx). Raises Loop2NeedsHelper for the rare paths whose sub-routines aren't recovered yet.
+    (Names per cyxx level.c.)"""
     if num == 0x91:                                        # id 0xc6 [885F] "tap": clear fly timers, then count
         out = {}
         for k in range(0x14):                              # [8861] table 0x6EA9, 0x14 * 8
@@ -333,10 +377,23 @@ def loop2_handler(num, rb, rw, si, find_free):
         return out, []                                    # full -> nothing (the 8509 ret)
     if num in (0xA7, 0xA8):                               # ids 0xdc/0xdd [864F] trap hit (bones)
         raise Loop2NeedsHelper("trap-hit 867E/8D1B")
-    if num == 0xA9:                                       # id 0xde [86B7] kill all monsters
-        raise Loop2NeedsHelper("kill-all needs the 12-slot death_handler walk")
-    if num == 0xAA:                                       # id 0xdf [870A] bomb
-        raise Loop2NeedsHelper("bomb 94F3")
+    if num == 0xA9:                                       # id 0xde [86B7] grenade: kill every on-screen enemy
+        def _grenade(ov, di):                             # [86E1] each enemy dies via the recovered 8C72
+            ov.apply(death_handler(ov.rb, ov.rw, ov.rw((di + 6) & 0xFFFF), di, si))
+        ov = _kill_all_screen(rb, rw, si, _grenade)
+        ov.wb(SHAKE, 9)                                   # [86E9] screen shake
+        ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE6, si))   # [8704] ax=0xe6 -> 860B
+        return {o: (v, 1) for o, v in ov.b.items()}, [0]
+    if num == 0xAA:                                       # id 0xdf [870A] bomb: kill all + food fountains
+        def _bomb(ov, di):                                # [8734] erase the enemy + erupt a fountain at its pos
+            ov.ww(SPAWN_X, ov.rw(di))                     # [8736]
+            ov.ww(SPAWN_Y, ov.rw((di + 2) & 0xFFFF))      # [873C]
+            ov.wb((di + 0xE) & 0xFFFF, 0xFF)              # [873F] mark dead
+            ov.ww((di + 4) & 0xFFFF, 0xFFFF)              # [8743] free the slot
+            _food_fountain(ov)                            # [8748] 94F3
+        ov = _kill_all_screen(rb, rw, si, _bomb)
+        ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE7, si))   # [8766] ax=0xe7 -> 860B
+        return {o: (v, 1) for o, v in ov.b.items()}, [0]
     if num == 0xB5:                                       # id 0xea [876C] light OFF
         out = {}
         if rb(LIGHT_STATE) != 1:
