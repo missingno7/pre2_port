@@ -79,7 +79,8 @@ PLAYER_YVEL = 0x4F2A
 PLAYER_DEATH = 0x4F2D      # death-state byte (0 = alive)
 KNOCKBACK_Y = 0xA331       # [0xA331] hurt/knockback Y delta
 HURT_SFX_TABLE = 0xA3E5    # [bx-0x5C1B] escalating hurt-effect ids
-_INSTADEATH = 0x6BE2       # [0x6BE2]!=0 -> touching an enemy = instant death_handler
+SCALE_LEVEL = 0x6BE2       # object_update's sprite "scale" level (decremented 16/frame by player.py); non-zero
+                           # (a scale/zoom transition active) -> touching an enemy = instant death_handler
 _DEATH_FLAG_A330 = 0xA330  # [0xA330]!=0 -> die on touch
 _DEATH_FLAG_4F2B = 0x4F2B  # [0x4F2B]<0 (signed byte) -> die on touch
 _ATTACK = 0x6BC7           # [0x6BC7]!=0 -> player attacking/invulnerable (can stomp)
@@ -187,8 +188,9 @@ def loop1(rb, rw, apply, emit_sfx):
             hit, hb = hitbox_overlap(rb, rw, PLAYER, di)   # [82C3] 8D7B
             apply(hb)
             if hit:
-                if rw(_INSTADEATH) != 0:                   # [82C8] instant death_handler, keep walking
-                    apply(death_handler(rb, rw, defp, di, PLAYER))   # [82CF] 8C72
+                if rw(SCALE_LEVEL) != 0:                   # [82C8] scale/zoom active -> instant death, keep walking
+                    # 8C72 returns byte-level {off:value}; loop1's apply wants (val,width) tuples
+                    apply({o: (v, 1) for o, v in death_handler(rb, rw, defp, di, PLAYER).items()})   # [82CF]
                 else:
                     writes, sfx = _loop1_hit_outcome(rb, rw, di)
                     apply(writes)

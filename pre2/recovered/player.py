@@ -59,7 +59,7 @@ XVEL_FLOOR = -0x60      # [asm 62FA] directional-friction floor on Xvel
 # [asm 5A4A-5A87] per-frame countdown timers decremented at the tail of the player update, each clamped at 0
 # (`sub [x],1 ; adc [x],0` = decrement-but-not-below-zero). Seven byte counters + one word counter.
 TIMER_BYTES = (0x6BCE, 0x6BCD, 0x6BEA, 0x6BE8, 0x6BE4, 0x6BE1, 0x6C00)
-TIMER_WORD = 0x6BE2
+TIMER_WORD = 0x6BE2   # also object_update's sprite "scale" level + player_interaction's instadeath gate (same offset)
 
 X_MIN = 0x0008          # [asm 5A29] commit only if new_x >= 8 (left world edge)
 X_MAX = 0x0FF8          # [asm 5A2E] commit only if new_x < 0xFF8 (right world edge)
