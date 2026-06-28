@@ -19,12 +19,13 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.recovered.object_inject import (OBJ_BASE, OBJ_STRIDE, ProjectResult, find_free_object_slot,
-                                          project_entity)
+                                          project_entity, second_pass_tick)
 
 from .common import report
 
 _ENTRY = (0x1030, 0x7F26)
 _EXIT = (0x1030, 0x7F6B)       # the single ret (both the success `clc;ret` and the off-screen/no-slot `jb`)
+_TICK_ENTRY = (0x1030, 0x6913)  # the 2nd-pass walker entry (object_tick falls through here after the 1st pass)
 _RENDER_PTR = 0xA32E           # [0xA32E] = the projected record offset (read by the anim-frame lookup at 6981)
 # word fields of the projected object record, byte fields, in write order [asm 7F36..7F67]
 _REC_WORDS = (0x00, 0x02, 0x04, 0x06, 0x08, 0x0A)
@@ -78,6 +79,44 @@ def second_pass_project_entity(cpu) -> None:
     else:
         cpu.s.flags |= 0x0001            # CF=1 (off-screen / no free slot)
     cpu.s.ip = cpu.pop()                 # near ret to the caller
+
+
+@registry.replace(*_TICK_ENTRY, "second_pass_tick")
+def second_pass_tick_hook(cpu) -> None:
+    """Native replacement for the WHOLE second per-frame pass (1030:6913..698B) — the coastline collapse of
+    the ~25% walker. Runs the recovered :func:`~pre2.recovered.object_inject.second_pass_tick` (list walk +
+    skip predicates + per-type dispatch + anim-frame resolve + stride advance) over live VM memory, then does
+    the routine's near ret (it ends in ``ret`` at 698B). Like ``object_tick`` this is NOT instruction-count
+    transparent (it does the pass in one host step); the data-segment effect is byte-exact (whole-pass shadow,
+    pre2/probes/probe_second_pass_tick.py). The collapsed ASM no longer reaches the 7F26 worker, so its hook
+    is dead on this path (kept for the verify-mode oracle below).
+
+    VERIFY MODE: step aside (run the interpreted 2nd pass) so the 7F26 per-projection verify still fires and
+    the offline whole-pass probe remains the byte-exact authority."""
+    if getattr(cpu, "pre2_verify_mode", False):
+        interpret_current_instruction_without_hook(cpu)
+        return
+
+    mem, ds = cpu.mem, cpu.s.ds
+    base = (ds << 4) & 0xFFFFF
+
+    def rb(o):
+        return mem.data[(base + (o & 0xFFFF)) & 0xFFFFF]
+
+    def rw(o):
+        return mem.data[(base + (o & 0xFFFF)) & 0xFFFFF] | (mem.data[(base + ((o + 1) & 0xFFFF)) & 0xFFFFF] << 8)
+
+    def apply_writes(writes):
+        for off, (val, width) in writes.items():
+            mem.data[(base + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
+            if width == 2:
+                mem.data[(base + ((off + 1) & 0xFFFF)) & 0xFFFFF] = (val >> 8) & 0xFF
+
+    es = rw(0x2DDA); eb = (es << 4) & 0xFFFFF
+    read_es = lambda o: mem.data[(eb + (o & 0xFFFF)) & 0xFFFFF]   # noqa: E731 — level map (terrain, read-only)
+    final_si = second_pass_tick(rb, rw, apply_writes, read_es, rw(0x2DE4), rw(0x2DE6))
+    cpu.s.si = final_si          # the ASM leaves si at the terminator entry; ax/bx are scratch (caller is a
+    cpu.s.ip = cpu.pop()         # flat subsystem-call list at 0x021D.. that re-derives its own registers)
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:

@@ -421,7 +421,7 @@ def second_pass_tick(rb, rw, apply_writes, read_es, cam_x, cam_y):
     while True:
         stride = rb(si & 0xFFFF)                                  # [6916]
         if stride >= ENTITY_STRIDE_END:
-            return
+            return si & 0xFFFF                                    # si at the terminator entry (the ASM's 698B si)
         flags1 = rb((si + 1) & 0xFFFF)
         skip = (rw((si + 2) & 0xFFFF) == 0xFFFF                   # [691B] empty
                 or (rb((si + 4) & 0xFFFF) & 4)                   # [6921] skip flag

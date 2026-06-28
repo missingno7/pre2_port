@@ -1,8 +1,15 @@
 # Second-pass walker island (1030:6913..698B)
 
-Status: **MAPPED (Stage 0)**. This is the single biggest remaining in-game-logic chunk — `1030:6900` is **~25%**
-of all interpreted instructions on a gameplay demo (hybrid-coverage audit, 2026-06-27). The render is ~done
-(0.8%) and the combat/interaction island is fully live, so this is the next `object_tick`-scale collapse.
+Status: **LIVE — COLLAPSED (2026-06-28)**. This was the single biggest remaining in-game-logic chunk —
+`1030:6900` was **~25%** of all interpreted instructions on a gameplay demo (hybrid-coverage audit,
+2026-06-27). Now native: a single hook at `6913` (`checkpoints/object_inject.second_pass_tick_hook`) runs the
+recovered `second_pass_tick` over live memory and does the `698B` ret. Byte-exact vs pure ASM (whole-memory
+0-diff on gameplay demos; offline whole-pass shadow `pre2/probes/probe_second_pass_tick.py`; per-handler shadow
+`pre2/probes/probe_second_pass_handlers.py`). Under verify-mode the hook steps aside so the `7F26`
+per-projection oracle still fires.
+
+All handlers recovered into `pre2/recovered/object_inject.py` (`dispatch_handler` + `second_pass_tick`);
+the dispatch table `cs:[0x6AC3]`, the per-type handlers, and the walker loop are documented below.
 
 ## What it is
 
