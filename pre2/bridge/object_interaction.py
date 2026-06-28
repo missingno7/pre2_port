@@ -59,7 +59,11 @@ def screen_di(map_offset: int) -> int:
 def redraw_tiles(mem, redraws, map_writes) -> None:
     """[asm 8B77's redraw] Re-blit each on-screen collected tile. (453B just sets EGA write-mode-1/mask-0x0F,
     which the recovered blit_sprite doesn't need; 3B77 is the recovered blit.) The tile id is the value that
-    was restored into the level map at that cell offset."""
+    was restored into the level map at that cell offset.
+
+    ``screen_di`` is the page-RELATIVE offset (the ASM 8BA6-8BD2 math); the shared blit entry 3B77 then adds
+    the off-screen scroll-staging base ``0x3F40`` (``add di,0x3f40``) before copying into A000 — every recovered
+    blit caller composes its di in that same staging frame, so the tile redraw must add it too."""
     if not redraws:
         return
     planes = _spr.plane_views(mem)
@@ -70,4 +74,5 @@ def redraw_tiles(mem, redraws, map_writes) -> None:
         tile_id = map_writes[map_offset][0]
         typ = blit_type[tile_id]
         mask = mask_region[(typ - 2) * 0x20:(typ - 2) * 0x20 + 0x20] if typ >= 2 else b""
-        blit_sprite(planes, tile_id, screen_di(map_offset), typ, bg_off, mask)
+        di = (screen_di(map_offset) + _frame.SCROLL_BASE) & 0xFFFF     # [asm 3B77: add di,0x3f40]
+        blit_sprite(planes, tile_id, di, typ, bg_off, mask)
