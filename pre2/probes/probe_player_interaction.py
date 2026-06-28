@@ -45,14 +45,19 @@ class _Ov:
                 self.w[(off + k) & 0xFFFF] = (val >> (8 * k)) & 0xFF
 
 
-def _run(demo, max_frames, stats, mism):
+def _run(demo, max_frames, stats, mism, native_replacements=False):
+    """Replay ``demo`` and shadow-verify. ``native_replacements`` MUST match the mode the demo was RECORDED
+    in: a hybrid-recorded demo (hooks on) only reproduces its trajectory with hooks on (live hooks collapse
+    work, shifting the ic-based clock -> a timing-sensitive pickup lands differently in pure ASM). 8295/loop2
+    is never live-hooked, so its ASM stays the oracle either way; in hybrid mode the keystone shadows (8875/
+    80CB) are skipped because those ARE live (no ASM to compare)."""
     pb = InputDemoPlayback.load(demo)
     meta = pb.manifest.get("metadata", {})
     args = argparse.Namespace(exe=str(ROOT / "assets" / "pre2.exe"), game_root=str(ROOT / "assets"),
-                              audio="off", steps=None, no_replacements=True, fast_retrace_waits=False,
+                              audio="off", steps=None, no_replacements=not native_replacements, fast_retrace_waits=False,
                               chunk_steps=int(meta.get("chunk_steps", 2142)), present_hz=int(meta.get("present_hz", 70)),
                               timer_irq=bool(meta.get("timer_irq", True)), input_irq_steps=int(meta.get("input_irq_steps", 2_000_000)))
-    rt = load_pre2_snapshot(args.exe, pb.snapshot_path(), game_root=args.game_root, native_replacements=False)
+    rt = load_pre2_snapshot(args.exe, pb.snapshot_path(), game_root=args.game_root, native_replacements=native_replacements)
     cpu = rt.cpu; cpu.trace_enabled = False; md = cpu.mem.data
     pend = {}
 
@@ -167,8 +172,11 @@ def _run(demo, max_frames, stats, mism):
         interpret_current_instruction_without_hook(c)
 
     # loop1 is verified separately (its 0x83D7 exit == loop2 entry); here focus on loop2 + the keystones.
-    for key, fn, nm in ((SPAWN, at_spawn, "s0"), (SPAWN_RET, at_spawn_ret, "s1"),
-                        (ANIM, at_anim, "a0"), (ANIM_RET, at_anim_ret, "a1"), (LOOP2, at_loop2, "L2")):
+    hooks = [(LOOP2, at_loop2, "L2")]
+    if not native_replacements:                                  # keystones are live in hybrid -> no ASM oracle
+        hooks += [(SPAWN, at_spawn, "s0"), (SPAWN_RET, at_spawn_ret, "s1"),
+                  (ANIM, at_anim, "a0"), (ANIM_RET, at_anim_ret, "a1")]
+    for key, fn, nm in hooks:
         cpu.replacement_hooks[key] = fn; cpu.hook_names[key] = nm
     for ip in LOOP2_EXITS:
         cpu.replacement_hooks[(CS, ip)] = at_loop2_exit; cpu.hook_names[(CS, ip)] = "L2e"
@@ -185,11 +193,19 @@ def _run(demo, max_frames, stats, mism):
 
 
 def main():
-    demos = sys.argv[1:] or ["artifacts/demo_pre2_20260627_213332", "artifacts/demo_pre2_20260627_190542",
-                             "artifacts/demo_pre2_20260626_115215", "artifacts/demo_pre2_20260626_140619"]
+    # (demo, native_replacements, max_frames). native MUST match the recording mode (see _run).
+    if sys.argv[1:]:
+        demos = [(d, False, 600) for d in sys.argv[1:]]
+    else:
+        demos = [("artifacts/demo_pre2_20260627_213332", False, 600),
+                 ("artifacts/demo_pre2_20260627_190542", False, 600),
+                 ("artifacts/demo_pre2_20260626_115215", False, 600),
+                 ("artifacts/demo_pre2_20260626_140619", False, 600),
+                 ("artifacts/demo_pre2_20260628_142652", False, 2000),   # bomb 870A (pure-ASM reproduces)
+                 ("artifacts/demo_pre2_20260628_142910", True, 200)]     # grenade 86B7 (hybrid-recorded)
     stats = Counter(); mism = []
-    for d in demos:
-        _run(d, 600, stats, mism)
+    for d, native, mf in demos:
+        _run(d, mf, stats, mism, native_replacements=native)
     print("\n=== player-interaction keystones shadow ===")
     for k in sorted(stats):
         print(f"  {k:12s} {stats[k]}")

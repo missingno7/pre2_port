@@ -379,7 +379,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         raise Loop2NeedsHelper("trap-hit 867E/8D1B")
     if num == 0xA9:                                       # id 0xde [86B7] grenade: kill every on-screen enemy
         def _grenade(ov, di):                             # [86E1] each enemy dies via the recovered 8C72
-            ov.apply(death_handler(ov.rb, ov.rw, ov.rw((di + 6) & 0xFFFF), di, si))
+            ov.merge_bytes(death_handler(ov.rb, ov.rw, ov.rw((di + 6) & 0xFFFF), di, si))  # 8C72 = byte-level
         ov = _kill_all_screen(rb, rw, si, _grenade)
         ov.wb(SHAKE, 9)                                   # [86E9] screen shake
         ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE6, si))   # [8704] ax=0xe6 -> 860B
