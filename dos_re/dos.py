@@ -785,8 +785,8 @@ class DOSMachine:
         if ah == 0x3D:  # open file
             name = self.read_asciiz(cpu, cpu.s.ds, cpu.s.dx)
             path = self.resolve_game_path(name)
-            if not path.exists():
-                cpu.s.ax = 2
+            if not path.is_file():        # missing, OR an empty/invalid name that resolved to a directory
+                cpu.s.ax = 2              # DOS "file not found" (CF=1) -> the game's open-fail path, not a crash
                 cpu.set_flag(CF, True)
                 return
             handle = self.next_handle
