@@ -61,6 +61,7 @@ FRAME_BASE = 0x138       # [asm 689F add dx,0x138] sprite-id base added to the s
 ID_FLAGS_MASK = 0x6000   # [asm 68E1 and [si+4],0x6000] the blink/opaque flag bits kept across an anim step
 FLIP_BIT = 0x8000        # [asm 68DF] sprite-id bit15 = H-flip (from record [si+9] bit7)
 _FRAME_MASK = 0x1FFF     # [asm 6891/68B9/68D7 and dh,0x1f] the 13-bit frame field
+REMAP_TABLE = 0xA801     # [asm 68B6] the zoom frame-remap table: 6-byte entries {lo, hi, remapped_frame}
 
 
 class ObjectScaleUnsupported(Exception):
@@ -86,15 +87,19 @@ class AnimResult:
 
 
 def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, scale: int) -> AnimResult:
-    """Advance one object's animation script — recovers ``1030:6881..68E6`` (the scale==0 path).
+    """Advance one object's animation script — recovers ``1030:6881..68E6`` (scale==0 AND the scale!=0 zoom
+    frame-remap).
 
     ``script_ptr`` is ``[si+0xC]`` (a DS-relative offset); ``read_word(off)`` reads a 16-bit word from the
     object segment. The script is a list of frame words walked forward each tick; a NEGATIVE word is a relative
     BACK-JUMP (``bx += word``) that loops the animation. The selected frame ``raw`` becomes the new sprite id:
     ``frame = ((raw & 0x1FFF) + 0x138) & 0x1FFF`` then ``[si+4] = (old & 0x6000) | frame | (flip ? 0x8000)``,
     keeping the blink/opaque flag bits; the script pointer advances by 2. Also writes the ``[0xA340]`` scratch
-    byte ``((raw>>8)&0xE0)|scale``. ``scale`` is ``[0x6BE2]``; non-zero -> :class:`ObjectScaleUnsupported`
-    (the boss zoom region-remap, unrecovered)."""
+    byte ``((raw>>8)&0xE0)|scale``. ``scale`` is ``[0x6BE2]``; non-zero is a zoom level -> the ``0xA801``
+    region-remap (6-byte entries ``{lo, hi, remapped_frame}``): a frame within ``[lo,hi]`` is remapped to
+    ``remapped_frame + 0x35`` and the script FREEZES (no advance); a frame below the table passes through.
+    Verified byte-exact vs ASM on snapshot 143131 (scale 0x294). The ``scale==7`` sub-case (zoom + shake
+    ``[0x6BEA]=9``, a side effect) stays :class:`ObjectScaleUnsupported` (not witnessed)."""
     bx = script_ptr & 0xFFFF
     for _ in range(256):                                     # [asm 6884-688D] resolve back-jumps
         raw = read_word(bx)
@@ -104,12 +109,28 @@ def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, s
     else:
         raise ObjectScaleUnsupported("runaway animation back-jump (malformed script)")
     a340 = ((raw >> 8) & 0xE0) | (scale & 0xFF)              # [asm 6891-689B] scratch attribute byte
-    if scale != 0:                                           # [asm 68A3 jne -> 0xA801 region remap]
-        raise ObjectScaleUnsupported(f"scale [0x6BE2]={scale:#x} region-remap not recovered")
-    frame = (((raw & _FRAME_MASK) + FRAME_BASE) & _FRAME_MASK)   # [asm 6891 mask, 689F +0x138, 68D7 mask]
+    frame = (((raw & _FRAME_MASK) + FRAME_BASE) & _FRAME_MASK)   # [asm 6891 mask, 689F +0x138, 68B9/68D7 mask]
+    advance = True                                           # the script ptr advances unless a remap fires
+    if scale != 0:                                           # [asm 68A3 jne] zoom active -> 0xA801 region remap
+        if scale == 7:                                       # [asm 68AA/68B1] this level ALSO sets shake
+            raise ObjectScaleUnsupported("scale==7 (zoom+shake [0x6BEA]=9) sub-case not witnessed")
+        di = REMAP_TABLE                                     # [asm 68B6] di=0xA801; walk the 6-byte entries
+        for _ in range(256):                                 # [asm 68BC..68C8]
+            if frame < read_word(di):                        # [68BE jb] below this range's lo -> use frame as-is
+                break
+            if frame <= read_word((di + 2) & 0xFFFF):        # [68C3 jbe] within [lo, hi] -> remap + freeze script
+                frame = (read_word((di + 4) & 0xFFFF) + 0x35) & _FRAME_MASK   # [68CA-68CD]
+                advance = False
+                break
+            di = (di + 6) & 0xFFFF                            # [68C5] next entry
+        else:
+            raise ObjectScaleUnsupported("runaway 0xA801 region-remap walk (malformed table)")
     val = frame | (FLIP_BIT if (flip_byte & 0x80) else 0)    # [asm 68DA-68DF] bit15 = H-flip from [si+9]
     new_id = (old_id & ID_FLAGS_MASK) | val                  # [asm 68E1-68E6] keep blink/opaque flags
-    return AnimResult(sprite_id=new_id, script_ptr=(bx + 2) & 0xFFFF, attr_a340=a340)
+    # [asm 68D2 inc bx;inc bx;mov [si+0xC],bx] runs only when NOT remapped (the remap's 68D0 jmp skips it),
+    # so a remap leaves [si+0xC] at its OLD value (the input), not the back-jump-resolved bx.
+    return AnimResult(sprite_id=new_id, script_ptr=(bx + 2) & 0xFFFF if advance else (script_ptr & 0xFFFF),
+                      attr_a340=a340)
 
 
 # -- despawn-if-far-from-player (1030:8084, + the 7CFF tail) ------------------------------------------- #

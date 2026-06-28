@@ -89,10 +89,38 @@ def test_anim_a340_takes_flag_bits_of_raw_frame():
     assert r.attr_a340 == 0x60           # (0x6010>>8)&0xE0 | scale(0)
 
 
-def test_anim_scale_active_is_unsupported_guard():
+def test_anim_scale7_zoom_plus_shake_is_unsupported_guard():
+    # scale==7 ALSO sets shake [0x6BEA]=9 (a side effect) — that sub-case is unwitnessed -> fail loud.
     ptr, rd = _script([0x10])
     with pytest.raises(ObjectScaleUnsupported):
         advance_animation(ptr, rd, old_id=0, flip_byte=0, scale=7)
+
+
+def _script_with_remap_table(words):
+    """read_word over the script at 0x100 PLUS the static 0xA801 zoom-remap table (first 3 entries:
+    {0x138-0x13c->0x56}, {0x13e-0x149->0x6f}, {0x14a-0x153->0x6d})."""
+    mem = {0x100 + 2 * i: w & 0xFFFF for i, w in enumerate(words)}
+    mem.update({0xA801: 0x138, 0xA803: 0x13c, 0xA805: 0x56,
+                0xA807: 0x13e, 0xA809: 0x149, 0xA80B: 0x6f,
+                0xA80D: 0x14a, 0xA80F: 0x153, 0xA811: 0x6d})
+    return 0x100, lambda off: mem.get(off & 0xFFFF, 0)
+
+
+def test_anim_zoom_remap_freezes_script():
+    # raw 0x12 -> frame 0x14a, within the table's [0x14a,0x153] range -> remap to 0x6d+0x35=0xa2 and FREEZE
+    ptr, rd = _script_with_remap_table([0x12])
+    r = advance_animation(ptr, rd, old_id=0x2000, flip_byte=0, scale=0x294)
+    assert r.sprite_id == (0x2000 | 0xA2)   # remapped frame, the 0x6000 flag bits kept
+    assert r.script_ptr == 0x100            # FROZEN — a remap skips the script advance
+    assert r.attr_a340 == 0x94              # scale & 0xFF
+
+
+def test_anim_zoom_frame_outside_a_range_passes_through():
+    # raw 5 -> frame 0x13d, which falls in the gap (>0x13c, <0x13e) -> used as-is, script DOES advance
+    ptr, rd = _script_with_remap_table([0x5])
+    r = advance_animation(ptr, rd, old_id=0, flip_byte=0, scale=0x294)
+    assert r.sprite_id == 0x13D
+    assert r.script_ptr == 0x102
 
 
 def test_anim_runaway_backjump_raises():
