@@ -40,3 +40,25 @@ def test_carte_enters_on_black_page():
     asset = _ASSET.read_bytes()
     planes = build_carte_page(asset, 8)
     assert all(not any(p) for p in planes), "carte page must start black at scroll_x=8"
+
+
+def test_carte_312px_hides_pel_pan_incoming_column():
+    # The carte narrows the CRTC active area to 312px so the pel-pan's incoming byte-column scrolls in
+    # from the OVERSCAN/border (off-screen), not the active area — that is what makes the fine scroll
+    # fluent. With pel>0 the present must drop the last `pel` active pixels (the un-fetched next byte),
+    # for the narrowed width only. Regression guard: the clamp for this was added then reverted once,
+    # and the 312px clip alone still left the column at px 306-311 visible.
+    import sys
+    import numpy as np
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from sdl_view import _planar_to_rgb, _PLANAR_ROW_BYTES
+    planes = [np.zeros(0x10000, dtype=np.uint8) for _ in range(4)]
+    planes[0][_PLANAR_ROW_BYTES] = 0xFF          # byte 39 = the incoming overflow column -> colour index 1
+    pal = [(0, 0, 0), (255, 0, 0)] + [(0, 0, 0)] * 14
+    carte = _planar_to_rgb(lambda p: planes[p], 0, pal, 0xFFFF, pel_pan=4, active_width=312)
+    assert not (carte[0] == (255, 0, 0)).all(axis=-1).any(), "carte: incoming column leaked into the active area"
+    # the full-width gameplay path is unchanged — that same column is the normal next scroll column
+    game = _planar_to_rgb(lambda p: planes[p], 0, pal, 0xFFFF, pel_pan=4, active_width=320)
+    assert (game[0] == (255, 0, 0)).all(axis=-1).any()

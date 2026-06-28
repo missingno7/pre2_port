@@ -483,9 +483,15 @@ def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: i
         bits = np.unpackbits(plane_bytes[..., None], axis=2)                    # (200, ncols, 8) MSB-first
         color |= bits << plane
     win = color.reshape(HEIGHT, ncols * 8)[:, pel:pel + aw]                     # (200, aw) active pixels
-    if aw < WIDTH:                                                             # pad border (black) to 320
+    if aw < WIDTH:
+        # The CRTC fetches only aw/8 byte-columns (H Display End); the pel-pan then shifts the display
+        # left by `pel`, so the last `pel` active pixels — which would need the NEXT, un-fetched byte
+        # (the column scrolling in) — fall in the overscan/border, OFF the active area, not on-screen.
+        # Dropping them keeps the carte's incoming column hidden in the border so its fine scroll stays
+        # fluent (without 312px clipping, that column pops in at the right edge — the reported glitch).
+        cw = aw - pel
         idx = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-        idx[:, :aw] = win
+        idx[:, :cw] = win[:, :cw]
     else:
         idx = win
     return pal[idx]
