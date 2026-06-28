@@ -7,9 +7,9 @@ VM memory, emits each hit's sfx via a controlled play_sfx near-call, and does th
 object_tick / second_pass_tick this is NOT instruction-count transparent (it does the pass in one host step);
 the data-segment effect is byte-exact (whole-pass shadow, pre2/probes/probe_player_interaction_tick.py).
 
-The two ASM_MATCHED-only effect paths (trap 864F, boss-projectile 8618) are still UNWITNESSED, so under the
-live hook they FAIL LOUD (strict=True -> Pre2HybridGap) rather than run an unverified recovery; the offline
-shadow keeps strict=False so it verifies them the moment a demo exercises them.
+Every effect path is recovered + verified byte-exact vs the ASM — including the last two ASM_MATCHED-only ones,
+the trap 864F (skull witness 202721) and the boss-projectile 8618 (final-boss witness 213544) — so the whole
+pass runs natively with no fail-loud paths.
 
 VERIFY MODE keeps the ASM as oracle: predict from the entry state (no mutation), step aside (the ASM runs),
 and diff the predicted game-state writes at the routine's RET.
@@ -20,9 +20,9 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.checkpoints.player import _emit_sfx
 from pre2.recovered.object_inject import find_free_object_slot
-from pre2.recovered.player_interaction import Loop2NeedsHelper, player_interaction_tick
+from pre2.recovered.player_interaction import player_interaction_tick
 
-from .common import Pre2HybridGap, report
+from .common import report
 
 _DS = 0x1A0F
 _ENTRY = (0x1030, 0x8295)
@@ -64,12 +64,9 @@ def player_interaction_tick_hook(cpu) -> None:
     if getattr(cpu, "pre2_verify_mode", False):
         ov = _Ov(cpu.mem)
         read_id = lambda slot: ov.rw(0x4FD0 + slot * 0x12 + 4)          # noqa: E731
-        try:
-            player_interaction_tick(ov.rb, ov.rw, ov.apply, lambda s: None,
-                                    lambda: find_free_object_slot(read_id), strict=False)
-            cpu.pre2_pi_pending = ov.w
-        except Loop2NeedsHelper:
-            cpu.pre2_pi_pending = None                                  # unmapped id -> let the ASM run, no diff
+        player_interaction_tick(ov.rb, ov.rw, ov.apply, lambda s: None,
+                                lambda: find_free_object_slot(read_id))
+        cpu.pre2_pi_pending = ov.w
         interpret_current_instruction_without_hook(cpu)
         return
 
@@ -84,11 +81,8 @@ def player_interaction_tick_hook(cpu) -> None:
 
     read_id = lambda slot: rw(0x4FD0 + slot * 0x12 + 4)                 # noqa: E731
     sfx_q: list[int] = []
-    try:
-        player_interaction_tick(rb, rw, apply_writes, sfx_q.append,
-                                lambda: find_free_object_slot(read_id), strict=True)
-    except Loop2NeedsHelper as e:
-        raise Pre2HybridGap(f"player_interaction_tick (1030:8295) live: ASM_MATCHED/unrecovered path hit: {e}")
+    player_interaction_tick(rb, rw, apply_writes, sfx_q.append,
+                            lambda: find_free_object_slot(read_id))
     for s in sfx_q:
         _emit_sfx(cpu, [s])
     cpu.s.ip = cpu.pop()       # near ret to the main loop (0x0235); ax/bx/.. are scratch (caller re-derives)

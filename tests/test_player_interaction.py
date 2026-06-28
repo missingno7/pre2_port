@@ -5,7 +5,7 @@ demos rarely pickup/stomp); these pin the score/spawn/consume + anim-advance con
 from __future__ import annotations
 
 from pre2.recovered.player_interaction import (spawn_pickup_effect, advance_anim_script,
-                                               _knockback, loop1, loop2_handler, Loop2NeedsHelper,
+                                               _knockback, loop1, loop2_handler,
                                                CLUB_TYPE, LEVEL, LEVEL_DONE, LIGHT_STATE, LETTERS_MASK)
 
 

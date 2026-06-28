@@ -227,11 +227,6 @@ OBJ_LIST = 0x4FD0        # the 12-slot object (enemy) list
 OBJ_COUNT = 12
 
 
-class Loop2NeedsHelper(Exception):
-    """A loop2 handler path needs an as-yet-unrecovered sub-routine (trap-hit 867E / extra-life 65D6 /
-    boss-projectile 8618)."""
-
-
 def _consume_link(rw, si):                                  # [853F] level_clear_item: consume [si+9] entity
     bx = rw((si + 9) & 0xFFFF)
     return {} if bx == 0xFFFF else {(bx + 4) & 0xFFFF: (0xFFFF, 2)}
@@ -447,13 +442,11 @@ def loop2_handler(num, rb, rw, si, find_free):
     #                                                       falls through the dispatch to the loop advance.
 
 
-def _boss_projectile(rb, rw, strict=False):
+def _boss_projectile(rb, rw):
     """[asm 8618] boss-projectile hit (loop2 ids 0x1CA/0x1CB). ENERGY==0 -> 65B3 _offcamera_trigger (lose a
     life / game over); else enter the hurt state, lose 1 energy, and 867E bone-burst (forced to a 6-bone
     scatter). No pickup-effect / no link-consume — the ASM jmps straight to the loop advance. Returns
-    (writes, sfx). ASM_MATCHED (unwitnessed); ``strict`` (LIVE) fails loud rather than run it."""
-    if strict:
-        raise Loop2NeedsHelper("boss-projectile 8618 ASM_MATCHED, not yet witnessed")
+    (writes, sfx). VERIFIED byte-exact on the final-boss witness 213544 (recon 8618->860E: 101 writes, 0 div)."""
     ov = _Overlay(rb)
     if ov.rb(ENERGY) < 1:                                  # [8618] cmp [0x27D6],1 ; jae
         ov.merge_bytes(_offcamera_trigger(ov.rb))         # [861F] 65B3 death/respawn (byte-level dict)
@@ -471,11 +464,11 @@ def _boss_projectile(rb, rw, strict=False):
 _EARLY_SKIP = (0xE5, 0x12C, 0x132, 0x134, 0x136)          # [840A] ids that pass through (no consume, no effect)
 
 
-def loop2(rb, rw, apply, emit_sfx, find_free, strict=False):
+def loop2(rb, rw, apply, emit_sfx, find_free):
     """[asm 83D7..8617] walk the 52-entry pickup list (0x50A8) vs the player; on a hitbox overlap of a
     collectible (`[si+5]&0x20`) entity, consume it and dispatch its effect. Applies writes via ``apply``;
-    plays sounds via ``emit_sfx``. Raises Loop2NeedsHelper only for the boss-projectile 8618 under ``strict`` —
-    the one remaining ASM_MATCHED-only, unwitnessed effect path."""
+    plays sounds via ``emit_sfx``. Every effect path (incl. the boss-projectile 8618) is now recovered +
+    verified byte-exact, so nothing fails loud."""
     si = ENTITY2
     for _ in range(0x34):                                  # cx=0x34 (52)
         sid = rw((si + 4) & 0xFFFF)
@@ -490,7 +483,7 @@ def loop2(rb, rw, apply, emit_sfx, find_free, strict=False):
                     # only for the dispatch), so the 0x2000 collectible flag stays in its high byte.
                     apply({(si + 4) & 0xFFFF: (0xFFFF, 2), A33A: (sid, 2)})
                     if aid in (0x1CA, 0x1CB):                        # [8432] boss projectile (8618)
-                        writes, sfx = _boss_projectile(rb, rw, strict)
+                        writes, sfx = _boss_projectile(rb, rw)
                     else:
                         writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free)
                     apply(writes)
@@ -499,11 +492,11 @@ def loop2(rb, rw, apply, emit_sfx, find_free, strict=False):
         si = (si + 0x12) & 0xFFFF                                    # [860E]
 
 
-def player_interaction_tick(rb, rw, apply, emit_sfx, find_free, strict=False):
+def player_interaction_tick(rb, rw, apply, emit_sfx, find_free):
     """[asm 8295..8617] the whole player<->world interaction subsystem: loop1 (player-vs-enemy) then, unless
-    loop1 took an early return, loop2 (player-vs-pickup). ``strict`` (LIVE hook) makes the one remaining
-    ASM_MATCHED-only, unwitnessed loop2 path (the boss-projectile 8618) raise Loop2NeedsHelper rather than run
-    unwitnessed; loop1 + all VERIFIED loop2 handlers (incl. the now-witnessed trap 864F) always run."""
+    loop1 took an early return, loop2 (player-vs-pickup). Every path is recovered + verified byte-exact vs the
+    ASM (the trap 864F and boss-projectile 8618 — the last ASM_MATCHED-only ones — on the skull/final-boss
+    witnesses), so the whole tick runs natively with no fail-loud paths."""
     if loop1(rb, rw, apply, emit_sfx):
         return
-    loop2(rb, rw, apply, emit_sfx, find_free, strict)
+    loop2(rb, rw, apply, emit_sfx, find_free)
