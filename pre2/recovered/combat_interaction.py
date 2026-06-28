@@ -1,7 +1,7 @@
 """Combat / pickup interaction island — 1030:88D7 + 899E + 8C21 (in progress).
 
 Once per frame the main loop (~1030:021D) runs the player-and-projectile interaction pass `88D7`: for each of
-the 4 projectile slots (DS:0x4F2E, stride 0x12) and then — unless [0x6BC5] (scripted-pose) — the player sprite
+the 4 projectile slots (DS:0x4F2E, stride 0x12) and then — unless [0x6BC5] (player flying) — the player sprite
 (DS:0x4F0A), it runs two collision passes against the source sprite at `si`:
 
     8C21  source-vs-ENEMY   — scan the 12 active object slots (DS:0x4FD0), sprite-hitbox proximity (8D7B),

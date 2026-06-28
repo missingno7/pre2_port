@@ -119,7 +119,7 @@ def collision_airborne(rw, rb) -> dict:
     out: dict = {0x4F22: _air_drift_x(rw, rb, 0x50),              # [63B7-63BA]
                  0x4F2A: _gravity_y(rw, rb, 0xC0)}                 # [63BD-63C0]
     yvel = _s16(out[0x4F2A])
-    if rb(0x6BC5) != 0:                                           # [63C3] (dormant momentum flag)
+    if rb(0x6BC5) != 0:                                           # [63C3] (player_flying_flag [0x6BC5]; dormant in normal play)
         al = 0x2D if yvel < 0 else 0x2E                           # [63CA-63D3]
         out[0x4F20] = (((rb(0x4F25) & 0x80) << 8) | al) & 0xFFFF  # [63F4-63FB]
         return out

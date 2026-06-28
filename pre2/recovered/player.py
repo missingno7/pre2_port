@@ -232,7 +232,7 @@ def player_state_run(rb, rw) -> dict:
 
     The handler is a composition of the recovered primitives (the original source structure). With entry
     ``al==1`` (anim_id) and ``bx==2`` (anim_id*2 = the sequence index) preserved through the calls, the main
-    path (gates ``[0x6BD0]==0`` no override, ``[0x6BC5]==0`` no scripted block) is::
+    path (gates ``[0x6BD0]==0`` no override, ``[0x6BC5]==0`` no flying-state block) is::
 
         [0x6BD3] = sat_inc([0x6BD3])              # 5EF9 frame counter (caps at 0xFF)
         [0x4F22] = accel(limit=0x50)              # 5F03-5F06 player_accel
@@ -428,8 +428,8 @@ def player_state_jump(rb, rw) -> dict:
 
 def _jump_body(rb, rw) -> dict:
     """The jump-arc body ``1030:5F41`` — shared by :func:`player_state_jump` (after its ``[0x6BE0]`` prologue) and
-    the momentum-mode jump (``5F13``). Drives the rising arc (decaying impulse table for the first 9 frames, then
-    gravity), horizontal control, ``set_anim_b(2)``, and two directional frictions. Under the scripted-pose gate
+    the flying-mode jump (``5F13``). Drives the rising arc (decaying impulse table for the first 9 frames, then
+    gravity), horizontal control, ``set_anim_b(2)``, and two directional frictions. Under the flying gate
     (``[0x6BC5]!=0``) the impulse is halved (``5F5B-5F62``); when ``[0x6BC5]==0`` that is a no-op, so the normal
     jump is unchanged."""
     out = {0x6BFE: 0}                                            # [5F41]
@@ -437,7 +437,7 @@ def _jump_body(rb, rw) -> dict:
     out[0x6BD1] = (counter + 1) & 0xFF                          # [5F4C] inc
     if counter < JUMP_FRAMES:                                    # [5F50] jae
         impulse = rw((JUMP_IMPULSE_TABLE + counter * 2) & 0xFFFF)   # [5F55-5F57]
-        if rb(0x6BC5) != 0:                                     # [5F5B-5F62] scripted pose -> halve the impulse
+        if rb(0x6BC5) != 0:                                     # [5F5B-5F62] flying state -> halve the impulse
             impulse = (_s16(impulse) >> 1) & 0xFFFF
         out[0x4F2A] = (rw(0x4F2A) + impulse) & 0xFFFF           # [5F64] Yvel += impulse
     else:
@@ -462,8 +462,8 @@ def _jump_body(rb, rw) -> dict:
     return out
 
 
-def _momentum_jump(rb, rw) -> dict:
-    """The momentum-mode jump ``1030:5F13`` (``cs:[0x7D6F][2]``). Once the hold counter ``[0x6BC8]`` reaches
+def _flying_jump(rb, rw) -> dict:
+    """The flying-mode jump ``1030:5F13`` (``cs:[0x7D6F][2]``). Once the hold counter ``[0x6BC8]`` reaches
     0x18 the jump ends (arm the descent: ``[0x6BC7]=1``, ``[0x6BC6]=0x18``, nudge ``Y-=3``, reset ``[0x6BC8]``)
     and only the two directional frictions run; otherwise it runs the shared jump body."""
     if rb(0x6BC8) >= 0x18:                                      # [5F13-5F18]
@@ -476,12 +476,12 @@ def _momentum_jump(rb, rw) -> dict:
     return _jump_body(rb, rw)                                   # [5F41]
 
 
-def player_fsm_momentum(rb, rw) -> tuple:
-    """Recover the scripted-pose / momentum state machine ``1030:596A`` (the ``[0x6BC5]!=0`` branch taken at the
+def player_fsm_flying(rb, rw) -> tuple:
+    """Recover the flying-movement state machine ``1030:596A`` (the ``[0x6BC5]!=0`` branch taken at the
     FSM gate ``5960``). Returns ``(writes, do_dispatch)``: when ``do_dispatch`` is True the caller then runs the
-    **momentum** handler table ``cs:[0x7D6F]`` (the normal dispatch with ``bx += 0x40``).
+    **flying** handler table ``cs:[0x7D6F]`` (the normal dispatch with ``bx += 0x40``).
 
-    Only the ``[0x6BC7]&1 == 0`` branch is witnessed (the scripted hold has not started): mask ``[0x6BC7]``,
+    Only the ``[0x6BC7]&1 == 0`` branch is witnessed (the flying hold has not started): mask ``[0x6BC7]``,
     arm the descent flag when Yvel exceeds 0xA0, then dispatch. The input-driven hold bookkeeping (``5977``,
     over ``[0x6BC6]``/``[0x7B1A]`` from ``[0x27EA]``/``[0x27EB]``) is unwitnessed and fails loud."""
     bc7 = rb(0x6BC7) & 1                                       # [596D] and [0x6BC7],1
@@ -491,7 +491,7 @@ def player_fsm_momentum(rb, rw) -> tuple:
             out[0x6BC7] = 1                                    # [5A06]
         return out, True                                      # [-> 5A0B] dispatch via cs:[0x7D6F]
 
-    # [5977] the scripted hold is active ([0x6BC7]&1): bookkeeping over [0x6BC6]/[0x7B1A]; never dispatches.
+    # [5977] the flying hold is active ([0x6BC7]&1): bookkeeping over [0x6BC6]/[0x7B1A]; never dispatches.
     ea, eb = rb(0x27EA), rb(0x27EB)
     bc6, b1a = rb(0x6BC6), rb(0x7B1A)
     if ea != 0:                                               # [5977] held "up"
@@ -525,14 +525,14 @@ def player_fsm_momentum(rb, rw) -> tuple:
     return out, False
 
 
-def player_fsm_momentum_dispatch(anim_id: int, rb, rw) -> tuple:
-    """The momentum handler table ``cs:[0x7D6F]`` (``= cs:[0x7D2F] + 0x40``). Mostly reuses recovered handlers:
-    anim_id 1 -> run (5EC4), 2 -> the momentum jump (5F13), 8 -> no-op (454C = ret); everything else -> anim5
+def player_fsm_flying_dispatch(anim_id: int, rb, rw) -> tuple:
+    """The flying handler table ``cs:[0x7D6F]`` (``= cs:[0x7D2F] + 0x40``). Mostly reuses recovered handlers:
+    anim_id 1 -> run (5EC4), 2 -> the flying jump (5F13), 8 -> no-op (454C = ret); everything else -> anim5
     (5E96). Returns ``(writes, sfx)``."""
     if anim_id == 1:
         return player_state_run(rb, rw), []                    # [5EC4]
     if anim_id == 2:
-        return _momentum_jump(rb, rw), []                      # [5F13]
+        return _flying_jump(rb, rw), []                      # [5F13]
     if anim_id == 8:
         return {}, []                                          # [454C] ret
     return player_state_anim5(rb, rw), []                      # [5E96] idx 0/3/4/5/6/7
@@ -640,16 +640,16 @@ def player_fsm_step(rb, rw) -> tuple:
     def rw2(off):
         return (writes[off] & 0xFFFF) if off in writes else rw(off)
 
-    # [5960] scripted-pose / momentum gate: when [0x6BC5]!=0 the FSM runs the 596A state machine instead of the
-    # normal dispatch, then (if it falls through) dispatches the momentum handler table cs:[0x7D6F].
+    # [5960] flying gate: when [0x6BC5]!=0 the FSM runs the 596A state machine instead of the
+    # normal dispatch, then (if it falls through) dispatches the flying handler table cs:[0x7D6F].
     if rb(0x6BC5) != 0:
-        mwrites, do_dispatch = player_fsm_momentum(rb2, rw2)   # [596A]
+        mwrites, do_dispatch = player_fsm_flying(rb2, rw2)   # [596A]
         writes.update(mwrites)
         msfx: list = []
         if do_dispatch:                                        # [-> 5A0B] dispatch via cs:[0x7D6F]
-            if rb2(0x6BD0) != 0:                               # the momentum handlers' [0x6BD0] override is unwitnessed
-                raise NotImplementedError("momentum dispatch with [0x6BD0]!=0 not witnessed")
-            hw, msfx = player_fsm_momentum_dispatch(anim_id, rb2, rw2)
+            if rb2(0x6BD0) != 0:                               # the flying handlers' [0x6BD0] override is unwitnessed
+                raise NotImplementedError("flying dispatch with [0x6BD0]!=0 not witnessed")
+            hw, msfx = player_fsm_flying_dispatch(anim_id, rb2, rw2)
             writes.update(hw)
         return writes, msfx, writes.pop(SCROLL_REQUEST, None)
 

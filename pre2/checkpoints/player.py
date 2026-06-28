@@ -95,7 +95,7 @@ def _emit_sfx(cpu, sfx) -> None:
 @registry.replace(*_FSM_ENTRY, "player_fsm")
 def player_fsm_hook(cpu) -> None:
     """Native replacement for the per-frame player FSM at 1030:58A7..5A0B (front-end -> select -> dispatch,
-    including the [0x6BC5]!=0 scripted-pose / momentum branch)."""
+    including the [0x6BC5]!=0 flying branch)."""
     mem = cpu.mem
     rb = lambda o: _rb(mem, o)
     rw = lambda o: _rw(mem, o)
