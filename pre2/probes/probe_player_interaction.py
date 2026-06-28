@@ -22,8 +22,27 @@ import play
 CS = 0x1030
 SPAWN = (CS, 0x8875); SPAWN_RET = (CS, 0x88D6)
 ANIM = (CS, 0x80CB); ANIM_RET = (CS, 0x80DD)
+LOOP1 = (CS, 0x8295); LOOP1_EXITS = (0x833F, 0x8389, 0x83CD, 0x83D7)   # stomp-ret/knock-ret/death-ret/loop2
 # regions the keystones own (ISR sound state is in low 0x27xx/0x28xx, outside these)
 _OWNED_SPAWN = (frozenset(range(0x4FD0, 0x5800)) | {0x6C0E, 0x6C0F, 0x6C10, 0x6C11} | {0xA33E, 0xA33F})
+
+
+class _Ov:
+    """Read-through copy-overlay of the 64KB DS; accumulates the recovered writes."""
+    def __init__(self, snap):
+        self.snap = snap; self.w = {}
+
+    def rb(self, o):
+        o &= 0xFFFF
+        return self.w.get(o, self.snap[o])
+
+    def rw(self, o):
+        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
+
+    def apply(self, writes):
+        for off, (val, width) in writes.items():
+            for k in range(width):
+                self.w[(off + k) & 0xFFFF] = (val >> (8 * k)) & 0xFF
 
 
 def _run(demo, max_frames, stats, mism):
@@ -94,9 +113,34 @@ def _run(demo, max_frames, stats, mism):
                     break
         interpret_current_instruction_without_hook(c)
 
+    def at_loop1(c):
+        snap = bytes(md[b():b() + 0x10000])
+        ov = _Ov(snap)
+        pi.loop1(ov.rb, ov.rw, ov.apply, lambda s: None)        # predict the whole loop1 walk
+        pend["L"] = ov.w
+        stats["loop1"] += 1
+        interpret_current_instruction_without_hook(c)
+
+    def at_loop1_exit(c):
+        w = pend.pop("L", None)
+        if w is not None:
+            post = md[b():b() + 0x10000]
+            for off, v in w.items():                            # predicted game-state writes must match ASM
+                if post[off] != v:
+                    stats["LOOP1_BAD"] += 1
+                    if len(mism) < 20:
+                        mism.append(f"loop1 PRED [{off:#06x}]={v:#04x} asm={post[off]:#04x}")
+                    break
+            else:
+                if w:
+                    stats["loop1_hit"] += 1                      # a tick that actually wrote something
+        interpret_current_instruction_without_hook(c)
+
     for key, fn, nm in ((SPAWN, at_spawn, "s0"), (SPAWN_RET, at_spawn_ret, "s1"),
-                        (ANIM, at_anim, "a0"), (ANIM_RET, at_anim_ret, "a1")):
+                        (ANIM, at_anim, "a0"), (ANIM_RET, at_anim_ret, "a1"), (LOOP1, at_loop1, "L0")):
         cpu.replacement_hooks[key] = fn; cpu.hook_names[key] = nm
+    for ip in LOOP1_EXITS:
+        cpu.replacement_hooks[(CS, ip)] = at_loop1_exit; cpu.hook_names[(CS, ip)] = "L1"
 
     det_speed = max(1, args.chunk_steps * args.present_hz)
     det_now = lambda: cpu.instruction_count / det_speed
@@ -120,8 +164,8 @@ def main():
         print(f"  {k:12s} {stats[k]}")
     for m in mism:
         print("  " + m)
-    ok = stats["SPAWN_BAD"] == 0 and stats["ANIM_BAD"] == 0
-    print("\nKEYSTONES:", "PASS (byte-exact vs ASM)" if ok else "FAIL")
+    ok = stats["SPAWN_BAD"] == 0 and stats["ANIM_BAD"] == 0 and stats["LOOP1_BAD"] == 0
+    print("\nPLAYER-INTERACTION (keystones + loop1):", "PASS (byte-exact vs ASM)" if ok else "FAIL")
     return 0 if ok else 1
 
 

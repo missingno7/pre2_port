@@ -4,7 +4,8 @@ Byte-exact ASM equivalence is checked live by pre2/probes/probe_player_interacti
 demos rarely pickup/stomp); these pin the score/spawn/consume + anim-advance contracts with fixtures."""
 from __future__ import annotations
 
-from pre2.recovered.player_interaction import spawn_pickup_effect, advance_anim_script
+from pre2.recovered.player_interaction import (spawn_pickup_effect, advance_anim_script,
+                                               _knockback, loop1)
 
 
 def _mem(kv):
@@ -51,3 +52,29 @@ def test_advance_anim_script_skips_to_after_marker():
     rb, rw = _mem(kv)
     w = advance_anim_script(rw, 0x4FD0)                       # 0x7000 -> +2 ->7002 ->7004(marker) ->+2 ->7006
     assert w[0x4FD0 + 0xC] == (0x7006, 2)
+
+
+# --- loop1 (player-vs-enemy collision) — byte-exact shadow in probe_player_interaction (107 ticks); these
+#     pin the control flow without the VM.
+def test_knockback_player_up():
+    rb, rw = _mem({0x4F1E: 0x0100, 0xA331: 0x0010})          # player Y=0x100, knockback delta=0x10
+    w = _knockback(rb, rw, 0xFFC0)
+    assert w[0x4F2A] == (0xFFC0, 2) and w[0x6BD2] == (0, 1) and w[0x4F1E] == (0x00F0, 2)
+
+
+def test_loop1_skips_when_player_dying():
+    rb, rw = _mem({0x4F2D: 0x2C})                            # player death-state != 0 -> straight to loop2
+    applied = []
+    assert loop1(rb, rw, lambda w: applied.append(w), lambda s: None) is False
+    assert applied == []
+
+
+def test_loop1_no_objects_no_writes():
+    kv = {}
+    for k in range(12):                                      # all 12 slots empty ([+4]==0xFFFF)
+        kv[0x4FD0 + k * 0x12 + 4] = 0xFF
+        kv[0x4FD0 + k * 0x12 + 5] = 0xFF
+    rb, rw = _mem(kv)
+    applied = []
+    assert loop1(rb, rw, lambda w: applied.append(w), lambda s: None) is False
+    assert applied == []
