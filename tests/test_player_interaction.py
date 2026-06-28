@@ -5,7 +5,8 @@ demos rarely pickup/stomp); these pin the score/spawn/consume + anim-advance con
 from __future__ import annotations
 
 from pre2.recovered.player_interaction import (spawn_pickup_effect, advance_anim_script,
-                                               _knockback, loop1)
+                                               _knockback, loop1, loop2_handler, Loop2NeedsHelper,
+                                               CLUB_TYPE, LEVEL, LEVEL_DONE, LIGHT_STATE, LETTERS_MASK)
 
 
 def _mem(kv):
@@ -78,3 +79,34 @@ def test_loop1_no_objects_no_writes():
     applied = []
     assert loop1(rb, rw, lambda w: applied.append(w), lambda s: None) is False
     assert applied == []
+
+
+# --- loop2 effect handlers (byte-exact shadow in probe_player_interaction, 143 ticks); names per cyxx ---
+def test_loop2_club_type():                                  # num 0xD (id 0x42) -> club/weapon type 0
+    rb, rw = _mem({0x50A8 + 9: 0xFF, 0x50A8 + 0xA: 0xFF})    # no linked item
+    w, sfx = loop2_handler(0xD, rb, rw, 0x50A8, lambda: None)
+    assert w[CLUB_TYPE] == (0, 1) and sfx == [8]
+
+
+def test_loop2_end_of_level_transition():                   # num 0xE2 (id 0x117): level 2 -> 12 + complete
+    rb, rw = _mem({0x2D8A: 2})
+    w, sfx = loop2_handler(0xE2, rb, rw, 0x50A8, lambda: None)
+    assert w[LEVEL] == (0xC, 1) and w[LEVEL_DONE] == (1, 1)
+
+
+def test_loop2_bonus_letter():                              # num 0x27 (id 0x4c) -> set letter bit 0
+    rb, rw = _mem({0x50A8 + 9: 0xFF, 0x50A8 + 0xA: 0xFF})
+    w, sfx = loop2_handler(0x27, rb, rw, 0x50A8, lambda: None)
+    assert w[LETTERS_MASK] == (1, 1) and sfx == [8]
+
+
+def test_loop2_light_off():                                 # num 0xB5 (id 0xea): light on -> off
+    rb, rw = _mem({0x6C04: 0, 0x50A8 + 9: 0xFF, 0x50A8 + 0xA: 0xFF})
+    w, sfx = loop2_handler(0xB5, rb, rw, 0x50A8, lambda: None)
+    assert w[LIGHT_STATE] == (1, 1) and w[0x6C01] == (1, 1) and sfx == [1]
+
+
+def test_loop2_deferred_path_raises():                      # num 0xAA (id 0xdf) bomb -> not recovered yet
+    import pytest
+    with pytest.raises(Loop2NeedsHelper):
+        loop2_handler(0xAA, *_mem({}), 0x50A8, lambda: None)

@@ -136,11 +136,42 @@ def _run(demo, max_frames, stats, mism):
                     stats["loop1_hit"] += 1                      # a tick that actually wrote something
         interpret_current_instruction_without_hook(c)
 
+    # --- loop2 shadow (predict the whole pickup walk at 83D7, compare predicted writes at the exits) ---
+    LOOP2 = (CS, 0x83D7); LOOP2_EXITS = (0x8617, 0x8858, 0x885E, 0x8829, 0x8509)
+
+    def at_loop2(c):
+        snap = bytes(md[b():b() + 0x10000]); ov = _Ov(snap)
+        es = ov.rw(0x2DDA); eb = (es << 4) & 0xFFFFF
+        read_id = lambda s: ov.rw(0x4FD0 + s * 0x12 + 4)
+        try:
+            pi.loop2(ov.rb, ov.rw, ov.apply, lambda s: None,
+                     lambda: __import__("pre2.recovered.object_inject", fromlist=["find_free_object_slot"]).find_free_object_slot(read_id))
+            pend["2"] = ov.w; stats["loop2"] += 1
+        except pi.Loop2NeedsHelper as e:
+            stats[f"NEEDS:{e}"] += 1
+        interpret_current_instruction_without_hook(c)
+
+    def at_loop2_exit(c):
+        w = pend.pop("2", None)
+        if w is not None:
+            post = md[b():b() + 0x10000]
+            for off, v in w.items():
+                if post[off] != v:
+                    stats["LOOP2_BAD"] += 1
+                    if len(mism) < 20:
+                        mism.append(f"loop2 PRED [{off:#06x}]={v:#04x} asm={post[off]:#04x}")
+                    break
+            else:
+                if w:
+                    stats["loop2_hit"] += 1
+        interpret_current_instruction_without_hook(c)
+
+    # loop1 is verified separately (its 0x83D7 exit == loop2 entry); here focus on loop2 + the keystones.
     for key, fn, nm in ((SPAWN, at_spawn, "s0"), (SPAWN_RET, at_spawn_ret, "s1"),
-                        (ANIM, at_anim, "a0"), (ANIM_RET, at_anim_ret, "a1"), (LOOP1, at_loop1, "L0")):
+                        (ANIM, at_anim, "a0"), (ANIM_RET, at_anim_ret, "a1"), (LOOP2, at_loop2, "L2")):
         cpu.replacement_hooks[key] = fn; cpu.hook_names[key] = nm
-    for ip in LOOP1_EXITS:
-        cpu.replacement_hooks[(CS, ip)] = at_loop1_exit; cpu.hook_names[(CS, ip)] = "L1"
+    for ip in LOOP2_EXITS:
+        cpu.replacement_hooks[(CS, ip)] = at_loop2_exit; cpu.hook_names[(CS, ip)] = "L2e"
 
     det_speed = max(1, args.chunk_steps * args.present_hz)
     det_now = lambda: cpu.instruction_count / det_speed
@@ -164,8 +195,8 @@ def main():
         print(f"  {k:12s} {stats[k]}")
     for m in mism:
         print("  " + m)
-    ok = stats["SPAWN_BAD"] == 0 and stats["ANIM_BAD"] == 0 and stats["LOOP1_BAD"] == 0
-    print("\nPLAYER-INTERACTION (keystones + loop1):", "PASS (byte-exact vs ASM)" if ok else "FAIL")
+    ok = stats["SPAWN_BAD"] == 0 and stats["ANIM_BAD"] == 0 and stats["LOOP2_BAD"] == 0
+    print("\nPLAYER-INTERACTION (keystones + loop2):", "PASS (byte-exact vs ASM)" if ok else "FAIL")
     return 0 if ok else 1
 
 

@@ -195,3 +195,194 @@ def loop1(rb, rw, apply, emit_sfx):
                     return True
         di = (di + 0x12) & 0xFFFF                          # [83CE]
     return False
+
+
+# --- loop2: player-vs-entity pickups (83D7..8617) — the ~23 effect handlers (names per cyxx level.c) -------
+# Offsets confirmed from the ASM handler bodies (cross-checked vs cyxx level_update_player_collision):
+ENTITY2 = 0x50A8           # the 52-entry pickup/entity list (objects 23+i in cyxx)
+ENERGY = 0x27D6           # player energy (0..3)  [NOT lives — my earlier mislabel]
+BONUS_ENERGY_CTR = 0x6BC9  # small-energy-bonus accumulator (6 -> +1 energy)
+LETTERS_MASK = 0x6CA7     # BONUS letters bitmask
+UTENSILS_MASK = 0x6CA8    # utensils/tools bitmask
+CLUB_TYPE = 0x7B18        # equipped club/weapon type (0..3)
+ITEM_COUNT_TBL = 0x6C12   # per-item collected count table
+ITEM_TOTAL = 0x6C9E       # total collected items
+SCORE_SPR_LUT = 0xA375    # [(num-57) -> score index]  (= (-0x5C8B)&0xFFFF)
+FLYING = 0x6BC5           # flying power-up flag
+CUR_ANIM = 0x4F27         # player current-anim
+LIGHT_STATE = 0x6C04      # 0=on,1=off
+LEVEL = 0x2D8A            # level number
+LEVEL_DONE = 0x6BE6       # 1=level complete, 0xFF=game complete
+SHAKE = 0x6BEA           # screen-shake counter
+A33A = 0xA33A            # scratch: last consumed spr_num
+
+
+class Loop2NeedsHelper(Exception):
+    """A loop2 handler path needs an as-yet-unrecovered sub-routine (8D1B bones / 94F3 bomb / 65D6 life)."""
+
+
+def _consume_link(rw, si):                                  # [853F] level_clear_item: consume [si+9] entity
+    bx = rw((si + 9) & 0xFFFF)
+    return {} if bx == 0xFFFF else {(bx + 4) & 0xFFFF: (0xFFFF, 2)}
+
+
+def _count_and_score(rb, rw, si, num):
+    """[85B6] shared food/collectible tail: bump the item count + add the lut score (spawned at 0x4A+lut)."""
+    out = {}
+    idx = (num - 0x39) & 0xFFFF                             # num-57
+    out[(ITEM_COUNT_TBL + idx) & 0xFFFF] = ((rb((ITEM_COUNT_TBL + idx) & 0xFFFF) + 1) & 0xFF, 1)
+    out[ITEM_TOTAL] = ((rw(ITEM_TOTAL) + 1) & 0xFFFF, 2)
+    eff = (rb((SCORE_SPR_LUT + idx) & 0xFFFF) + 0x4A) & 0xFFFF
+    if rw((si + 9) & 0xFFFF) != 0xFFFF:                     # [85CC] linked -> bump [0x2A7A]
+        out[0x2A7A] = ((rw(0x2A7A) + 1) & 0xFFFF, 2)
+    out.update(spawn_pickup_effect(rb, rw, eff, si))        # [860B] spawn at eff id
+    return out
+
+
+def loop2_handler(num, rb, rw, si, find_free):
+    """Dispatch a pickup hit (ax=num=(spr_num&0x1FFF)-0x35) to its effect, in the ASM's chain order. Returns
+    (writes, sfx). Raises Loop2NeedsHelper for the 3 paths whose bones/bomb/life sub-routines aren't recovered
+    yet. (Names per cyxx level.c.)"""
+    if num == 0x91:                                        # id 0xc6 [885F] "tap": clear fly timers, then count
+        out = {}
+        for k in range(0x14):                              # [8861] table 0x6EA9, 0x14 * 8
+            out[(0x6EA9 + k * 8 + 7) & 0xFFFF] = (7, 1)
+        out.update(_count_and_score(rb, rw, si, num))
+        return out, [8]
+    if num == 0xE2:                                       # id 0x117 [882A] end-of-level (level transition)
+        lvl = rb(LEVEL); out = {}
+        nxt = {2: 0xC, 0xD: 2, 6: 0xE, 0xF: 6}.get(lvl)
+        if nxt is not None:
+            out[LEVEL] = (nxt, 1)
+        out[LEVEL_DONE] = (1, 1)
+        return out, []
+    if num == 0x102:                                      # id 0x137 [8859] game complete
+        return {LEVEL_DONE: (0xFF, 1)}, []
+    if num == 0xE4:                                       # id 0x119 [87FD] checkpoint
+        out = {0x6BAD: (rw(PLAYER), 2), 0x6BAF: (rw(PLAYER_Y), 2)}
+        for k in range(0x46):                             # [8809] reveal item 0x118 in the 0x8F1D table
+            o = (0x8F1D + k * 7 + 4) & 0xFFFF
+            if rw(o) == 0x118:
+                out[o] = (0x119, 2)
+        bx = rw((si + 9) & 0xFFFF)
+        if bx != 0xFFFF:
+            out[(bx + 4) & 0xFFFF] = ((rw((bx + 4) & 0xFFFF) - 1) & 0xFFFF, 2)
+        return out, []
+    if num == 0xAE:                                       # id 0xe3 [87E6] extra life
+        raise Loop2NeedsHelper("extra-life 65D6")
+    if num in (0xD, 0xB6, 0x2C, 0xE0):                    # ids 0x42/0xeb/0x61/0x115 [87AE..] club/weapon 0-3
+        ct = {0xD: 0, 0xB6: 1, 0x2C: 2, 0xE0: 3}[num]
+        w = {CLUB_TYPE: (ct, 1)}; w.update(_consume_link(rw, si))
+        return w, [8]
+    if num <= 0x14:                                       # ids 0x35-0x49 [85DA] small energy bonus
+        out = dict(_consume_link(rw, si))
+        ctr = (rb(BONUS_ENERGY_CTR) + 1) & 0xFF
+        out[BONUS_ENERGY_CTR] = (ctr, 1)
+        if ctr >= 6 and rb(ENERGY) != 3:
+            out[ENERGY] = ((rb(ENERGY) + 1) & 0xFF, 1)
+            out[BONUS_ENERGY_CTR] = (0, 1)
+            out.update(spawn_pickup_effect(rb, rw, 0xE2, si))
+        return out, [8]
+    if num <= 0x2C:                                       # ids 0x4a-0x60 [8524] BONUS letters
+        out = {}
+        idx = (num - 0x27) & 0xFFFF
+        if 0 <= idx <= 4:
+            out[LETTERS_MASK] = (rb(LETTERS_MASK) | (1 << idx), 1)
+        out.update(_consume_link(rw, si))
+        return out, [8]
+    if num <= 0x32:                                       # ids 0x62-0x67 [854F] utensils/tools
+        out = {}
+        idx = (num - 0x2D) & 0xFF
+        out[UTENSILS_MASK] = (rb(UTENSILS_MASK) | (1 << idx), 1)
+        if idx == 1:                                      # lighter -> reveal the 0x116 semaphore item
+            for k in range(0x46):
+                o = (0x8F1D + k * 7 + 4) & 0xFFFF
+                if rw(o) == 0x116:
+                    out[o] = (0x117, 2)
+        out.update(_consume_link(rw, si))
+        return out, [8]
+    if num <= 0x40:                                       # ids 0x68-0x75 [8582] food (bounce or score)
+        ydir = _s16(rw((si + 0xE) & 0xFFFF))
+        if ydir < 0x80:                                   # low -> count + score (shared 85B6)
+            return _count_and_score(rb, rw, si, num), [4]
+        out = {(si + 0xE) & 0xFFFF: ((-ydir) & 0xFFFF, 2)}   # bounce up
+        a, b, c, d, ret = rng_lcg(rb(0x2CEC), rb(0x2CED), rb(0x2CEE), rw(0x2CEF))
+        out[0x2CEC] = (a, 1); out[0x2CED] = (b, 1); out[0x2CEE] = (c, 1); out[0x2CEF] = (d, 2)
+        xv = 0x20
+        if ret & 1:
+            xv = (-0x20) & 0xFFFF
+            out[SHAKE] = (7, 1)
+        out[(si + 6) & 0xFFFF] = (xv, 2)
+        out[(si + 4) & 0xFFFF] = (rw(A33A), 2)
+        return out, [4]
+    if num <= 0x4A:                                       # ids 0x76-0x7f [850A] flying power-up
+        out = {}
+        if rb(FLYING) == 0:
+            out[FLYING] = (1, 1)
+            out[CUR_ANIM] = (0xFF, 1)
+            out.update(_consume_link(rw, si))
+        return out, [8]
+    if num <= 0xA6:                                       # ids 0x80-0xdb [85B0] collectibles -> score
+        return _count_and_score(rb, rw, si, num), [8]
+    if num == 0xAD:                                       # id 0xe2 [84F6] energy refill (+1 if < 3)
+        out = {}
+        if rb(ENERGY) < 3:
+            out[ENERGY] = ((rb(ENERGY) + 1) & 0xFF, 1)
+            out.update(_consume_link(rw, si))
+            return out, [4]
+        return out, []                                    # full -> nothing (the 8509 ret)
+    if num in (0xA7, 0xA8):                               # ids 0xdc/0xdd [864F] trap hit (bones)
+        raise Loop2NeedsHelper("trap-hit 867E/8D1B")
+    if num == 0xA9:                                       # id 0xde [86B7] kill all monsters
+        raise Loop2NeedsHelper("kill-all needs the 12-slot death_handler walk")
+    if num == 0xAA:                                       # id 0xdf [870A] bomb
+        raise Loop2NeedsHelper("bomb 94F3")
+    if num == 0xB5:                                       # id 0xea [876C] light OFF
+        out = {}
+        if rb(LIGHT_STATE) != 1:
+            out = {0x6C02: (0, 1), 0x6C01: (1, 1), 0x6C03: (0, 1), LIGHT_STATE: (1, 1)}
+            out.update(_consume_link(rw, si)); return out, [1]
+        out.update(_consume_link(rw, si)); return out, []
+    if num == 0xB4:                                       # id 0xe9 [8790] light ON
+        out = {}
+        if rb(LIGHT_STATE) != 0:
+            out = {0x6C01: (0, 1), 0x6C02: (1, 1), 0x6C03: (0, 1), LIGHT_STATE: (0, 1)}
+        out.update(_consume_link(rw, si)); return out, []
+    raise Loop2NeedsHelper(f"unmapped num {num:#x}")
+
+
+_EARLY_SKIP = (0xE5, 0x12C, 0x132, 0x134, 0x136)          # [840A] ids that pass through (no consume, no effect)
+
+
+def loop2(rb, rw, apply, emit_sfx, find_free):
+    """[asm 83D7..8617] walk the 52-entry pickup list (0x50A8) vs the player; on a hitbox overlap of a
+    collectible (`[si+5]&0x20`) entity, consume it and dispatch its effect. Applies writes via ``apply``;
+    plays sounds via ``emit_sfx``. Raises Loop2NeedsHelper if a not-yet-recovered effect path is hit."""
+    si = ENTITY2
+    for _ in range(0x34):                                  # cx=0x34 (52)
+        sid = rw((si + 4) & 0xFFFF)
+        if (sid != 0xFFFF and _s16(rw((si + 0xC) & 0xFFFF)) <= 0xBC   # [83E0/83E9] live + not-yet-active
+                and (rb((si + 5) & 0xFFFF) & 0x20)):                 # [83F3] collectible flag
+            hit, hb = hitbox_overlap(rb, rw, si, PLAYER)             # [83FC] 8D7B (si=entity, di=player)
+            apply(hb)
+            if hit:
+                aid = sid & 0x1FFF                                   # [8404/8407]
+                if aid not in _EARLY_SKIP:
+                    # [8426] consume: [0xA33A] stores the FULL spr_num (the &0x1FFF mask is applied AFTER,
+                    # only for the dispatch), so the 0x2000 collectible flag stays in its high byte.
+                    apply({(si + 4) & 0xFFFF: (0xFFFF, 2), A33A: (sid, 2)})
+                    if aid in (0x1CA, 0x1CB):                        # [8432] boss projectile -> hit
+                        raise Loop2NeedsHelper("boss-proj 8618/867E")
+                    writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free)
+                    apply(writes)
+                    for s in sfx:
+                        emit_sfx(s)
+        si = (si + 0x12) & 0xFFFF                                    # [860E]
+
+
+def player_interaction_tick(rb, rw, apply, emit_sfx, find_free):
+    """[asm 8295..8617] the whole player<->world interaction subsystem: loop1 (player-vs-enemy) then, unless
+    loop1 took an early return, loop2 (player-vs-pickup)."""
+    if loop1(rb, rw, apply, emit_sfx):
+        return
+    loop2(rb, rw, apply, emit_sfx, find_free)
