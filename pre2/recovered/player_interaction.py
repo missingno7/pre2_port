@@ -266,6 +266,21 @@ def _food_fountain(ov):
             dx = (dx - 0x10) & 0xFFFF                     # [9515]
 
 
+def _bone_burst(ov):
+    """[asm 867E] burst ``6*ENERGY + bonus-energy-ctr`` bone sprites (id 0x2046) at (playerX, playerY-0x30)
+    via 8D1B :func:`spawn_effect_burst`, then zero ENERGY + the bonus counter. ``ov`` is a read-through
+    :class:`_Overlay`. (Used by the trap 864F and the boss-projectile 8618.)"""
+    ov.ww(SPAWN_X, ov.rw(PLAYER))                          # [867F/8682] [0xA336] = player X
+    ov.ww(SPAWN_Y, (ov.rw(PLAYER_Y) - 0x30) & 0xFFFF)     # [8685/8688/868B] [0xA338] = player Y - 0x30
+    cnt = ((6 * ov.rb(ENERGY)) + ov.rb(BONUS_ENERGY_CTR)) & 0xFF   # [868E mul 6,[27d6]] + [8696 add cl,[6bc9]]
+    if cnt == 0:                                           # [869A] je -> nothing to scatter
+        return
+    ov.wb(ENERGY, 0)                                       # [86A2] [0x27D6] = 0
+    ov.wb(BONUS_ENERGY_CTR, 0)                             # [86A7] [0x6BC9] = 0
+    ov.ww(A33A, 0x2046)                                    # [86AC] burst sprite id
+    ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFF80, cnt))  # [86B2] 8D1B
+
+
 def _kill_all_screen(rb, rw, si, per_enemy):
     """[asm 86B7/870A shared walk] walk the 12 object slots (0x4FD0); for every on-screen enemy
     (``[di+4]!=-1`` & ``![def+4]&0x10`` (def=`[di+6]`) & ``[di+5]&0x20``) run ``per_enemy(ov, di)``; finally
@@ -384,8 +399,18 @@ def loop2_handler(num, rb, rw, si, find_free):
             out.update(_consume_link(rw, si))
             return out, [4]
         return out, []                                    # full -> nothing (the 8509 ret)
-    if num in (0xA7, 0xA8):                               # ids 0xdc/0xdd [864F] trap hit (bones)
-        raise Loop2NeedsHelper("trap-hit 867E/8D1B")
+    if num in (0xA7, 0xA8):                               # ids 0xdc/0xdd [864F] trap hit (scatter bones)
+        ov = _Overlay(rb)                                 # ASM_MATCHED (unwitnessed): faithful 864F transcribe
+        ov.wb(PLAYER_DEATH, 0x2C)                         # [8655] enter hurt/death state
+        ov.wb(0x4F2C, 0)                                  # [865A]
+        ov.wb(CUR_ANIM, 8)                                # [865F] anim 8
+        _bone_burst(ov)                                   # [8664] 867E scatter the player's bones
+        ov.wb(SHAKE, 7)                                   # [8667]
+        link = ov.rw((si + 9) & 0xFFFF)                   # [866C] consume the linked entity
+        if link != 0xFFFF:
+            ov.ww((link + 4) & 0xFFFF, 0xFFFF)
+        ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE4, si))   # [8679] ax=0xe4 -> 860B
+        return {o: (v, 1) for o, v in ov.b.items()}, [1]
     if num == 0xA9:                                       # id 0xde [86B7] grenade: kill every on-screen enemy
         def _grenade(ov, di):                             # [86E1] each enemy dies via the recovered 8C72
             ov.merge_bytes(death_handler(ov.rb, ov.rw, ov.rw((di + 6) & 0xFFFF), di, si))  # 8C72 = byte-level
@@ -417,6 +442,25 @@ def loop2_handler(num, rb, rw, si, find_free):
     raise Loop2NeedsHelper(f"unmapped num {num:#x}")
 
 
+def _boss_projectile(rb, rw):
+    """[asm 8618] boss-projectile hit (loop2 ids 0x1CA/0x1CB). ENERGY==0 -> 65B3 _offcamera_trigger (lose a
+    life / game over); else enter the hurt state, lose 1 energy, and 867E bone-burst (forced to a 6-bone
+    scatter). No pickup-effect / no link-consume — the ASM jmps straight to the loop advance. Returns
+    (writes, sfx). ASM_MATCHED (unwitnessed)."""
+    ov = _Overlay(rb)
+    if ov.rb(ENERGY) < 1:                                  # [8618] cmp [0x27D6],1 ; jae
+        ov.merge_bytes(_offcamera_trigger(ov.rb))         # [861F] 65B3 death/respawn (byte-level dict)
+        return {o: (v, 1) for o, v in ov.b.items()}, []
+    ov.wb(PLAYER_DEATH, 0x2C)                              # [862A] hurt state
+    ov.wb(0x4F2C, 0)                                       # [862F]
+    ov.wb(CUR_ANIM, 8)                                     # [8634] anim 8
+    e = (ov.rb(ENERGY) - 1) & 0xFF                         # [8639] dec [0x27D6]
+    ov.wb(ENERGY, 1)                                       # [8641] force ENERGY=1 so 867E scatters 6 bones
+    _bone_burst(ov)                                        # [8646] 867E (also zeroes ENERGY + bonus)
+    ov.wb(ENERGY, e)                                       # [864A] restore the decremented energy
+    return {o: (v, 1) for o, v in ov.b.items()}, [1]
+
+
 _EARLY_SKIP = (0xE5, 0x12C, 0x132, 0x134, 0x136)          # [840A] ids that pass through (no consume, no effect)
 
 
@@ -437,9 +481,10 @@ def loop2(rb, rw, apply, emit_sfx, find_free):
                     # [8426] consume: [0xA33A] stores the FULL spr_num (the &0x1FFF mask is applied AFTER,
                     # only for the dispatch), so the 0x2000 collectible flag stays in its high byte.
                     apply({(si + 4) & 0xFFFF: (0xFFFF, 2), A33A: (sid, 2)})
-                    if aid in (0x1CA, 0x1CB):                        # [8432] boss projectile -> hit
-                        raise Loop2NeedsHelper("boss-proj 8618/867E")
-                    writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free)
+                    if aid in (0x1CA, 0x1CB):                        # [8432] boss projectile (8618)
+                        writes, sfx = _boss_projectile(rb, rw)
+                    else:
+                        writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free)
                     apply(writes)
                     for s in sfx:
                         emit_sfx(s)

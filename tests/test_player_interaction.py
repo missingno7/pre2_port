@@ -106,10 +106,49 @@ def test_loop2_light_off():                                 # num 0xB5 (id 0xea)
     assert w[LIGHT_STATE] == (1, 1) and w[0x6C01] == (1, 1) and sfx == [1]
 
 
-def test_loop2_deferred_path_raises():                      # num 0xA7 (id 0xdc) trap -> 867E not recovered yet
+def test_loop2_unmapped_num_raises():                       # the defensive fallback for an id no handler claims
     import pytest
     with pytest.raises(Loop2NeedsHelper):
-        loop2_handler(0xA7, *_mem({}), 0x50A8, lambda: None)
+        loop2_handler(0xFF, *_mem({}), 0x50A8, lambda: None)
+
+
+def _burst_arena(kv):
+    """Free the entity list (0x50A8..0x52E8, the 8D1B burst target) + the effect list (0x5450)."""
+    for s in range(52):
+        kv[0x50A8 + s * 0x12 + 4] = 0xFF; kv[0x50A8 + s * 0x12 + 5] = 0xFF
+    for s in range(0x10):
+        kv[0x5450 + s * 0x12 + 4] = 0xFF; kv[0x5450 + s * 0x12 + 5] = 0xFF
+    return kv
+
+
+def test_loop2_trap_hurts_and_scatters_bones():            # num 0xA7 (id 0xdc) [864F] ASM_MATCHED
+    kv = _burst_arena({0x4F1C: 0x00, 0x4F1D: 0x02, 0x4F1E: 0x40, 0x4F1F: 0x01,  # player (0x200,0x140)
+                       0x27D6: 2, 0x6BC9: 0,                # ENERGY=2 -> 12 bones; bonus 0
+                       0x50A8 + 9: 0xFF, 0x50A8 + 0xA: 0xFF})
+    rb, rw = _mem(kv)
+    w, sfx = loop2_handler(0xA7, rb, rw, 0x50A8, lambda: None)
+    assert sfx == [1]
+    assert w[0x4F2D] == (0x2C, 1) and w[0x6BEA] == (7, 1)   # hurt state + shake
+    assert w[0x27D6] == (0, 1)                              # energy zeroed by the bone burst
+    assert w[0x50A8 + 4] == (0x46, 1) and w[0x50A8 + 5] == (0x20, 1)  # first bone sprite id 0x2046
+    assert w[0x5454] == (0xE4, 1) and w[0x5455] == (0x00, 1)  # 0xe4 pickup effect
+
+
+def test_boss_projectile_death_when_no_energy():           # [8618] ENERGY==0 -> 65B3 _offcamera_trigger
+    from pre2.recovered.player_interaction import _boss_projectile
+    rb, rw = _mem({0x27D6: 0, 0x27D8: 3, 0x6BE4: 0})        # energy 0, lives 3, not yet triggered
+    w, sfx = _boss_projectile(rb, rw)
+    assert sfx == []
+    assert w[0x27D8] == (2, 1) and w[0x6BE4] == (2, 1)      # lose a life + arm respawn
+
+
+def test_boss_projectile_survives_with_energy():           # [8618] ENERGY>=1 -> hurt + -1 energy + bones
+    from pre2.recovered.player_interaction import _boss_projectile
+    rb, rw = _mem(_burst_arena({0x27D6: 2, 0x4F1C: 0, 0x4F1D: 2, 0x4F1E: 0x40, 0x4F1F: 1, 0x6BC9: 0}))
+    w, sfx = _boss_projectile(rb, rw)
+    assert sfx == [1]
+    assert w[0x4F2D] == (0x2C, 1)                           # hurt state
+    assert w[0x27D6] == (1, 1)                              # energy 2 -> 1 (restored after the 6-bone burst)
 
 
 def _bomb_fixture():
