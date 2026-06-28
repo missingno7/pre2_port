@@ -139,11 +139,34 @@ def _object_render_ignore(cpu):
     ]
 
 
+def _frame_scroll_copy_ignore(cpu):
+    """Don't-care region for frame_scroll_copy (1030:3A27). (`cpu` unused — fixed program address.)
+
+    (1) EXACT RANGE: code-seg 0x3A25..0x3A27 (one word, the 2 bytes between the prior routine's RET at
+        3A24 and this entry at 3A27).
+    (2) OWNER: frame_scroll_copy (1030:3A27..3AF1), the vertical-scroll screen copy.
+    (3) WHY ASM WRITES IT: the routine is SELF-MODIFYING — it computes the row pixel offset
+        ax = 0x28 * [0x6BF8] and stores it into its own code image at cs:[0x3A25] (mov cs:[0x3a25],ax @3A37),
+        then reads it back as the dest-row stride addend (add di,cs:[0x3a25] @3A54).
+    (4) WHY RECOVERED NEEDN'T: the recovered scroll_copy computes that row offset in Python (row_factor),
+        so it reaches the same dest planes without the SMC scratch word.
+    (5) READ/WRITE-WATCH PROOF: a full code-segment scan for the address word 0x3A25 finds exactly two
+        memory accessors — the write at 3A37 and the read at 3A54 — both inside 3A27..3AF1; nothing outside
+        the routine references it (the only other byte-pattern hit, 3AD4, is an `and ax,imm` immediate).
+    (6) DOWNSTREAM MATCH: with this word neutralised, full-verify is 0-divergence for frame_scroll_copy (the
+        four EGA planes — the routine's real output — are still diffed in full and match).
+    (7) MECHANISM-ONLY: the word is dead the instant the routine returns (recomputed + overwritten on the
+        next call), an artifact of the ASM storing a temporary in its own code, not game state."""
+    code = (0x1030 << 4) & 0xFFFFF
+    return [(code + 0x3A25, code + 0x3A27)]
+
+
 # Per-hook don't-care regions: ``(cs, ip) -> fn(cpu_at_entry) -> [(phys_lo, phys_hi), ...]``.
 # Add an entry ONLY under the IGNORE-REGION POLICY above (proven mechanism-only).
 _IGNORE = {
     (0x1030, 0x107B): _sqz_ignore,
     (0x1030, 0x26FA): _object_render_ignore,
+    (0x1030, 0x3A27): _frame_scroll_copy_ignore,
 }
 
 # phys-range -> human name, for localising a diff. DGROUP is listed before the code
