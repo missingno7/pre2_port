@@ -14,6 +14,8 @@ live-grounded vs verify-only vs faithful-only adapter state is tracked in `faith
 
 | ASM boundary | Function | Status | Merge target | Contract |
 |---|---|---|---|---|
+| `1030:03F8` | `recovered.song_load.scale_samples` | VERIFIED | audio_system | MOD sample byte -> mixer scaled-unsigned: ((b+0x80)&0xFF)>>2 |
+| `1030:0425` | `recovered.song_load.remap_pattern_periods` | VERIFIED | audio_system | MOD note period -> 1-based period-table index (0x24 = not found) |
 | `1030:107B` | `codecs.sqz.unpack_sqz` | VERIFIED | asset loader | decompress a .SQZ asset (LZSS / LZW / Huffman+RLE) -> bytes; bump-allocator advance |
 | `1030:218F` | `recovered.mixer.mix_channel` | VERIFIED | audio mixer | additively mix one resampled, volume-scaled MOD channel into the 168-byte PCM block and advance its sample position/loop (pos/end/frac updated) |
 | `1030:227C` | `recovered.tracker.tracker_tick` | VERIFIED | audio tracker | advance the MOD song one sequencer tick: apply per-channel volume slides, and every `speed` ticks process the current pattern row (4 channels -> note triggers, period/effect) and advance row/order — updating playback + per-voice state |

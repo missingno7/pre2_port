@@ -1010,6 +1010,18 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
     return load_pre2_snapshot(exe, playback.snapshot_path(), game_root=game_root, fast_adlib=fast_adlib)
 
 
+def _maybe_install_song_load_ff(rt, args) -> None:
+    """Install the MOD song-load fast-forward (removes the ~1s boss-music-load freeze) per --fast-song-load:
+    an explicit flag wins; otherwise default ON for the fresh interactive viewer and OFF for demo
+    replay/verify (which must run the ASM loader to match the demo's recorded multi-frame song load)."""
+    want = getattr(args, "fast_song_load", None)
+    if want is None:
+        want = bool(args.view) and not args.play_demo
+    if want:
+        from pre2.bridge.song_load_fastforward import install_song_load_fastforward
+        install_song_load_fastforward(rt.cpu)
+
+
 def main(argv: list[str] | None = None) -> int:
     # Status/summary lines use a few non-ASCII glyphs (e.g. the '✗' divergence marker in the verify-hooks
     # summary). On a legacy Windows code page (cp1250) the default console encoding raises UnicodeEncodeError
@@ -1033,6 +1045,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--view", action="store_true", help="open the live pygame VGA/text viewer with digital audio")
     p.add_argument("--record-demo", metavar="NAME", help="(viewer) start recording an input demo immediately")
     p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (headless unless --view)")
+    p.add_argument("--fast-song-load", dest="fast_song_load", action="store_true", default=None,
+                   help="fast-forward the MOD song loader (byte-exact; removes the ~1s boss-music-load freeze). "
+                        "Default ON for the fresh --view viewer, OFF for --play-demo (so existing demos "
+                        "replay/verify against the ASM). Pass this to replay a demo recorded with it.")
+    p.add_argument("--no-fast-song-load", dest="fast_song_load", action="store_false",
+                   help="disable the MOD song-load fast-forward")
     p.add_argument("--demo-dir", default=str(ROOT / "artifacts"), help="directory to write recorded demos into")
     p.add_argument("--audio", default="adlib", choices=("adlib", "enhanced", "off"),
                    help="viewer digital audio: 'adlib' = faithful audio via the SB DMA path "
@@ -1094,6 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
         rt = _make_replay_runtime(args, playback)
         _install_verification_hooks(rt, args)
         _install_hook_trace(rt, args)
+        _maybe_install_song_load_ff(rt, args)
         if args.view:
             return _run_view(rt, args, playback=playback)
         return _run_replay_headless(rt, args, playback)
@@ -1101,6 +1120,7 @@ def main(argv: list[str] | None = None) -> int:
     rt = _make_runtime(args)
     _install_verification_hooks(rt, args)
     _install_hook_trace(rt, args)
+    _maybe_install_song_load_ff(rt, args)
     if args.view:
         return _run_view(rt, args)
 
