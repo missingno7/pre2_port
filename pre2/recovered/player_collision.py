@@ -376,9 +376,12 @@ def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:
     if idx == 1:                                                   # [6539] wall block
         new_x, new_xvel = collision_hblock(rw(0x4F1C), rw(0x4F22))  # [6407]
         return {0x4F1C: new_x, 0x4F22: new_xvel}
+    if idx == 2:                                                   # [65AF -> 65B3] hazard tile (e.g. head-spike):
+        return _offcamera_trigger(rb)                             # the off-camera death/respawn trigger, the
+        #                                                           SAME routine ceiling idx2 / ground idx6 use
     if idx in (3, 4, 5, 6, 7, 8):                                  # ground handlers, unwitnessed in side scan
         raise NotImplementedError(f"side scan ground handler idx {idx} (0x7D95) not witnessed")
-    raise NotImplementedError(f"side handler idx {idx} (0x65AF trigger) not recovered")  # idx 2
+    raise NotImplementedError(f"side handler idx {idx} (0x7D95) not recovered")  # idx >= 9
 
 
 class _Overlay:

@@ -288,9 +288,23 @@ def test_side_idx0_wall_marker_pushed_when_side_solid():
     assert out[0x6EAD] == 0 and out[0x6EAE] == 0 and out[0x6EB0] == 0
 
 
-def test_side_idx2_trigger_fails_loud():
-    with pytest.raises(NotImplementedError):
-        collision_side_handler(2, lambda o: 0, lambda o: 0, lambda o: 0, 0)
+def test_side_idx2_is_offcamera_death():
+    # idx 2 (0x65AF -> 0x65B3) is a hazard tile (e.g. a head-spike): the off-camera death/respawn trigger, the
+    # SAME routine ceiling idx2 / ground idx6 use. With no lives left it sets the game-over flag. VERIFIED
+    # byte-exact on the head-spike witness (snapshot_pre2_headspike_20260628_210702).
+    assert collision_side_handler(2, lambda o: 0, lambda o: 0, lambda o: 0, 0) == {0x6BE5: 1}
+
+
+def test_side_idx2_consumes_a_life():
+    ds = {0x27D8: 3}                            # 3 lives, not yet triggered ([0x6BE4]=0)
+    rb = lambda o: ds.get(o, 0) & 0xFF
+    out = collision_side_handler(2, lambda o: 0, lambda o: 0, rb, 0)
+    assert out == {0x27D8: 2, 0x27D6: 0, 0x6BE4: 2}   # consume one + reset counter + arm respawn
+
+
+def test_side_idx9_plus_still_fails_loud():
+    with pytest.raises(NotImplementedError):       # an out-of-table index is still a loud gap
+        collision_side_handler(9, lambda o: 0, lambda o: 0, lambda o: 0, 0)
 
 
 # --- airborne physics 0x63B5 (collision_airborne) ---
