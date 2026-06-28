@@ -106,10 +106,9 @@ def test_loop2_light_off():                                 # num 0xB5 (id 0xea)
     assert w[LIGHT_STATE] == (1, 1) and w[0x6C01] == (1, 1) and sfx == [1]
 
 
-def test_loop2_unmapped_num_raises():                       # the defensive fallback for an id no handler claims
-    import pytest
-    with pytest.raises(Loop2NeedsHelper):
-        loop2_handler(0xFF, *_mem({}), 0x50A8, lambda: None)
+def test_loop2_unmapped_num_is_noop():                      # [84F3 jmp 860E] an id no handler claims -> no-op
+    w, sfx = loop2_handler(0xFF, *_mem({}), 0x50A8, lambda: None)
+    assert w == {} and sfx == []                            # entity already consumed by loop2; ASM just advances
 
 
 def _burst_arena(kv):

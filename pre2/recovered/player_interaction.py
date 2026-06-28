@@ -444,7 +444,9 @@ def loop2_handler(num, rb, rw, si, find_free, strict=False):
         if rb(LIGHT_STATE) != 0:
             out = {0x6C01: (0, 1), 0x6C02: (1, 1), 0x6C03: (0, 1), LIGHT_STATE: (0, 1)}
         out.update(_consume_link(rw, si)); return out, []
-    raise Loop2NeedsHelper(f"unmapped num {num:#x}")
+    return {}, []                                         # [asm 84F3 jmp 860E] an unmapped id is a NO-OP: the
+    #                                                       entity was already consumed (8426); the ASM just
+    #                                                       falls through the dispatch to the loop advance.
 
 
 def _boss_projectile(rb, rw, strict=False):
