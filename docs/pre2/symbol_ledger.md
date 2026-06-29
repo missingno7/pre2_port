@@ -289,7 +289,7 @@ lightweight list (the *emitters* are already recovered: combat_interaction 0x50A
 | `1030:581E` | ring via `[0x6BBE]` (5 slots in `[0x4F76,0x4FC0)`) | popup/score lifetime + anim ([+4] id +1 each frame, free at 0x3A; the 0xFFFF early-out is dead after `ah&0x1F`) | **VERIFIED + live** (`effects_update.tick_popup_ring`; 749 live calls 0 mismatch) |
 | `1030:60DF` | debris pool `0x5450` (16 slots) | lifetime tick: dec `[+2]` & `[+0xC]`, free at `[+0xC]==0` (pairs with `spawn_debris_element` 8875 which arms `[+0xC]=0x2C`) | **VERIFIED + live** (`effects_update.tick_debris_pool`; 747 live calls 0 mismatch) |
 | `1030:60FE` | particles `0x50A8` (32 slots) | physics: velocity `>>4`, gravity Yvel+9 cap 0x100, X-bounce 0/0x1000, tile-collide via `[0x2DDA]`+`[0x7F5E]`/`[0x7E5E]`, sprite anim 0x46-0x49 | **VERIFIED + live** (`effects_update.tick_particles`; 747 live calls/13.4k writes 0 mismatch) |
-| `1030:6210` | projectiles `0x4F2E` (4 slots) | anim-script walker + per-slot `call [bx+0x79EC]` handler dispatch | OBSERVED |
+| `1030:6210` | projectiles `0x4F2E` (4 slots) | thrown-weapon walker: X/Y integrate, anim-script ptr `[+0xC]`, `[+4]`=script\|facing, DS:0x79EC dispatch (idx0 Yvel+=0x20 / idx1 Yvel-=0x10) | **VERIFIED + live** (`effects_update.tick_projectiles`; witness 233821, 1204 writes 0 mismatch; idx0 from the trivial handler) |
 | `1030:4907` | terrain entities `0x9107` (16 slots) | separate 3-state machine w/ tile collision (`[0x2CF5]` bound) — not one of the 4-leaf pass | OBSERVED |
 
 Module: `pre2/recovered/effects_update.py` (pure), `pre2/bridge/effects_update.py` (DGROUP seam),

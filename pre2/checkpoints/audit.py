@@ -84,7 +84,7 @@ _NOT_SEPARATELY_HOOKED = [
     ("secondary list: popup ring 0x6BBE", "1030:581E", "recovered + live", "tick_popup_ring: 5-slot ring lifetime/anim tick; byte-exact (749 live calls, 0 mismatch) + live-hooked + verify-mode"),
     ("secondary list: debris pool 0x5450", "1030:60DF", "recovered + live", "tick_debris_pool: 16-slot lifetime tick (pairs with spawn_debris_element 8875); byte-exact (747 live calls, 0 mismatch) + live-hooked + verify-mode"),
     ("secondary list: particles 0x50A8", "1030:60FE", "recovered + live", "tick_particles: 32-slot physics (velocity>>4, gravity+9 cap 0x100, X-bounce, tile-collide via [0x2DDA]+0x7F5E/0x7E5E, anim 0x46-0x49); byte-exact (747 live calls/13.4k writes, 0 mismatch) + live-hooked + verify-mode"),
-    ("secondary list: projectiles 0x4F2E", "1030:6210", "ASM / not recovered", "remaining update-pass leaf: 4-slot anim-script walker with per-slot handler dispatch call [bx+0x79EC]"),
+    ("secondary list: projectiles 0x4F2E", "1030:6210", "recovered + live", "tick_projectiles: 4-slot thrown-weapon walker (X/Y integrate, anim-script ptr, [+4]=script|facing, DS:0x79EC dispatch idx0 Yvel+=0x20/idx1 Yvel-=0x10); byte-exact (1204 writes/witness 233821, 0 mismatch) + live-hooked; unknown handler idx fails loud"),
     ("secondary list: terrain entities 0x9107", "1030:4907", "ASM / not recovered", "16-slot terrain-colliding entity state machine (separate from the 4-leaf update pass)"),
 ]
 

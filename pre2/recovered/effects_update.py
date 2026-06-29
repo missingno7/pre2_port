@@ -19,6 +19,10 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 
 
+class Pre2EffectsGap(Exception):
+    """An unrecovered path in the secondary-entity update pass (fail loud; never silently run ASM)."""
+
+
 def _s16(v):
     v &= 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
@@ -195,5 +199,59 @@ def tick_particles(rw, rb, read_tile):
         writes[(b + 0xE) & 0xFFFF] = (yv, 2)
         if new_id is not None:
             writes[(b + 4) & 0xFFFF] = (new_id, 2)
+        b = (b + STRIDE) & 0xFFFF
+    return writes
+
+
+# --- list 0x4F2E: the 4 thrown-weapon projectile slots (the last 2 player weapons are throwable; emitter =
+#     player.spawn_projectile @6017). Each slot: [+0]=X [+2]=Y [+4]=sprite-id(+facing bit15) [+5]=flag byte
+#     ([+5]&0x20 = "alive") [+6]=Xvel [+7]=facing-byte(bit7) [+0xC]=anim-script ptr [+0xE]=Yvel [+8]=handler. ---
+PROJECTILE_LO = 0x4F2E
+PROJECTILE_N = 4
+PROJ_ALIVE = 0x20            # [asm 621C] [+5] bit; clear -> free the slot
+# DS:0x79EC dispatch (only idx 0/1 are real entries; both are 1-instruction Yvel tweaks at 6272/6277):
+PROJ_HANDLER_DYV = {0: 0x20, 1: -0x10}   # idx -> delta added to Yvel [+0xE]
+
+
+@oracle_link("1030:6210",
+             "per-frame tick of the 4 thrown-weapon projectile slots 0x4F2E (stride 0x12): free a slot whose "
+             "[+5]&0x20 is clear; else integrate X/Y by Xvel/Yvel>>4, advance the anim-script pointer [+0xC] "
+             "(a negative script word loops back by that signed offset, then +2), set [+4]=script word | the "
+             "facing bit ([+7]&0x80)<<8, and dispatch the [+8] handler (DS:0x79EC: idx0 Yvel+=0x20, idx1 "
+             "Yvel-=0x10). Witness: demo …233821 (idx1, 238 update calls). Other handler indices fail loud.",
+             "OBSERVED", merge_target="effects_update")
+def tick_projectiles(rw, rb):
+    """[asm 6210] ``rw``/``rb`` read DGROUP word/byte. Returns the ``{offset: (value, width)}`` write contract."""
+    writes: dict[int, tuple[int, int]] = {}
+    b = PROJECTILE_LO
+    for _ in range(PROJECTILE_N):
+        if rw((b + 4) & 0xFFFF) == 0xFFFF:                    # [asm 6216] inactive slot
+            b = (b + STRIDE) & 0xFFFF
+            continue
+        if not (rb((b + 5) & 0xFFFF) & PROJ_ALIVE):           # [asm 621C] dead -> free
+            writes[(b + 4) & 0xFFFF] = (0xFFFF, 2)
+            b = (b + STRIDE) & 0xFFFF
+            continue
+        x = (rw(b & 0xFFFF) + _sar16(rw((b + 6) & 0xFFFF), 4)) & 0xFFFF       # [asm 6229] X += Xvel>>4
+        writes[b & 0xFFFF] = (x, 2)
+        y = (rw((b + 2) & 0xFFFF) + _sar16(rw((b + 0xE) & 0xFFFF), 4)) & 0xFFFF  # [asm 6236] Y += Yvel>>4
+        writes[(b + 2) & 0xFFFF] = (y, 2)
+
+        ptr = rw((b + 0xC) & 0xFFFF)                          # [asm 6244] anim-script pointer
+        word = rw(ptr)
+        if word & 0x8000:                                    # [asm 6249] negative -> loop back
+            ptr = (ptr + _s16(word)) & 0xFFFF
+            word = rw(ptr)
+        ptr = (ptr + 2) & 0xFFFF                              # [asm 6251] advance
+        writes[(b + 0xC) & 0xFFFF] = (ptr, 2)
+
+        facing = rb((b + 7) & 0xFFFF) & 0x80                  # [asm 6256] [+4] = script word | facing bit
+        writes[(b + 4) & 0xFFFF] = ((word | (facing << 8)) & 0xFFFF, 2)
+
+        idx = rb((b + 8) & 0xFFFF)                            # [asm 6261] handler dispatch [+8]
+        if idx not in PROJ_HANDLER_DYV:
+            raise Pre2EffectsGap(f"6210 projectile handler idx {idx} unrecovered (DS:0x79EC)")
+        yv = (rw((b + 0xE) & 0xFFFF) + PROJ_HANDLER_DYV[idx]) & 0xFFFF
+        writes[(b + 0xE) & 0xFFFF] = (yv, 2)
         b = (b + STRIDE) & 0xFFFF
     return writes

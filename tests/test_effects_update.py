@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.effects_update import tick_debris_pool, tick_particles, tick_popup_ring
+from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
+                                           tick_projectiles)
 
 _FIX = Path(__file__).parent / "fixtures" / "effects_update"
 
@@ -21,6 +22,7 @@ _LEAVES = {
     "tick_popup_ring": (0x4F76, lambda rw, rb, tile: tick_popup_ring(rw)),
     "tick_debris_pool": (0x5450, lambda rw, rb, tile: tick_debris_pool(rw)),
     "tick_particles": (0x50A8, lambda rw, rb, tile: tick_particles(rw, rb, tile)),
+    "tick_projectiles": (0x4F2E, lambda rw, rb, tile: tick_projectiles(rw, rb)),
 }
 
 
@@ -57,3 +59,7 @@ def test_tick_popup_ring_byte_exact():
 
 def test_tick_particles_byte_exact():
     _check("tick_particles")
+
+
+def test_tick_projectiles_byte_exact():
+    _check("tick_projectiles")

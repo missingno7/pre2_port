@@ -14,7 +14,8 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge import effects_update as bridge
-from pre2.recovered.effects_update import tick_debris_pool, tick_particles, tick_popup_ring
+from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
+                                           tick_projectiles)
 
 from .common import report
 
@@ -23,6 +24,7 @@ _DS_BASE = (0x1A0F << 4) & 0xFFFFF
 # name -> (entry, ret)
 _LEAVES = {
     "tick_popup_ring": (0x581E, 0x584F),
+    "tick_projectiles": (0x6210, 0x6271),
     "tick_particles": (0x60FE, 0x620F),
     "tick_debris_pool": (0x60DF, 0x60FD),
 }
@@ -33,6 +35,8 @@ def _writes(mem, name):
     rb, rw = bridge.readers(mem)
     if name == "tick_particles":
         return tick_particles(rw, rb, bridge.tile_reader(mem))
+    if name == "tick_projectiles":
+        return tick_projectiles(rw, rb)
     if name == "tick_popup_ring":
         return tick_popup_ring(rw)
     return tick_debris_pool(rw)
