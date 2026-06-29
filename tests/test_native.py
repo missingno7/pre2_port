@@ -10,6 +10,7 @@ import pytest
 
 from pre2.checkpoints.common import Pre2HybridGap
 from pre2.native.loop import MAIN_LOOP_SPINE, native_object_spawn_step, spine_coverage
+from pre2.native.player import native_player_step
 from pre2.native.state import DATA_SEG, NativeGameState
 
 _BASE = DATA_SEG << 4
@@ -33,7 +34,7 @@ def test_main_loop_spine_roadmap():
     # The roadmap: every per-frame main-loop call, classified. The VM-less core's coverage = the native share.
     assert len(MAIN_LOOP_SPINE) == 27
     cov = spine_coverage()
-    assert cov["native"] == 8 and cov["render"] == 4 and cov["gap"] == 15
+    assert cov["native"] == 12 and cov["render"] == 4 and cov["gap"] == 11
     assert all(kind in ("native", "render", "gap") for _, kind, _ in MAIN_LOOP_SPINE)
 
 
@@ -51,3 +52,44 @@ def test_native_object_spawn_step_fails_loud_on_boss_death():
     st = _state({0x91FE: 0xFF, 0x2D8A: 9, 0xA517: 0, 0xA518: 0, 0xA519: 0, 0xA51A: 0})
     with pytest.raises(Pre2HybridGap):
         native_object_spawn_step(st)
+
+
+def test_native_player_step_fails_loud_on_pause():
+    # The pause spin ([0x2830]!=0) isn't a gameplay-state path -> the native player step fail-louds rather than
+    # silently skipping the update. (Dormant in normal play.)
+    st = _state({0x2830: 1})
+    with pytest.raises(Pre2HybridGap):
+        native_player_step(st)
+
+
+def test_native_player_step_fails_loud_on_death():
+    # The death/respawn branch (65AF, when [0x6BE4]==0 and the death flag [0x282F]!=0) is unrecovered for the
+    # native step -> fail loud, never a silent ASM fallback.
+    st = _state({0x6BE4: 0, 0x282F: 1})
+    with pytest.raises(Pre2HybridGap):
+        native_player_step(st)
+
+
+def test_native_camera_follow_gated_off():
+    # [0x6BD9]!=0 gates the whole camera follow off (564E); it only clears cs:[0x6771] (already 0) -> no change.
+    from pre2.native.camera_scroll import native_camera_follow
+    st = _state({0x6BD9: 1})
+    before = bytes(st.data)
+    native_camera_follow(st)
+    assert bytes(st.data) == before
+
+
+def test_native_v_scroll_down_accumulates():
+    # The vertical-down primitive (33AD) adds dl to the sub-tile accumulator [0x6BC4]; the camera cell [0x2DE6]
+    # only advances when it crosses 0x10. Here 0x08+5 < 0x10 -> no cell advance.
+    from pre2.native.camera_scroll import _v_scroll_down
+    st = _state({0x2CF5: 0xFF, 0x2DE6: 0x10, 0x6BC4: 0x08})
+    assert _v_scroll_down(st, 5) is True
+    assert st.rb(0x6BC4) == 0x0D and st.rw(0x2DE6) == 0x10
+
+
+def test_native_v_scroll_down_at_limit():
+    # At the bottom camera limit ([0x2DE6] >= [0x2CF5]-0xB) the down primitive cannot scroll -> returns False.
+    from pre2.native.camera_scroll import _v_scroll_down
+    st = _state({0x2CF5: 0x20, 0x2DE6: 0x15})   # limit = 0x20-0xB = 0x15; 0x15 >= 0x15
+    assert _v_scroll_down(st, 5) is False
