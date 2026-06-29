@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, hurt_effect, inc_scroll_phase,
-                                         init_effect_row, player_cursor_dist, scan_camera_targets,
-                                         tick_scroll_cursor)
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, camera_boundary_collision,
+                                         camera_target_bounce, hurt_effect, inc_scroll_phase, init_effect_row,
+                                         player_cursor_dist, scan_camera_targets, tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -96,3 +96,15 @@ def test_hurt_effect():
     st2 = {0x6BC9: 0, 0x27D6: 5, 0x4F1C: 0, 0x4F1E: 0x30, 0x50AC: 0xFFFF}
     w2 = hurt_effect(lambda o: st2.get(o & 0xFFFF, 0) & 0xFF, lambda o: st2.get(o & 0xFFFF, 0))
     assert w2[0x6BC9] == (5, 1) and w2[0x27D6] == (4, 1)               # cooldown underflow -> reload 5, lose a life
+
+
+def test_camera_target_bounce_gates():
+    # 81F3 gates (the bounce path itself is shadow-verified: gorilla 62 calls, 0 div, 3 bounces).
+    di = 0xA500
+    assert camera_target_bounce(lambda o: 0, lambda o: 0xFFFF if (o & 0xFFFF) == di + 4 else 0, di) == {}  # inactive
+    assert camera_target_bounce(lambda o: 0, lambda o: 0x100, di) == {}     # active but [di+5]&0x20==0 -> not a boundary
+
+
+def test_camera_boundary_collision_gated_off():
+    # 81B4: [0x6BE4]!=0 disables the whole crush (the active path is shadow-verified: gorilla 31 calls, 0 div).
+    assert camera_boundary_collision(lambda o: 1 if (o & 0xFFFF) == 0x6BE4 else 0, lambda o: 0) == {}

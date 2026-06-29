@@ -253,3 +253,101 @@ def hurt_effect(rb, rw):
     orw = lambda o: (writes[o & 0xFFFF][0] & 0xFFFF) if (o & 0xFFFF) in writes else rw(o)   # 8D1B reads the writes above
     writes.update(spawn_effect_burst(rb, orw, ax, 0xFF80, 1))    # [asm 828B]
     return writes
+
+
+# --- 81F3: one camera-boundary target vs the player (the per-target half of the 81B4 crush) ---
+SCROLL_PUSH = 0x91FB      # al = 4 - [0x91FB] is subtracted from the scroll phase on a bounce
+PLAYER_XVEL = 0x4F22
+PLAYER_YVEL = 0x4F2A
+
+
+@oracle_link("1030:81F3",
+             "one camera-boundary target `di` vs the player (the per-target half of 81B4): skip unless the "
+             "target is active ([di+4]!=0xFFFF) and a boundary ([di+5]&0x20); test the player hitbox (8D7B). On "
+             "overlap, knock the scroll phase [0x6C05] down by 4-[0x91FB] (clamped to 0), hurt the player "
+             "(824D), and bounce: [0x4F2A]=0xFF80 (up), [0x4F22]=+/-0x80 (away from the cursor), facing "
+             "[0x4F24]=3, plus [0x4F2D]=0x2C / [0x6BD0]=[0x6BC7]=0. Plays sfx 1 (audio seam, not in the state "
+             "contract). Composes the verified hitbox_overlap + hurt_effect.",
+             "OBSERVED", merge_target="object_spawn")
+def camera_target_bounce(rb, rw, di):
+    """[asm 81F3] ``di`` = the camera-target record offset. Returns the ``{offset: (value, width)}`` writes
+    (8D7B always contributes [0xA330]); raises :class:`Pre2SpawnGap` via 824D on the lives-depleted death."""
+    di &= 0xFFFF
+    if rw((di + 4) & 0xFFFF) == 0xFFFF:               # [asm 81F3] inactive target
+        return {}
+    if (rb((di + 5) & 0xFFFF) & 0x20) == 0:           # [asm 81F9] not a boundary target
+        return {}
+    hit, writes = hitbox_overlap(rb, rw, PLAYER_X, di)   # [asm 8201] 8D7B (always writes [0xA330])
+    if not hit:                                       # [asm 8204] jae
+        return writes
+    al = (4 - rb(SCROLL_PUSH)) & 0xFF                 # [asm 8206]
+    r = (rb(SCROLL_PHASE) - al) & 0xFF                # [asm 820C] sub [0x6C05],al
+    writes[SCROLL_PHASE] = (0 if (r & 0x80) else r, 1)   # [asm 8210] jns -> clamp to 0
+    writes.update(hurt_effect(rb, rw))               # [asm 8217] 824D
+    writes[0x4F2D] = (0x2C, 1)                        # [asm 8220]
+    writes[0x6BD0] = (0, 1)                           # [asm 8225]
+    writes[PLAYER_YVEL] = (0xFF80, 2)                 # [asm 822A]
+    writes[0x4F24] = (3, 1)                           # [asm 8230]
+    bvx = 0x80 if _s16(rw(PLAYER_X)) >= _s16(rw(CURSOR_X)) else 0xFF80   # [asm 8235-8242] toward the player
+    writes[PLAYER_XVEL] = (bvx, 2)                    # [asm 8244]
+    writes[0x6BC7] = (0, 1)                           # [asm 8247]
+    return writes
+
+
+# --- 81B4: the whole camera-boundary crush (3 targets vs the player) ---
+class _Ov:
+    """Read-through overlay so each sub-call sees the prior ones' writes (81B4's [0xA425] hitbox reads
+    [0x4F2A], which the earlier 81F3 bounces may have just set). Byte-level shadow; ``writes`` keeps the
+    ordered ``{offset: (value, width)}`` contract (re-inserted on overwrite so last-write wins)."""
+
+    def __init__(self, rb, rw):
+        self._rb = rb
+        self._bytes = {}
+        self.writes = {}
+
+    def rb(self, o):
+        o &= 0xFFFF
+        return self._bytes.get(o, self._rb(o)) & 0xFF
+
+    def rw(self, o):
+        o &= 0xFFFF
+        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
+
+    def apply(self, writes):
+        for off, (val, wd) in writes.items():
+            off &= 0xFFFF
+            self.writes.pop(off, None)
+            self.writes[off] = (val, wd)
+            self._bytes[off] = val & 0xFF
+            if wd == 2:
+                self._bytes[(off + 1) & 0xFFFF] = (val >> 8) & 0xFF
+
+
+CAM_TARGET_A = 0xA421
+CAM_TARGET_B = 0xA423
+CAM_TARGET_C = 0xA425
+CRUSH_GATE = 0x6BE4
+CRUSH_SFX_FLAG = 0x27EA
+
+
+@oracle_link("1030:81B4",
+             "the whole camera-boundary crush (gated off when [0x6BE4]!=0): bounce the player off two boundary "
+             "targets [0xA421]/[0xA423] (81F3 each), then test the third [0xA425] (8D7B); on that overlap with a "
+             "set [0xA330] detail, drive the player downward [0x4F2A]=0xFFC0 (0xFF80 + sfx 3 when [0x27EA]!=0). "
+             "Composes the recovered camera_target_bounce + hitbox_overlap over a read-through overlay so the "
+             "[0xA425] hitbox sees the earlier bounces' [0x4F2A].",
+             "OBSERVED", merge_target="object_spawn")
+def camera_boundary_collision(rb, rw):
+    """[asm 81B4] Returns the ``{offset: (value, width)}`` writes; raises :class:`Pre2SpawnGap` via 824D on the
+    lives-depleted death path."""
+    if rb(CRUSH_GATE) != 0:                           # [asm 81B4] crush disabled this frame
+        return {}
+    ov = _Ov(rb, rw)
+    ov.apply(camera_target_bounce(ov.rb, ov.rw, ov.rw(CAM_TARGET_A)))   # [asm 81BE] 81F3
+    ov.apply(camera_target_bounce(ov.rb, ov.rw, ov.rw(CAM_TARGET_B)))   # [asm 81C5] 81F3
+    hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, ov.rw(CAM_TARGET_C))   # [asm 81D0] 8D7B
+    ov.apply(hb)
+    if hit and hb[0xA330][0] != 0:                    # [asm 81D3 jae / 81D5 cmp [0xA330],0]
+        ax = 0xFF80 if ov.rb(CRUSH_SFX_FLAG) != 0 else 0xFFC0   # [asm 81DC-81E6] (+ sfx 3 when set)
+        ov.apply({PLAYER_YVEL: (ax, 2)})              # [asm 81EF]
+    return ov.writes
