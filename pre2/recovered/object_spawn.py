@@ -204,17 +204,19 @@ def tick_scroll_cursor(rb, rw, read_tile):
     cur_y = (rw(CURSOR_Y) + _sar16(rw(SCROLL_VY), 4)) & 0xFFFF   # [asm 7118] advance cursor Y
     writes[CURSOR_Y] = (cur_y, 2)
     vy = rw(SCROLL_VY)
-    if _s16(vy) >= 0:                                     # [asm 7121] scrolling down/still -> tile collide
+    landed = False
+    if _s16(vy) >= 0:                                     # [asm 7121-7126] jl 7165 (scrolling up -> straight to gravity)
         col = _sar16(cur_x, 4) & 0xFF
         row = _sar16(cur_y, 4) & 0xFF
         tile = read_tile((col | (row << 8)) & 0xFFFF)     # [asm 7128-713B]
-        if rb((TBL_FLOOR + tile) & 0xFFFF) != 0:          # [asm 713E-7144] solid floor
+        if rb((TBL_FLOOR + tile) & 0xFFFF) != 0:          # [asm 7142-7144] solid floor -> land
             writes[CURSOR_Y] = ((cur_y & 0xFFF0), 2)      # [asm 7146] snap (and byte [0x9201],0xF0)
             if _s16(vy) != 0:                             # [asm 714B] was scrolling
                 writes[SCROLL_STOP_FLAG] = (7, 1)
             writes[SCROLL_VY] = (0, 2)                     # [asm 7157] stop the scroll
             writes[SCROLL_VX] = (0, 2)
-    elif not (_s16(vy) >= SCROLL_VY_GRAV_CAP):            # [asm 7165] scrolling up -> gravity
+            landed = True
+    if not landed and _s16(vy) < SCROLL_VY_GRAV_CAP:      # [asm 7165] fall faster toward the floor (cap 0xE0)
         writes[SCROLL_VY] = ((vy + SCROLL_GRAVITY) & 0xFFFF, 2)
     return writes
 
@@ -714,4 +716,27 @@ def camera_script_interp(rb, rw):
     cmd_writes, _ = camera_script_command(ov.rb, ov.rw, si)   # [asm 7573] 93B2
     ov.apply(cmd_writes)
     ov.apply(scan_camera_targets(ov.rb, ov.rw))          # [asm 7576] 80DE
+    return ov.writes
+
+
+# --- 70D7..7579: the whole per-frame level-camera / scroll engine ---
+@oracle_link("1030:70D7",
+             "the whole per-frame level-camera/scroll engine (called from 6822 when [0x91FE]!=0xFF): advance the "
+             "spawn cursor + scroll (tick_scroll_cursor), follow the player (player_cursor_dist), and unless the "
+             "player is too far (the cull -> jmp 7579), run the camera sequencer (camera_state_machine) and its "
+             "bytecode script (camera_script_interp). Composes all the recovered 70D7 leaves over one "
+             "read-through overlay so each stage sees the prior writes. Raises Pre2SpawnGap on the gated state-6 "
+             "boss-reach finale (94F3).",
+             "OBSERVED", merge_target="object_spawn")
+def camera_engine(rb, rw, read_tile):
+    """[asm 70D7..7579] ``rb``/``rw`` read DGROUP; ``read_tile`` reads the level tile map. Returns the
+    ``{offset: (value, width)}`` write contract for the whole engine."""
+    ov = _Ov(rb, rw)
+    ov.apply(tick_scroll_cursor(ov.rb, ov.rw, read_tile))   # [asm 70D7..7172] cursor + scroll + spawn gate
+    dist_w, cull = player_cursor_dist(ov.rw)                # [asm 7172..71AB] player-follow distance
+    ov.apply(dist_w)
+    if cull:                                                # [asm 7195/71A8] too far -> jmp 7579
+        return ov.writes
+    ov.apply(camera_state_machine(ov.rb, ov.rw))           # [asm 71AB..7534] the camera sequencer
+    ov.apply(camera_script_interp(ov.rb, ov.rw))           # [asm 7534..7579] its bytecode script
     return ov.writes

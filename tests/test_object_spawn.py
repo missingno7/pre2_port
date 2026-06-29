@@ -11,9 +11,10 @@ import json
 from pathlib import Path
 
 from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, camera_boundary_collision,
-                                         camera_offset_lookup, camera_script_interp, camera_state_machine,
-                                         camera_target_bounce, hurt_effect, inc_scroll_phase, init_effect_row,
-                                         player_cursor_dist, scan_camera_targets, tick_scroll_cursor)
+                                         camera_engine, camera_offset_lookup, camera_script_interp,
+                                         camera_state_machine, camera_target_bounce, hurt_effect,
+                                         inc_scroll_phase, init_effect_row, player_cursor_dist,
+                                         scan_camera_targets, tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -77,6 +78,13 @@ def test_camera_script_interp_byte_exact():
     # 7534 tail: the camera-script bytecode interpreter, composing 93B2 -> 93F6 -> 94DC + the fixed 80DE.
     # Goldens from the live ASM (shadow 0-div over 281 gorilla calls, full response windows; 3 collision cases).
     _golden_case("camera_script_interp", lambda rb, rw, tile: camera_script_interp(rb, rw))
+
+
+def test_camera_engine_byte_exact():
+    # 70D7..7579: the WHOLE composed camera engine (head + dist + cull + state machine + script). Verified by a
+    # whole-DGROUP shadow (gorilla 281 calls, 0 div, excl. the moving sound-DMA region + the gated state-6
+    # finale) — which caught two latent leaf bugs the per-piece windows missed (80DE response, head gravity).
+    _golden_case("camera_engine", lambda rb, rw, tile: camera_engine(rb, rw, tile))
 
 
 def test_tick_scroll_cursor_byte_exact():
