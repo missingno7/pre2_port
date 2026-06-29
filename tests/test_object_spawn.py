@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, inc_scroll_phase,
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, hurt_effect, inc_scroll_phase,
                                          init_effect_row, player_cursor_dist, scan_camera_targets,
                                          tick_scroll_cursor)
 
@@ -83,3 +83,16 @@ def test_player_cursor_dist():
     assert w == {0xA3FA: (1, 1), 0xA3FB: (0x50, 2)} and not cull       # cursor left of player, close
     w2, cull2 = player_cursor_dist(lambda o: {0x91FF: 0x200, 0x4F1C: 0, 0x9201: 0, 0x4F1E: 0}[o & 0xFFFF])
     assert w2 == {0xA3FA: (0, 1), 0xA3FB: (0x200, 2)} and cull2        # cursor right of player, X-dist culls
+
+
+def test_hurt_effect():
+    # 824D: damage cooldown tick + hurt burst (composes verified 8D1B). Shadow 0-div over 3 gorilla crush-hits.
+    st = {0x6BC9: 3, 0x27D6: 5, 0x4F1C: 0x100, 0x4F1E: 0x80, 0x50AC: 0xFFFF}   # slot 0x50A8 free
+    w = hurt_effect(lambda o: st.get(o & 0xFFFF, 0) & 0xFF, lambda o: st.get(o & 0xFFFF, 0))
+    assert w[0x6BC9] == (2, 1) and 0x27D6 not in w        # cooldown 3->2, no life lost
+    assert w[0xA336] == (0x100, 2) and w[0xA338] == (0x50, 2) and w[0xA33A] == (0x2046, 2)   # fx origin + sprite
+    assert w[0x50AC] == (0x2046, 2) and w[0x50A8] == (0x100, 2) and w[0x50AA] == (0x50, 2)   # spawned slot
+    assert w[0x50AE] == (0x30, 2) and w[0x50B6] == (0xFF80, 2)         # Xvel (+0x30, cd even) + Yvel
+    st2 = {0x6BC9: 0, 0x27D6: 5, 0x4F1C: 0, 0x4F1E: 0x30, 0x50AC: 0xFFFF}
+    w2 = hurt_effect(lambda o: st2.get(o & 0xFFFF, 0) & 0xFF, lambda o: st2.get(o & 0xFFFF, 0))
+    assert w2[0x6BC9] == (5, 1) and w2[0x27D6] == (4, 1)               # cooldown underflow -> reload 5, lose a life

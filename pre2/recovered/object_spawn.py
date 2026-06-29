@@ -14,7 +14,11 @@ the live hook emits separately (like the other play_sfx seams) — it is outside
 from __future__ import annotations
 
 from pre2.islands import oracle_link
-from pre2.recovered.combat_interaction import hitbox_overlap
+from pre2.recovered.combat_interaction import hitbox_overlap, spawn_effect_burst
+
+
+class Pre2SpawnGap(Exception):
+    """An unrecovered path in the 6822/70D7 spawner machinery (fail loud; never silently run ASM)."""
 
 
 def _s16(v):
@@ -211,3 +215,41 @@ def player_cursor_dist(rw):
         yd = _abs16((rw(PLAYER_Y) - rw(CURSOR_Y)) & 0xFFFF)   # [asm 7198-71A1]
         cull = yd > CULL_Y                               # [asm 71A3] jbe
     return writes, cull
+
+
+# --- 824D: the player-hurt effect at the bottom of the camera-boundary crush chain (81B4->81F3->824D) ---
+HURT_COOLDOWN = 0x6BC9    # damage cooldown; reloads to 5 and costs a life on underflow
+LIVES = 0x27D6
+HURT_FX_X = 0xA336        # spawn_effect_burst reads this as its SPAWN_X
+HURT_FX_Y = 0xA338        # ... SPAWN_Y (player_Y - 0x30)
+HURT_FX_SPRITE = 0xA33A   # ... BURST_SPRITE (0x2046)
+
+
+@oracle_link("1030:824D",
+             "the player-hurt effect when the scroll boundary crushes the player (bottom of the 81B4 chain): "
+             "tick the damage cooldown [0x6BC9] (reload 5 + lose a life [0x27D6] on underflow -> player death "
+             "65B3 when lives deplete), record the hurt-burst origin [0xA336]/[0xA338] = player - (0,0x30), then "
+             "spawn one hurt sprite (8D1B, id 0x2046, Xvel +/-0x30 by [0x6BC9] parity, Yvel 0xFF80). Composes "
+             "the verified spawn_effect_burst over a read-through overlay so it sees the just-set origin/sprite.",
+             "OBSERVED", merge_target="object_spawn")
+def hurt_effect(rb, rw):
+    """[asm 824D] Returns the ``{offset: (value, width)}`` writes. Raises :class:`Pre2SpawnGap` on the
+    (unwitnessed) lives-depleted death path into 65B3."""
+    writes = {}
+    cd = (rb(HURT_COOLDOWN) - 1) & 0xFF
+    if cd & 0x80:                                        # [asm 8254] dec underflowed -> reload + lose a life
+        writes[HURT_COOLDOWN] = (5, 1)
+        cd = 5
+        lives = (rb(LIVES) - 1) & 0xFF
+        writes[LIVES] = (lives, 1)
+        if lives & 0x80:                                 # [asm 825F] lives underflow -> 65B3 player death
+            raise Pre2SpawnGap("824D player death (65B3) unrecovered")
+    else:
+        writes[HURT_COOLDOWN] = (cd, 1)
+    writes[HURT_FX_X] = (rw(PLAYER_X), 2)                # [asm 8264]
+    writes[HURT_FX_Y] = ((rw(PLAYER_Y) - 0x30) & 0xFFFF, 2)   # [asm 826A]
+    ax = (-0x30 if (cd & 1) else 0x30) & 0xFFFF          # [asm 8276-8280] sign by the final [0x6BC9] parity
+    writes[HURT_FX_SPRITE] = (0x2046, 2)                 # [asm 8285]
+    orw = lambda o: (writes[o & 0xFFFF][0] & 0xFFFF) if (o & 0xFFFF) in writes else rw(o)   # 8D1B reads the writes above
+    writes.update(spawn_effect_burst(rb, orw, ax, 0xFF80, 1))    # [asm 828B]
+    return writes
