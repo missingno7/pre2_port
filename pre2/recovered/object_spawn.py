@@ -14,6 +14,7 @@ the live hook emits separately (like the other play_sfx seams) — it is outside
 from __future__ import annotations
 
 from pre2.islands import oracle_link
+from pre2.recovered.combat_interaction import hitbox_overlap
 
 # --- 7585: the 8-slot effect-row list at 0x56A2 (a horizontal row of sprite-0x135 effects + a sound) ---
 EFFECT_ROW_LO = 0x56A2
@@ -62,3 +63,49 @@ def inc_scroll_phase(rb):
     """[asm 757A] ``rb(off)`` reads a DGROUP byte. Returns the ``{offset: (value, width)}`` write contract."""
     v = rb(SCROLL_PHASE)
     return {SCROLL_PHASE: ((0xFF if v == 0xFF else v + 1), 1)}
+
+
+# --- 80DE/8182: the camera-target collision scan (a 70D7 tail leaf, run every frame) ---
+SCAN_PLAYER = 0x4F0A        # the player sprite record (combat record)
+SCAN_PROJ = 0x4F2E          # the 4 thrown-weapon projectile slots
+SCAN_PROJ_N = 4
+TARGET_A = 0xA423           # camera target record-ptr A (free 0x19C/0x19D sprites that hit it)
+TARGET_B = 0xA425           # camera target record-ptr B
+TARGET_SPRITES = (0x19C, 0x19D)
+
+
+def _target_collision(rb, rw, si, writes):
+    """[asm 8182] test one sprite ``si`` against the camera targets; accumulate hitbox + free writes into
+    ``writes``; return CF (a hit vs target B, or a freed 0x19C/0x19D vs target A)."""
+    if rw((si + 4) & 0xFFFF) == 0xFFFF:                  # [asm 8182] inactive
+        return False
+    if (rw((si + 4) & 0xFFFF) & 0x1FFF) in TARGET_SPRITES:    # [asm 818F-819A] 0x19C/0x19D -> target A
+        hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_A))    # [asm 819C] 8D7B
+        for off, (val, wid) in hb.items():
+            writes[off] = (val, wid)
+        if hit:                                          # [asm 819F-81A6] free on hit
+            writes[(si + 4) & 0xFFFF] = (0xFFFF, 2)
+            return True
+    hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_B))   # [asm 81A8-81AC] target B
+    for off, (val, wid) in hb.items():
+        writes[off] = (val, wid)
+    return hit
+
+
+@oracle_link("1030:80DE",
+             "the camera-target collision scan (run every frame from the 70D7 tail): test the player (0x4F0A) "
+             "then the 4 projectile slots (0x4F2E) against the camera targets [0xA423]/[0xA425] via the hitbox "
+             "test 8D7B; free a 0x19C/0x19D sprite that overlaps target A; stop at the first hit. Composes the "
+             "verified hitbox_overlap (8D7B). Contract = its [0xA330]/[0xA331] hitbox writes + any freed slots.",
+             "OBSERVED", merge_target="object_spawn")
+def scan_camera_targets(rb, rw):
+    """[asm 80DE] ``rb``/``rw`` read DGROUP byte/word. Returns the ``{offset: (value, width)}`` write contract."""
+    writes: dict[int, tuple[int, int]] = {}
+    if _target_collision(rb, rw, SCAN_PLAYER, writes):   # [asm 80DE-80E4] player first
+        return writes
+    si = SCAN_PROJ
+    for _ in range(SCAN_PROJ_N):                          # [asm 80E6-80F4] then the 4 projectiles
+        if _target_collision(rb, rw, si, writes):
+            break
+        si = (si + 0x12) & 0xFFFF
+    return writes

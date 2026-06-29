@@ -7,8 +7,11 @@ spawns across the gorilla + 233821 demos; the audio side-effect via 0x2CC is out
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, inc_scroll_phase,
-                                         init_effect_row)
+                                         init_effect_row, scan_camera_targets)
 
 _LO = 0x56A2
 
@@ -47,3 +50,16 @@ def test_inc_scroll_phase_saturates():
     assert inc_scroll_phase(lambda o: 0x40)[SCROLL_PHASE] == (0x41, 1)
     assert inc_scroll_phase(lambda o: 0xFE)[SCROLL_PHASE] == (0xFF, 1)
     assert inc_scroll_phase(lambda o: 0xFF)[SCROLL_PHASE] == (0xFF, 1)   # saturates, no wrap
+
+
+def test_scan_camera_targets_byte_exact():
+    # 80DE: camera-target collision scan (composes verified 8D7B). Goldens from the live ASM (shadow 0-div over
+    # 281 calls / gorilla); the test replays the recorded reads and asserts the contract.
+    cases = json.loads((Path(__file__).parent / "fixtures" / "object_spawn" / "scan_camera_targets.json").read_text())
+    assert cases, "no fixture cases"
+    for case in cases:
+        rw_d = {int(k): v for k, v in case["rw"].items()}
+        rb_d = {int(k): v for k, v in case["rb"].items()}
+        golden = {int(k): tuple(v) for k, v in case["writes"].items()}
+        writes = scan_camera_targets(lambda o: rb_d[o & 0xFFFF], lambda o: rw_d[o & 0xFFFF])
+        assert writes == golden
