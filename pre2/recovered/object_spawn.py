@@ -533,3 +533,25 @@ def camera_state_machine(rb, rw):
         return w
 
     return w                                               # [asm 74EF jne 7534] states >= 8 / 0xFF: no-op
+
+
+# --- 94DC: the precomputed camera-offset table lookup (used by the 93F6 geometry) ---
+CAM_OFFSET_TABLE = 0xA6ED   # {dx-key, ax-key, value} entries, stride 6
+
+
+@oracle_link("1030:94DC",
+             "the precomputed camera-offset lookup: scan the [0xA6ED] table (stride 6: dx-key, ax-key, value) "
+             "for the (dx, ax) pair and return the value word. The camera-target geometry is baked into this "
+             "table, so there is no runtime trig — 93F6 just looks up each target's offset.",
+             "OBSERVED", merge_target="object_spawn")
+def camera_offset_lookup(rw, key_dx, key_ax):
+    """[asm 94DC] ``rw`` reads a DGROUP word. Returns the looked-up offset word; raises :class:`Pre2SpawnGap`
+    if the pair is absent (the ASM would scan off the end of the table)."""
+    key_dx &= 0xFFFF
+    key_ax &= 0xFFFF
+    bx = CAM_OFFSET_TABLE
+    for _ in range(4096):                                  # [asm 94E0-94F1] scan to the matching entry
+        if rw(bx) == key_dx and rw((bx + 2) & 0xFFFF) == key_ax:
+            return rw((bx + 4) & 0xFFFF)                   # [asm 94E9]
+        bx = (bx + 6) & 0xFFFF
+    raise Pre2SpawnGap("94DC camera-offset (dx, ax) not found in the [0xA6ED] table")

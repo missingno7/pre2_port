@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 
 from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, camera_boundary_collision,
-                                         camera_state_machine, camera_target_bounce, hurt_effect,
-                                         inc_scroll_phase, init_effect_row, player_cursor_dist,
+                                         camera_offset_lookup, camera_state_machine, camera_target_bounce,
+                                         hurt_effect, inc_scroll_phase, init_effect_row, player_cursor_dist,
                                          scan_camera_targets, tick_scroll_cursor)
 
 _LO = 0x56A2
@@ -121,3 +121,12 @@ def test_camera_state_machine_simple_states():
     assert call(0, 0x50) == {0xA3F7: (0, 2), 0x91FE: (1, 1)}              # state 0 near: advance to state 1
     assert call(5, 0, timer=5) == {0xA3F7: (6, 2), 0xA401: (0xA47E, 2)}   # state 5 within dwell: hold script
     assert call(5, 0, timer=0x20) == {0xA3F7: (0, 2), 0x91FE: (1, 1)}     # state 5 dwell elapsed: back to state 1
+
+
+def test_camera_offset_lookup():
+    # 94DC: scan the [0xA6ED] stride-6 table for (dx, ax) -> value. Shadow 0-div / 1124 gorilla calls.
+    tbl = {0xA6ED: 0x10, 0xA6EF: 0x20, 0xA6F1: 0x1234,    # entry 0: key (0x10, 0x20) -> 0x1234
+           0xA6F3: 0x30, 0xA6F5: 0x40, 0xA6F7: 0x5678}    # entry 1: key (0x30, 0x40) -> 0x5678
+    rw = lambda o: tbl.get(o & 0xFFFF, 0)
+    assert camera_offset_lookup(rw, 0x10, 0x20) == 0x1234       # first entry
+    assert camera_offset_lookup(rw, 0x30, 0x40) == 0x5678       # scans past the first entry
