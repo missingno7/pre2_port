@@ -18,6 +18,20 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 
+
+def _s16(v):
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def _neg16(v):
+    return (-_s16(v)) & 0xFFFF
+
+
+def _sar16(v, n):
+    return (_s16(v) >> n) & 0xFFFF
+
+
 # --- list 0x5450: the 16-slot debris/effect pool (emitter = combat_interaction.spawn_debris_element @8875) ---
 DEBRIS_POOL_LO = 0x5450
 DEBRIS_POOL_N = 0x10
@@ -72,4 +86,114 @@ def tick_popup_ring(rw):
         si = (si - STRIDE) & 0xFFFF                            # [asm 5841] sub si,0x12
         if si < POPUP_RING_LO:                                 # [asm 5844-584A] wrap
             si = POPUP_RING_HI
+    return writes
+
+
+# --- list 0x50A8: the 32-slot physics-particle pool (the bounce/debris fragments; emitter = combat_interaction
+#     burst @0x50A8). Each slot: [+0]=X [+2]=Y [+4]=sprite-id(+flags) [+6]=Xvel [+7]=facing-byte
+#     [+0xC]=lifetime(signed) [+0xE]=Yvel [+0x11]=substate. World coords are fixed-point (>>4 = tile/pixel). ---
+PARTICLE_LO = 0x50A8
+PARTICLE_N = 0x20
+GRAVITY = 9                  # [asm 615C] Yvel += 9 / frame
+YVEL_CAP = 0x100             # [asm 615F] stop integrating gravity once Yvel+9 would reach 0x100
+X_MAX = 0x1000               # [asm 6149] world-X bounce bound
+LIFE_CLAMP = 0x32            # [asm 612B] special ids cap their lifetime here
+FREEZE_FLAG = 0x6BD5         # [asm 61E3] bit0 -> skip the sprite animation
+MAP_SEG_PTR = 0x2DDA         # [asm 6106] [0x2DDA] = the level-map (es) segment
+TBL_FLOOR = 0x7F5E           # [asm 61A0] ground-tile property table (xlatb)
+TBL_CEIL = 0x7E5E            # [asm 61D1] ceiling-tile property table (xlatb)
+ANIM_WRAP_AT = 0x49          # [asm 61F9] sprite cycles ..->0x49 ->0x46
+ANIM_WRAP_TO = 0x46
+ID_LIFE_CLAMP = (0x136, 0x134, 0x12C, 0x132)   # [asm 6168] -> clamp lifetime, skip tile/anim
+ID_SKIP = 0xE5                                  # [asm 617A] -> skip tile/anim
+
+
+@oracle_link("1030:60FE",
+             "per-frame physics tick of the 32-slot particle pool 0x50A8 (stride 0x12): dec lifetime [+0xC]; "
+             "when >0 integrate X/Y by Xvel/Yvel>>4, apply gravity (Yvel+9 capped at 0x100), bounce X at "
+             "0/0x1000; then per sprite-id (masked dh&0x1F) either clamp lifetime to 0x32 (ids "
+             "0x134/0x136/0x12C/0x132), skip (0xE5), or run tile collision via es=[0x2DDA] + xlatb tables "
+             "0x7F5E (floor, when falling) / 0x7E5E (ceiling, when rising) and animate the sprite 0x46..0x49 "
+             "(unless [0x6BD5]&1 or Xvel==0). lifetime==0 sets substate [+0x11]=0xF; <0 frees once [+0x11]==0.",
+             "OBSERVED", merge_target="effects_update")
+def tick_particles(rw, rb, read_tile):
+    """[asm 60FE] ``rw``/``rb`` read DGROUP word/byte; ``read_tile(off)`` reads the level-map (es) segment.
+    Returns the ``{offset: (value, width)}`` write contract."""
+    writes: dict[int, tuple[int, int]] = {}
+    freeze = rb(FREEZE_FLAG) & 1
+    b = PARTICLE_LO
+    for _ in range(PARTICLE_N):
+        if rw((b + 4) & 0xFFFF) == 0xFFFF:                     # [asm 610A] inactive slot
+            b = (b + STRIDE) & 0xFFFF
+            continue
+        life = (rw((b + 0xC) & 0xFFFF) - 1) & 0xFFFF           # [asm 6110] dec lifetime
+        writes[(b + 0xC) & 0xFFFF] = (life, 2)
+        sl = _s16(life)
+        if sl < 0:                                             # [asm 6117] expired
+            if rb((b + 0x11) & 0xFFFF) == 0:                   # free once the substate marker cleared
+                writes[(b + 4) & 0xFFFF] = (0xFFFF, 2)         # [asm 611D]
+            b = (b + STRIDE) & 0xFFFF
+            continue
+        if sl == 0:                                            # [asm 6124] just expired -> arm substate
+            writes[(b + 0x11) & 0xFFFF] = (0x0F, 1)
+            b = (b + STRIDE) & 0xFFFF
+            continue
+
+        # [asm 6139] physics (lifetime > 0)
+        x = rw(b & 0xFFFF)
+        xv = rw((b + 6) & 0xFFFF)
+        y = rw((b + 2) & 0xFFFF)
+        yv = rw((b + 0xE) & 0xFFFF)
+        idv = rw((b + 4) & 0xFFFF)
+
+        x = (x + _sar16(xv, 4)) & 0xFFFF                       # [asm 613C-613E] X += Xvel>>4
+        if x & 0x8000:                                        # [asm 6140] jns -> clamp 0 + bounce
+            x = 0
+            xv = _neg16(xv)
+        if x >= X_MAX:                                        # [asm 6149] jb skip else bounce
+            xv = _neg16(xv)
+
+        ydelta = _s16(yv) >> 4                                 # [asm 6157] ax = Yvel>>4 (also fall/rise sign)
+        y = (y + (ydelta & 0xFFFF)) & 0xFFFF                   # [asm 6159] Y += Yvel>>4
+        g = (_s16(yv) + GRAVITY) & 0xFFFF                      # [asm 615C] dx = Yvel + 9
+        if _s16(g) < YVEL_CAP:                                # [asm 615F] jge skip store (cap)
+            yv = g
+
+        sid = idv & 0x1FFF                                     # [asm 6168] dh &= 0x1F
+        new_id = None
+        if sid in ID_LIFE_CLAMP:                               # [asm 612B] clamp lifetime, skip rest
+            if life > LIFE_CLAMP:                              # unsigned jbe
+                writes[(b + 0xC) & 0xFFFF] = (LIFE_CLAMP, 2)
+        elif sid == ID_SKIP:                                   # [asm 617A] skip rest
+            pass
+        else:
+            # [asm 618C] tile collision at the (clamped) world position
+            col = (_s16(x) >> 4) & 0xFF
+            row = (_s16(y) >> 4) & 0xFF
+            bx = (col | (row << 8)) & 0xFFFF
+            if ydelta > 0:                                     # [asm 619B] falling -> floor check
+                if rb((TBL_FLOOR + read_tile(bx)) & 0xFFFF) != 0:    # [asm 61A3-61A6] solid
+                    yv = _sar16(_neg16(yv), 1)                 # [asm 61A8-61AB] -Yvel/2
+                    d = 8 if _s16(xv) >= 0 else -8             # [asm 61B3-61BA]
+                    axv = (xv - d) & 0xFFFF                    # [asm 61BC] reduce |Xvel| by 8 toward 0
+                    xv = axv if (((axv >> 8) ^ rb((b + 7) & 0xFFFF)) & 0xFF) == 0 else 0   # [asm 61C0-61C5]
+            else:                                              # [asm 61CC] rising -> ceiling check
+                if rb((TBL_CEIL + read_tile((bx - 0x100) & 0xFFFF)) & 0xFFFF) != 0:        # [asm 61D1-61D5]
+                    xv = _neg16(xv)                            # [asm 61D9]
+                    x = (x + _sar16(xv, 4)) & 0xFFFF           # [asm 61DC-61E1]
+            # [asm 61E3] sprite animation 0x46..0x49 (gated by [0x6BD5]&1 and Xvel!=0)
+            if not freeze and (xv & 0xFFFF) != 0:
+                masked = idv & 0x1FFF
+                if masked < ANIM_WRAP_AT:                      # [asm 61FC] jb -> id+1 (keeps flag bits)
+                    new_id = (idv + 1) & 0xFFFF
+                elif masked == ANIM_WRAP_AT:                   # [asm 6200] wrap
+                    new_id = ANIM_WRAP_TO
+
+        writes[b & 0xFFFF] = (x, 2)
+        writes[(b + 2) & 0xFFFF] = (y, 2)
+        writes[(b + 6) & 0xFFFF] = (xv, 2)
+        writes[(b + 0xE) & 0xFFFF] = (yv, 2)
+        if new_id is not None:
+            writes[(b + 4) & 0xFFFF] = (new_id, 2)
+        b = (b + STRIDE) & 0xFFFF
     return writes

@@ -22,6 +22,13 @@ def readers(mem):
     return rb, rw
 
 
+def tile_reader(mem):
+    """``read_tile(off)`` over the level-map segment es=[0x2DDA] (used by the particle tile collision)."""
+    es = mem.data[(((DATA_SEG << 4) + 0x2DDA) & 0xFFFFF)] | (mem.data[(((DATA_SEG << 4) + 0x2DDB) & 0xFFFFF)] << 8)
+    base = (es << 4) & 0xFFFFF
+    return lambda o: mem.data[(base + (o & 0xFFFF)) & 0xFFFFF]
+
+
 def apply_ds(mem, writes) -> None:
     """Apply a recovered ``{offset: (value, width)}`` DGROUP write contract."""
     base = (DATA_SEG << 4) & 0xFFFFF

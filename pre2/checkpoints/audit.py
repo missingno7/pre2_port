@@ -83,7 +83,8 @@ _NOT_SEPARATELY_HOOKED = [
     ("player FSM step (full)", "1030:58A7..5A0B", "recovered / shadow-only", "player_fsm_step: front-end -> select_anim_id -> dispatch (incl attack 3/6/7 + override). Only remaining gap = idle anim13 (5D8A). Full-step standalone shadow shows perturbation-class residuals on the STATEFUL attack seq -> verify-mode at the live collapse is the authority"),
     ("secondary list: popup ring 0x6BBE", "1030:581E", "recovered + live", "tick_popup_ring: 5-slot ring lifetime/anim tick; byte-exact (749 live calls, 0 mismatch) + live-hooked + verify-mode"),
     ("secondary list: debris pool 0x5450", "1030:60DF", "recovered + live", "tick_debris_pool: 16-slot lifetime tick (pairs with spawn_debris_element 8875); byte-exact (747 live calls, 0 mismatch) + live-hooked + verify-mode"),
-    ("secondary lists 0x4F2E/0x50A8", "6210/60FE", "ASM / not recovered", "remaining update-pass leaves: 4-slot projectiles (anim-script + 0x79EC dispatch) + 32-slot physics particles (gravity/bounce/tile-collide)"),
+    ("secondary list: particles 0x50A8", "1030:60FE", "recovered + live", "tick_particles: 32-slot physics (velocity>>4, gravity+9 cap 0x100, X-bounce, tile-collide via [0x2DDA]+0x7F5E/0x7E5E, anim 0x46-0x49); byte-exact (747 live calls/13.4k writes, 0 mismatch) + live-hooked + verify-mode"),
+    ("secondary list: projectiles 0x4F2E", "1030:6210", "ASM / not recovered", "remaining update-pass leaf: 4-slot anim-script walker with per-slot handler dispatch call [bx+0x79EC]"),
     ("secondary list: terrain entities 0x9107", "1030:4907", "ASM / not recovered", "16-slot terrain-colliding entity state machine (separate from the 4-leaf update pass)"),
 ]
 

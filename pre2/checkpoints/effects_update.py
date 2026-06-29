@@ -14,24 +14,33 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge import effects_update as bridge
-from pre2.recovered.effects_update import tick_debris_pool, tick_popup_ring
+from pre2.recovered.effects_update import tick_debris_pool, tick_particles, tick_popup_ring
 
 from .common import report
 
 _DS_BASE = (0x1A0F << 4) & 0xFFFFF
 
-# name -> (entry, ret, tick_fn)
+# name -> (entry, ret)
 _LEAVES = {
-    "tick_popup_ring": (0x581E, 0x584F, tick_popup_ring),
-    "tick_debris_pool": (0x60DF, 0x60FD, tick_debris_pool),
+    "tick_popup_ring": (0x581E, 0x584F),
+    "tick_particles": (0x60FE, 0x620F),
+    "tick_debris_pool": (0x60DF, 0x60FD),
 }
 
 
-def _run(cpu, ret, fn):
-    """Compute the recovered write contract; in verify mode stash it for the RET diff, else apply + near ret."""
+def _writes(mem, name):
+    """Recovered write contract for one leaf over live DGROUP memory."""
+    rb, rw = bridge.readers(mem)
+    if name == "tick_particles":
+        return tick_particles(rw, rb, bridge.tile_reader(mem))
+    if name == "tick_popup_ring":
+        return tick_popup_ring(rw)
+    return tick_debris_pool(rw)
+
+
+def _run(cpu, ret, name):
     mem = cpu.mem
-    _, rw = bridge.readers(mem)
-    writes = fn(rw)
+    writes = _writes(mem, name)
     if getattr(cpu, "pre2_verify_mode", False):
         pend = getattr(cpu, "pre2_eu_pending", None)
         if pend is None:
@@ -45,12 +54,17 @@ def _run(cpu, ret, fn):
 
 @registry.replace(0x1030, 0x581E, "tick_popup_ring")
 def _popup_ring_hook(cpu) -> None:
-    _run(cpu, 0x584F, tick_popup_ring)
+    _run(cpu, 0x584F, "tick_popup_ring")
+
+
+@registry.replace(0x1030, 0x60FE, "tick_particles")
+def _particles_hook(cpu) -> None:
+    _run(cpu, 0x620F, "tick_particles")
 
 
 @registry.replace(0x1030, 0x60DF, "tick_debris_pool")
 def _debris_pool_hook(cpu) -> None:
-    _run(cpu, 0x60FD, tick_debris_pool)
+    _run(cpu, 0x60FD, "tick_debris_pool")
 
 
 def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
@@ -75,6 +89,6 @@ def register_verify(cpu, stats, on_result, raise_on_divergence) -> None:
             interpret_current_instruction_without_hook(c)
         return _diff
 
-    for name, (entry, ret, fn) in _LEAVES.items():
+    for name, (entry, ret) in _LEAVES.items():
         cpu.replacement_hooks[(0x1030, ret)] = _make_diff(ret, name)
         cpu.hook_names[(0x1030, ret)] = name + "_verify"

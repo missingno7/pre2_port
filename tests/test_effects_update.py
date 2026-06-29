@@ -1,30 +1,41 @@
-"""Byte-exact regression for the secondary-entity update-pass leaves (1030:60DF, 581E) — see
+"""Byte-exact regression for the secondary-entity update-pass leaves (1030:60DF, 581E, 60FE) — see
 :mod:`pre2.recovered.effects_update`.
 
 Goldens captured from the original ASM under the VM (faithful hybrid replay of the gorilla + bonus demos, with
-only these two leaves un-hooked so the ASM runs them): per active call, the DGROUP word reads the recovered
-tick makes and the full list-window before/after. The recovered tick must reproduce the ASM after-window
-exactly. At capture, recovered-vs-ASM was 0 mismatches over 747 (debris) + 749 (popup) live calls; these cases
-are the ones where the window changed.
+only these leaves un-hooked so the ASM runs them): per active call, every read the recovered tick makes
+(DGROUP word ``rw``, DGROUP byte ``rb``, level-map ``tile``) and the full list-window before/after. The
+recovered tick must reproduce the ASM after-window exactly. At capture, recovered-vs-ASM was 0 mismatches over
+749 (popup) + 747 (debris) + 747 (particles) live calls; these cases are the ones where the window changed.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from pre2.recovered.effects_update import tick_debris_pool, tick_popup_ring
+from pre2.recovered.effects_update import tick_debris_pool, tick_particles, tick_popup_ring
 
 _FIX = Path(__file__).parent / "fixtures" / "effects_update"
 
+# name -> (window_lo, call(rw, rb, tile) -> writes)
+_LEAVES = {
+    "tick_popup_ring": (0x4F76, lambda rw, rb, tile: tick_popup_ring(rw)),
+    "tick_debris_pool": (0x5450, lambda rw, rb, tile: tick_debris_pool(rw)),
+    "tick_particles": (0x50A8, lambda rw, rb, tile: tick_particles(rw, rb, tile)),
+}
 
-def _check(name, fn, window_lo):
+
+def _check(name):
+    window_lo, call = _LEAVES[name]
     cases = json.loads((_FIX / f"{name}.json").read_text())
     assert cases, f"no fixture cases for {name}"
     for case in cases:
-        reads = {int(k): v for k, v in case["reads"].items()}
+        rw_d = {int(k): v for k, v in case["rw"].items()}
+        rb_d = {int(k): v for k, v in case["rb"].items()}
+        tile_d = {int(k): v for k, v in case["tile"].items()}
         before = bytes.fromhex(case["before"])
         after = bytes.fromhex(case["after"])
-        writes = fn(lambda off: reads[off & 0xFFFF])
+        writes = call(lambda off: rw_d[off & 0xFFFF], lambda off: rb_d[off & 0xFFFF],
+                      lambda off: tile_d[off & 0xFFFF])
         pred = bytearray(before)
         for off, (val, wid) in writes.items():
             k = (off - window_lo) & 0xFFFF
@@ -37,8 +48,12 @@ def _check(name, fn, window_lo):
 
 
 def test_tick_debris_pool_byte_exact():
-    _check("tick_debris_pool", tick_debris_pool, 0x5450)
+    _check("tick_debris_pool")
 
 
 def test_tick_popup_ring_byte_exact():
-    _check("tick_popup_ring", tick_popup_ring, 0x4F76)
+    _check("tick_popup_ring")
+
+
+def test_tick_particles_byte_exact():
+    _check("tick_particles")
