@@ -290,7 +290,7 @@ lightweight list (the *emitters* are already recovered: combat_interaction 0x50A
 | `1030:60DF` | debris pool `0x5450` (16 slots) | lifetime tick: dec `[+2]` & `[+0xC]`, free at `[+0xC]==0` (pairs with `spawn_debris_element` 8875 which arms `[+0xC]=0x2C`) | **VERIFIED + live** (`effects_update.tick_debris_pool`; 747 live calls 0 mismatch) |
 | `1030:60FE` | particles `0x50A8` (32 slots) | physics: velocity `>>4`, gravity Yvel+9 cap 0x100, X-bounce 0/0x1000, tile-collide via `[0x2DDA]`+`[0x7F5E]`/`[0x7E5E]`, sprite anim 0x46-0x49 | **VERIFIED + live** (`effects_update.tick_particles`; 747 live calls/13.4k writes 0 mismatch) |
 | `1030:6210` | projectiles `0x4F2E` (4 slots) | thrown-weapon walker: X/Y integrate, anim-script ptr `[+0xC]`, `[+4]`=script\|facing, DS:0x79EC dispatch (idx0 Yvel+=0x20 / idx1 Yvel-=0x10) | **VERIFIED + live** (`effects_update.tick_projectiles`; witness 233821, 1204 writes 0 mismatch; idx0 from the trivial handler) |
-| `1030:4907` | terrain entities `0x9107` (16 slots) | separate 3-state machine w/ tile collision (`[0x2CF5]` bound) — not one of the 4-leaf pass | OBSERVED |
+| `1030:4907` | terrain entities `0x9107` (16 slots, **source stride 0xF**) | SEPARATE sub-island: falling objects (type-8 3-state) + 8-dir moving platforms the player rides (collision 4B05/8D7B); render-projects to 0x5570 (max 7) | MOVEMENT half **VERIFIED** (`terrain_entities.move_entities`, 0 div both paths over gorilla+233821); render + player-ride collision + live-hook remain (see [[pre2-terrain-entities-island]]) |
 
 Module: `pre2/recovered/effects_update.py` (pure), `pre2/bridge/effects_update.py` (DGROUP seam),
 `pre2/checkpoints/effects_update.py` (live hook + verify), `tests/test_effects_update.py` (whole-window goldens).
