@@ -106,22 +106,58 @@ def _target_collision(rb, rw, si, writes):
     return hit
 
 
+FLASH_RECORDS = (0x564D, 0x565F, 0x5671, 0x5683, 0x5695)   # the 5 camera-target records' sprite-id high byte
+
+
 @oracle_link("1030:80DE",
-             "the camera-target collision scan (run every frame from the 70D7 tail): test the player (0x4F0A) "
-             "then the 4 projectile slots (0x4F2E) against the camera targets [0xA423]/[0xA425] via the hitbox "
-             "test 8D7B; free a 0x19C/0x19D sprite that overlaps target A; stop at the first hit. Composes the "
-             "verified hitbox_overlap (8D7B). Contract = its [0xA330]/[0xA331] hitbox writes + any freed slots.",
+             "the camera-target collision scan + response (run every frame from the 70D7 tail): test the player "
+             "(0x4F0A) then the 4 projectile slots (0x4F2E) against the camera targets [0xA423]/[0xA425] via 8D7B "
+             "(freeing a 0x19C/0x19D sprite that overlaps target A). On a hit, and unless debounced "
+             "(|[0x6BD5]-[0xA3FD]|<=0x16), run the response: latch [0xA3FD], sfx 8, set the flash bit6 on all 5 "
+             "target records, [0x6BC5]=0, inc_scroll_phase (757A), then decrement the level param [0x91FC] by "
+             "[0x7B19] -> state 6 + dive [0x6C08] on underflow, else a state-5 scroll kick when [0x7B19]>0x14; "
+             "[0xA3F7]=0 and free the hitting slot. Composes hitbox_overlap + inc_scroll_phase.",
              "OBSERVED", merge_target="object_spawn")
 def scan_camera_targets(rb, rw):
-    """[asm 80DE] ``rb``/``rw`` read DGROUP byte/word. Returns the ``{offset: (value, width)}`` write contract."""
+    """[asm 80DE..8181] ``rb``/``rw`` read DGROUP byte/word. Returns the ``{offset: (value, width)}`` contract.
+    The sfx-8 emit is an audio side-effect seam (not in the state contract)."""
     writes: dict[int, tuple[int, int]] = {}
+    si_hit = None
     if _target_collision(rb, rw, SCAN_PLAYER, writes):   # [asm 80DE-80E4] player first
+        si_hit = SCAN_PLAYER
+    else:
+        si = SCAN_PROJ
+        for _ in range(SCAN_PROJ_N):                      # [asm 80E6-80F4] then the 4 projectiles
+            if _target_collision(rb, rw, si, writes):
+                si_hit = si
+                break
+            si = (si + 0x12) & 0xFFFF
+    if si_hit is None:                                    # [asm 80F6] no hit
         return writes
-    si = SCAN_PROJ
-    for _ in range(SCAN_PROJ_N):                          # [asm 80E6-80F4] then the 4 projectiles
-        if _target_collision(rb, rw, si, writes):
-            break
-        si = (si + 0x12) & 0xFFFF
+
+    bd5 = rw(0x6BD5)                                      # [asm 80F7] the collision response
+    if _abs16((bd5 - rw(0xA3FD)) & 0xFFFF) <= 0x16:       # [asm 80FC-8107] debounce on the last-hit time
+        return writes
+    writes[0xA3FD] = (bd5, 2)                             # [asm 8109]
+    # [asm 8110] play_sfx 8 -> audio seam (emitted at the live hook, not part of the state contract)
+    for rec in FLASH_RECORDS:                             # [asm 8113-8127] set the flash bit on every target
+        writes[rec] = ((rb(rec) | 0x40) & 0xFF, 1)
+    writes[0x6BC5] = (0, 1)                               # [asm 812C]
+    writes.update(inc_scroll_phase(rb))                  # [asm 8131] 757A
+    al = rb(0x7B19)                                       # [asm 8134]
+    nfc = (rw(SPAWN_COUNT) - al) & 0xFFFF                 # [asm 8139] decrement the level param
+    writes[SPAWN_COUNT] = (nfc, 2)
+    if nfc & 0x8000:                                      # [asm 813D] underflow -> finale approach
+        writes[CAM_STATE] = (6, 1)                        # [asm 813F]
+        writes[SCROLL_VY] = (0xFF80, 2)                   # [asm 8144]
+        return writes
+    if al > 0x14:                                         # [asm 814C] a scroll kick
+        dx = 0x30 if _s16(rw(CURSOR_X)) >= _s16(rw(PLAYER_X)) else (-0x30) & 0xFFFF   # [asm 8153-815C]
+        writes[SCROLL_VX] = (dx, 2)                       # [asm 815E]
+        writes[SCROLL_VY] = (0xFF80 if _s16(rw(SCROLL_VY)) > 0 else 0xFFC0, 2)        # [asm 8162-816E]
+        writes[CAM_STATE] = (5, 1)                        # [asm 8171]
+    writes[0xA3F7] = (0, 2)                               # [asm 8176]
+    writes[(si_hit + 4) & 0xFFFF] = (0xFFFF, 2)           # [asm 817C] free the hitting slot
     return writes
 
 
@@ -555,3 +591,127 @@ def camera_offset_lookup(rw, key_dx, key_ax):
             return rw((bx + 4) & 0xFFFF)                   # [asm 94E9]
         bx = (bx + 6) & 0xFFFF
     raise Pre2SpawnGap("94DC camera-offset (dx, ax) not found in the [0xA6ED] table")
+
+
+# --- 93F6: the camera-target geometry chain (target 0 off the cursor, 1-3 off target 0) ---
+CURSOR_SNAP_X = 0xA403     # the cursor X the tail latched before the script command
+CURSOR_SNAP_Y = 0xA405
+DIST_DIR_FLAG = 0xA3FA     # player facing -> mirror the geometry in X
+CMD_BYTE = 0xA3F9          # the script command byte (bit6 = a vertical nudge)
+
+
+def _cbw(v):
+    """al -> ax sign-extend (capstone prints this opcode as ``cwde``; it is ``cbw``)."""
+    v &= 0xFF
+    return (v - 0x100) & 0xFFFF if v & 0x80 else v
+
+
+@oracle_link("1030:93F6",
+             "the camera-target GEOMETRY chain: read 5 script param words via lodsw, look up each target's "
+             "offset (94DC), and lay out 4 targets — target 0 = cursor [0xA403]/[0xA405] +/- offset, targets "
+             "1/2/3 = target 0 +/- offset — mirroring X by player facing [0xA3FA] and nudging Y when the command "
+             "[0xA3F9]&0x40 is set. Stores the param words [0xA407]/[0xA40D]/[0xA413]/[0xA419]/[0xA41F] (bit15 "
+             "flipped when facing) + the 4 positions [0xA409]..[0xA41D]. Composes camera_offset_lookup.",
+             "OBSERVED", merge_target="object_spawn")
+def camera_target_geometry(rb, rw, si):
+    """[asm 93F6] ``si`` = the script command struct offset. Returns ``(writes, new_si)`` (si advanced past the
+    5 consumed param words)."""
+    w = {}
+    face = rb(DIST_DIR_FLAG) != 0
+    flip = lambda p: ((p ^ 0x8000) & 0xFFFF) if face else (p & 0xFFFF)
+    cx = rw(CURSOR_SNAP_X)
+    cy = rw(CURSOR_SNAP_Y)
+
+    p1 = rw(si); si = (si + 2) & 0xFFFF                   # [asm 93F9] lodsw
+    p2 = rw(si); si = (si + 2) & 0xFFFF                   # [asm 93FF] lodsw
+    off = camera_offset_lookup(rw, p1, p2)               # [asm 9403] 94DC
+    t0x = (cx + (-_cbw(off) if face else _cbw(off))) & 0xFFFF    # [asm 9406-9412]
+    t0y = (cy + _cbw(off >> 8)) & 0xFFFF                  # [asm 9419-941C]
+    w[0xA407] = (flip(p1), 2); w[0xA40D] = (flip(p2), 2)
+    w[0xA409] = (t0x, 2); w[0xA40B] = (t0y, 2)
+
+    for poff, txo, tyo in ((0xA413, 0xA40F, 0xA411), (0xA419, 0xA415, 0xA417), (0xA41F, 0xA41B, 0xA41D)):
+        p = rw(si); si = (si + 2) & 0xFFFF               # [asm 9427/944F/9477] lodsw
+        off = camera_offset_lookup(rw, p2, p)            # [asm 942B/9453/947B] 94DC (shared first key p2)
+        tx = (t0x + (-_cbw(off) if face else _cbw(off))) & 0xFFFF    # relative to target 0
+        ty = (t0y + _cbw(off >> 8)) & 0xFFFF
+        w[poff] = (flip(p), 2); w[txo] = (tx, 2); w[tyo] = (ty, 2)
+
+    if rb(CMD_BYTE) & 0x40:                               # [asm 949B-94AF] vertical nudge
+        w[0xA40B] = ((w[0xA40B][0] + 2) & 0xFFFF, 2)
+        w[0xA411] = ((w[0xA411][0] + 1) & 0xFFFF, 2)
+        w[0xA417] = ((w[0xA417][0] + 1) & 0xFFFF, 2)
+        w[0xA41D] = ((w[0xA41D][0] + 1) & 0xFFFF, 2)
+    return w, si
+
+
+# --- 93B2: populate the 5 camera-target records from the script command ---
+TARGET_RECORDS = 0x5648    # 5 records, stride 0x12 (first 3 words copied from the geometry)
+TARGET_STRIDE = 0x12
+
+
+@oracle_link("1030:93B2",
+             "build the 5 camera-target records: compute the geometry (93F6), then for each of the command's 5 "
+             "source pointers copy 3 words from the geometry into the records @0x5648 (stride 0x12), and set the "
+             "collision refs [0xA423]/[0xA421]/[0xA425] = the record offset whose source is "
+             "[0xA415]/[0xA41B]/[0xA40F]. Composes camera_target_geometry over a read-through overlay so the "
+             "copy reads the geometry it just wrote.",
+             "OBSERVED", merge_target="object_spawn")
+def camera_script_command(rb, rw, si):
+    """[asm 93B2] ``si`` = the command struct offset (cmd*0x14 + 0xA571). Returns ``(writes, new_si)``."""
+    ov = _Ov(rb, rw)
+    geom, si = camera_target_geometry(ov.rb, ov.rw, si)   # [asm 93B9] 93F6
+    ov.apply(geom)
+    di = TARGET_RECORDS
+    for _ in range(5):                                    # [asm 93BF dx=5]
+        bx = ov.rw(si)                                    # [asm 93C2] source pointer
+        si = (si + 2) & 0xFFFF                            # [asm 93E2]
+        if bx == 0xA415:                                  # [asm 93C4]
+            ov.apply({0xA423: (di, 2)})
+        if bx == 0xA41B:                                  # [asm 93CE]
+            ov.apply({0xA421: (di, 2)})
+        if bx == 0xA40F:                                  # [asm 93D8]
+            ov.apply({0xA425: (di, 2)})
+        ov.apply({di: (ov.rw(bx), 2),                     # [asm 93E4-93EE] copy 3 words
+                  (di + 2) & 0xFFFF: (ov.rw((bx + 2) & 0xFFFF), 2),
+                  (di + 4) & 0xFFFF: (ov.rw((bx + 4) & 0xFFFF), 2)})
+        di = (di + TARGET_STRIDE) & 0xFFFF                # [asm 93EF] +6 (stosw x3) +0xC
+    return ov.writes, si
+
+
+# --- 7534..7579: the camera-script bytecode interpreter (the 70D7 tail) ---
+SCRIPT_CURSOR = 0xA3FF     # the live script cursor (points into the 0xA427+ bytecode)
+SCRIPT_LAST = 0x6C0A       # the script pointer last seen (reset the cursor when [0xA401] changes)
+
+
+@oracle_link("1030:7534",
+             "the camera-script bytecode interpreter (the 70D7 tail): when the state machine's script pointer "
+             "[0xA401] changes, reset the cursor [0xA3FF]; skip JUMP opcodes (negative bytes advance the cursor "
+             "by the signed offset); then dispatch the command byte (struct si = (cmd&0xBF)*0x14 + 0xA571), "
+             "latch the cursor pos [0xA403]/[0xA405] = [0x91FF]/[0x9201], run the command (93B2), and scan the "
+             "camera targets (80DE). Composes the recovered camera_script_command + scan_camera_targets over a "
+             "read-through overlay.",
+             "OBSERVED", merge_target="object_spawn")
+def camera_script_interp(rb, rw):
+    """[asm 7534..7579] Returns the ``{offset: (value, width)}`` write contract."""
+    ov = _Ov(rb, rw)
+    ax = ov.rw(SCRIPT_PTR)                                # [asm 7534]
+    if ov.rw(SCRIPT_LAST) != ax:                          # [asm 7537]
+        ov.apply({SCRIPT_LAST: (ax, 2), SCRIPT_CURSOR: (ax, 2)})   # [asm 753D-7540] reset the cursor
+    for _ in range(4096):                                 # [asm 7543] skip JUMP opcodes
+        cursor = ov.rw(SCRIPT_CURSOR)
+        al = ov.rb(cursor)
+        if not (al & 0x80):                              # [asm 7549] jns -> a command byte
+            break
+        ov.apply({SCRIPT_CURSOR: ((cursor + _cbw(al)) & 0xFFFF, 2)})   # [asm 754D-754E] jump by the signed offset
+    else:
+        raise Pre2SpawnGap("7534 camera-script JUMP loop did not terminate")
+    ov.apply({CMD_BYTE: (al, 1)})                         # [asm 7554]
+    cmd = al & 0xBF                                       # [asm 7557]
+    ov.apply({SCRIPT_CURSOR: ((ov.rw(SCRIPT_CURSOR) + 1) & 0xFFFF, 2)})   # [asm 7559]
+    si = (cmd * 0x14 + 0xA571) & 0xFFFF                   # [asm 755D-7563]
+    ov.apply({CURSOR_SNAP_X: (ov.rw(CURSOR_X), 2), CURSOR_SNAP_Y: (ov.rw(CURSOR_Y), 2)})   # [asm 7567-7570]
+    cmd_writes, _ = camera_script_command(ov.rb, ov.rw, si)   # [asm 7573] 93B2
+    ov.apply(cmd_writes)
+    ov.apply(scan_camera_targets(ov.rb, ov.rw))          # [asm 7576] 80DE
+    return ov.writes
