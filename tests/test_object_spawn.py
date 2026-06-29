@@ -107,12 +107,14 @@ def test_spawn_boss_bolts():
 
 def test_boss_script_interp():
     # 6B91: glyph byte (al>=0) at the cursor -> advance [0xA517] + render (seam). Shadow 0-div / 659 calls.
-    st = {0xA517: 0x500, 0x500: 0x41}                                    # cursor -> a glyph at 0x500
-    assert boss_script_interp(lambda o: st.get(o & 0xFFFF, 0) & 0xFF,
-                              lambda o: st.get(o & 0xFFFF, 0)) == {0xA517: (0x501, 2)}
-    st2 = {0xA517: 0x500, 0x500: 0xFE, 0x501: 0x41, 0xA515: 3,           # 0xFE (spawn 0x1CB) then a glyph
-           0x50AC: 0xFFFF, 0x2CEC: 1, 0x2CED: 2, 0x2CEE: 3, 0x2CEF: 4}
-    w2 = boss_script_interp(lambda o: st2.get(o & 0xFFFF, 0) & 0xFF, lambda o: st2.get(o & 0xFFFF, 0))
+    # (boss_script_interp reads via a byte-level overlay, so the state must be byte-level.)
+    def call(state):
+        rb = lambda o: state.get(o & 0xFFFF, 0) & 0xFF
+        return boss_script_interp(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
+    assert call({0xA517: 0x00, 0xA518: 0x05, 0x500: 0x41}) == {0xA517: (0x501, 2)}   # cursor 0x500 -> glyph
+    st = {0xA517: 0x00, 0xA518: 0x05, 0x500: 0xFE, 0x501: 0x41, 0xA515: 3,           # 0xFE (spawn 0x1CB) then glyph
+          0x50AC: 0xFF, 0x50AD: 0xFF, 0x2CEC: 1, 0x2CED: 2, 0x2CEE: 3, 0x2CEF: 4}
+    w2 = call(st)
     assert w2[0x50AC] == (0x1CB, 2) and w2[0xA517] == (0x501, 2)         # spawned 0x1CB, then advanced past 0xFE
 
 
