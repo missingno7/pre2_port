@@ -14,8 +14,34 @@ from __future__ import annotations
 from collections import Counter
 
 from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
+from pre2.bridge.object_tick import LiveWalkerMem
 from pre2.checkpoints.common import Pre2HybridGap
+from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
+                                           tick_projectiles)
+from pre2.recovered.object_inject import second_pass_tick
 from pre2.recovered.object_spawn import Pre2SpawnGap, camera_engine, tick_mode9_boss
+from pre2.recovered.object_tick import object_tick
+from pre2.recovered.terrain_entities import tick_terrain_entities
+from pre2.native.state import DATA_SEG
+
+
+def _apply_bytes(state, writes) -> None:
+    """Apply a byte-level ``{offset: value}`` DGROUP contract (e.g. tick_terrain_entities' overlay writes)."""
+    base = DATA_SEG << 4
+    for off, val in writes.items():
+        state.data[(base + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
+
+
+class _NativeCpuView:
+    """A minimal ``cpu``-like view of a NativeGameState for bridges that take a ``cpu`` (they only read
+    ``cpu.mem.data`` + the fixed segments). No registers, no execution — just the memory image and DS=0x1A0F /
+    CS=0x1030, so e.g. object_tick's ``LiveWalkerMem`` runs over native state unchanged."""
+
+    __slots__ = ("mem", "s")
+
+    def __init__(self, state):
+        self.mem = state                                  # state.data is the 1 MB address space
+        self.s = type("Segs", (), {"ds": 0x1A0F, "cs": 0x1030})()
 
 # (addr, kind, note) for every per-frame main-loop call, in order. kind in {"native","render","gap"}.
 MAIN_LOOP_SPINE = [
@@ -70,3 +96,30 @@ def native_object_spawn_step(state) -> None:
             apply_ds(state, tick_mode9_boss(rb, rw))
     except Pre2SpawnGap as exc:
         raise Pre2HybridGap(f"native object-spawn: {exc}") from exc
+
+
+def native_object_system_step(state) -> None:
+    """The whole 6822 object system over NativeGameState (no VM): the spawner branches (camera/boss), then
+    object_tick (684E, in place), then the second pass (6913). Each sub-pass reads the previous one's writes
+    in place — exactly the ASM's fall-through 6822 -> 684E -> 6913."""
+    rb, rw = readers(state)
+    native_object_spawn_step(state)                       # [asm 6822..6B..] camera_engine / tick_mode9_boss
+    object_tick(LiveWalkerMem(_NativeCpuView(state)))     # [asm 684E..6912] per-slot walker, in place
+    es = rw(0x2DDA)
+    eb = (es << 4) & 0xFFFFF
+    read_es = lambda o: state.data[(eb + (o & 0xFFFF)) & 0xFFFFF]   # noqa: E731 — level map (read-only)
+    second_pass_tick(rb, rw, lambda w: apply_ds(state, w), read_es, rw(0x2DE4), rw(0x2DE6))   # [asm 6913..698B]
+
+
+def native_gameplay_frame(state) -> None:
+    """Drive the recovered prefix of the per-frame main loop (0214..) over NativeGameState — VM-less, in spine
+    order, fail-loud at the first gap. Today reaches 0x5850 (the first unclassified gap); the prefix grows as
+    gaps are recovered. Render calls (88D7) are the faithful renderer's job and are not run here."""
+    rb, rw = readers(state)
+    apply_ds(state, tick_popup_ring(rw))                              # [asm 021A] 581E
+    native_object_system_step(state)                                 # [asm 0220] 6822 (whole object system)
+    apply_ds(state, tick_projectiles(rw, rb))                        # [asm 0223] 6210
+    apply_ds(state, tick_particles(rw, rb, tile_reader(state)))      # [asm 0226] 60FE
+    apply_ds(state, tick_debris_pool(rw))                            # [asm 0229] 60DF
+    _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 022C] 4907 (byte-level)
+    raise Pre2HybridGap("main-loop 0x5850 (first unclassified gap) not yet recovered")   # [asm 022F]
