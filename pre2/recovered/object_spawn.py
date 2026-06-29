@@ -728,7 +728,7 @@ def camera_script_interp(rb, rw):
              "bytecode script (camera_script_interp). Composes all the recovered 70D7 leaves over one "
              "read-through overlay so each stage sees the prior writes. Raises Pre2SpawnGap on the gated state-6 "
              "boss-reach finale (94F3).",
-             "OBSERVED", merge_target="object_spawn")
+             "VERIFIED", merge_target="object_spawn")
 def camera_engine(rb, rw, read_tile):
     """[asm 70D7..7579] ``rb``/``rw`` read DGROUP; ``read_tile`` reads the level tile map. Returns the
     ``{offset: (value, width)}`` write contract for the whole engine."""
@@ -954,7 +954,7 @@ def boss_pre_interp(rb, rw):
              "the glyph-script interpreter (boss_script_interp), all over one read-through overlay so each stage "
              "sees the prior writes. Raises Pre2SpawnGap on the boss-death paths (the 6C0D finale when "
              "[0xA519]==0, and the 6BDB death-burst); 6C0D glyph render + sfx are render/audio seams.",
-             "OBSERVED", merge_target="object_spawn")
+             "VERIFIED", merge_target="object_spawn")
 def tick_mode9_boss(rb, rw):
     """[asm 6ADD..6BDA] Returns the ``{offset: (value, width)}`` write contract for the whole boss engine."""
     ov = _Ov(rb, rw)
