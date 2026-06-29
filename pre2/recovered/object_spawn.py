@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, spawn_effect_burst
+from pre2.recovered.prng import rng_lcg
 
 
 class Pre2SpawnGap(Exception):
@@ -769,4 +770,92 @@ def tick_mode9_spawn(rb, rw):
     else:
         count = rw(M9_COUNT)
     writes.update(init_effect_row(_sar16(count, 2) & 0xFFFF))   # [asm 6B04-6B0C] 7585, cx = [0xA519]>>2
+    return writes
+
+
+# --- 6BDB: the boss-hit diamond burst (spawned when a projectile damages the boss) ---
+@oracle_link("1030:6BDB",
+             "the boss-hit effect burst: spawn 4 sprites (id 0x2137) at the boss origin (0xB9, 0x1E) in a "
+             "diamond — Xvel cycles +/-0x20, +/-0x10 and Yvel steps 0xFF60 -> 0xFF50 — via the verified "
+             "spawn_effect_burst (one sprite per call), over a read-through overlay so each spawn takes the next "
+             "free 0x50A8 slot.",
+             "OBSERVED", merge_target="object_spawn")
+def boss_hit_burst(rb, rw):
+    """[asm 6BDB..6C0C] Returns the ``{offset: (value, width)}`` writes (4 spawned 0x50A8 slots)."""
+    ov = _Ov(rb, rw)
+    ov.apply({0xA336: (0xB9, 2), 0xA338: (0x1E, 2), 0xA33A: (0x2137, 2)})   # [asm 6BDB-6BF5] origin + sprite
+    ax, dx = 0x20, 0xFF60                                  # [asm 6BEA-6BED]
+    for _ in range(4):                                     # [asm 6BE7 cx=4]
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [asm 6BFC] 8D1B (one sprite)
+        ax = (-ax) & 0xFFFF                                # [asm 6BFF] neg ax
+        if not (ax & 0x8000):                              # [asm 6C01] js -> skip the step
+            ax = (ax - 0x10) & 0xFFFF                      # [asm 6C03]
+            dx = (dx - 0x10) & 0xFFFF                      # [asm 6C06]
+    return ov.writes
+
+
+# --- 6CA7 / 6CF1: the boss-attack projectile spawns (opcodes 0xFF / 0xFE of the boss script) ---
+BOSS_POOL_LO = 0x50A8      # the shared 0x50A8 effect/projectile pool (0x20 slots, stride 0x12)
+BOSS_POOL_N = 0x20
+BOSS_POOL_STRIDE = 0x12
+RNG_LCG_LO = 0x2CEC        # the 4-byte rng_lcg state a/b/c (bytes) + d (word at 0x2CEF)
+
+
+def _free_boss_slot(rw):
+    """[asm 6CA9-6CB8] the first free 0x50A8 slot ([+4]==0xFFFF), or None when the pool is full."""
+    si = BOSS_POOL_LO
+    for _ in range(BOSS_POOL_N):
+        if rw((si + 4) & 0xFFFF) == 0xFFFF:
+            return si
+        si = (si + BOSS_POOL_STRIDE) & 0xFFFF
+    return None
+
+
+def _rng_lcg_next(rb, rw, writes):
+    """[asm 39DF via call] advance rng_lcg over [0x2CEC..0x2CEF], record the state writeback, return AL=b'."""
+    a, b, c, d, ret = rng_lcg(rb(RNG_LCG_LO), rb(RNG_LCG_LO + 1), rb(RNG_LCG_LO + 2), rw(RNG_LCG_LO + 3))
+    writes[RNG_LCG_LO] = (a, 1)
+    writes[RNG_LCG_LO + 1] = (b, 1)
+    writes[RNG_LCG_LO + 2] = (c, 1)
+    writes[RNG_LCG_LO + 3] = (d, 2)
+    return ret
+
+
+@oracle_link("1030:6CA7",
+             "boss-script opcode 0xFF: spawn a boss projectile (sprite 0x1CA) into the first free 0x50A8 slot at "
+             "(0xC8, 0x58), anim [+0xC]=0x84, with a random upward-left Xvel = -((rng_lcg & 0xF) << 3). No-op "
+             "when the pool is full. Composes the recovered rng_lcg.",
+             "OBSERVED", merge_target="object_spawn")
+def spawn_boss_bolt_1ca(rb, rw):
+    """[asm 6CA7..6CF0] Returns the ``{offset: (value, width)}`` writes (the spawned slot + rng state)."""
+    si = _free_boss_slot(rw)
+    if si is None:                                         # [asm 6CBA] pool full -> no spawn
+        return {}
+    writes = {(si + 4) & 0xFFFF: (0x1CA, 2), si: (0xC8, 2), (si + 2) & 0xFFFF: (0x58, 2),   # [asm 6CBC-6CC5]
+              (si + 0x11) & 0xFFFF: (0, 1), (si + 0xC) & 0xFFFF: (0x84, 2), (si + 9) & 0xFFFF: (0xFFFF, 2)}
+    r = _rng_lcg_next(rb, rw, writes)                     # [asm 6CD8] 39DF
+    writes[(si + 6) & 0xFFFF] = ((-(((r & 0xF) << 3) & 0xFFFF)) & 0xFFFF, 2)   # [asm 6CDB-6CE6] Xvel
+    writes[(si + 0xE) & 0xFFFF] = (0, 2)                  # [asm 6CE9] Yvel
+    return writes
+
+
+@oracle_link("1030:6CF1",
+             "boss-script opcode 0xFE: spawn a boss projectile (sprite 0x1CB) into the first free 0x50A8 slot at "
+             "(random X = (rng_lcg & 0x7F) - 0x10, Y=0), anim [+0xC]=0x42, no velocity. No-op when the pool is "
+             "full. Composes the recovered rng_lcg.",
+             "OBSERVED", merge_target="object_spawn")
+def spawn_boss_bolt_1cb(rb, rw):
+    """[asm 6CF1..6D33] Returns the ``{offset: (value, width)}`` writes (the spawned slot + rng state)."""
+    si = _free_boss_slot(rw)
+    if si is None:                                         # [asm 6D04] pool full -> no spawn
+        return {}
+    writes = {(si + 4) & 0xFFFF: (0x1CB, 2)}              # [asm 6D06]
+    r = _rng_lcg_next(rb, rw, writes)                     # [asm 6D0B] 39DF
+    writes[si] = (((r & 0x7F) - 0x10) & 0xFFFF, 2)        # [asm 6D0E-6D14] random X
+    writes[(si + 2) & 0xFFFF] = (0, 2)                    # [asm 6D16] Y
+    writes[(si + 0x11) & 0xFFFF] = (0, 1)                 # [asm 6D1B]
+    writes[(si + 0xC) & 0xFFFF] = (0x42, 2)              # [asm 6D1F] anim
+    writes[(si + 9) & 0xFFFF] = (0xFFFF, 2)              # [asm 6D24]
+    writes[(si + 6) & 0xFFFF] = (0, 2)                    # [asm 6D2B] Xvel
+    writes[(si + 0xE) & 0xFFFF] = (0, 2)                  # [asm 6D2E] Yvel
     return writes

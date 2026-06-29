@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, camera_boundary_collision,
-                                         camera_engine, camera_offset_lookup, camera_script_interp,
-                                         camera_state_machine, camera_target_bounce, hurt_effect,
-                                         inc_scroll_phase, init_effect_row, player_cursor_dist,
-                                         scan_camera_targets, tick_mode9_spawn, tick_scroll_cursor)
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_hit_burst,
+                                         camera_boundary_collision, camera_engine, camera_offset_lookup,
+                                         camera_script_interp, camera_state_machine, camera_target_bounce,
+                                         hurt_effect, inc_scroll_phase, init_effect_row, player_cursor_dist,
+                                         scan_camera_targets, spawn_boss_bolt_1ca, spawn_boss_bolt_1cb,
+                                         tick_mode9_spawn, tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -89,6 +90,29 @@ def test_tick_mode9_spawn_head():
     st = {0xA517: 0, 0xA519: 0x10}                                       # already seeded, health 0x10
     w2 = tick_mode9_spawn(lambda o: st.get(o & 0xFFFF, 0) & 0xFF, lambda o: st.get(o & 0xFFFF, 0))
     assert 0xA4F7 not in w2 and w2[0x56A6] == (0x135, 2)                 # no re-seed; spawned 0x10>>2 = 4 slots
+
+
+def test_spawn_boss_bolts():
+    # 6CA7/6CF1: boss-attack projectile spawns into the 0x50A8 pool, composing rng_lcg. Shadow 0-div on the
+    # last-boss demo (6CA7 13 calls, 6CF1 18 calls).
+    st = {0x50AC: 0xFFFF, 0x2CEC: 1, 0x2CED: 2, 0x2CEE: 3, 0x2CEF: 4}    # slot 0 free, rng state seeded
+    rb = lambda o: st.get(o & 0xFFFF, 0) & 0xFF
+    rw = lambda o: st.get(o & 0xFFFF, 0)
+    w = spawn_boss_bolt_1ca(rb, rw)
+    assert w[0x50AC] == (0x1CA, 2) and w[0x50A8] == (0xC8, 2) and w[0x50AA] == (0x58, 2) and 0x2CED in w
+    w2 = spawn_boss_bolt_1cb(rb, rw)
+    assert w2[0x50AC] == (0x1CB, 2) and w2[0x50AA] == (0, 2) and 0x2CED in w2
+    assert spawn_boss_bolt_1ca(lambda o: 0, lambda o: 0x100) == {}       # pool full -> no spawn
+
+
+def test_boss_hit_burst():
+    # 6BDB: the boss-death diamond burst (4 sprites id 0x2137 via spawn_effect_burst). ASM_MATCHED (the boss
+    # survives demo_pre2_20260629_141422, so 6BDB is unwitnessed there); composition asserted vs the disasm.
+    rb = lambda o: 0xFF
+    rw = lambda o: 0xFFFF if (o & 0xFFFF) in (0x50AC, 0x50BE, 0x50D0, 0x50E2) else 0   # 4 free slots
+    w = boss_hit_burst(rb, rw)
+    assert w[0x50AC] == (0x2137, 2) and w[0x50A8] == (0xB9, 2) and w[0x50AA] == (0x1E, 2)   # first sprite
+    assert w[0x50AE] == (0x20, 2)                                        # first Xvel +0x20
 
 
 def test_camera_engine_byte_exact():
