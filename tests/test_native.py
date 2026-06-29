@@ -93,3 +93,15 @@ def test_native_v_scroll_down_at_limit():
     from pre2.native.camera_scroll import _v_scroll_down
     st = _state({0x2CF5: 0x20, 0x2DE6: 0x15})   # limit = 0x20-0xB = 0x15; 0x15 >= 0x15
     assert _v_scroll_down(st, 5) is False
+
+
+def test_native_input_drives_key_table():
+    # apply_input writes the raw per-scancode key table DC1 reads (0xFF down / 0 up) at [0x27F4 + scancode] —
+    # the host-input seam, no keyboard ISR.
+    from pre2.native.input import apply_input, KEY_TABLE, SCAN_RIGHT, SCAN_LEFT, SCAN_FIRE
+    st = _state({})
+    apply_input(st, right=True, fire=True)
+    assert st.rb(KEY_TABLE + SCAN_RIGHT) == 0xFF and st.rb(KEY_TABLE + SCAN_FIRE) == 0xFF
+    assert st.rb(KEY_TABLE + SCAN_LEFT) == 0
+    apply_input(st, right=False, fire=False)          # release
+    assert st.rb(KEY_TABLE + SCAN_RIGHT) == 0 and st.rb(KEY_TABLE + SCAN_FIRE) == 0
