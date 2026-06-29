@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 
 from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, inc_scroll_phase,
-                                         init_effect_row, scan_camera_targets, tick_scroll_cursor)
+                                         init_effect_row, player_cursor_dist, scan_camera_targets,
+                                         tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -74,3 +75,11 @@ def test_tick_scroll_cursor_byte_exact():
     # 70D7 head: spawn gate + scroll-cursor advance. Goldens from the live ASM at the 0x7172 boundary
     # (shadow 0-div over 413 calls / gorilla + 151845); the test replays the recorded reads + tile lookups.
     _golden_case("tick_scroll_cursor", lambda rb, rw, tile: tick_scroll_cursor(rb, rw, tile))
+
+
+def test_player_cursor_dist():
+    # 7172: direction flag + |X dist| + the state-machine cull. Shadow 0-div / 282 calls (gorilla), cull exact.
+    w, cull = player_cursor_dist(lambda o: {0x91FF: 0x100, 0x4F1C: 0x150, 0x9201: 0x100, 0x4F1E: 0x110}[o & 0xFFFF])
+    assert w == {0xA3FA: (1, 1), 0xA3FB: (0x50, 2)} and not cull       # cursor left of player, close
+    w2, cull2 = player_cursor_dist(lambda o: {0x91FF: 0x200, 0x4F1C: 0, 0x9201: 0, 0x4F1E: 0}[o & 0xFFFF])
+    assert w2 == {0xA3FA: (0, 1), 0xA3FB: (0x200, 2)} and cull2        # cursor right of player, X-dist culls

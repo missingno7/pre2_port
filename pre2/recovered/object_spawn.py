@@ -177,3 +177,37 @@ def tick_scroll_cursor(rb, rw, read_tile):
     elif not (_s16(vy) >= SCROLL_VY_GRAV_CAP):            # [asm 7165] scrolling up -> gravity
         writes[SCROLL_VY] = ((vy + SCROLL_GRAVITY) & 0xFFFF, 2)
     return writes
+
+
+# --- 7172..71AB: the player-vs-cursor distance that gates the camera state machine ---
+PLAYER_X = 0x4F1C
+PLAYER_Y = 0x4F1E
+DIST_DIR = 0xA3FA          # 1 if the cursor is left of the player
+DIST_X = 0xA3FB            # |player_X - cursor_X|
+CULL_X = 0x190
+CULL_Y = 0xFA
+
+
+def _abs16(v):
+    v &= 0xFFFF
+    return (-v) & 0xFFFF if v & 0x8000 else v
+
+
+@oracle_link("1030:7172",
+             "the player-vs-cursor distance (70D7, between the scroll-cursor head and the camera state "
+             "machine): [0xA3FA] = 1 if the cursor [0x91FF] is left of the player [0x4F1C] else 0; [0xA3FB] = "
+             "|player_X - cursor_X|. Returns the writes + a cull flag: the camera state machine is skipped "
+             "(jmp 7579) when |player_X-cursor_X| > 0x190 or |player_Y-cursor_Y| > 0xFA.",
+             "OBSERVED", merge_target="object_spawn")
+def player_cursor_dist(rw):
+    """[asm 7172..71AB] ``rw`` reads a DGROUP word. Returns ``(writes, cull)``."""
+    px = rw(PLAYER_X)
+    cur_x = rw(CURSOR_X)
+    dir_flag = 0 if cur_x >= px else 1                    # [asm 7177] jae (unsigned)
+    xd = _abs16((px - cur_x) & 0xFFFF)                    # [asm 7185-718B]
+    writes = {DIST_DIR: (dir_flag, 1), DIST_X: (xd, 2)}
+    cull = xd > CULL_X                                    # [asm 7190] jbe
+    if not cull:
+        yd = _abs16((rw(PLAYER_Y) - rw(CURSOR_Y)) & 0xFFFF)   # [asm 7198-71A1]
+        cull = yd > CULL_Y                               # [asm 71A3] jbe
+    return writes, cull
