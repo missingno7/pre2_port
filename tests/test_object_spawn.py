@@ -10,12 +10,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_hit_burst, boss_script_interp,
-                                         camera_boundary_collision, camera_engine, camera_offset_lookup,
-                                         camera_script_interp, camera_state_machine, camera_target_bounce,
-                                         hurt_effect, inc_scroll_phase, init_effect_row, player_cursor_dist,
-                                         scan_camera_targets, spawn_boss_bolt_1ca, spawn_boss_bolt_1cb,
-                                         tick_mode9_spawn, tick_scroll_cursor)
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_hit_burst, boss_pre_interp,
+                                         boss_script_interp, camera_boundary_collision, camera_engine,
+                                         camera_offset_lookup, camera_script_interp, camera_state_machine,
+                                         camera_target_bounce, hurt_effect, inc_scroll_phase, init_effect_row,
+                                         player_cursor_dist, scan_camera_targets, spawn_boss_bolt_1ca,
+                                         spawn_boss_bolt_1cb, tick_mode9_boss, tick_mode9_spawn, tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -116,6 +116,23 @@ def test_boss_script_interp():
           0x50AC: 0xFF, 0x50AD: 0xFF, 0x2CEC: 1, 0x2CED: 2, 0x2CEE: 3, 0x2CEF: 4}
     w2 = call(st)
     assert w2[0x50AC] == (0x1CB, 2) and w2[0xA517] == (0x501, 2)         # spawned 0x1CB, then advanced past 0xFE
+
+
+def test_boss_pre_interp():
+    # 6B1C/6B43: the script-advance + projectile-hit detection. Shadow 0-div / 660 last-boss calls.
+    st = {0xA515: 5,                                          # dwell != 0 -> skip the script-advance
+          0x4F32: 0x00, 0x4F33: 0x01,                         # slot 0 active ([+4]=0x100)
+          0x4F2E: 0xC8, 0x4F2F: 0, 0x4F30: 0x30, 0x4F31: 0,   # X=0xC8, Y=0x30 -> both in the boss zone
+          0xA519: 5, 0xA516: 0}                               # boss health 5, cycle 0
+    rb = lambda o: st.get(o & 0xFFFF, 0) & 0xFF
+    w = boss_pre_interp(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
+    assert w[0xA517] == (0xA534, 2) and w[0xA519] == (4, 1) and w[0xA516] == (1, 1)   # hit script + health-- + cycle
+
+
+def test_tick_mode9_boss_byte_exact():
+    # 6ADD..6BDA: the WHOLE composed mode-9 last-boss engine. Verified by a whole-DGROUP shadow on the last-boss
+    # demo demo_pre2_20260629_141422 (659 calls, 0 div, excl. audio/DMA + the gated boss-death paths).
+    _golden_case("tick_mode9_boss", lambda rb, rw, tile: tick_mode9_boss(rb, rw))
 
 
 def test_boss_hit_burst():

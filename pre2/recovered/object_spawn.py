@@ -899,3 +899,68 @@ def boss_script_interp(rb, rw):
     else:
         raise Pre2SpawnGap("6B91 boss-script interpreter ran 4096 opcodes without reaching a glyph")
     return ov.writes
+
+
+# --- 6B1C..6B90: the boss script-advance + projectile-hit detection ---
+BOSS_CYCLE = 0xA516        # hit cadence counter (&3); every 4th hit switches to the 0xA540 script
+BOSS_PROJ_LO = 0x4F2E      # the 4 player-projectile slots (stride 0x12)
+BOSS_ZONE_X = (0xB9, 0x32)  # a projectile hits the boss when X-0xB9 < 0x32 and Y-0x1E < 0x32
+BOSS_ZONE_Y = (0x1E, 0x32)
+
+
+@oracle_link("1030:6B1C",
+             "the boss script-advance + projectile-hit detection (between the 6ADD head and the 6B91 glyph "
+             "interpreter): when the dwell [0xA515] hits 0, load the next attack-script entry from the table "
+             "[0xA4F7] (0xFFFF = a relative wrap) into [0xA517]/[0xA515]; then scan the 4 projectile slots "
+             "[0x4F2E] and, on the first one inside the boss zone (X in [0xB9,0xEB), Y in [0x1E,0x50)), switch to "
+             "the hit script [0xA517]=0xA534, drop the boss health [0xA519] (saturating; ->6BDB death-burst at "
+             "0), and cycle [0xA516]&3 (every 4th -> [0xA517]=0xA540).",
+             "OBSERVED", merge_target="object_spawn")
+def boss_pre_interp(rb, rw):
+    """[asm 6B1C..6B90] Returns the ``{offset: (value, width)}`` write contract. Raises :class:`Pre2SpawnGap`
+    on the boss-death burst (6BDB, health depleted)."""
+    ov = _Ov(rb, rw)
+    if ov.rb(BOSS_DWELL) == 0:                            # [asm 6B1C] dwell expired -> next script entry
+        bx = ov.rw(M9_PTR)                                # [asm 6B23]
+        if ov.rw(bx) == 0xFFFF:                           # [asm 6B29] wrap marker
+            bx = (bx + ov.rw((bx + 2) & 0xFFFF)) & 0xFFFF  # [asm 6B2E]
+        ov.apply({BOSS_SCRIPT_PTR: (ov.rw(bx), 2),        # [asm 6B33]
+                  BOSS_DWELL: (ov.rb((bx + 2) & 0xFFFF), 1),    # [asm 6B36-6B39]
+                  M9_PTR: ((bx + 4) & 0xFFFF, 2)})        # [asm 6B3C-6B3F]
+    si = BOSS_PROJ_LO                                     # [asm 6B43]
+    for _ in range(4):                                    # [asm 6B46] cx=4 slots
+        if (ov.rw((si + 4) & 0xFFFF) != 0xFFFF                              # [asm 6B49] active
+                and ((ov.rw(si) - BOSS_ZONE_X[0]) & 0xFFFF) < BOSS_ZONE_X[1]    # [asm 6B4F-6B57] X in zone
+                and ((ov.rw((si + 2) & 0xFFFF) - BOSS_ZONE_Y[0]) & 0xFFFF) < BOSS_ZONE_Y[1]):  # [asm 6B59-6B62]
+            ov.apply({BOSS_SCRIPT_PTR: (0xA534, 2)})      # [asm 6B64] switch to the hit script
+            h = ov.rb(M9_COUNT)                           # [asm 6B6A-6B6F] boss health-- (saturating)
+            nh = ((h - 1) & 0xFF) if h else 0
+            ov.apply({M9_COUNT: (nh, 1)})
+            if nh == 0:                                   # [asm 6B74] health depleted -> 6BDB death-burst
+                raise Pre2SpawnGap("6B76 boss death-burst 6BDB (health depleted)")
+            c = (ov.rb(BOSS_CYCLE) + 1) & 3               # [asm 6B79-6B7D]
+            ov.apply({BOSS_CYCLE: (c, 1)})
+            if c == 0:                                    # [asm 6B82]
+                ov.apply({BOSS_SCRIPT_PTR: (0xA540, 2)})  # [asm 6B84]
+            break                                         # [asm 6B8A] -> the glyph interpreter
+        si = (si + 0x12) & 0xFFFF                         # [asm 6B8C]
+    return ov.writes
+
+
+# --- 6ADD..6BDA: the whole mode-9 last-boss engine spawn path ---
+@oracle_link("1030:6ADD",
+             "the whole mode-9 last-boss engine (6ADD..6BDA): the head (seed + per-frame effect row) -> while "
+             "the boss is alive ([0xA519]!=0) the script-advance + projectile-hit detection (boss_pre_interp) -> "
+             "the glyph-script interpreter (boss_script_interp), all over one read-through overlay so each stage "
+             "sees the prior writes. Raises Pre2SpawnGap on the boss-death paths (the 6C0D finale when "
+             "[0xA519]==0, and the 6BDB death-burst); 6C0D glyph render + sfx are render/audio seams.",
+             "OBSERVED", merge_target="object_spawn")
+def tick_mode9_boss(rb, rw):
+    """[asm 6ADD..6BDA] Returns the ``{offset: (value, width)}`` write contract for the whole boss engine."""
+    ov = _Ov(rb, rw)
+    ov.apply(tick_mode9_spawn(ov.rb, ov.rw))             # [asm 6ADD..6B0C] head (seed + spawn row)
+    if ov.rw(M9_COUNT) == 0:                             # [asm 6B0F] boss dead -> 6C0D finale (render seam)
+        raise Pre2SpawnGap("6ADD mode-9 finale 6C0D (boss dead)")
+    ov.apply(boss_pre_interp(ov.rb, ov.rw))             # [asm 6B1C..6B90] script-advance + hit-detection
+    ov.apply(boss_script_interp(ov.rb, ov.rw))          # [asm 6B91..6BDA] glyph-script interpreter
+    return ov.writes
