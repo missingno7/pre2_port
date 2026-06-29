@@ -7,7 +7,8 @@ spawns across the gorilla + 233821 demos; the audio side-effect via 0x2CC is out
 """
 from __future__ import annotations
 
-from pre2.recovered.object_spawn import EFFECT_ROW_STRIDE, init_effect_row
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, inc_scroll_phase,
+                                         init_effect_row)
 
 _LO = 0x56A2
 
@@ -38,3 +39,11 @@ def test_init_effect_row_caps_at_8():
     w = init_effect_row(8)
     assert all(w[_slot(i) + 4] == (0x135, 2) for i in range(8))
     assert init_effect_row(20) == w        # cx>8 capped to 8
+
+
+def test_inc_scroll_phase_saturates():
+    # 757A: [0x6C05] = min([0x6C05]+1, 0xFF). Shadow-verified witnessed + 0-div (gorilla, 7 calls).
+    assert inc_scroll_phase(lambda o: 0x00)[SCROLL_PHASE] == (0x01, 1)
+    assert inc_scroll_phase(lambda o: 0x40)[SCROLL_PHASE] == (0x41, 1)
+    assert inc_scroll_phase(lambda o: 0xFE)[SCROLL_PHASE] == (0xFF, 1)
+    assert inc_scroll_phase(lambda o: 0xFF)[SCROLL_PHASE] == (0xFF, 1)   # saturates, no wrap

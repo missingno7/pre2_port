@@ -48,3 +48,17 @@ def init_effect_row(cx):
         writes[(si + 4) & 0xFFFF] = (0xFFFF, 2)
         si = (si + EFFECT_ROW_STRIDE) & 0xFFFF
     return writes
+
+
+# --- 757A: a leaf of the 70D7 camera/scroll state machine (states 1/2 advance the scroll-phase counter) ---
+SCROLL_PHASE = 0x6C05
+
+
+@oracle_link("1030:757A",
+             "saturating increment of the scroll-phase counter [0x6C05]: add 1, then clamp at 0xFF (the "
+             "`add [0x6C05],1` / `sbb [0x6C05],0` idiom). A leaf of the 70D7 camera/scroll state machine.",
+             "OBSERVED", merge_target="object_spawn")
+def inc_scroll_phase(rb):
+    """[asm 757A] ``rb(off)`` reads a DGROUP byte. Returns the ``{offset: (value, width)}`` write contract."""
+    v = rb(SCROLL_PHASE)
+    return {SCROLL_PHASE: ((0xFF if v == 0xFF else v + 1), 1)}
