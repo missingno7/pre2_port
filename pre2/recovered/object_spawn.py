@@ -740,3 +740,33 @@ def camera_engine(rb, rw, read_tile):
     ov.apply(camera_state_machine(ov.rb, ov.rw))           # [asm 71AB..7534] the camera sequencer
     ov.apply(camera_script_interp(ov.rb, ov.rw))           # [asm 7534..7579] its bytecode script
     return ov.writes
+
+
+# --- 6ADD: the mode-9 (last-boss) spawn driver ---
+M9_INIT_FLAG = 0xA517      # -1 until the mode-9 state is seeded
+M9_PTR = 0xA4F7
+M9_COUNT = 0xA519          # spawn-count seed (>>2 = the effect-row width)
+
+
+@oracle_link("1030:6ADD",
+             "the mode-9 (last-boss) engine HEAD (6ADD..6B0C), dispatched from 6822 when [0x2D8A]==9: on first "
+             "entry ([0xA517]==-1) seed the boss state ([0xA4F7]=0xA4F9 script ptr, [0xA519]=0x18 boss health, "
+             "[0xA515]=0 dwell, [0xA516]=3 cycle); then spawn the per-frame effect row of [0xA519]>>2 slots "
+             "(7585). The continuation 6B1C+ (the boss-script advance + projectile-hit detection + glyph-script "
+             "interpreter) is the rest of the engine, recovered separately. Composes init_effect_row; 7585's "
+             "sound is an audio seam.",
+             "OBSERVED", merge_target="object_spawn")
+def tick_mode9_spawn(rb, rw):
+    """[asm 6ADD..6B0C] the mode-9 boss-engine head. Returns the ``{offset: (value, width)}`` write contract
+    (the seed + the spawn row); the 6B1C+ boss-script engine is a separate routine."""
+    writes = {}
+    if rw(M9_INIT_FLAG) == 0xFFFF:                     # [asm 6AE7] first frame -> seed the state
+        writes[M9_PTR] = (0xA4F9, 2)                   # [asm 6AEE]
+        writes[M9_COUNT] = (0x18, 2)                   # [asm 6AF4]
+        writes[0xA515] = (0, 1)                        # [asm 6AFA]
+        writes[0xA516] = (3, 1)                        # [asm 6AFF]
+        count = 0x18
+    else:
+        count = rw(M9_COUNT)
+    writes.update(init_effect_row(_sar16(count, 2) & 0xFFFF))   # [asm 6B04-6B0C] 7585, cx = [0xA519]>>2
+    return writes

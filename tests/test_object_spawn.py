@@ -14,7 +14,7 @@ from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, camera
                                          camera_engine, camera_offset_lookup, camera_script_interp,
                                          camera_state_machine, camera_target_bounce, hurt_effect,
                                          inc_scroll_phase, init_effect_row, player_cursor_dist,
-                                         scan_camera_targets, tick_scroll_cursor)
+                                         scan_camera_targets, tick_mode9_spawn, tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -78,6 +78,17 @@ def test_camera_script_interp_byte_exact():
     # 7534 tail: the camera-script bytecode interpreter, composing 93B2 -> 93F6 -> 94DC + the fixed 80DE.
     # Goldens from the live ASM (shadow 0-div over 281 gorilla calls, full response windows; 3 collision cases).
     _golden_case("camera_script_interp", lambda rb, rw, tile: camera_script_interp(rb, rw))
+
+
+def test_tick_mode9_spawn_head():
+    # 6ADD head (last-boss engine entry): seed on first entry ([0xA517]==-1) + spawn [0xA519]>>2 row (7585).
+    # Shadow 0-div / 660 calls on the last-boss demo demo_pre2_20260629_141422.
+    w = tick_mode9_spawn(lambda o: 0xFF, lambda o: 0xFFFF)               # [0xA517]==-1 -> seed
+    assert w[0xA4F7] == (0xA4F9, 2) and w[0xA519] == (0x18, 2) and w[0xA515] == (0, 1) and w[0xA516] == (3, 1)
+    assert w[0x56A6] == (0x135, 2)                                       # spawned a 0x18>>2 = 6-wide effect row
+    st = {0xA517: 0, 0xA519: 0x10}                                       # already seeded, health 0x10
+    w2 = tick_mode9_spawn(lambda o: st.get(o & 0xFFFF, 0) & 0xFF, lambda o: st.get(o & 0xFFFF, 0))
+    assert 0xA4F7 not in w2 and w2[0x56A6] == (0x135, 2)                 # no re-seed; spawned 0x10>>2 = 4 slots
 
 
 def test_camera_engine_byte_exact():
