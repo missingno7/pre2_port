@@ -11,9 +11,21 @@ import json
 from pathlib import Path
 
 from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, inc_scroll_phase,
-                                         init_effect_row, scan_camera_targets)
+                                         init_effect_row, scan_camera_targets, tick_scroll_cursor)
 
 _LO = 0x56A2
+
+
+def _golden_case(name, call):
+    cases = json.loads((Path(__file__).parent / "fixtures" / "object_spawn" / f"{name}.json").read_text())
+    assert cases, f"no fixture cases for {name}"
+    for case in cases:
+        rw_d = {int(k): v for k, v in case["rw"].items()}
+        rb_d = {int(k): v for k, v in case["rb"].items()}
+        tile_d = {int(k): v for k, v in case.get("tile", {}).items()}
+        golden = {int(k): tuple(v) for k, v in case["writes"].items()}
+        writes = call(lambda o: rb_d[o & 0xFFFF], lambda o: rw_d[o & 0xFFFF], lambda o: tile_d[o & 0xFFFF])
+        assert writes == golden
 
 
 def _slot(off):
@@ -55,11 +67,10 @@ def test_inc_scroll_phase_saturates():
 def test_scan_camera_targets_byte_exact():
     # 80DE: camera-target collision scan (composes verified 8D7B). Goldens from the live ASM (shadow 0-div over
     # 281 calls / gorilla); the test replays the recorded reads and asserts the contract.
-    cases = json.loads((Path(__file__).parent / "fixtures" / "object_spawn" / "scan_camera_targets.json").read_text())
-    assert cases, "no fixture cases"
-    for case in cases:
-        rw_d = {int(k): v for k, v in case["rw"].items()}
-        rb_d = {int(k): v for k, v in case["rb"].items()}
-        golden = {int(k): tuple(v) for k, v in case["writes"].items()}
-        writes = scan_camera_targets(lambda o: rb_d[o & 0xFFFF], lambda o: rw_d[o & 0xFFFF])
-        assert writes == golden
+    _golden_case("scan_camera_targets", lambda rb, rw, tile: scan_camera_targets(rb, rw))
+
+
+def test_tick_scroll_cursor_byte_exact():
+    # 70D7 head: spawn gate + scroll-cursor advance. Goldens from the live ASM at the 0x7172 boundary
+    # (shadow 0-div over 413 calls / gorilla + 151845); the test replays the recorded reads + tile lookups.
+    _golden_case("tick_scroll_cursor", lambda rb, rw, tile: tick_scroll_cursor(rb, rw, tile))
