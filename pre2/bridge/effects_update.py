@@ -1,0 +1,31 @@
+"""VM seam for the secondary-entity update pass (:mod:`pre2.recovered.effects_update`).
+
+Layout/translation only — no gameplay decisions. Reads DGROUP (0x1A0F) for the recovered tick functions and
+applies their ``{offset: (value, width)}`` write contracts back onto live memory.
+"""
+from __future__ import annotations
+
+DATA_SEG = 0x1A0F
+
+
+def readers(mem):
+    """``(rb, rw)`` byte/word readers over DGROUP (0x1A0F)."""
+    base = (DATA_SEG << 4) & 0xFFFFF
+
+    def rb(o):
+        return mem.data[(base + (o & 0xFFFF)) & 0xFFFFF]
+
+    def rw(o):
+        b = (base + (o & 0xFFFF)) & 0xFFFFF
+        return mem.data[b] | (mem.data[(b + 1) & 0xFFFFF] << 8)
+
+    return rb, rw
+
+
+def apply_ds(mem, writes) -> None:
+    """Apply a recovered ``{offset: (value, width)}`` DGROUP write contract."""
+    base = (DATA_SEG << 4) & 0xFFFFF
+    for off, (val, width) in writes.items():
+        mem.data[(base + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
+        if width == 2:
+            mem.data[(base + ((off + 1) & 0xFFFF)) & 0xFFFFF] = (val >> 8) & 0xFF
