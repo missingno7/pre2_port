@@ -859,3 +859,43 @@ def spawn_boss_bolt_1cb(rb, rw):
     writes[(si + 6) & 0xFFFF] = (0, 2)                    # [asm 6D2B] Xvel
     writes[(si + 0xE) & 0xFFFF] = (0, 2)                  # [asm 6D2E] Yvel
     return writes
+
+
+# --- 6B91: the boss glyph-script interpreter ---
+BOSS_SCRIPT_PTR = 0xA517   # the live boss-script cursor
+BOSS_DWELL = 0xA515        # the dwell counter (decremented by jump opcodes; the 6B1C advance fires at 0)
+
+
+@oracle_link("1030:6B91",
+             "the boss glyph-script interpreter: from the cursor [0xA517], process control opcodes — 0xFF spawn "
+             "0x1CA (6CA7), 0xFE spawn 0x1CB (6CF1), 0xFD play sfx 2, a negative byte = a relative jump that also "
+             "decrements the dwell [0xA515] (saturating) — until a glyph byte (al>=0): advance [0xA517] by 1, "
+             "render it (6C0D, es=0xA000), and return. Composes the recovered boss-bolt spawns; 6C0D + sfx are "
+             "render/audio seams.",
+             "OBSERVED", merge_target="object_spawn")
+def boss_script_interp(rb, rw):
+    """[asm 6B91..6BDA] Returns the ``{offset: (value, width)}`` write contract (spawns + cursor + dwell + rng).
+    The 6C0D glyph blit and the sfx are seams (not in the contract)."""
+    ov = _Ov(rb, rw)
+    bx = ov.rw(BOSS_SCRIPT_PTR)                            # [asm 6B91]
+    for _ in range(4096):
+        al = ov.rb(bx)                                    # [asm 6B95]
+        if al == 0xFF:                                    # [asm 6B97] spawn 0x1CA
+            ov.apply(spawn_boss_bolt_1ca(ov.rb, ov.rw))
+            bx = (bx + 1) & 0xFFFF
+        elif al == 0xFE:                                  # [asm 6BA1] spawn 0x1CB
+            ov.apply(spawn_boss_bolt_1cb(ov.rb, ov.rw))
+            bx = (bx + 1) & 0xFFFF
+        elif al == 0xFD:                                  # [asm 6BAB] play sfx 2 (audio seam)
+            bx = (bx + 1) & 0xFFFF
+        elif al & 0x80:                                   # [asm 6BB8] negative -> relative jump + dwell
+            d = ov.rb(BOSS_DWELL)                         # [asm 6BC0-6BC5] sub 1 ; adc 0 (saturate at 0)
+            ov.apply({BOSS_DWELL: (((d - 1) & 0xFF) if d else 0, 1)})
+            bx = (bx + _cbw(al)) & 0xFFFF                 # [asm 6BCB] bx += signed al
+            ov.apply({BOSS_SCRIPT_PTR: (bx, 2)})          # [asm 6BCD]
+        else:                                             # [asm 6BD3] glyph -> advance, render (6C0D), return
+            ov.apply({BOSS_SCRIPT_PTR: ((ov.rw(BOSS_SCRIPT_PTR) + 1) & 0xFFFF, 2)})
+            break
+    else:
+        raise Pre2SpawnGap("6B91 boss-script interpreter ran 4096 opcodes without reaching a glyph")
+    return ov.writes

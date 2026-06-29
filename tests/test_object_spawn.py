@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_hit_burst,
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_hit_burst, boss_script_interp,
                                          camera_boundary_collision, camera_engine, camera_offset_lookup,
                                          camera_script_interp, camera_state_machine, camera_target_bounce,
                                          hurt_effect, inc_scroll_phase, init_effect_row, player_cursor_dist,
@@ -103,6 +103,17 @@ def test_spawn_boss_bolts():
     w2 = spawn_boss_bolt_1cb(rb, rw)
     assert w2[0x50AC] == (0x1CB, 2) and w2[0x50AA] == (0, 2) and 0x2CED in w2
     assert spawn_boss_bolt_1ca(lambda o: 0, lambda o: 0x100) == {}       # pool full -> no spawn
+
+
+def test_boss_script_interp():
+    # 6B91: glyph byte (al>=0) at the cursor -> advance [0xA517] + render (seam). Shadow 0-div / 659 calls.
+    st = {0xA517: 0x500, 0x500: 0x41}                                    # cursor -> a glyph at 0x500
+    assert boss_script_interp(lambda o: st.get(o & 0xFFFF, 0) & 0xFF,
+                              lambda o: st.get(o & 0xFFFF, 0)) == {0xA517: (0x501, 2)}
+    st2 = {0xA517: 0x500, 0x500: 0xFE, 0x501: 0x41, 0xA515: 3,           # 0xFE (spawn 0x1CB) then a glyph
+           0x50AC: 0xFFFF, 0x2CEC: 1, 0x2CED: 2, 0x2CEE: 3, 0x2CEF: 4}
+    w2 = boss_script_interp(lambda o: st2.get(o & 0xFFFF, 0) & 0xFF, lambda o: st2.get(o & 0xFFFF, 0))
+    assert w2[0x50AC] == (0x1CB, 2) and w2[0xA517] == (0x501, 2)         # spawned 0x1CB, then advanced past 0xFE
 
 
 def test_boss_hit_burst():
