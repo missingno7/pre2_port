@@ -168,7 +168,21 @@ So per-hook-address diffing is an early scaffold; as islands merge, checkpoints
 become fewer and move up to clean semantic boundaries (asset load, renderer
 output, collision query, player/object update, frame/tick, major game-state).
 
-## Two runtime modes
+## Runtime modes — and the migration to a VM-less faithful core
+
+The three `--video` paths are a **migration vehicle**, not three permanent renderers.
+`--video vm` is the legacy/oracle framebuffer (original ASM for reference). `--video
+faithful` today is a recovered visual backend *inside* the hybrid runtime, but it should
+gradually **stop being "just a renderer" and become the VM-less faithful source-port
+core** — the real standalone game (`NativeGameState → recovered gameplay systems →
+recovered render/audio state → faithful renderer/audio`). `--video enhanced` is an
+optional modern presentation/audio layer built **on top of** that faithful core. The
+endgame is a complete recovered native PRE2 with the VM kept only as an oracle — **not
+"VM with a nicer renderer".** The recovery loop drives this: try to move a behaviour
+native → discover the missing state/timing/render-intent → drop to the ASM boundary →
+recover the smallest leaf → verify → compose into an island → replace in hybrid → **lift
+the island into the faithful native core** → repeat until the VM is no longer required at
+runtime.
 
 ### Hybrid (normal play) — the active runtime
 
@@ -194,6 +208,32 @@ enough state to identify which recovered subsystem drifted.
 
 Workflow: play in hybrid → record demos → if something looks wrong or a subsystem
 needs validation, replay the demo in verify mode → diagnose the first divergence.
+
+### Standalone (native, VM-less) — the endgame
+
+The destination. **No VM is started.** A `NativeGameState` drives the recovered gameplay
+systems directly — the *same* recovered functions the hybrid hooks call, now invoked
+native-to-native — producing recovered render/audio state that the faithful renderer/audio
+presents. The recovered code needs no CPU registers, segmented memory, hook dispatch,
+framebuffer-as-input, or live ASM. The per-routine transition is exactly:
+`VM memory/regs → adapter/view → recovered fn → write back to VM` (hybrid hook) **becomes**
+`NativeGameState → same recovered fn → NativeGameState` (standalone) — the hook disappears
+from the standalone runtime, the recovered function remains. **Verification switch:** on →
+the VM oracle may run beside the native game and compare state checkpoints; off → no VM is
+started and the faithful/native game runs by itself.
+
+### Enhanced is presentation only — never the simulation
+
+`--video enhanced` builds on the faithful native core: object/camera interpolation, smooth
+transitions and palette fades, modern scaling, cleaner/lower-latency audio mixing. It
+**must not** change gameplay tick accuracy, input semantics, collision behaviour, the RNG
+sequence, object state, score/lives, or level progression. Enhanced *audio* may modernize
+the output path (buffering, mixing, quality) **only so long as it never feeds back into
+gameplay timing, controls, or the simulation**. Enhanced is not a separate gameplay fork —
+it displays and plays the faithful core's state more smoothly. If an enhanced (or native)
+feature needs state that is not yet available, recover that state at the faithful/source
+layer first; **never fake it in the renderer.** (Sibling project `missingno7/overkill_port`
+is mid-way through the same faithful-becomes-native migration — a useful reference.)
 
 ## Slice 1 — asset decompression: complete
 
