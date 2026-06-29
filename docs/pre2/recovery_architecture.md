@@ -182,7 +182,30 @@ endgame is a complete recovered native PRE2 with the VM kept only as an oracle �
 native → discover the missing state/timing/render-intent → drop to the ASM boundary →
 recover the smallest leaf → verify → compose into an island → replace in hybrid → **lift
 the island into the faithful native core** → repeat until the VM is no longer required at
-runtime.
+runtime. **Hybrid is the workshop; faithful is the product** — code is prepared and proven in
+hybrid, then the *same* code is plugged into the VM-less faithful core. Write every island
+with an exit path, not "VM forever + ever-cleverer hooks".
+
+### The two layers, and who owns the state
+
+Every serious island is **two layers**: the **recovered behaviour** (pure source-level logic
+— permanent) and a thin **adapter** (the temporary connection — VM memory/registers today, a
+`NativeGameState` later). The recovered function is the shared centre; the VM adapter, the
+faithful core, and the enhanced projection are different ways to connect to it — **one
+implementation, many adapters**, never three copies that can drift.
+
+The deepest migration milestone is **state ownership**, not "replace more ASM":
+
+| phase | who owns the state |
+|---|---|
+| early | ASM owns it; recovered code observes/mirrors |
+| middle | ASM owns it; recovered hooks replace known routines; adapters read/write VM memory; islands verified in hybrid |
+| transition | recovered systems own source-level state **locally**; VM memory becomes a compatibility projection; the same system runs from a VM adapter *or* a `NativeGameState` adapter |
+| late / end | `NativeGameState` is the real state; VM state exists only in verify/oracle mode; faithful/native drives the frame |
+
+Renderer recovery is a big step but not the whole port — the key remaining work is moving
+**gameplay update, object/player state, collision, scene flow, and timing ownership** out of
+ASM into recovered source.
 
 ### Hybrid (normal play) — the active runtime
 
