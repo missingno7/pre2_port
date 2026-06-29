@@ -11,8 +11,9 @@ import json
 from pathlib import Path
 
 from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, camera_boundary_collision,
-                                         camera_target_bounce, hurt_effect, inc_scroll_phase, init_effect_row,
-                                         player_cursor_dist, scan_camera_targets, tick_scroll_cursor)
+                                         camera_state_machine, camera_target_bounce, hurt_effect,
+                                         inc_scroll_phase, init_effect_row, player_cursor_dist,
+                                         scan_camera_targets, tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -108,3 +109,15 @@ def test_camera_target_bounce_gates():
 def test_camera_boundary_collision_gated_off():
     # 81B4: [0x6BE4]!=0 disables the whole crush (the active path is shadow-verified: gorilla 31 calls, 0 div).
     assert camera_boundary_collision(lambda o: 1 if (o & 0xFFFF) == 0x6BE4 else 0, lambda o: 0) == {}
+
+
+def test_camera_state_machine_simple_states():
+    # 71AB sequencer: the sub-call-free states (the whole machine is shadow-verified on gorilla: 281 calls,
+    # 0 div, states 0/1/2/3/5/6/7; state 4 + the state-6 94F3 finale are ASM_MATCHED / gated).
+    def call(state, dist, timer=0):
+        d = {0x91FE: state, 0xA3FB: dist, 0xA3F7: timer}
+        return camera_state_machine(lambda o: d.get(o & 0xFFFF, 0) & 0xFF, lambda o: d.get(o & 0xFFFF, 0) & 0xFFFF)
+    assert call(0, 0x100) == {0x6C05: (0, 1), 0xA401: (0xA427, 2)}        # state 0 far: anchor the camera
+    assert call(0, 0x50) == {0xA3F7: (0, 2), 0x91FE: (1, 1)}              # state 0 near: advance to state 1
+    assert call(5, 0, timer=5) == {0xA3F7: (6, 2), 0xA401: (0xA47E, 2)}   # state 5 within dwell: hold script
+    assert call(5, 0, timer=0x20) == {0xA3F7: (0, 2), 0x91FE: (1, 1)}     # state 5 dwell elapsed: back to state 1
