@@ -261,7 +261,10 @@ def native_gameplay_frame(state) -> None:
     _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 022C] 4907 (byte-level)
     native_player_step(state)                                       # [asm 022F] 5850 (whole player update)
     native_player_interaction(state)                                # [asm 0232] 8295 (player<->world pass)
-    # [asm 0235] 8922 project_particles -> render draw-list (the faithful renderer's job)
+    # [asm 0235] 8922 project_particles -> effect SOURCE-list [0x8F1D] animation + render slots [0x52E8]. It is a
+    # gameplay-COUPLED state producer (its slot writes feed back into the next frame), so it belongs in the native
+    # render-state pass being built (see pre2-native-render-state memory) — wiring it ALONE regresses the forward
+    # verify because the OTHER render-cluster state producers (26FA record-update, etc.) are still stale. TODO.
     native_trigger_scan(state)                                      # [asm 0238] 52FE (position-trigger; no-op unarmed)
     native_proximity_trigger(state)                                 # [asm 023B] 53F6 (proximity trigger; no-op unfired)
     native_camera_follow(state)                                     # [asm 023E] 5643 (H+V camera follow/scroll)
