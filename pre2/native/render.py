@@ -11,11 +11,31 @@ produces the state, ``native_render`` produces the pixels. See native/loop.py fo
 """
 from __future__ import annotations
 
+from dos_re.dos import _dac8
+
 from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.bridge.gameplay_effects import capture_gameplay_effects
 
 _DS = 0x1A0F << 4
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
+
+
+def native_load_level_palette(state, dos) -> None:
+    """[asm 0ba0] Apply the per-level 16-colour VGA palette the standalone runner owns.
+
+    PRE2 is a 16-colour planar game; each level has its own 16-entry palette. ``[0x2d8a]`` (the level) indexes the
+    pointer table ``[0x2d00+level*2]``, whose 16 RGB triples (6-bit DAC) load into DAC colours 0..15 — exactly
+    what ``0ba0`` does via int 10h ax=0x1012/cx=0x10. native_level_init skips 0ba0 as 'render' (it touches no
+    DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap snapshot's palette. The
+    per-level palettes are global in DGROUP, so this just selects the right one (no asset reload needed)."""
+    d = state.data
+    level = d[_DS + 0x2D8A]
+    base = _DS + (d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8))
+    if len(dos.vga_palette) < 256:                                  # ensure a full DAC (snapshots carry 256)
+        dos.vga_palette = list(dos.vga_palette) + [(0, 0, 0)] * (256 - len(dos.vga_palette))
+    for i in range(0x10):                                          # [asm 0bb8] cx=0x10 colours from [asm 0bb6] bx=0
+        r, g, b = d[base + i * 3], d[base + i * 3 + 1], d[base + i * 3 + 2]
+        dos.vga_palette[i] = (_dac8(r), _dac8(g), _dac8(b))
 
 
 def native_sync_render_state(state) -> None:

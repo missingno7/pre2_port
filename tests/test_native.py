@@ -72,6 +72,23 @@ def test_native_player_step_fails_loud_on_death():
         native_player_step(st)
 
 
+def test_native_load_level_palette():
+    # 0ba0 port: [0x2d8a]=level selects the palette pointer [0x2d00+level*2]; its 16 RGB triples (6-bit DAC)
+    # load into dos.vga_palette[0..15] (and ONLY those), so a standalone --level N gets its own colours.
+    from types import SimpleNamespace
+
+    from dos_re.dos import _dac8
+    from pre2.native.render import native_load_level_palette
+    st = _state({0x2D8A: 3, 0x2D00 + 3 * 2: 0x00, 0x2D00 + 3 * 2 + 1: 0x30})   # level 3 -> palette ptr 0x3000
+    for i in range(48):
+        st.data[_BASE + 0x3000 + i] = i
+    dos = SimpleNamespace(vga_palette=[(0, 0, 0)] * 256)
+    native_load_level_palette(st, dos)
+    assert dos.vga_palette[0] == (_dac8(0), _dac8(1), _dac8(2))
+    assert dos.vga_palette[15] == (_dac8(45), _dac8(46), _dac8(47))
+    assert dos.vga_palette[16] == (0, 0, 0)                        # only colours 0..15 are touched (cx=0x10)
+
+
 def test_native_level_state_raises_respawn_transition():
     # The respawn (4C69's [0x6be4]==1 -> 4F6C) is a MULTI-FRAME transition (the 60-frame death-bounce), so the
     # per-frame dispatcher SIGNALS it (Pre2RespawnTransition) rather than running it blocking in-loop — running it

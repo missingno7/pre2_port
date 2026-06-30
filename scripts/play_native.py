@@ -57,7 +57,7 @@ def main(argv=None) -> int:
     from dos_re.input_demo import InputDemoPlayback
     from pre2.runtime import load_pre2_snapshot
     from pre2.native.state import NativeGameState
-    from pre2.native.render import native_render
+    from pre2.native.render import native_load_level_palette, native_render
     from pre2.native.runtime import native_frame_step
     from pre2.native.level_init import native_level_init
     from pre2.native.input import apply_input
@@ -81,17 +81,17 @@ def main(argv=None) -> int:
 
     snap_level = cpu.mem.data[DS + 0x2D8A]
     if args.level != snap_level:                                     # the snapshot only carries ONE level's assets
-        print(f"  WARNING: --level {args.level} != the snapshot's bootstrap level {snap_level}. native_level_init "
-              f"reloads the per-level LOCAL tiles, but the EXE-loaded palette + SHARED tile bank stay "
-              f"LEVEL{snap_level + 1}'s (they aren't in this snapshot) — so colours + some tiles will be wrong. "
-              f"Cold-boot-from-files (#10) is the real fix; for now use --level {snap_level}, or a snapshot "
-              f"recorded on LEVEL{args.level + 1}.")
+        print(f"  NOTE: --level {args.level} != the snapshot's bootstrap level {snap_level}. The per-level palette "
+              f"is now loaded correctly (0ba0) and native_level_load reloads the per-level LOCAL tiles, but the "
+              f"SHARED sprite bank + 42af tile tables are still the snapshot's (deferred in native_level_load), so "
+              f"SOME tiles/sprites will still be LEVEL{snap_level + 1}'s until those loaders land (#10).")
 
     # --- seed a NativeGameState via the faithful VM-less level-init (load + re-init + player + centred camera,
     #     every leaf byte-exact vs the ASM), VM-less from here on ---
     state = NativeGameState(bytearray(cpu.mem.data))
     state.data[DS + 0x2D8A] = args.level                            # select the level
     native_level_init(state, game_root=gr)
+    native_load_level_palette(state, dos)                          # [asm 0ba0] the per-level 16-colour palette
     state.data[DS + 0x27F4:DS + 0x27F4 + 0x90] = b"\x00" * 0x90      # clear residual input
 
     print("Ready — arrow keys / numpad = move, SPACE = fire/jump, ESC = quit. (VM-less native gameplay)")
