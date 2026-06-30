@@ -197,12 +197,25 @@ def native_scroll_script(state) -> None:
 
 def native_level_state(state) -> None:
     """[asm 0259: 4C69] The per-frame level/death state dispatcher. Idle (mode [0x6be6], respawn [0x6be4], death
-    [0x6be5] all 0) it returns no-carry and the loop continues — a byte-exact no-op. When armed it drives
-    death/respawn/level-end/game-over (the 4f65/5063/5034 handlers; carry -> main's level change at 0x12f).
-    That level-state machine is unrecovered -> fail loud (witnessed by the death/game-over demos)."""
+    [0x6be5] all 0) it returns no-carry and the loop continues. Armed:
+      * [0x6be4]==1 -> the respawn-to-checkpoint handler ``native_4f6c`` (in-loop, no carry; the boss hit set
+        [0x6be4]=2 via 8295/65b3 and the player step counts it down 2->1->0 via its timers);
+      * [0x6be4]!=0 (i.e. ==2) -> idle this frame (4C69 dispatches nothing while the respawn counter is winding);
+      * [0x6be5]==1 death (5063) / ==0xff game-over (5034) / [0x6be6] level-end (4F65) -> the carry paths that
+        return to main's level change at 0x12f — not yet recovered, so fail loud (the death/game-over demos)."""
+    from pre2.native.level_state import native_4f6c
     rb, _ = readers(state)
-    if rb(0x6BE6) != 0 or rb(0x6BE4) != 0 or rb(0x6BE5) != 0:
-        raise Pre2HybridGap("native level-state (4C69) armed — death/respawn/level-end/game-over not recovered")
+    if rb(0x6BE6) != 0:
+        raise Pre2HybridGap("native level-state: level-end (4F65 / next-level select, carry -> 0x12f) not recovered")
+    if rb(0x6BE4) == 1:
+        native_4f6c(state)                                          # [asm 4f6c] respawn-to-checkpoint (in-loop)
+        return
+    if rb(0x6BE4) != 0:
+        return                                                      # [0x6be4]==2: 4C69 idle (counter winding down)
+    if rb(0x6BE5) == 1:
+        raise Pre2HybridGap("native level-state: death (5063, carry -> 0x12f) not recovered")
+    if rb(0x6BE5) == 0xFF:
+        raise Pre2HybridGap("native level-state: game-over (5034, carry -> 0x12f) not recovered")
 
 
 def native_respawn_gate(state) -> None:
