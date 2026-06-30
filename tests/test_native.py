@@ -36,7 +36,7 @@ def test_main_loop_spine_roadmap():
     cov = spine_coverage()
     # the whole loop is collapsed: every call is a recovered gameplay system or a render call — no raw gaps.
     # (event-driven paths run as idle-no-op / armed-fail-loud, the recovered "native" pattern, so kind == native.)
-    assert cov["native"] == 17 and cov["render"] == 10 and cov["gap"] == 0
+    assert cov["native"] == 16 and cov["render"] == 11 and cov["gap"] == 0
     assert all(kind in ("native", "render", "gap") for _, kind, _ in MAIN_LOOP_SPINE)
 
 

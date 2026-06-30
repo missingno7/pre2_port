@@ -79,7 +79,7 @@ MAIN_LOOP_SPINE = [
     (0x54AB, "native", "native_firefly_step (swarm sim + RNG)"),
     (0x3922, "native", "native_scroll_script (counter inc; scripted camera fails loud)"),
     (0x4C69, "native", "native_level_state (idle no-op; death/respawn/level-end armed fails loud)"),
-    (0x45AF, "native", "native_respawn_gate (idle no-op; respawn animation fails loud)"),
+    (0x45AF, "render", "45AF respawn-animation draw -> faithful renderer"),
     (0x44FB, "render", "4509+1C65 render/timing helper"),
     (0x6772, "render", "render-frame commit (-> faithful renderer)"),
     (0x67D7, "native", "native_special_event ([0x6ca7]==0x1f one-shot fails loud)"),
@@ -219,11 +219,10 @@ def native_level_state(state) -> None:
 
 
 def native_respawn_gate(state) -> None:
-    """[asm 0261: 45AF] The respawn-animation pass. Respawning ([0x6be4]!=0) draws the death/respawn sequence
-    (from [0x6c0e]/[0x6c10]) — unrecovered. Idle it is the renderer's job (no gameplay state)."""
-    rb, _ = readers(state)
-    if rb(0x6BE4) != 0:
-        raise Pre2HybridGap("native respawn animation (45AF) — not recovered")
+    """[asm 0261: 45AF] The respawn-animation pass: when respawning ([0x6be4]!=0) it DRAWS the death/respawn
+    sequence (reading [0x6c0e]/[0x6c10]) — pure render, no gameplay-state writes — so it is a no-op for the
+    gameplay step (the faithful renderer draws it). [verified render: the whole-loop verify stays DIV=0]"""
+    return
 
 
 def native_special_event(state) -> None:
