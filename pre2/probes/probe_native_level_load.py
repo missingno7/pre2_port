@@ -100,13 +100,13 @@ def main() -> int:
         f"planar tile cache (local x{n_local})": planar_local_ok,
         f"planar shared cache (UNION x{n_shared})": planar_shared_ok,
         "classify type tables [0x4df8]": region_ok(0x4DF8, 0x4EF8),
+        "anim tables [0x6688] (42af)": region_ok(0x6688, 0x6A88),
     }
     for name, good in checks.items():
         print(f"  {'OK  ' if good else 'FAIL'} {name}")
-    # still-deferred halves (reported for scope, not asserted): the 42af tile tables -> [0x6688], the 3ead/41ca
-    # high-memory writes, and the 0x9dc0 parallax blit.
-    tiletab = sum(1 for o in range(0x6688, 0x6A88) if got[_DS + o] != post[_DS + o])
-    print(f"  (deferred: 42af tile-tables {tiletab}B)")
+    # still-deferred halves (reported for scope, not asserted): the 3ead/41ca high-memory writes + the 0x9dc0
+    # parallax blit (its source over-reads past the level data into the next bump allocation — memory-layout).
+    print("  (deferred: 3ead/41ca high-mem + 0x9dc0 parallax)")
     ok = all(checks.values())
     print("native level-load (DGROUP + object tables):", "PASS (byte-exact vs ASM)" if ok else "FAIL")
     return 0 if ok else 1

@@ -261,6 +261,33 @@ def native_level_load_classify(state) -> None:
     d[_DS + 0x2DF8:_DS + 0x2DF8 + n] = res.masks[:n]
 
 
+def native_level_load_anim_tables(state) -> None:
+    """[asm 42af] Build the 4 tile-animation lookup tables [0x6688]/[0x6788]/[0x6888]/[0x6988] (0x100 bytes each)
+    that the renderer (redraw_animated_grid / animation.py) reads to animate tiles. Walk the 0x100 tile indices,
+    reading the per-tile flag at [0x805E+t] (the foreground/animated-flag table): a STATIC tile (bit 0x80 clear)
+    maps to itself in tables 0/1/2 and 0 in table 3; an ANIMATED tile (bit 0x80 set) consumes 3 consecutive
+    indices and fills a rotated 3-frame cycle (tables 0/1/2 = the three frames t/t+1/t+2, each rotated) with 1 in
+    table 3. [0x6bbd] = 1 iff the level has any animated tile. Deterministic; reads [0x805E] (loaded by dgroup)."""
+    d = state.data
+    T0, T1, T2, T3, FLAG = 0x6688, 0x6788, 0x6888, 0x6988, 0x805E
+    has_anim = 0
+    bx = 0
+    while bx < 0x100:                                              # [asm 430d: or bh,bh / je]
+        if (d[_DS + FLAG + bx] & 0x80) == 0:                       # [asm 42bb] static tile
+            t = bx & 0xFF
+            d[_DS + T0 + bx] = t; d[_DS + T1 + bx] = t; d[_DS + T2 + bx] = t; d[_DS + T3 + bx] = 0
+            bx += 1                                                # [asm 42d3 -> 430c]
+        else:                                                      # [asm 42d5] animated: rotated 3-frame cycle
+            has_anim = 1
+            t = bx & 0xFF; t1 = (t + 1) & 0xFF; t2 = (t + 2) & 0xFF
+            d[_DS + T0 + bx] = t;  d[_DS + T0 + bx + 1] = t1; d[_DS + T0 + bx + 2] = t2
+            d[_DS + T1 + bx] = t1; d[_DS + T1 + bx + 1] = t2; d[_DS + T1 + bx + 2] = t
+            d[_DS + T2 + bx] = t2; d[_DS + T2 + bx + 1] = t;  d[_DS + T2 + bx + 2] = t1
+            d[_DS + T3 + bx] = 1;  d[_DS + T3 + bx + 1] = 1;  d[_DS + T3 + bx + 2] = 1
+            bx += 3                                                # [asm 430a/430b/430c: inc bx x3]
+    d[_DS + 0x6BBD] = has_anim                                     # [asm 4311] any-animated flag
+
+
 def native_level_load_shared(state, *, game_root: str) -> None:
     """The shared/union sprite-bank pass [asm 4389]: the global ``UNION.SQZ`` bank (resource 7, filename at
     DGROUP 0x0a25), decompressed by the recovered SQZ codec (``load_sqz_by_dx`` — VERIFIED: the VM's 0x107b UNION
@@ -306,16 +333,18 @@ def native_level_load(state, level: int, *, game_root: str) -> None:
     recovered halves of ``1030:3ed6``:
       * ``native_level_load_dgroup``  — prologue scalars, SQZ load, tile-index, property memcpy (byte-exact);
       * ``native_level_load_objects`` — entity/effect sprite-bank rebases, RNG decor, per-level reads, dup (byte-exact);
+      * ``native_level_load_anim_tables`` — the tile-animation tables ``[0x6688]`` (``42af``, byte-exact);
       * ``native_level_load_planar``  — the LOCAL planar tile cache (``code < 0x100``, byte-exact);
       * ``native_level_load_shared``  — the SHARED/union bank (``code >= 0x100`` from UNION.SQZ, byte-exact);
       * ``native_level_load_classify``— the tile/sprite type tables (``4232``, byte-exact over the full cache).
 
-    All verified byte-exact vs the ASM against a clean-VRAM 3ed6 witness (LOCAL 173/173, SHARED 83/83, classify
-    0 diff). Still TODO: the ``42af`` tile lookup tables ``[0x6688]``, the ``3ead`` self-patch + ``41ca``
-    trigger-sprite build, and the ``0x9dc0`` parallax-background blit (``native_level_load_background``, which
-    still needs its source-layout fix). Tracked in [[pre2-level-init-island]]."""
+    All verified byte-exact vs the ASM against a clean-VRAM 3ed6 witness (LOCAL 173/173, SHARED 83/83, classify +
+    42af 0 diff). Still TODO: the ``3ead`` self-patch + ``41ca`` trigger-sprite build, and the ``0x9dc0``
+    parallax-background blit (its source over-reads past the level data into the next bump allocation, a
+    memory-layout coupling — not just the level file). Tracked in [[pre2-level-init-island]]."""
     native_level_load_dgroup(state, level, game_root=game_root)
     native_level_load_objects(state)
+    native_level_load_anim_tables(state)                            # 42af: tile-animation tables [0x6688]
     native_level_load_planar(state)                                 # LOCAL tile cache (code < 0x100)
     native_level_load_shared(state, game_root=game_root)            # SHARED/union bank (code >= 0x100), UNION.SQZ
     native_level_load_classify(state)                              # 4232: tile/sprite type tables (full cache)
