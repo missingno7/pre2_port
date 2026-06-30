@@ -72,6 +72,30 @@ def test_native_player_step_fails_loud_on_death():
         native_player_step(st)
 
 
+def test_native_level_state_raises_respawn_transition():
+    # The respawn (4C69's [0x6be4]==1 -> 4F6C) is a MULTI-FRAME transition (the 60-frame death-bounce), so the
+    # per-frame dispatcher SIGNALS it (Pre2RespawnTransition) rather than running it blocking in-loop — running it
+    # blocking made the runner render only the end state (instant respawn, no animation). native_frame_step drives
+    # it, rendering each frame. (Regression guard for "you respawn immediately, before the death animation plays".)
+    from pre2.checkpoints.common import Pre2RespawnTransition
+    from pre2.native.loop import native_level_state
+    st = _state({0x6BE4: 1, 0x6BE5: 0, 0x6BE6: 0})
+    with pytest.raises(Pre2RespawnTransition):
+        native_level_state(st)
+
+
+def test_respawn_handlers_are_per_frame_generators():
+    # native_4f6c (respawn) + native_death_bounce_509d (the 60-frame bounce) MUST stay generators that yield once
+    # per frame, so the runtime renders each frame of the animation. The deep per-frame byte-exactness vs the ASM
+    # 509d loop is proven by pre2/probes/probe_native_respawn_anim.py; this just pins the per-frame SHAPE.
+    import inspect
+
+    from pre2.native.level_state import native_4f6c
+    from pre2.native.loop import native_death_bounce_509d
+    assert inspect.isgeneratorfunction(native_4f6c)
+    assert inspect.isgeneratorfunction(native_death_bounce_509d)
+
+
 def test_native_camera_follow_gated_off():
     # [0x6BD9]!=0 gates the whole camera follow off (564E); it only clears cs:[0x6771] (already 0) -> no change.
     from pre2.native.camera_scroll import native_camera_follow

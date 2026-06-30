@@ -99,32 +99,43 @@ def main(argv=None) -> int:
     screen = pygame.display.set_mode((320 * args.scale, 200 * args.scale))
     pygame.display.set_caption(f"PRE2 — VM-less native gameplay (LEVEL{args.level + 1})")
     clock = pygame.time.Clock()
-    running = True
-    frames = 0
-    while running:
+    state_ref = {"running": True, "frames": 0}
+
+    def pump():                                                      # keep the window responsive (incl. mid-bounce)
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
-                running = False
-        k = pygame.key.get_pressed()
-        apply_input(state,
-                    left=k[pygame.K_LEFT] or k[pygame.K_KP4],
-                    right=k[pygame.K_RIGHT] or k[pygame.K_KP6],
-                    up=k[pygame.K_UP] or k[pygame.K_KP8],
-                    down=k[pygame.K_DOWN] or k[pygame.K_KP2],
-                    fire=k[pygame.K_SPACE])
-        try:
-            planes, page = native_frame_step(state, dos, disp, game_root=gr)
-        except Exception as e:                                       # never crash the window on a gap
-            planes, page = native_render(state, dos, disp, game_root=gr)
+                state_ref["running"] = False
+
+    def present(planes, page):
         rgb = np.asarray(render_planar_rgb_from_planes(planes, page, dos.vga_palette), np.uint8)
         surf = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))     # (200,320,3) -> surface
         screen.blit(pygame.transform.scale(surf, screen.get_size()), (0, 0))
         pygame.display.flip()
         clock.tick(args.fps)
-        frames += 1
-        if frames % 20 == 0:                                         # show the live frame rate
+        state_ref["frames"] += 1
+        if state_ref["frames"] % 20 == 0:                           # show the live frame rate
             pygame.display.set_caption(
                 f"PRE2 — VM-less native gameplay (LEVEL{args.level + 1})  —  {clock.get_fps():.0f} fps")
+
+    while state_ref["running"]:
+        pump()
+        k = pygame.key.get_pressed()
+        apply_input(state,                                          # read input ONCE per game frame (the death
+                    left=k[pygame.K_LEFT] or k[pygame.K_KP4],       #   -bounce that follows ignores it, as in the
+                    right=k[pygame.K_RIGHT] or k[pygame.K_KP6],     #   original — it plays out over its 60 frames)
+                    up=k[pygame.K_UP] or k[pygame.K_KP8],
+                    down=k[pygame.K_DOWN] or k[pygame.K_KP2],
+                    fire=k[pygame.K_SPACE])
+        try:
+            # native_frame_step yields one frame normally, or the whole 60-frame death-bounce + checkpoint frame
+            # during a respawn — so the runner ANIMATES the respawn rather than teleporting to the checkpoint.
+            for planes, page in native_frame_step(state, dos, disp, game_root=gr):
+                present(planes, page)
+                pump()
+                if not state_ref["running"]:
+                    break
+        except Exception:                                           # never crash the window on an unrecovered gap
+            present(*native_render(state, dos, disp, game_root=gr))
     pygame.quit()
     return 0
 

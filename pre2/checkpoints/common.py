@@ -34,6 +34,16 @@ class Pre2HybridGap(RuntimeError):
     """
 
 
+class Pre2RespawnTransition(Pre2HybridGap):
+    """Signal (not a gap): the per-frame gameplay step reached a multi-frame TRANSITION that must be driven
+    outside the single-frame loop — the death-respawn (4C69's [0x6be4]==1 -> 4F6C). The death-bounce plays out
+    60 rendered frames; running it blocking inside ``native_gameplay_frame`` would make the runner render only
+    the end state (instant respawn, no animation). So ``native_level_state`` raises this and the runtime/flow
+    driver drives ``native_4f6c`` as a generator, rendering each frame. Subclasses Pre2HybridGap so existing
+    ``except Pre2HybridGap`` sites still treat it as "not a plain per-frame step" — catch it FIRST where the
+    transition is actually driven."""
+
+
 @dataclass
 class HookVerifyStats:
     verified: int = 0

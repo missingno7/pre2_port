@@ -25,7 +25,7 @@ def native_51df(state) -> None:
     d[_DS + 0x6C9E] = 0; d[_DS + 0x6C9F] = 0                        # [asm 51e9] [0x6c9e] = 0 (word)
 
 
-def native_4f6c(state) -> None:
+def native_4f6c(state):
     """[asm 4F6C] The respawn-to-checkpoint handler (4C69's ``[0x6be4]==1`` target). Plays the death-bounce
     (509d), then — unless a real death is pending (``[0x2879]`` or ``[0x6be5]``) — snapshots the live
     effect-sprite-source + active-flag tables, re-inits the level (5237), drops the player at the checkpoint
@@ -33,8 +33,13 @@ def native_4f6c(state) -> None:
     effect sprites + re-freeing the slots that were dead), and cleans up (51df). Returns with NO level change —
     the gameplay loop continues. The pending-death tail (506c, carry -> main's 0x12f game-over) is not yet here.
 
+    GENERATOR: ``yield``s once per death-bounce frame (60 frames) so the caller renders the whole arc, THEN runs
+    the checkpoint restore (instantaneous — the screen jumps to the checkpoint on the next rendered frame). Drive
+    to completion to apply the respawn (``for _ in native_4f6c(state): render(...)``).
+
     Verified byte-exact end-to-end vs the ASM: pre2/probes/probe_native_respawn.py drives the blocking ASM 4F6C
-    through the timer/retrace machinery and diffs DGROUP at the RET 0x5033 -> 0 diffs (render/timing excluded)."""
+    through the timer/retrace machinery and diffs DGROUP at the RET 0x5033 -> 0 diffs (render/timing excluded);
+    pre2/probes/probe_native_respawn_anim.py additionally diffs EACH bounce frame vs the ASM 509d loop."""
     d = state.data
 
     def rb(o): return d[_DS + (o & 0xFFFF)]
@@ -45,7 +50,7 @@ def native_4f6c(state) -> None:
 
     def ww(o, v): wb(o, v); wb(o + 1, v >> 8)
 
-    native_death_bounce_509d(state)                                 # [asm 4f6c] 509d death-bounce
+    yield from native_death_bounce_509d(state)                      # [asm 4f6c] 509d death-bounce (per-frame)
     if rb(0x2879) != 0 or rb(0x6BE5) != 0:                          # [asm 4f6f-4f80] a real death is pending
         raise Pre2HybridGap("native respawn 4F6C: the pending-death tail (506c, game-over) is not recovered")
 

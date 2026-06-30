@@ -15,7 +15,7 @@ from collections import Counter
 
 from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
 from pre2.bridge.object_tick import LiveWalkerMem
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.checkpoints.common import Pre2HybridGap, Pre2RespawnTransition
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
 from pre2.recovered.object_inject import second_pass_tick
@@ -198,18 +198,18 @@ def native_scroll_script(state) -> None:
 def native_level_state(state) -> None:
     """[asm 0259: 4C69] The per-frame level/death state dispatcher. Idle (mode [0x6be6], respawn [0x6be4], death
     [0x6be5] all 0) it returns no-carry and the loop continues. Armed:
-      * [0x6be4]==1 -> the respawn-to-checkpoint handler ``native_4f6c`` (in-loop, no carry; the boss hit set
-        [0x6be4]=2 via 8295/65b3 and the player step counts it down 2->1->0 via its timers);
+      * [0x6be4]==1 -> the respawn-to-checkpoint handler ``native_4f6c``, raised as a ``Pre2RespawnTransition``:
+        the death-bounce is a 60-frame ANIMATION, so it must be driven OUTSIDE the single-frame loop (by the
+        runtime/flow driver, rendering each frame) — running it blocking here would teleport the player to the
+        checkpoint with no animation. The boss hit set [0x6be4]=2 (8295/65b3); the player step counts it 2->1->0;
       * [0x6be4]!=0 (i.e. ==2) -> idle this frame (4C69 dispatches nothing while the respawn counter is winding);
       * [0x6be5]==1 death (5063) / ==0xff game-over (5034) / [0x6be6] level-end (4F65) -> the carry paths that
         return to main's level change at 0x12f — not yet recovered, so fail loud (the death/game-over demos)."""
-    from pre2.native.level_state import native_4f6c
     rb, _ = readers(state)
     if rb(0x6BE6) != 0:
         raise Pre2HybridGap("native level-state: level-end (4F65 / next-level select, carry -> 0x12f) not recovered")
     if rb(0x6BE4) == 1:
-        native_4f6c(state)                                          # [asm 4f6c] respawn-to-checkpoint (in-loop)
-        return
+        raise Pre2RespawnTransition()                              # [asm 4f6c] respawn — a multi-frame transition
     if rb(0x6BE4) != 0:
         return                                                      # [0x6be4]==2: 4C69 idle (counter winding down)
     if rb(0x6BE5) == 1:
@@ -280,13 +280,17 @@ def native_gameplay_frame(state) -> None:
     # [asm 0270] jmp 0214 — loop back
 
 
-def native_death_bounce_509d(state) -> None:
+def native_death_bounce_509d(state):
     """[asm 509D] The death-bounce animation — the player's death-jump (called first by the respawn 4F6C and the
     death 5063). Sets the player flying (Yvel=+0xF, anim 0x21) drifting toward the screen centre (Xvel=+/-5), then
     runs 0x3C=60 frames of the entity-update SUBSET (581E/6822/6210/60FE/60DF + the 26FA frame-counter tick +
     54AB/3922) while integrating the player ballistically with gravity (NO collision — the corpse arcs up then
-    falls through the level). The render cluster (3668..3721, 44FB) is the renderer's job. Blocking: it plays out
-    60 whole frames in one call, reusing the same recovered leaves as native_gameplay_frame.
+    falls through the level). The render cluster (3668..3721, 44FB) is the renderer's job.
+
+    This is a GENERATOR: it ``yield``s once per bounce frame (at the loop top, mirroring the ASM's 0x50de) so the
+    caller renders each of the 60 frames — the whole arc animates instead of teleporting to the end. The ASM's
+    509d is an inner render-loop within one main-loop iteration; here the runtime/flow-driver pumps the renderer
+    between yields. Drive to completion (``for _ in native_death_bounce_509d(state): ...``) to apply all 60 frames.
 
     Verified: the player's death-bounce TRAJECTORY is byte-exact vs the ASM (timer-driven synthetic invoke — the
     render busy-waits need the full timing machinery, so it's driven through play._advance_demo_frame). The only
@@ -304,6 +308,8 @@ def native_death_bounce_509d(state) -> None:
     centre = ((rw(0x2DE4) + 0xA) << 4) & 0xFFFF                     # [asm 50c0-50cd] (camera cell + 10 tiles) * 16
     _ww(state, 0x4F22, 5 if rw(0x4F1C) < centre else (-5 & 0xFFFF))  # [asm 50cf-50d8] drift toward screen centre
     for _ in range(0x3C):                                           # [asm 50db cx=0x3c] 60 frames
+        yield                                                       # render THIS bounce frame (mirrors the ASM
+        #   loop-top 0x50de: the caller renders the corpse mid-arc, then we advance one frame of physics)
         _ww(state, 0x4F0E, 0xFFFF)                                  # [asm 50df] suppress the normal player render
         apply_ds(state, tick_popup_ring(rw))                        # [asm 50e5] 581E
         native_object_system_step(state)                           # [asm 50e8] 6822

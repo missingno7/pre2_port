@@ -56,7 +56,10 @@ def _verify(name, entry, ret_ip, native_fn, totals, cap=3000):
     if cap_d["post"] is None:
         print(f"  {name}: FAIL (RET {ret_ip:#06x} not reached in {i} chunks)"); totals["fail"] += 1; return
     post = cap_d["post"]
-    st = NativeGameState(bytearray(pre)); native_fn(st); nd = st.data
+    st = NativeGameState(bytearray(pre))
+    for _ in native_fn(st):                                         # native_4f6c is now a per-frame generator;
+        pass                                                       #   drive all 60 bounce frames + the restore
+    nd = st.data
     excl = set(_EXCL) | {0x2DEC, 0x2DED}
     diffs = [o for o in range(0x10000)
              if o not in excl and ((nd[DS + o] ^ post[DS + o]) & (0x9F if o in _SLOT5_PAGE else 0xFF))]

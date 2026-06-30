@@ -30,9 +30,10 @@ from dos_re.interrupts import deliver_scancode
 from pre2.runtime import load_pre2_snapshot
 from pre2.native.state import NativeGameState
 from pre2.native.loop import native_gameplay_frame
+from pre2.native.level_state import native_4f6c
 from pre2.native.player import RENDER_OFFSETS
 from pre2.recovered.input_decode import _KBD_SOURCES
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.checkpoints.common import Pre2HybridGap, Pre2RespawnTransition
 import play
 
 DS = 0x1A0F
@@ -78,7 +79,7 @@ def _run(demo, lim, totals):
     rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
                             game_root=str(ROOT / "assets"), native_replacements=True)
     cpu = rt.cpu; cpu.trace_enabled = False; mem = cpu.mem
-    st = {"calls": 0, "div": 0, "err": 0, "gap": 0}
+    st = {"calls": 0, "div": 0, "err": 0, "gap": 0, "respawn": 0}
     pend = {"seed": None, "kbd": None}
     orig = cpu.step
 
@@ -96,6 +97,14 @@ def _run(demo, lim, totals):
                     state.data[DS_BASE + o] = v
                 try:
                     native_gameplay_frame(state)
+                except Pre2RespawnTransition:                            # the respawn is a multi-frame TRANSITION
+                    try:                                                #   (4C69 [0x6be4]==1 -> 4F6C): drive it to
+                        for _ in native_4f6c(state):                    #   completion so the whole-loop verify still
+                            pass                                        #   diffs the respawn frame's endpoint vs the
+                    except Pre2HybridGap:                               #   VM (its per-frame arc is proven by
+                        st["gap"] += 1                                  #   probe_native_respawn_anim). A pending
+                        pend["seed"] = None; pend["kbd"] = None; orig(); return   # death -> game-over carry = gap.
+                    st["respawn"] += 1
                 except Pre2HybridGap:                                     # armed unrecovered event (death/scroll-
                     st["gap"] += 1                                        # script/level-state) — flagged, not a div
                     pend["seed"] = None; pend["kbd"] = None; orig(); return
@@ -126,9 +135,9 @@ def _run(demo, lim, totals):
                                  sound_blaster=None, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
         frame += 1
     print(f"  {demo.split('/')[-1]:44s} frame@{GAP_SITE:#06x}: "
-          f"calls={st['calls']} DIV={st['div']} gap={st['gap']} err={st['err']}")
+          f"calls={st['calls']} DIV={st['div']} respawn={st['respawn']} gap={st['gap']} err={st['err']}")
     totals["calls"] += st["calls"]; totals["div"] += st["div"]
-    totals["err"] += st["err"]; totals["gap"] += st["gap"]
+    totals["err"] += st["err"]; totals["gap"] += st["gap"]; totals["respawn"] += st["respawn"]
 
 
 def main():
@@ -138,13 +147,14 @@ def main():
     # prefix BEFORE the player step runs and unrelated to it; tracked separately. Add them back once that lands.
     demos = [("artifacts/demo_pre2_20260629_141422", 900),
              ("artifacts/demo_pre2_full_gorilla_20260628_203423", 900)]
-    totals = {"calls": 0, "div": 0, "err": 0, "gap": 0}
+    totals = {"calls": 0, "div": 0, "err": 0, "gap": 0, "respawn": 0}
     for d, lim in demos:
         _run(d, lim, totals)
     ok = totals["div"] == 0 and totals["err"] == 0 and totals["calls"] > 0
     print(f"\nnative_gameplay_frame (WHOLE loop 021A..026D) vs VM: calls={totals['calls']} "
-          f"DIV={totals['div']} gap={totals['gap']} err={totals['err']}")
-    print(f"  (gap = frames where an armed event — death/respawn/level-state/scroll-script — correctly fail-louds)")
+          f"DIV={totals['div']} respawn={totals['respawn']} gap={totals['gap']} err={totals['err']}")
+    print(f"  (respawn = death-respawn transitions driven to completion + endpoint-verified here, per-frame-verified")
+    print(f"   by probe_native_respawn_anim; gap = armed event — level-end/death/game-over — correctly fail-louds)")
     print("native_gameplay_frame:", "PASS (gameplay DGROUP byte-exact over the whole loop)" if ok else "FAIL")
     return 0 if ok else 1
 
