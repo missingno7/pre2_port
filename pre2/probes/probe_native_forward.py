@@ -33,11 +33,12 @@ DS = 0x1A0F
 # the demo-RLE playback cursor + scratch (DS:0x3F {byte,count}) is input plumbing the standalone runner never uses
 # (it reads live input), so exclude it from the forward gameplay compare.
 _DEMO_RLE = set(range(0x3C, 0x60))
-# the render slot array (base 0x4F0A, stride 0x12): slot 1 is the player, slots >=2 are render records the ASM
-# render maintains (8922 project_particles + 26FA object_render fill [+4] sprite-id / [+5] page / [+0xc] and FREE
-# [+4]=0xFFFF on expiry). native skips those render routines, so these slots go stale in the forward run — this
-# is the SEPARATE native-render-state gap (the missing effect sprites, e.g. the spider's web). Excluded here so
-# the GAMEPLAY-logic forward verify can run past it (slot 1 = player and all entity DATA stay fully checked).
+# the render slot array (base 0x4F0A, stride 0x12): slot 1 is the player, slots >=2 are render records.
+# native NOW maintains these (8922 project_particles + the 26FA record-mutation half are wired into
+# native_gameplay_frame), so with this exclusion the WHOLE gorilla demo runs forward clean = GAMEPLAY reproduced.
+# A pure-RENDER residual still diverges ~frame 141 without the exclusion (a remaining render producer: 4B8E
+# particles_draw / the terrain 0x5570 compaction) — it never cascades into gameplay (the 318-frame run proves it),
+# so it is excluded here to keep this the clean gameplay-completeness metric. Slot 1 + all entity DATA stay checked.
 _SLOT_BASE, _SLOT_STRIDE = 0x4F0A, 0x12
 _NSLOTS = max((p - (_SLOT_BASE + 5)) // _SLOT_STRIDE for p in _SLOT5_PAGE) + 1
 _RENDER_SLOTS = {_SLOT_BASE + k * _SLOT_STRIDE + f for k in range(2, _NSLOTS) for f in (4, 5, 0xC, 0xD)}

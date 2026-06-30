@@ -18,7 +18,10 @@ from pre2.bridge.object_tick import LiveWalkerMem
 from pre2.checkpoints.common import Pre2HybridGap, Pre2RespawnTransition
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
+from pre2.bridge import object_render as _obj_render
 from pre2.recovered.object_inject import second_pass_tick
+from pre2.recovered.object_particles import project_particles
+from pre2.recovered.object_render import plan_record_update, plan_sprite
 from pre2.recovered.object_spawn import Pre2SpawnGap, camera_engine, tick_mode9_boss
 from pre2.recovered.object_tick import object_tick
 from pre2.recovered.terrain_entities import tick_terrain_entities
@@ -60,7 +63,7 @@ MAIN_LOOP_SPINE = [
                        "death/pause/cheat/active-momentum fail loud (dormant in play)"),
     (0x8295, "native", "native_player_interaction: player<->world pass (loop1 stomp/hurt/die + loop2 ~25 "
                        "pickups), wired into the native frame"),
-    (0x8922, "render", "project_particles (effect-sprite projector -> render slots)"),
+    (0x8922, "native", "project_particles: effect source-list [0x8F1D] animation + render-slot [0x52E8] projection"),
     (0x52FE, "native", "native_trigger_scan: position-trigger (player tile coords vs [0x8367] table) -> "
                        "teleport 5326; byte-exact no-op when unarmed ([0x6BE1]==0, always in demos); armed "
                        "scan/teleport fails loud (unwitnessed)"),
@@ -74,7 +77,8 @@ MAIN_LOOP_SPINE = [
     (0x35A1, "render", "dirty-grid redraw -> faithful renderer"),
     (0x3A27, "render", "scroll-copy window -> faithful renderer"),
     (0x4B8E, "render", "particles_draw"),
-    (0x26FA, "render", "moving-sprite renderer (object_render) -> faithful renderer"),
+    (0x26FA, "render", "moving-sprite renderer: pixels -> faithful renderer; STATE half (life/flags record "
+     "mutation + [0x6bd5] tick) extracted into native_gameplay_frame (native_object_render_state)"),
     (0x3721, "render", "foreground-tile pass -> faithful renderer"),
     (0x54AB, "native", "native_firefly_step (swarm sim + RNG)"),
     (0x3922, "native", "native_scroll_script (counter inc; scripted camera fails loud)"),
@@ -261,10 +265,7 @@ def native_gameplay_frame(state) -> None:
     _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 022C] 4907 (byte-level)
     native_player_step(state)                                       # [asm 022F] 5850 (whole player update)
     native_player_interaction(state)                                # [asm 0232] 8295 (player<->world pass)
-    # [asm 0235] 8922 project_particles -> effect SOURCE-list [0x8F1D] animation + render slots [0x52E8]. It is a
-    # gameplay-COUPLED state producer (its slot writes feed back into the next frame), so it belongs in the native
-    # render-state pass being built (see pre2-native-render-state memory) — wiring it ALONE regresses the forward
-    # verify because the OTHER render-cluster state producers (26FA record-update, etc.) are still stale. TODO.
+    apply_ds(state, project_particles(rb, rw))                      # [asm 0235] 8922 effect-sprite projector
     native_trigger_scan(state)                                      # [asm 0238] 52FE (position-trigger; no-op unarmed)
     native_proximity_trigger(state)                                 # [asm 023B] 53F6 (proximity trigger; no-op unfired)
     native_camera_follow(state)                                     # [asm 023E] 5643 (H+V camera follow/scroll)
@@ -273,6 +274,7 @@ def native_gameplay_frame(state) -> None:
     # the animation phase reads ([0x6bd5]&1/&3/&7/&0xf) — in 11 gameplay calls incl. the player/object/particle
     # passes. The prefix above already read it as N (frame start); the firefly/scroll/respawn/shake below read N+1.
     _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                    # [asm 024D: 2708] inc word [0x6bd5]
+    native_object_render_state(state)                               # [asm 024D: 26FA] record mutation (life/flags)
     native_firefly_step(state)                                      # [asm 0253] 54AB
     native_scroll_script(state)                                     # [asm 0256] 3922
     native_level_state(state)                                       # [asm 0259] 4C69 (carry -> level change @ 0x12f)
@@ -281,6 +283,22 @@ def native_gameplay_frame(state) -> None:
     native_special_event(state)                                     # [asm 026A] 67D7
     native_camera_shake(state)                                      # [asm 026D] 4C30
     # [asm 0270] jmp 0214 — loop back
+
+
+def native_object_render_state(state) -> None:
+    """[asm 26FA state half] The moving-sprite renderer's RECORD MUTATION: for every active slot (sprite_id
+    [+4] != 0xFFFF) in the list 0x4F0A..0x5720 it decrements the life countdown [+0x11] (saturating) and updates
+    the drawn flag [+5]. This is the GAMEPLAY-COUPLED half of object_render (the pixel half is native_render's):
+    skipping it left the sprite lives frozen, which cascades into the effect-pool free + the combat effect-spawn
+    (the forward-verify divergence). [0x6bd5] was already incremented by the caller (the extracted 26FA tick), so
+    read the camera with frame_pre_inc=False. Composes the SAME recovered leaves the object_render checkpoint
+    verifies (plan_sprite -> drawn, plan_record_update, write_record)."""
+    cam = _obj_render.read_camera(state, frame_pre_inc=False)
+    for off, spr in _obj_render.read_active_list(state):
+        if spr.sprite_id == 0xFFFF:                                 # [asm 2713] empty slot
+            continue
+        draw = plan_sprite(spr, _obj_render.read_attr(state, spr.sprite_id), cam)   # the draw/visibility decision
+        _obj_render.write_record(state, off, plan_record_update(spr, draw is not None))  # [asm 2732/2742/28B6]
 
 
 def native_death_bounce_509d(state):
