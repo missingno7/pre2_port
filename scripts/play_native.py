@@ -130,12 +130,19 @@ def main(argv=None) -> int:
             # native_frame_step yields one frame normally, or the whole 60-frame death-bounce + checkpoint frame
             # during a respawn — so the runner ANIMATES the respawn rather than teleporting to the checkpoint.
             for planes, page in native_frame_step(state, dos, disp, game_root=gr):
+                state_ref["last"] = (planes, page)
                 present(planes, page)
                 pump()
                 if not state_ref["running"]:
                     break
-        except Exception:                                           # never crash the window on an unrecovered gap
-            present(*native_render(state, dos, disp, game_root=gr))
+        except Exception as e:                                      # never crash the window on an unrecovered gap
+            if state_ref.get("warned") != str(e):                   # (e.g. a render leaf not yet recovered for
+                print(f"  render/gameplay gap (holding last frame): {type(e).__name__}: {str(e)[:80]}")
+                state_ref["warned"] = str(e)                        #  this level — report once, hold last frame,
+            if state_ref.get("last"):                               #  do NOT re-render: that would re-raise)
+                present(*state_ref["last"])
+            else:
+                clock.tick(args.fps)                                # nothing rendered yet — just pace + keep polling
     pygame.quit()
     return 0
 

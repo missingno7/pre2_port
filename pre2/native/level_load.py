@@ -269,16 +269,22 @@ def native_level_load_shared(state, *, game_root: str) -> None:
     fills the cache half the local pass leaves empty. ``[0x2ddc]`` is the bank base the shared pass addresses."""
     from pre2.bridge.sprites import compute_shared_slots, write_slots
     d = state.data
-    # [asm 3fb1-3fb8] load UNION OVER the (already-consumed) level-data seg [0x2dda] — the local cache + dgroup
-    # tables are extracted by now — so the 4389 segment arithmetic ((code-0x100)*8 + base) addresses a SMALL base
-    # that doesn't wrap, exactly as the original does (a large bump segment wraps the high codes -> garbage).
-    saved = d[_DS + 0x2875] | (d[_DS + 0x2875 + 1] << 8)
+    # [asm 3fb1-3fb8] load UNION at a SMALL base so the 4389 segment arithmetic ((code-0x100)*8 + base) does not
+    # wrap (a large bump segment wraps the high codes -> garbage). The original loads it over the level-data seg
+    # [0x2dda] (which it then reloads); we do the same BUT [0x2dda]:0 is the tilemap GRID the standalone renderer
+    # reads each frame (read_foreground_state / render_frame), so we SAVE it, load UNION there only to demux into
+    # the cache (UNION isn't read after the cache is filled), then RESTORE the grid. Otherwise the grid becomes
+    # UNION bytes -> scattered tiles + garbage tile types.
+    saved_bump = d[_DS + 0x2875] | (d[_DS + 0x2875 + 1] << 8)
     lvl_seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDA + 1] << 8)
+    lvl_base = (lvl_seg << 4) & 0xFFFFF
+    grid = bytes(d[lvl_base:lvl_base + 0x12000])                    # UNION decompresses to ~0x11000; save + margin
     d[_DS + 0x2875] = lvl_seg & 0xFF; d[_DS + 0x2875 + 1] = (lvl_seg >> 8) & 0xFF
     union_seg = load_sqz_by_dx(state, 0x0A25, game_root=game_root)  # [asm 0699->107b] decompress UNION.SQZ
-    d[_DS + 0x2875] = saved & 0xFF; d[_DS + 0x2875 + 1] = (saved >> 8) & 0xFF
+    d[_DS + 0x2875] = saved_bump & 0xFF; d[_DS + 0x2875 + 1] = (saved_bump >> 8) & 0xFF
     d[_DS + 0x2DDC] = union_seg & 0xFF; d[_DS + 0x2DDC + 1] = (union_seg >> 8) & 0xFF
     write_slots(state, compute_shared_slots(state, union_seg))      # [asm 4389] demux code>=0x100 into the cache
+    d[lvl_base:lvl_base + 0x12000] = grid                          # restore the level-data grid UNION overwrote
 
 
 def native_player_init(state) -> None:
