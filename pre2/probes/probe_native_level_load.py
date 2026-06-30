@@ -26,8 +26,7 @@ from dos_re.input_demo import InputDemoPlayback
 from pre2.runtime import load_pre2_snapshot
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.native.state import NativeGameState, DATA_SEG
-from pre2.native.level_load import (native_level_load_dgroup, native_level_load_objects,
-                                    native_level_load_planar)
+from pre2.native.level_load import native_level_load
 
 _DS = DATA_SEG << 4
 _LEVEL = 5                      # LEVEL6.SQZ — different from the snapshot's level, so the static tables are
@@ -68,20 +67,23 @@ def main() -> int:
     post = _run_3ed6(rt, _LEVEL)                              # the ASM oracle
 
     state = NativeGameState(bytearray(pre))
-    native_level_load_dgroup(state, _LEVEL, game_root=str(ROOT / "assets"))
-    native_level_load_objects(state)
-    native_level_load_planar(state)
+    native_level_load(state, _LEVEL, game_root=str(ROOT / "assets"))
     got = state.data
 
-    # planar local pass: every slot whose index code < 0x100 must demux byte-exact into the 4 EGA planes
+    # planar cache: every slot must demux byte-exact into the 4 EGA planes — local (index code < 0x100) AND
+    # shared (code >= 0x100, from the UNION.SQZ union bank), then classify produces the type tables over both.
     codes = [got[_DS + 0x25CE + i * 2] | (got[_DS + 0x25CE + i * 2 + 1] << 8) for i in range(0x100)]
     cache = 0x5E80
-    planar_local_ok = all(
-        got[EGA_APERTURE + p * EGA_PLANE_STRIDE + cache + slot * 0x20 + o]
-        == post[EGA_APERTURE + p * EGA_PLANE_STRIDE + cache + slot * 0x20 + o]
-        for slot, code in enumerate(codes) if code < 0x100
-        for p in range(4) for o in range(0x20))
+
+    def slot_ok(slot):
+        return all(got[EGA_APERTURE + p * EGA_PLANE_STRIDE + cache + slot * 0x20 + o]
+                   == post[EGA_APERTURE + p * EGA_PLANE_STRIDE + cache + slot * 0x20 + o]
+                   for p in range(4) for o in range(0x20))
+
+    planar_local_ok = all(slot_ok(s) for s, c in enumerate(codes) if c < 0x100)
+    planar_shared_ok = all(slot_ok(s) for s, c in enumerate(codes) if c >= 0x100)
     n_local = sum(1 for c in codes if c < 0x100)
+    n_shared = sum(1 for c in codes if c >= 0x100)
 
     def region_ok(lo, hi):
         return all(got[_DS + o] == post[_DS + o] for o in range(lo, hi))
@@ -96,14 +98,15 @@ def main() -> int:
         "object+effect lists [0x8489]": region_ok(0x8489, 0x9203),
         "double-buffer dup [0x9203]": region_ok(0x9203, 0xA2A8),
         f"planar tile cache (local x{n_local})": planar_local_ok,
+        f"planar shared cache (UNION x{n_shared})": planar_shared_ok,
+        "classify type tables [0x4df8]": region_ok(0x4DF8, 0x4EF8),
     }
     for name, good in checks.items():
         print(f"  {'OK  ' if good else 'FAIL'} {name}")
-    # not-yet-recovered halves (reported for scope, not asserted): classify_sprites (4232) -> [0x2df8/0x4df8],
-    # the 42af tile tables -> [0x6688], the 3ead/41ca high-memory writes, and the planar tile blit.
-    classify = sum(1 for o in range(0x2DF8, 0x3A58) if got[_DS + o] != post[_DS + o])
+    # still-deferred halves (reported for scope, not asserted): the 42af tile tables -> [0x6688], the 3ead/41ca
+    # high-memory writes, and the 0x9dc0 parallax blit.
     tiletab = sum(1 for o in range(0x6688, 0x6A88) if got[_DS + o] != post[_DS + o])
-    print(f"  (deferred: classify-sprites region {classify}B, 42af tile-tables {tiletab}B)")
+    print(f"  (deferred: 42af tile-tables {tiletab}B)")
     ok = all(checks.values())
     print("native level-load (DGROUP + object tables):", "PASS (byte-exact vs ASM)" if ok else "FAIL")
     return 0 if ok else 1

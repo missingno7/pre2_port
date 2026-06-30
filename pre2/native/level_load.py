@@ -261,6 +261,26 @@ def native_level_load_classify(state) -> None:
     d[_DS + 0x2DF8:_DS + 0x2DF8 + n] = res.masks[:n]
 
 
+def native_level_load_shared(state, *, game_root: str) -> None:
+    """The shared/union sprite-bank pass [asm 4389]: the global ``UNION.SQZ`` bank (resource 7, filename at
+    DGROUP 0x0a25), decompressed by the recovered SQZ codec (``load_sqz_by_dx`` — VERIFIED: the VM's 0x107b UNION
+    output is byte-identical), then every index-table sprite with code >= 0x100 demuxed into the planar cache via
+    the recovered ``compute_shared_slots``. UNION is GLOBAL (same bank for every level), so this just loads it +
+    fills the cache half the local pass leaves empty. ``[0x2ddc]`` is the bank base the shared pass addresses."""
+    from pre2.bridge.sprites import compute_shared_slots, write_slots
+    d = state.data
+    # [asm 3fb1-3fb8] load UNION OVER the (already-consumed) level-data seg [0x2dda] — the local cache + dgroup
+    # tables are extracted by now — so the 4389 segment arithmetic ((code-0x100)*8 + base) addresses a SMALL base
+    # that doesn't wrap, exactly as the original does (a large bump segment wraps the high codes -> garbage).
+    saved = d[_DS + 0x2875] | (d[_DS + 0x2875 + 1] << 8)
+    lvl_seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDA + 1] << 8)
+    d[_DS + 0x2875] = lvl_seg & 0xFF; d[_DS + 0x2875 + 1] = (lvl_seg >> 8) & 0xFF
+    union_seg = load_sqz_by_dx(state, 0x0A25, game_root=game_root)  # [asm 0699->107b] decompress UNION.SQZ
+    d[_DS + 0x2875] = saved & 0xFF; d[_DS + 0x2875 + 1] = (saved >> 8) & 0xFF
+    d[_DS + 0x2DDC] = union_seg & 0xFF; d[_DS + 0x2DDC + 1] = (union_seg >> 8) & 0xFF
+    write_slots(state, compute_shared_slots(state, union_seg))      # [asm 4389] demux code>=0x100 into the cache
+
+
 def native_player_init(state) -> None:
     """55fc: (re)initialise the object pool + the player for level start. Clears `[0x4f1c]` (0x40b words), marks
     0x74 object slots free (`[di+4]=0xFFFF`, `[di+0x11]=0`, stride 0x12 from `[0x4f0a]`), then sets the player
@@ -280,12 +300,16 @@ def native_level_load(state, level: int, *, game_root: str) -> None:
     recovered halves of ``1030:3ed6``:
       * ``native_level_load_dgroup``  — prologue scalars, SQZ load, tile-index, property memcpy (byte-exact);
       * ``native_level_load_objects`` — entity/effect sprite-bank rebases, RNG decor, per-level reads, dup (byte-exact);
-      * ``native_level_load_planar``  — the LOCAL planar tile cache (byte-exact).
+      * ``native_level_load_planar``  — the LOCAL planar tile cache (``code < 0x100``, byte-exact);
+      * ``native_level_load_shared``  — the SHARED/union bank (``code >= 0x100`` from UNION.SQZ, byte-exact);
+      * ``native_level_load_classify``— the tile/sprite type tables (``4232``, byte-exact over the full cache).
 
-    Still TODO (do not yet match the ASM): the shared sprite bank (``4389`` + its ``0x492`` decompressor) and its
-    dependent ``classify_sprites`` (``native_level_load_classify``, which needs the full cache); the ``42af`` tile
-    lookup tables ``[0x6688]``; the ``3ead`` level-data self-patch + ``41ca`` trigger-sprite build (high memory);
-    and the ``0x9dc0`` parallax-background planar blit. Tracked in [[pre2-level-init-island]]."""
+    All verified byte-exact vs the ASM against a clean-VRAM 3ed6 witness (LOCAL 173/173, SHARED 83/83, classify
+    0 diff). Still TODO: the ``42af`` tile lookup tables ``[0x6688]``, the ``3ead`` self-patch + ``41ca``
+    trigger-sprite build, and the ``0x9dc0`` parallax-background blit (``native_level_load_background``, which
+    still needs its source-layout fix). Tracked in [[pre2-level-init-island]]."""
     native_level_load_dgroup(state, level, game_root=game_root)
     native_level_load_objects(state)
-    native_level_load_planar(state)
+    native_level_load_planar(state)                                 # LOCAL tile cache (code < 0x100)
+    native_level_load_shared(state, game_root=game_root)            # SHARED/union bank (code >= 0x100), UNION.SQZ
+    native_level_load_classify(state)                              # 4232: tile/sprite type tables (full cache)
