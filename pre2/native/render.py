@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from dos_re.dos import _dac8
 
+from pre2.bridge.foreground_tiles import read_foreground_state
 from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.bridge.gameplay_effects import capture_gameplay_effects
+from pre2.bridge.particles import read_particles
 
 _DS = 0x1A0F << 4
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
@@ -60,12 +62,19 @@ def native_render(state, dos, display_page: int, *, game_root: str,
                   particle_capture=None, foreground_capture=None):
     """Render one gameplay frame from ``state`` (a NativeGameState). ``dos`` carries the VGA palette + registers;
     ``display_page`` is the on-screen page (``ega_display_start``). ``particle_capture``/``foreground_capture``
-    are the mid-frame particle/foreground overlay captures (None -> draw the core frame + fireflies only, which
-    is correct when those overlays are empty/not yet captured). Returns ``(planes, page)`` — four EGA plane
-    buffers + the committed page — exactly what the faithful presentation path consumes.
+    are the mid-frame overlay captures; when not supplied (the standalone path) they are read straight from the
+    game state here, since both the FOREGROUND tile layer (3721 — tiles drawn IN FRONT of the player) and the
+    one-shot point PARTICLES (4b8e) are reconstructable from state native maintains (render slots, tilemap, camera,
+    the particle list). Without this the standalone runner drew only the core frame + fireflies, so the front-tile
+    layer was missing. Returns ``(planes, page)`` — four EGA plane buffers + the committed page.
 
     Mirrors the faithful renderer's commit-boundary capture (bridge/faithful_session.py), but sourced from
     native game state instead of the VM. Raises FaithfulVisualGap for non-gameplay scenes (no silent fallback)."""
+    if foreground_capture is None:
+        foreground_capture = read_foreground_state(state)          # [3721] the front tile layer
+    if particle_capture is None:
+        pf = read_particles(state)                                 # [4b8e] one-shot point particles
+        particle_capture = pf if pf.particles else None
     fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
     gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx)
     return render_game_visual_state(gvs)
