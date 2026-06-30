@@ -7,7 +7,7 @@ in the loop. Your keyboard drives it; ``native_render`` draws it.
 
     python scripts/play_native.py                 # play LEVEL3
     python scripts/play_native.py --level 1        # internal level index (0-based; 1 -> LEVEL2)
-    python scripts/play_native.py --fps 35         # cap the frame rate (game tick is 70Hz; lower = slower)
+    python scripts/play_native.py --fps 30         # raise/lower the game-tick rate (default ~24Hz)
 
 Controls: arrow keys / numpad = move, SPACE = fire/jump, ESC = quit. The title bar shows the live FPS.
 
@@ -18,8 +18,11 @@ EXE-loaded asset state (the shared sprite bank etc. that ``native_level_load`` s
 
 KNOWN ROUGH EDGES (standalone-runtime gaps, not gameplay): the faithful renderer was built + verified OVER THE VM,
 where the ASM render cluster maintains the display-page / smooth-scroll render state each frame; the VM-less
-gameplay step does not maintain that render state, so tiles can corrupt once the camera scrolls. Pacing is capped
-to ``--fps`` (default = the 70Hz game tick).
+gameplay step does not maintain that render state, so tiles can corrupt once the camera scrolls. The game's logic
+tick is ~24Hz (the main loop waits 3 VGA retraces per iteration; 70Hz is only the display refresh the menu scroll
+rides), so ``--fps`` defaults to ~24. And it currently bootstraps the EXE-loaded assets from a fixed snapshot
+(LEVEL3), so a *different* ``--level`` shows that snapshot's palette + shared tiles, not the requested level's —
+the proper fix is the cold-boot-from-files (#10), which would load each level's own assets natively.
 """
 from __future__ import annotations
 
@@ -44,7 +47,8 @@ def main(argv=None) -> int:
     ap.add_argument("--level", type=int, default=2, help="internal level index (0-based; 2 -> LEVEL3)")
     ap.add_argument("--snapshot", default=_DEFAULT_SNAPSHOT,
                     help="demo DIR whose memory snapshot bootstraps the EXE-loaded assets (NOT replayed)")
-    ap.add_argument("--fps", type=int, default=70, help="frame-rate cap (the game tick is 70Hz; lower runs slower)")
+    ap.add_argument("--fps", type=int, default=24,
+                    help="game-tick rate cap; default ~24Hz (the main loop waits 3 VGA retraces). 70 = retrace")
     ap.add_argument("--scale", type=int, default=2)
     args = ap.parse_args(argv)
 
@@ -74,6 +78,14 @@ def main(argv=None) -> int:
 
     dos = rt.dos
     disp = rt.program.memory.ega_display_start
+
+    snap_level = cpu.mem.data[DS + 0x2D8A]
+    if args.level != snap_level:                                     # the snapshot only carries ONE level's assets
+        print(f"  WARNING: --level {args.level} != the snapshot's bootstrap level {snap_level}. native_level_init "
+              f"reloads the per-level LOCAL tiles, but the EXE-loaded palette + SHARED tile bank stay "
+              f"LEVEL{snap_level + 1}'s (they aren't in this snapshot) — so colours + some tiles will be wrong. "
+              f"Cold-boot-from-files (#10) is the real fix; for now use --level {snap_level}, or a snapshot "
+              f"recorded on LEVEL{args.level + 1}.")
 
     # --- seed a NativeGameState via the faithful VM-less level-init (load + re-init + player + centred camera,
     #     every leaf byte-exact vs the ASM), VM-less from here on ---
