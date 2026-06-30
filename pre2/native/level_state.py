@@ -31,7 +31,10 @@ def native_4f6c(state) -> None:
     effect-sprite-source + active-flag tables, re-inits the level (5237), drops the player at the checkpoint
     ``[0x6bad]``/``[0x6baf]``, re-inits the camera (3af2), restores the snapshot (keeping the re-init's transient
     effect sprites + re-freeing the slots that were dead), and cleans up (51df). Returns with NO level change —
-    the gameplay loop continues. The pending-death tail (506c, carry -> main's 0x12f game-over) is not yet here."""
+    the gameplay loop continues. The pending-death tail (506c, carry -> main's 0x12f game-over) is not yet here.
+
+    Verified byte-exact end-to-end vs the ASM: pre2/probes/probe_native_respawn.py drives the blocking ASM 4F6C
+    through the timer/retrace machinery and diffs DGROUP at the RET 0x5033 -> 0 diffs (render/timing excluded)."""
     d = state.data
 
     def rb(o): return d[_DS + (o & 0xFFFF)]
