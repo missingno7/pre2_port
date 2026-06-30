@@ -42,7 +42,15 @@ _DEMO_RLE = set(range(0x3C, 0x60))
 _SLOT_BASE, _SLOT_STRIDE = 0x4F0A, 0x12
 _NSLOTS = max((p - (_SLOT_BASE + 5)) // _SLOT_STRIDE for p in _SLOT5_PAGE) + 1
 _RENDER_SLOTS = {_SLOT_BASE + k * _SLOT_STRIDE + f for k in range(2, _NSLOTS) for f in (4, 5, 0xC, 0xD)}
-_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS
+# the HUD (45B8, render — native skips it) FORMATS its DGROUP layout buffers each frame: the 6-digit score string
+# [0x6F52], the BONUS-letter table [0x6F86], etc. native never writes them, so they go stale in the forward run
+# (the score VALUE is gameplay + stays checked; only the formatted display band is excluded).
+_HUD = set(range(0x6F4E, 0x6FA0))
+# the previous-camera cells [0x2DE0]/[0x2DE2] are render scroll state (the runner's native_sync_render_state +
+# native_render maintain them; native_gameplay_frame does not). _EXCL already covers the horizontal [0x2DE0];
+# add the vertical [0x2DE2] for levels that scroll vertically (the gorilla demo doesn't, so it was never needed).
+_SCROLL_Y = {0x2DE2, 0x2DE3}
+_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y
 
 
 def _run(demo, lim):
