@@ -45,7 +45,7 @@ def main(argv=None) -> int:
     from pre2.native.state import NativeGameState
     from pre2.native.render import native_render
     from pre2.native.runtime import native_frame_step
-    from pre2.native.level_load import native_level_load, native_player_init
+    from pre2.native.level_init import native_level_init
     from pre2.native.input import apply_input
     from sdl_view import render_planar_rgb_from_planes
     import play
@@ -64,14 +64,12 @@ def main(argv=None) -> int:
     dos = rt.dos
     disp = rt.program.memory.ega_display_start
 
-    # --- seed a NativeGameState at the level start, VM-less from here on ---
+    # --- seed a NativeGameState via the faithful VM-less level-init (load + re-init + player + centred camera,
+    #     every leaf byte-exact vs the ASM), VM-less from here on ---
     state = NativeGameState(bytearray(cpu.mem.data))
-    native_level_load(state, args.level, game_root=gr)
-    native_player_init(state)
+    state.data[DS + 0x2D8A] = args.level                            # select the level
+    native_level_init(state, game_root=gr)
     state.data[DS + 0x27F4:DS + 0x27F4 + 0x90] = b"\x00" * 0x90      # clear residual input
-    for off, val in ((0x2DE0, 0), (0x2DE4, 0), (0x2DDC, 0), (0x2DE2, 34), (0x2DE6, 34), (0x2DDE, 34)):
-        _ww(state.data, off, val)                                    # camera at the player's start
-    state.data[DS + 0x6BC4] = 0
 
     print("Ready — arrow keys / numpad = move, SPACE = fire/jump, ESC = quit. (VM-less native gameplay)")
     pygame.init()
