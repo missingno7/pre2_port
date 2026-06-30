@@ -14,6 +14,27 @@ from __future__ import annotations
 from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.bridge.gameplay_effects import capture_gameplay_effects
 
+_DS = 0x1A0F << 4
+_RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
+
+
+def native_sync_render_state(state) -> None:
+    """Maintain the render-ONLY scroll state the VM-less gameplay step leaves stale.
+
+    The faithful renderer was built over the VM, where the ASM render cluster (35A1/3A27) re-derives the
+    tile-ring indices [0x2DE8]/[0x2DEA] (= camera_x % 0x14 / camera_y % 0x0C) and the previous-camera cells
+    [0x2DE0]/[0x2DE2] from the camera every frame. ``native_camera_follow`` advances the camera ([0x2DE4]/
+    [0x2DE6]) but not these render mirrors, so a standalone runner must re-derive them here — otherwise the
+    renderer reads a stale ring index and the tiles corrupt the moment the camera scrolls. (Render-only, so it
+    lives outside ``native_gameplay_frame`` and never perturbs the byte-exact gameplay verify.)"""
+    d = state.data
+    cam_x = d[_DS + 0x2DE4] | (d[_DS + 0x2DE5] << 8)
+    cam_y = d[_DS + 0x2DE6] | (d[_DS + 0x2DE7] << 8)
+    for off, val in ((0x2DE8, cam_x % _RING_COLS), (0x2DEA, cam_y % _RING_ROWS),
+                     (0x2DE0, cam_x), (0x2DE2, cam_y)):
+        d[_DS + off] = val & 0xFF
+        d[_DS + off + 1] = (val >> 8) & 0xFF
+
 
 def native_render(state, dos, display_page: int, *, game_root: str,
                   particle_capture=None, foreground_capture=None):

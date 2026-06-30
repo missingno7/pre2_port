@@ -1,17 +1,25 @@
 """Play a Prehistorik 2 level with the VM-LESS native core.
 
-This is the standalone gameplay runner: it seeds a NativeGameState from the game's assets (via the recovered
-``native_level_load`` over a snapshot base for the surrounding assets/palette), drops the player at the level
-start, and then runs the *recovered* gameplay every frame — player FSM, object system, camera follow — with NO
-emulator in the loop. Your keyboard drives it; ``native_render`` draws it.
+The standalone gameplay runner: it bootstraps the EXE-loaded shared assets ONCE from a memory SNAPSHOT (cold
+boot-from-files isn't recovered yet), seeds a NativeGameState with the faithful VM-less level-init, then runs the
+*recovered* gameplay every frame — player, objects, camera, collision, the boss death/respawn — with NO emulator
+in the loop. Your keyboard drives it; ``native_render`` draws it.
 
-    python scripts/play_native.py            # play LEVEL3 (the snapshot's level)
-    python scripts/play_native.py --level 2  # internal level index (0-based; 2 -> LEVEL3.SQZ)
+    python scripts/play_native.py                 # play LEVEL3
+    python scripts/play_native.py --level 1        # internal level index (0-based; 1 -> LEVEL2)
+    python scripts/play_native.py --fps 35         # cap the frame rate (game tick is 70Hz; lower = slower)
 
-Controls: arrow keys / numpad = move, SPACE = fire/jump, ESC = quit.
+Controls: arrow keys / numpad = move, SPACE = fire/jump, ESC = quit. The title bar shows the live FPS.
 
-(The boot/front-end still uses the EXE once to bootstrap the surrounding assets; the *gameplay* is entirely the
-recovered native code over a NativeGameState. The cold-boot-from-files + native front-end are tracked separately.)
+NOTE — the snapshot is NOT a replayed demo. ``--snapshot`` points at a recorded-demo DIRECTORY only because
+that's where a usable memory snapshot lives; the demo is never played back — it is just the source of the
+EXE-loaded asset state (the shared sprite bank etc. that ``native_level_load`` still defers). The cold-boot-from
+-files + native front-end (which would remove the snapshot dependency entirely) are tracked separately (#10/#14).
+
+KNOWN ROUGH EDGES (standalone-runtime gaps, not gameplay): the faithful renderer was built + verified OVER THE VM,
+where the ASM render cluster maintains the display-page / smooth-scroll render state each frame; the VM-less
+gameplay step does not maintain that render state, so tiles can corrupt once the camera scrolls. Pacing is capped
+to ``--fps`` (default = the 70Hz game tick).
 """
 from __future__ import annotations
 
@@ -34,7 +42,9 @@ def _ww(data, off, val):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Play a PRE2 level with the VM-less native core")
     ap.add_argument("--level", type=int, default=2, help="internal level index (0-based; 2 -> LEVEL3)")
-    ap.add_argument("--snapshot", default=_DEFAULT_SNAPSHOT, help="snapshot dir to bootstrap surrounding assets")
+    ap.add_argument("--snapshot", default=_DEFAULT_SNAPSHOT,
+                    help="demo DIR whose memory snapshot bootstraps the EXE-loaded assets (NOT replayed)")
+    ap.add_argument("--fps", type=int, default=70, help="frame-rate cap (the game tick is 70Hz; lower runs slower)")
     ap.add_argument("--scale", type=int, default=2)
     args = ap.parse_args(argv)
 
@@ -51,7 +61,8 @@ def main(argv=None) -> int:
     import play
 
     gr = str(ROOT / "assets")
-    print(f"Booting LEVEL{args.level + 1} (bootstrap from {args.snapshot}, then VM-less native gameplay)...")
+    print(f"LEVEL{args.level + 1}: bootstrapping the EXE-loaded assets from the snapshot in '{args.snapshot}' "
+          f"(the demo is NOT replayed — just its memory image), then VM-less native gameplay capped at {args.fps} fps...")
     pb = InputDemoPlayback.load(str(ROOT / args.snapshot))
     rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(), game_root=gr,
                             native_replacements=True)
@@ -77,6 +88,7 @@ def main(argv=None) -> int:
     pygame.display.set_caption(f"PRE2 — VM-less native gameplay (LEVEL{args.level + 1})")
     clock = pygame.time.Clock()
     running = True
+    frames = 0
     while running:
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
@@ -96,7 +108,11 @@ def main(argv=None) -> int:
         surf = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))     # (200,320,3) -> surface
         screen.blit(pygame.transform.scale(surf, screen.get_size()), (0, 0))
         pygame.display.flip()
-        clock.tick(70)
+        clock.tick(args.fps)
+        frames += 1
+        if frames % 20 == 0:                                         # show the live frame rate
+            pygame.display.set_caption(
+                f"PRE2 — VM-less native gameplay (LEVEL{args.level + 1})  —  {clock.get_fps():.0f} fps")
     pygame.quit()
     return 0
 
