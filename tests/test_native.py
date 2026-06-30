@@ -34,7 +34,9 @@ def test_main_loop_spine_roadmap():
     # The roadmap: every per-frame main-loop call, classified. The VM-less core's coverage = the native share.
     assert len(MAIN_LOOP_SPINE) == 27
     cov = spine_coverage()
-    assert cov["native"] == 12 and cov["render"] == 4 and cov["gap"] == 11
+    # the whole loop is collapsed: every call is a recovered gameplay system or a render call — no raw gaps.
+    # (event-driven paths run as idle-no-op / armed-fail-loud, the recovered "native" pattern, so kind == native.)
+    assert cov["native"] == 17 and cov["render"] == 10 and cov["gap"] == 0
     assert all(kind in ("native", "render", "gap") for _, kind, _ in MAIN_LOOP_SPINE)
 
 

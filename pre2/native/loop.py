@@ -70,20 +70,20 @@ MAIN_LOOP_SPINE = [
     (0x5643, "native", "native_camera_follow: per-frame H (57A8->apply_camera_pan) + V (5663->33AD/3363) camera "
                        "follow/scroll; reproduces the camera-scroll state (DGROUP byte-exact 173/173), the plane "
                        "redraw is VRAM (renderer's job)"),
-    (0x3668, "gap", "unclassified"),
-    (0x35A1, "gap", "unclassified"),
-    (0x3A27, "gap", "unclassified"),
+    (0x3668, "render", "frame redraw cluster -> faithful renderer"),
+    (0x35A1, "render", "dirty-grid redraw -> faithful renderer"),
+    (0x3A27, "render", "scroll-copy window -> faithful renderer"),
     (0x4B8E, "render", "particles_draw"),
-    (0x26FA, "gap", "unclassified"),
-    (0x3721, "gap", "trigger system"),
-    (0x54AB, "native", "firefly_sim"),
-    (0x3922, "gap", "scroll script"),
-    (0x4C69, "gap", "unclassified"),
-    (0x45AF, "gap", "unclassified"),
-    (0x44FB, "gap", "unclassified"),
+    (0x26FA, "render", "moving-sprite renderer (object_render) -> faithful renderer"),
+    (0x3721, "render", "foreground-tile pass -> faithful renderer"),
+    (0x54AB, "native", "native_firefly_step (swarm sim + RNG)"),
+    (0x3922, "native", "native_scroll_script (counter inc; scripted camera fails loud)"),
+    (0x4C69, "native", "native_level_state (idle no-op; death/respawn/level-end armed fails loud)"),
+    (0x45AF, "native", "native_respawn_gate (idle no-op; respawn animation fails loud)"),
+    (0x44FB, "render", "4509+1C65 render/timing helper"),
     (0x6772, "render", "render-frame commit (-> faithful renderer)"),
-    (0x67D7, "gap", "unclassified"),
-    (0x4C30, "gap", "unclassified"),
+    (0x67D7, "native", "native_special_event ([0x6ca7]==0x1f one-shot fails loud)"),
+    (0x4C30, "native", "native_camera_shake"),
 ]
 
 
@@ -162,11 +162,84 @@ def native_proximity_trigger(state) -> None:
         si = (si + 0xA) & 0xFFFF
 
 
+_DS_BASE = DATA_SEG << 4
+
+
+def _wb(state, off: int, v: int) -> None:
+    state.data[(_DS_BASE + (off & 0xFFFF)) & 0xFFFFF] = v & 0xFF
+
+
+def _ww(state, off: int, v: int) -> None:
+    _wb(state, off, v)
+    _wb(state, off + 1, v >> 8)
+
+
+def native_firefly_step(state) -> None:
+    """[asm 0253: 54AB] Step the firefly swarm (animation + both RNGs) in place — the per-frame sim. The VRAM
+    draw is the renderer's job; only the state contract (slots + RNG seeds + scratch) is applied here."""
+    from pre2.bridge.firefly_sim import read_firefly_sim_state, write_firefly_sim_state
+    from pre2.recovered.firefly_sim import step_fireflies
+    st = read_firefly_sim_state(state)
+    step_fireflies(st)
+    write_firefly_sim_state(state, st)
+
+
+def native_scroll_script(state) -> None:
+    """[asm 0256: 3922] Advance the scripted-scroll frame counter [0x2dbe]. A level with an active script (the
+    per-level table at [0x2dbc], its first word != -1, on a 4-frame tick) or a nonzero accumulated scroll
+    [0x6bf6] (the scripted camera + its VRAM scroll) is unrecovered -> fail loud. A no-script level is a
+    byte-exact counter inc."""
+    rb, rw = readers(state)
+    _ww(state, 0x2DBE, (rw(0x2DBE) + 1) & 0xFFFF)
+    if rw(0x6BF6) != 0 or ((rb(0x6BD5) & 3) == 0 and rw(rw(0x2DBC)) != 0xFFFF):
+        raise Pre2HybridGap("native scroll-script (3922) active — scripted camera not recovered")
+
+
+def native_level_state(state) -> None:
+    """[asm 0259: 4C69] The per-frame level/death state dispatcher. Idle (mode [0x6be6], respawn [0x6be4], death
+    [0x6be5] all 0) it returns no-carry and the loop continues — a byte-exact no-op. When armed it drives
+    death/respawn/level-end/game-over (the 4f65/5063/5034 handlers; carry -> main's level change at 0x12f).
+    That level-state machine is unrecovered -> fail loud (witnessed by the death/game-over demos)."""
+    rb, _ = readers(state)
+    if rb(0x6BE6) != 0 or rb(0x6BE4) != 0 or rb(0x6BE5) != 0:
+        raise Pre2HybridGap("native level-state (4C69) armed — death/respawn/level-end/game-over not recovered")
+
+
+def native_respawn_gate(state) -> None:
+    """[asm 0261: 45AF] The respawn-animation pass. Respawning ([0x6be4]!=0) draws the death/respawn sequence
+    (from [0x6c0e]/[0x6c10]) — unrecovered. Idle it is the renderer's job (no gameplay state)."""
+    rb, _ = readers(state)
+    if rb(0x6BE4) != 0:
+        raise Pre2HybridGap("native respawn animation (45AF) — not recovered")
+
+
+def native_special_event(state) -> None:
+    """[asm 026A: 67D7] A one-shot event when [0x6ca7] reaches 0x1f (capture player pos -> [0xa336], spawn via
+    8d1b). Idle ([0x6ca7] != 0x1f) it is a byte-exact no-op."""
+    rb, _ = readers(state)
+    if rb(0x6CA7) == 0x1F:
+        raise Pre2HybridGap("native special event (67D7: [0x6ca7]==0x1f) not recovered")
+
+
+def native_camera_shake(state) -> None:
+    """[asm 026D: 4C30] One frame's screen-shake apply: from magnitude [0x6BEA] + parity [0x6BD5]&1, write the
+    renderer row-bias [0x6BF8], the jittered magnitude, and the odd-frame horizontal nudge [0x4F1E]-=3.
+    Magnitude 0 -> no change (no shake). [recovered leaf]"""
+    from pre2.recovered.camera_shake import apply_camera_shake
+    rb, rw = readers(state)
+    res = apply_camera_shake(rw(0x6BF8), rb(0x6BEA), rb(0x6BD5), rb(0x4F27), rw(0x4F1E))
+    _ww(state, 0x6BF8, res.row_factor)
+    _wb(state, 0x6BEA, res.magnitude)
+    _ww(state, 0x4F1E, res.h_scroll)
+
+
 def native_gameplay_frame(state) -> None:
-    """Drive the recovered prefix of the per-frame main loop (0214..) over NativeGameState — VM-less, in spine
-    order, fail-loud at the first gap. Today reaches the 0x3668 render cluster (after the player,
-    player-interaction, the two trigger scans, and the camera follow); the prefix grows as gaps are recovered.
-    Render calls (88D7, 8922, and the 3668.. cluster) are the faithful renderer's job and are not run here."""
+    """Drive the WHOLE per-frame main loop (0214..0270) over NativeGameState — VM-less, in spine order. The
+    recovered gameplay systems run; the render calls (88D7, 8922, and the 3668/35A1/3A27/4B8E/26FA/3721/6772
+    cluster) are the faithful renderer's job and are not run here. The event-driven paths a normal frame doesn't
+    take — death/respawn + the level-state machine (4C69/45AF), the scripted camera (3922), the 67D7 one-shot —
+    are byte-exact no-ops when idle and fail loud when armed (witnessed by the death/game-over demos), never a
+    silent skip."""
     rb, rw = readers(state)
     apply_ds(state, tick_popup_ring(rw))                              # [asm 021A] 581E
     native_object_system_step(state)                                 # [asm 0220] 6822 (whole object system)
@@ -176,9 +249,64 @@ def native_gameplay_frame(state) -> None:
     _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 022C] 4907 (byte-level)
     native_player_step(state)                                       # [asm 022F] 5850 (whole player update)
     native_player_interaction(state)                                # [asm 0232] 8295 (player<->world pass)
-    # [asm 0235] 8922 project_particles -> render draw-list (the faithful renderer's job, not run here)
+    # [asm 0235] 8922 project_particles -> render draw-list (the faithful renderer's job)
     native_trigger_scan(state)                                      # [asm 0238] 52FE (position-trigger; no-op unarmed)
     native_proximity_trigger(state)                                 # [asm 023B] 53F6 (proximity trigger; no-op unfired)
     native_camera_follow(state)                                     # [asm 023E] 5643 (H+V camera follow/scroll)
-    # [asm 0241..] 3668/35A1/3A27/4B8E/26FA render cluster (frame_renderer/object_render) — the renderer's job
-    raise Pre2HybridGap("main-loop 0x3668 (render cluster after the camera follow) not run in the gameplay step")  # [asm 0241]
+    # [asm 0241..0250] 3668/35A1/3A27/4B8E/26FA/3721 render cluster — the faithful renderer's job. One gameplay
+    # side effect is extracted: 26FA (object_render) bumps the free-running 16-bit frame counter [0x6bd5] that
+    # the animation phase reads ([0x6bd5]&1/&3/&7/&0xf) — in 11 gameplay calls incl. the player/object/particle
+    # passes. The prefix above already read it as N (frame start); the firefly/scroll/respawn/shake below read N+1.
+    _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                    # [asm 024D: 2708] inc word [0x6bd5]
+    native_firefly_step(state)                                      # [asm 0253] 54AB
+    native_scroll_script(state)                                     # [asm 0256] 3922
+    native_level_state(state)                                       # [asm 0259] 4C69 (carry -> level change @ 0x12f)
+    native_respawn_gate(state)                                      # [asm 0261] 45AF
+    # [asm 0264] 44FB (4509 + 1C65) render/timing helper; [asm 0267] 6772 render commit — the renderer's job
+    native_special_event(state)                                     # [asm 026A] 67D7
+    native_camera_shake(state)                                      # [asm 026D] 4C30
+    # [asm 0270] jmp 0214 — loop back
+
+
+def native_death_bounce_509d(state) -> None:
+    """[asm 509D] The death-bounce animation — the player's death-jump (called first by the respawn 4F6C and the
+    death 5063). Sets the player flying (Yvel=+0xF, anim 0x21) drifting toward the screen centre (Xvel=+/-5), then
+    runs 0x3C=60 frames of the entity-update SUBSET (581E/6822/6210/60FE/60DF + the 26FA frame-counter tick +
+    54AB/3922) while integrating the player ballistically with gravity (NO collision — the corpse arcs up then
+    falls through the level). The render cluster (3668..3721, 44FB) is the renderer's job. Blocking: it plays out
+    60 whole frames in one call, reusing the same recovered leaves as native_gameplay_frame.
+
+    Verified: the player's death-bounce TRAJECTORY is byte-exact vs the ASM (timer-driven synthetic invoke — the
+    render busy-waits need the full timing machinery, so it's driven through play._advance_demo_frame). The only
+    residual is the 8 effect slots that the render 26FA frees ([slot+4]=0xffff) as their lifetime expires —
+    render-managed, and in the full 4F6C respawn it is immediately wiped by 5237's pool re-init, so it is
+    irrelevant to the respawn outcome (and would be reproduced by native_render's per-frame draw in a renderer)."""
+    def _s16(v):
+        return v - 0x10000 if v & 0x8000 else v
+
+    rb, rw = readers(state)
+    # [asm 50a6-50b7] play_sfx(7) (an audio command, no DGROUP) + the death pose
+    _wb(state, 0x4F2D, 0)                                            # [asm 50ac] clear the player death-state byte
+    _ww(state, 0x4F20, 0x21)                                        # [asm 50b1] death anim frame
+    _ww(state, 0x4F2A, 0x0F)                                        # [asm 50b7] Yvel = +15 (the upward kick)
+    centre = ((rw(0x2DE4) + 0xA) << 4) & 0xFFFF                     # [asm 50c0-50cd] (camera cell + 10 tiles) * 16
+    _ww(state, 0x4F22, 5 if rw(0x4F1C) < centre else (-5 & 0xFFFF))  # [asm 50cf-50d8] drift toward screen centre
+    for _ in range(0x3C):                                           # [asm 50db cx=0x3c] 60 frames
+        _ww(state, 0x4F0E, 0xFFFF)                                  # [asm 50df] suppress the normal player render
+        apply_ds(state, tick_popup_ring(rw))                        # [asm 50e5] 581E
+        native_object_system_step(state)                           # [asm 50e8] 6822
+        apply_ds(state, tick_projectiles(rw, rb))                  # [asm 50eb] 6210
+        apply_ds(state, tick_particles(rw, rb, tile_reader(state)))  # [asm 50ee] 60FE
+        apply_ds(state, tick_debris_pool(rw))                      # [asm 50f1] 60DF
+        # [asm 50f4-5103] 3668/35A1/3A27/4B8E/26FA/3721 render — only 26FA's [0x6bd5] frame tick is gameplay:
+        _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)              # [asm 26fa:2708]
+        native_firefly_step(state)                                 # [asm 5106] 54AB
+        native_scroll_script(state)                                # [asm 5109] 3922
+        # [asm 510c] 44FB render/timing helper
+        _ww(state, 0x4F1C, (rw(0x4F1C) + rw(0x4F22)) & 0xFFFF)      # [asm 510f] X += Xvel
+        yv = _s16(rw(0x4F2A)) - 1                                   # [asm 5116] Yvel -= 1 (gravity)
+        if yv < -0x10:                                             # [asm 511a] clamp at terminal -0x10
+            yv = -0x10
+        _ww(state, 0x4F2A, yv & 0xFFFF)                            # [asm 5122]
+        _ww(state, 0x4F1E, (rw(0x4F1E) - yv) & 0xFFFF)            # [asm 5125] Y -= Yvel
+    # [asm 512c] call 30c6 — camera/scroll fixup (the renderer's job; no gameplay DGROUP state)
