@@ -99,13 +99,23 @@ def _run(demo: str, frame_cap: int = 12000):
                         return (o - s) < 4 and vd[s + 4] == 0xFF and vd[s + 5] == 0xFF
                     # (the idle-fidget anim fields are now BYTE-EXACT via the oracle-clock injection above — the
                     # idle timer [0x27F0] itself stays in _FWD_EXCL, but its downstream fidget pose is verified.)
+                    # PC-speaker SFX note state is AUDIO, not gameplay: play_sfx (0282 fall-through) writes the
+                    # active-note pointer [0x1035]=0x1037+dl*0xa and the sound engine updates the 11 per-SFX note
+                    # structs [0x1037..0x10A5] (0xa bytes each; the digital table [0x1009..0x1035) has 11 entries).
+                    # Native emits no sound, so this diverges whenever the VM plays an effect — not a gameplay gap.
                     diffs = [o for o in range(0x10000)
-                             if o not in _FWD_EXCL and not _empty_slot_residue(o)
+                             if o not in _FWD_EXCL and not _empty_slot_residue(o) and not (0x1035 <= o < 0x10A5)
                              and ((nd[o] ^ vd[o]) & (0x9F if o in _SLOT5_PAGE else 0xFF))]
                     if diffs:
                         print(f"  FIRST DIVERGENCE at gameplay frame {ns['matched']} (demo f{cur['f']}): {len(diffs)} diffs")
                         for o in diffs[:34]:
                             print(f"     {o:#06x}: n{nd[o]:02x} v{vd[o]:02x}")
+                        def _w(d, o): return d[o] | (d[o + 1] << 8)
+                        for tag, d in (("NAT", nd), ("VM ", vd)):
+                            print(f"     [{tag}] plr=(x{_w(d,0x4F1C):04x} y{_w(d,0x4F1E):04x}) mode[2879]={d[0x2879]:02x} "
+                                  f"in[27E8..ED]={d[0x27E8]:02x}{d[0x27E9]:02x}{d[0x27EA]:02x}{d[0x27EB]:02x}{d[0x27EC]:02x}{d[0x27ED]:02x} "
+                                  f"src27ED[3f/6e/1f/1a]={d[0x283F]:02x}{d[0x286E]:02x}{d[0x281F]:02x}{d[0x281A]:02x} "
+                                  f"6bdb={d[0x6BDB]:02x} a0={d[0x00A0]:02x}{d[0x00A1]:02x}{d[0x00A2]:02x}", flush=True)
                         ns["done"] = True; orig(); return
                     ns["matched"] += 1
                     if ns["matched"] % 1000 == 0:
