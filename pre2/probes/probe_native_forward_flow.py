@@ -56,8 +56,10 @@ def _run(demo: str, frame_cap: int = 12000):
                     if ns["st"] is None:
                         ns["st"] = NativeGameState(bytearray(mem.data)); ns["seedframe"] = cur["f"]
                     ns["kbd"] = None
-                elif ip == DECODE and ns["st"] is not None:
-                    ns["kbd"] = {o: mem.data[DS_BASE + o] for o in KBD}
+                elif ip == 0x0F0A and ns["st"] is not None:            # AFTER the decode's [0x28xx] reads (0EA4-0F06,
+                    ns["kbd"] = {o: mem.data[DS_BASE + o] for o in KBD}   # then 0F0A) — INT 09 can set a key between
+                    #   the decode ENTRY (0DC1) and here; capturing at the reads matches what the VM's decode used
+                    #   (a late press otherwise reaches the VM's [0x27ED] but not native's fed [0x28xx]).
                 elif ip == 0x5DCC and ns["st"] is not None:            # the VM's idle-fidget read of [0x27F0] (5DCC:
                     ns["idle"] = bytes(mem.data[DS_BASE + 0x27F0:DS_BASE + 0x27F4])   # mov ax,[0x27f0]) — oracle-clock
                 elif ip == GAP_SITE and ns["st"] is not None and ns["kbd"] is not None:
