@@ -171,12 +171,13 @@ def native_front_end(state, dos, display_page: int, *, game_root: str):
     #     (fire) selects level 1 and returns here; password entry still fails loud (code entry not wired). ---
     yield from _native_menu_map(state, dos, game_root, "password" if choice == LS_PASSWORD else "mode_select")
 
-    # --- the map selected a level ([0x2d8a]); load it VM-less and hand off to native_frame_step. The generator
-    #     RETURNS here (no more scenes) — the runner switches to the gameplay loop. This closes the cold-boot flow:
-    #     OLDIES -> titles -> menu -> world-map -> LEVEL 1 gameplay, all VM-less. (The 965a carte scroll-in between
-    #     the map and gameplay is a deferred visual; the level-init/render/play is byte-exact.) ---
-    from pre2.native.level_init import native_level_init
-    native_level_init(state, game_root=game_root)
+    # --- the map selected a level ([0x2d8a]). The REAL flow now runs main's 0x9520 CARTE scroll-in, then the level
+    #     song, then 447d + the 3ed6 level-load (01A5..01D2). We do NOT glue native_level_init here: the carte + the
+    #     exact load sequence are not yet recovered + verified byte-exact against the VM, so advancing would produce
+    #     an unverified (broken) level. Fail loud — the flow stops at the first unverified stage, as it must. ---
+    raise Pre2HybridGap(
+        "native front-end: the world-map selected a level, but the CARTE (0x9520) + the real level-load sequence "
+        "(main 01A5..01D2) are not yet recovered/verified byte-exact vs the VM. Not advancing to a glued level.")
 
 
 _ZERO_SINE = bytes(0x100)          # the password/mode-select map does not bounce (row stays 0), so the sine is unused
