@@ -51,7 +51,8 @@ class _NativeCpuView:
 # (addr, kind, note) for every per-frame main-loop call, in order. kind in {"native","render","gap"}.
 MAIN_LOOP_SPINE = [
     (0x581E, "native", "tick_popup_ring (effects-update popup)"),
-    (0x88D7, "render", "player throwable-weapons draw"),
+    (0x88D7, "native", "native_combat_pass: the combat/pickup pass (4 projectiles + player vs enemies 8C21 then "
+                       "bonus tiles 899E) — damage/kill, effect+debris burst pools, secret-tile collects, [0x4f2a] bounce"),
     (0x6822, "native", "object system: camera_engine/tick_mode9_boss -> object_tick(684E) -> 2nd pass(6913)"),
     (0x6210, "native", "tick_projectiles (effects-update)"),
     (0x60FE, "native", "tick_particles (effects-update)"),
@@ -284,6 +285,58 @@ def native_camera_shake(state) -> None:
     _ww(state, 0x4F1E, res.h_scroll)
 
 
+_COMBAT_SLOTS_LO = 0x4F2E     # [asm 88D7] first thrown-weapon slot
+_COMBAT_STRIDE = 0x12
+_COMBAT_N = 4
+_PLAYER_SRC = 0x4F0A          # [asm 88FC] the player's collision sprite
+_COMBAT_FLAG = 0xA312         # [asm 88DD] full-tolerance flag (read by hitbox_overlap 8D7B)
+_SCRIPTED_POSE = 0x6BC5       # [asm 88F5] scripted-pose gate (skips the player pass)
+_PLAYER_YVEL = 0x4F2A         # [asm 890F/8916] player Yvel (bounce on a hit/collect)
+
+
+def _combat_source_pass(state, si, *, bounce: bool) -> None:
+    """[asm 8C21 then 899E] Resolve one source sprite (a projectile or the player at ``si``) vs enemies then bonus
+    tiles, applying each result to the live state IN PLACE so the bonus scan sees the projectile's writes (the
+    ASM's fall-through). ``bounce`` (player only) fires the [0x4f2a] Yvel bounce on an enemy hit OR a collect."""
+    from pre2.recovered.combat_interaction import bonus_pickup_scan, projectile_vs_enemies
+    rb, rw = readers(state)
+    writes, _sfx, hit, _slot = projectile_vs_enemies(rb, rw, si)      # [asm 8C21] source-vs-ENEMY
+    _apply_bytes(state, writes)
+    # _sfx (kill = play_sfx 2) is an audio command emitted by the audio seam — no DGROUP, excluded here.
+    did = hit                                                        # [asm 88EB/8908] jb -> skip the bonus scan
+    if not hit:                                                      # CF=0 -> source-vs-BONUS pickup
+        ds, mapw, _redraws, collected = bonus_pickup_scan(rb, rw, si)   # [asm 899E]
+        _apply_bytes(state, ds)
+        if mapw:                                                     # the collected tiles' level-map rewrites (es=[0x2DDA])
+            eb = (rw(0x2DDA) << 4) & 0xFFFFF
+            for off, (val, width) in mapw.items():
+                state.data[(eb + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
+                if width == 2:
+                    state.data[(eb + ((off + 1) & 0xFFFF)) & 0xFFFFF] = (val >> 8) & 0xFF
+        # _redraws = the on-screen tile re-blit (a render side-effect) — the faithful renderer's job.
+        did = collected                                             # [asm 890D] jae -> skip the bounce if no collect
+    if bounce and did and rw(_PLAYER_YVEL) != 0:                     # [asm 890F/8914] player Yvel != 0
+        _ww(state, _PLAYER_YVEL, 0xFFB0)                            # [asm 8916] bounce up (-0x50)
+
+
+def native_combat_pass(state) -> None:
+    """[asm 88D7] The per-frame COMBAT / pickup pass: the 4 thrown-weapon slots ([0x4F2E]) then the player
+    ([0x4F0A]), each resolved vs enemies (8C21) then bonus tiles (899E). Fills the effect/debris burst pools
+    ([0x50A8]/[0x5450]), damages/kills enemies, consumes hit projectiles, collects secret/bonus tiles, and
+    bounces the player ([0x4f2a]) on a hit/collect. GAMEPLAY-coupled (feeds the effect pools + enemy state read
+    back next frame) — the render classification wrongly skipped it, so native forward-diverged at the first hit."""
+    rb, rw = readers(state)
+    _wb(state, _COMBAT_FLAG, 1)                                      # [asm 88DD] [0xA312] = 1 (relax the bounce test)
+    for k in range(_COMBAT_N):                                       # [asm 88D7/88DA] the 4 projectile slots
+        si = (_COMBAT_SLOTS_LO + k * _COMBAT_STRIDE) & 0xFFFF
+        if rw((si + 4) & 0xFFFF) != 0xFFFF:                          # [asm 88E2] slot occupied?
+            _combat_source_pass(state, si, bounce=False)
+    if rb(_SCRIPTED_POSE) == 0:                                      # [asm 88F5] not a scripted pose
+        if rw((_PLAYER_SRC + 4) & 0xFFFF) != 0xFFFF:                # [asm 88FF] the player sprite present?
+            _combat_source_pass(state, _PLAYER_SRC, bounce=True)
+    _wb(state, _COMBAT_FLAG, 0)                                      # [asm 891C] [0xA312] = 0
+
+
 def native_gameplay_frame(state) -> None:
     """Drive the WHOLE per-frame main loop (0214..0270) over NativeGameState — VM-less, in spine order. The
     recovered gameplay systems run; the render calls (88D7, 8922, and the 3668/35A1/3A27/4B8E/26FA/3721/6772
@@ -293,6 +346,7 @@ def native_gameplay_frame(state) -> None:
     silent skip."""
     rb, rw = readers(state)
     apply_ds(state, tick_popup_ring(rw))                              # [asm 021A] 581E
+    native_combat_pass(state)                                        # [asm 021D] 88D7 (combat/pickup pass)
     native_object_system_step(state)                                 # [asm 0220] 6822 (whole object system)
     apply_ds(state, tick_projectiles(rw, rb))                        # [asm 0223] 6210
     apply_ds(state, tick_particles(rw, rb, tile_reader(state)))      # [asm 0226] 60FE

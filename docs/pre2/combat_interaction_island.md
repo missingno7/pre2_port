@@ -47,10 +47,18 @@ then compose** (the object_tick precedent). Recovered code lands in `pre2/recove
    The whole projectile/player-vs-ENEMY side of the island is now recovered.
 4. ✅ `899E` (source-vs-bonus pickup, `bonus_pickup_scan`) — DONE, shadow byte-exact. The whole bonus side
    (`8A5A` + `5E41` + `8B6E` + the flood-fill) is recovered.
-5. **Next: live-hook `88D7`** — the orchestrator (`8C21` then `899E` per projectile + the player). Both
-   `projectile_vs_enemies` and `bonus_pickup_scan` are recovered; the live hook applies their write contracts,
-   emits the SFX, performs the on-screen tile re-blit for collects (the render side-effect), and the player
-   `[0x4F2A]` bounce on a miss. Then verify-mode coverage.
+5. ✅ **`88D7` orchestrator wired (native)** — `native_combat_pass` (native/loop.py, `@asm 88D7`) composes
+   `projectile_vs_enemies` then `bonus_pickup_scan` over the 4 projectile slots + the player, applying each
+   write contract in place (so the bonus scan sees the projectile's writes), the collected tiles' level-map
+   rewrites (es=`[0x2DDA]`), and the `[0x4f2a]` player bounce on a hit/collect. Wired at loop 021D. On the
+   menu→L1 forward demo it EXTENDED the byte-exact forward run 133 → 134 gameplay frames (frame 133 = the first
+   club kill's effect burst `[0x50A8]` now matches). SFX (`play_sfx 2`) and the on-screen tile re-blit are the
+   audio/renderer seams (excluded from the DGROUP contract), still emitted elsewhere.
+
+   NEXT frontier (frame 134): a benign render-slot RESIDUE — render slot 0 `[0x4F0A]` is empty (`id=0xFFFF`) in
+   both native and VM but holds a different stale projected position (the transient projection of a combat-burst
+   effect sprite). The player game-struct `[0x4F1C]` is byte-identical. This is the render-state PROJECTION gap
+   ([[pre2-native-render-state]]), not a combat-logic gap — the combat pass itself is correct.
 
 Gated flags to respect: `[0x6BC5]` (scripted pose — skips the player pass), `[0xA312]` (set across the pass;
 read by `8D7B` to relax the player-vs-enemy bounce test).

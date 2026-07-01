@@ -55,8 +55,24 @@ def test_main_loop_spine_roadmap():
     cov = spine_coverage()
     # the whole loop is collapsed: every call is a recovered gameplay system or a render call — no raw gaps.
     # (event-driven paths run as idle-no-op / armed-fail-loud, the recovered "native" pattern, so kind == native.)
-    assert cov["native"] == 17 and cov["render"] == 10 and cov["gap"] == 0
+    assert cov["native"] == 18 and cov["render"] == 9 and cov["gap"] == 0   # 88D7 combat pass is now native
     assert all(kind in ("native", "render", "gap") for _, kind, _ in MAIN_LOOP_SPINE)
+
+
+def test_native_combat_pass_idle_no_op():
+    # [asm 88D7] The combat/pickup pass is a byte-exact no-op on an idle frame (no thrown weapons, no enemy in
+    # range): it must set [0xA312]=1 across the scan and restore it to 0, and touch no gameplay state. This
+    # guards the wiring + the flag restore; the hit/kill/collect paths compose already-shadow-verified leaves.
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.loop import native_combat_pass
+
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    state = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    base = DATA_SEG << 4
+    before = bytes(state.data[base + 0x4F0A:base + 0x5732])   # player + object/effect pools
+    native_combat_pass(state)
+    assert state.data[base + 0xA312] == 0                     # [asm 891C] the full-tolerance flag is restored
+    assert bytes(state.data[base + 0x4F0A:base + 0x5732]) == before   # idle -> no combat writes
 
 
 def test_native_sync_render_state_advances_animation():
