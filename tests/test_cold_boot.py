@@ -147,3 +147,31 @@ def test_native_menu_map_scroll_pixel_exact():
         for plane in scene.planes:
             h.update(bytes(plane)[:0x2000])
     assert h.hexdigest() == "091655f679b9a30a2d53fdf5426d48b12265f132"
+
+
+def test_native_menu_map_mode_select_toggle():
+    # The mode-select map: an arrow toggles BEGINNER<->EXPERT ([0xB197], edge-detected — no re-toggle while held);
+    # fire commits the difficulty ([0xB198]/[0x83D]) and starts level 1 ([0x2D8A]=0), returning from the generator.
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import load_boot_image
+    from pre2.native.front_end import _native_menu_map
+    from pre2.native.input import init_keyboard_input, set_key
+    from pre2.native.state import NativeGameState
+
+    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    init_keyboard_input(state)
+    gen = _native_menu_map(state, DOSMachine(str(ASSETS)), str(ASSETS), "mode_select")
+    next(gen); next(gen)                                # seed + first frame
+    assert state.data[_DS + 0xB197] == 0               # BEGINNER
+    set_key(state, 0x48, True); next(gen)              # up-arrow -> EXPERT
+    assert state.data[_DS + 0xB197] == 1
+    next(gen); next(gen)                                # arrow still held -> NO re-toggle (edge)
+    assert state.data[_DS + 0xB197] == 1
+    set_key(state, 0x48, False); set_key(state, 0x39, True)   # release, press fire
+    try:
+        next(gen)                                       # confirm -> the generator returns
+        raise AssertionError("expected the generator to return on confirm")
+    except StopIteration:
+        pass
+    assert state.data[_DS + 0x2D8A] == 0               # level 1
+    assert state.data[_DS + 0xB198] == 1               # EXPERT difficulty committed

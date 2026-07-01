@@ -195,7 +195,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     from pre2.recovered.present import scroll_shift_frame
     from pre2.recovered.text import draw_string
     from pre2.recovered.world_map import (MapCamera, map_camera_update, map_page_flip, map_pan,
-                                          mode_select_text_runs, password_text_runs)
+                                          mode_select_input, mode_select_text_runs, password_text_runs)
     rb, rw = readers(state)
     native_load_dac_palette(state, dos, 0xB118, 0x10)             # [asm 97A5] the map's 16-colour palette
     page = MenuScenePage()
@@ -212,6 +212,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
 
     cam = MapCamera(0, 0, 2, 0, 0, 0)                            # [asm 978D] phase seeds at 2
     prev_page = 0
+    prev_arrow = False                                          # edge-detect the arrow for the BEGINNER/EXPERT toggle
     pal = tuple(dos.vga_palette)
 
     def scene(planes, page_off, pel):
@@ -231,10 +232,18 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
         scroll_shift_frame(page.planes, cam.prev_x, cam.x, 0, 0, page_clear)   # [asm 9804] pan the display page
         prev_page = page_draw
         yield scene(page.planes, ds, pel)
-        apply_ds(state, decode_input(rb, rw))                  # DC1: turn the host keys into the FSM fire flag
+        apply_ds(state, decode_input(rb, rw))                  # DC1: host keys -> the FSM arrow/fire flags
+        if kind == "mode_select":                              # [asm 994E] an arrow toggles BEGINNER <-> EXPERT
+            arrow_sc = (0x48 if rb(0x27EA) else 0x50 if rb(0x27EB) else       # up / down
+                        0x4D if rb(0x27EC) else 0x4B if rb(0x27ED) else 0)    # right / left
+            if arrow_sc and not prev_arrow and mode_select_input(arrow_sc, False).toggle:
+                state.data[_DS + 0xB197] ^= 1                  # flip the selection (the text re-renders next frame)
+            prev_arrow = bool(arrow_sc)
         if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm
-            if kind == "mode_select":                          # [asm 8ED7] BEGINNER confirm -> level 1
-                state.data[_DS + 0x2D8A] = 0                    # select level 1 (the caller does the level-init)
+            if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
+                state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
+                state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
+                state.data[_DS + 0x2D8A] = 0                    # BEGINNER/EXPERT both begin at level 1
                 return                                          # (the 965a carte scroll-in is a deferred visual)
             raise Pre2HybridGap(                                # password entry (accumulate + validate) not wired yet
                 f"native front-end: the 96d5 password screen renders VM-less (pixel-exact). Next: the code entry "
