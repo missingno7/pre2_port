@@ -303,11 +303,12 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
     """[asm 8C21 then 899E] Resolve one source sprite (a projectile or the player at ``si``) vs enemies then bonus
     tiles, applying each result to the live state IN PLACE so the bonus scan sees the projectile's writes (the
     ASM's fall-through). ``bounce`` (player only) fires the [0x4f2a] Yvel bounce on an enemy hit OR a collect."""
+    from pre2.native.audio import native_emit_sfx
     from pre2.recovered.combat_interaction import bonus_pickup_scan, projectile_vs_enemies
     rb, rw = readers(state)
-    writes, _sfx, hit, _slot = projectile_vs_enemies(rb, rw, si)      # [asm 8C21] source-vs-ENEMY
+    writes, sfx, hit, _slot = projectile_vs_enemies(rb, rw, si)       # [asm 8C21] source-vs-ENEMY
     _apply_bytes(state, writes)
-    # _sfx (kill = play_sfx 2) is an audio command emitted by the audio seam — no DGROUP, excluded here.
+    native_emit_sfx(state, sfx)                                       # emit the kill sound (play_sfx 2)
     did = hit                                                        # [asm 88EB/8908] jb -> skip the bonus scan
     if not hit:                                                      # CF=0 -> source-vs-BONUS pickup
         ds, mapw, _redraws, collected = bonus_pickup_scan(rb, rw, si)   # [asm 899E]

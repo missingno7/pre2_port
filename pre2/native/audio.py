@@ -19,8 +19,69 @@ from pre2.bridge.audio import read_sfx
 from pre2.bridge.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
 
 _DS = 0x1A0F << 4
+_CS = 0x1030 << 4
 _SONG_LENGTH = 0xDC2      # [asm 22FE] number of order positions
 _ORDER_TABLE = 0xDC7      # [asm 22B3] order table (pattern sequence)
+_SFX_DEV_FLAGS = (0x1D6C, 0x1D6D)   # cs: digital-device-present flags (either == 1 -> the SB/digital path)
+
+
+def native_play_sfx(state, dl: int) -> None:
+    """[asm 0282] Emit sound effect ``dl`` the way ``play_sfx`` does — reproduce its device dispatch:
+
+    * a digital device is present (``cs:[0x1D6C]`` or ``cs:[0x1D6D]`` == 1) -> write the SB descriptor
+      ``[0x1004]`` (src) / ``[0x1006]`` (len) from the table entry ``[0x1009 + dl*4]`` (0x2A9). This is exactly
+      what :class:`NativeAudio`'s poll reads to fire a ``PlaySfx``.
+    * otherwise -> write the PC-speaker active-note pointer ``[0x1035] = 0x1037 + dl*0xA`` (0x292).
+
+    The standalone runner sets a device flag at boot (SB emulation is present), so it takes the digital path and
+    plays; the forward oracle seeds the VM's flags (PC-speaker in the recorded demos), so it matches the VM's
+    ``[0x1035]`` write instead. Byte-exact with 0282 in both."""
+    d = state.data
+    dl &= 0xFF
+    if d[_CS + _SFX_DEV_FLAGS[0]] == 1 or d[_CS + _SFX_DEV_FLAGS[1]] == 1:   # [asm 0282/028a] digital present
+        bx = dl * 4
+        d[_DS + 0x1004] = d[_DS + 0x1009 + bx]; d[_DS + 0x1005] = d[_DS + 0x100A + bx]   # [asm 02b7-02bb] src
+        d[_DS + 0x1006] = d[_DS + 0x100B + bx]; d[_DS + 0x1007] = d[_DS + 0x100C + bx]   # [asm 02be-02c2] len
+    else:                                                                   # [asm 0292-02a1] PC-speaker note ptr
+        ptr = (0x1037 + dl * 0xA) & 0xFFFF
+        d[_DS + 0x1035] = ptr & 0xFF; d[_DS + 0x1036] = (ptr >> 8) & 0xFF
+
+
+def native_emit_sfx(state, sfx) -> None:
+    """Emit each ``play_sfx`` index a recovered pass produced (its ``sfx`` list), in order (last wins the single
+    ``[0x1004]`` descriptor, as in the VM's per-frame sequence). A no-op for an empty list."""
+    for dl in sfx:
+        native_play_sfx(state, dl)
+
+
+_SFX_BANK_SEG = 0xC000    # native home for the SFX PCM bank (upper memory, above the 0xA000 video aperture)
+
+
+def native_load_sfx_bank(state, game_root: str, *, seg: int = _SFX_BANK_SEG) -> None:
+    """[asm 07C9] Reproduce the sound-init's SFX sample-bank load so the VM-less runtime can PLAY effects.
+
+    Decodes ``SAMPLE.SQZ`` (the 11 concatenated 8-bit-PCM @ 8000 Hz effects, 0xED60 bytes), places it at ``seg``,
+    points the sample segment ``[0x0B59]`` there, fills each effect's source offset in the ``[0x1009 + dl*4]``
+    ``{src,len}`` table (``src`` = prefix-sum of the lengths already loaded there), and flags a digital device
+    present (``cs:[0x1D6C]``) so ``native_play_sfx`` takes the digital path (writes ``[0x1004]``/``[0x1006]``) and
+    :class:`NativeAudio` fires ``PlaySfx``. Idempotent; call once at boot (the VM does it after OLDIES). The
+    forward oracle seeds the VM's own audio state, so this only affects the standalone product runtime."""
+    import os
+
+    from pre2.codecs.sqz import unpack_sqz
+    with open(os.path.join(game_root, "SAMPLE.SQZ"), "rb") as f:
+        pcm = unpack_sqz(f.read())
+    d = state.data
+    base = (seg << 4) & 0xFFFFF
+    d[base:base + len(pcm)] = pcm                            # the decoded sample bank
+    d[_DS + 0x0B59] = seg & 0xFF; d[_DS + 0x0B5A] = (seg >> 8) & 0xFF        # [0x0B59] = sample segment
+    src = 0
+    for dl in range(11):                                    # fill each effect's src = running offset into the bank
+        t = _DS + 0x1009 + dl * 4
+        length = d[t + 2] | (d[t + 3] << 8)                # the len is already in the table (static)
+        d[t] = src & 0xFF; d[t + 1] = (src >> 8) & 0xFF
+        src = (src + length) & 0xFFFF
+    d[_CS + _SFX_DEV_FLAGS[0]] = 1                          # digital device present -> the SB/digital path
 
 
 def native_load_song(state, name: str, game_root: str) -> None:
@@ -84,8 +145,9 @@ def _sfx_index(state) -> int:
     d = state.data
     base = (0x1A0F << 4)
     src = d[base + 0x1004] | (d[base + 0x1005] << 8)
+    ln = d[base + 0x1006] | (d[base + 0x1007] << 8)
     for dl in range(0x40):
         t = base + SFX_TABLE + dl * 4
-        if (d[t] | (d[t + 1] << 8)) == src:
+        if (d[t] | (d[t + 1] << 8)) == src and (d[t + 2] | (d[t + 3] << 8)) == ln:   # match src+len (unique)
             return dl
     return 0

@@ -70,6 +70,8 @@ def native_cold_boot(game_root: str, boot_image_path: str, *, level: int = 0) ->
     # level loads 0x519 paragraphs too low and the parallax background over-reads the wrong memory (black sky).
     load_sqz(state, "FRONT.SQZ", game_root=game_root)            # [asm 107B] permanent front-panel load (bumps [0x2875])
     native_build_sprite_bank(state, game_root=game_root)          # the shared SPRITES.SQZ 5-plane bank
+    from pre2.native.audio import native_load_sfx_bank
+    native_load_sfx_bank(state, game_root)                        # [asm 07C9] the SFX sample bank (so effects PLAY)
     init_keyboard_input(state)                                    # boot joystick-detect outcome (keyboard play)
     state.data[_DS + _LEVEL_SEL] = level & 0xFF
     native_level_start(state, game_root=game_root)                # load + init + the level-start block (lives, etc.)

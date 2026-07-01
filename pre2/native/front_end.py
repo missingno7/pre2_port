@@ -145,10 +145,14 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
         if done:
             break
 
+    # --- 07c9 sound init (after OLDIES): load the SFX sample bank (SAMPLE.SQZ) so the runner PLAYS effects. It's
+    #     audio-command state (the SFX table + [0x0B59] segment + the digital-device flag), not a visual frame. ---
+    from pre2.native.audio import native_load_sfx_bank
+    native_load_sfx_bank(state, game_root)
+
     # --- TITUS screen (912b): the first 13h title, TIMED (main 00FE-0104). Composition of three VERIFIED leaves:
     #     render_image_scene (the image, Δ=0 vs the framebuffer) + front_end_fade (the DAC fade, byte-exact vs the
-    #     VM DAC) at the measured cadence: fade-IN 31 + hold 70 ([asm 9146 cx=0x46]) + fade-OUT 16. The 07c9 sound
-    #     init + SAMPLE.SQZ load is an audio command (NativeAudio), not a visual frame. ---
+    #     VM DAC) at the measured cadence: fade-IN 31 + hold 70 ([asm 9146 cx=0x46]) + fade-OUT 16. ---
     yield from _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70)
 
     # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
