@@ -31,7 +31,7 @@ DS = 0x1A0F
 _DEFAULT = "demo_menu_start_L1_20260701_154811"
 
 
-def _run(demo: str, frame_cap: int = 12000):
+def _run(demo: str, frame_cap: int = 30000):
     gr = str(ROOT / "assets")
     pb = InputDemoPlayback.load(str(ROOT / "artifacts" / demo))
     meta = pb.manifest.get("metadata", {})
@@ -120,7 +120,7 @@ def _run(demo: str, frame_cap: int = 12000):
                                   f"6bdb={d[0x6BDB]:02x} a0={d[0x00A0]:02x}{d[0x00A1]:02x}{d[0x00A2]:02x}", flush=True)
                         ns["done"] = True; orig(); return
                     ns["matched"] += 1
-                    if ns["matched"] % 1000 == 0:
+                    if ns["matched"] % 100 == 0:
                         print(f"  ... {ns['matched']} clean frames (demo f{cur['f']}, {ns['respawns']} respawns)", flush=True)
         orig()
 
