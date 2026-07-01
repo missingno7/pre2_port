@@ -11,7 +11,21 @@ from __future__ import annotations
 from pre2.native.state import DATA_SEG
 
 KEY_TABLE = 0x27F4          # DS:[0x27F4 + scancode] = "key down" flag (0xFF down / 0 up), read by DC1
+JOYSTICK_CFG = 0x27E4       # bit7 set => joystick absent (DC1's live-read gate, [asm 0D6C/0E6F])
 _DS_BASE = (DATA_SEG << 4) & 0xFFFFF
+
+
+def init_keyboard_input(state) -> None:
+    """Establish the keyboard-play input config that the boot joystick-detect lands on, so DC1's live read
+    reaches the keyboard scancodes instead of the (absent) joystick.
+
+    The original runs a one-time joystick calibration in main()'s init (``1030:0CC6..0D6A``, before the
+    front-end): it probes port 0x201 and, finding no stick on a keyboard machine, sets ``[0x27E4]=0xFF`` at
+    ``0D64`` — bit7 = "joystick absent", which gates DC1 (``0E6F``) past the hardware joystick block to the
+    keyboard flags. The VM-less cold boot skips that init (and the hardware probe is pointless to emulate for a
+    keyboard runner), so reproduce its deterministic no-joystick OUTCOME here. Without it DC1 fails loud on the
+    port-0x201 read and the player never receives input."""
+    state.data[(_DS_BASE + JOYSTICK_CFG) & 0xFFFFF] = 0xFF
 
 # default action -> DOS scancode (DC1's primary source for each of the six input flags)
 SCAN_FIRE = 0x39           # space   -> [0x27E8]

@@ -457,6 +457,20 @@ def render_planar_rgb_from_planes(planes, display_start: int = 0,
     return _planar_to_rgb(lambda p: parr[p], display_start, palette, wrap, pel_pan, active_width)
 
 
+def front_end_scene_to_rgb(scene) -> np.ndarray:
+    """Render a :class:`pre2.native.front_end.FrontEndScene` to a (200, 320, 3) RGB frame — the single
+    present path for every front-end screen.
+
+    ``MODE_LINEAR`` (0x13, the title artwork) indexes the 320x200 256-colour image through the palette;
+    ``MODE_PLANAR`` (0x0D, OLDIES / menu / map) deplanarizes the four EGA planes from ``page`` (the CRTC
+    display-start) with the fine pel-pan, ``active_width`` and ``wrap`` of the panning planar screens."""
+    if scene.mode == 0x13:                                                        # MODE_LINEAR
+        pal = np.array(scene.palette, dtype=np.uint8)
+        return pal[np.frombuffer(scene.linear, dtype=np.uint8).reshape(HEIGHT, WIDTH)]
+    return render_planar_rgb_from_planes(scene.planes, scene.page, scene.palette,   # MODE_PLANAR
+                                         scene.pel, scene.active_width, scene.wrap)
+
+
 def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: int = 0,
                    active_width: int = WIDTH) -> np.ndarray:
     """Shared core: assemble the 4-bit colour index from four bit-planes (MSB-first) through the

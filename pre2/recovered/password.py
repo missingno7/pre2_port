@@ -17,7 +17,7 @@ Index → level/difficulty: index 0 == level 1 beginner and index 10 == level 1 
 from __future__ import annotations
 
 __all__ = ["PASSWORD_XOR", "DEFAULT_SEED", "DEFAULT_ROT", "LEVELS_PER_MODE",
-           "level_code", "password", "password_table"]
+           "level_code", "password", "password_table", "validate_code"]
 
 PASSWORD_XOR = 0x55A3     # [asm 939C xor ax,0x55a3]
 DEFAULT_SEED = 0x20       # [asm 9390] the zeroed-BIOS fallback -> the seed on the GOG build under the VM/DOSBox
@@ -42,6 +42,20 @@ def password(level: int, expert: bool = False, seed: int = DEFAULT_SEED, rot: in
     """The 4-hex-char password string for ``level`` (1-based) in beginner or expert mode."""
     index = (LEVELS_PER_MODE if expert else 0) + (level - 1)
     return f"{level_code(index, seed, rot):04X}"
+
+
+def validate_code(entered: int, seed: int = DEFAULT_SEED, rot: int = DEFAULT_ROT) -> tuple[int, bool] | None:
+    """[asm 9A6E-9AAA] Validate an entered 16-bit ``ENTER CODE`` value against the level passwords.
+
+    Scans indices ``0..0x12`` for ``level_code(index) == entered``; on a match returns ``(level, expert)`` where
+    ``level`` is the 0-based level the game stores in ``[0x2D8A]`` and ``expert`` is ``index >= LEVELS_PER_MODE``
+    (the ASM subtracts ``0xA`` and sets ``[0xB197]=1`` for an expert code). Returns ``None`` if no level matches
+    (the menu then rotates the seed history and stays on the ENTER-CODE screen)."""
+    for index in range(_MAX_VALID_INDEX + 1):              # [asm 9A70-9A7F] dx = 0..0x12
+        if level_code(index, seed, rot) == entered:        # [asm 9A72-9A79] cmp [0xB1B9], 932F(dx)
+            expert = index >= LEVELS_PER_MODE              # [asm 9A9D] cmp dl,0xa; jb
+            return (index - LEVELS_PER_MODE if expert else index), expert   # [asm 9AA2/9AA6] [0x2D8A]=dl
+    return None
 
 
 def password_table(seed: int = DEFAULT_SEED, rot: int = DEFAULT_ROT) -> list[tuple[int, str, str]]:

@@ -22,22 +22,31 @@ _DS = 0x1A0F << 4
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
 
 
+def native_load_dac_palette(state, dos, table_off: int, count: int = 0x10) -> None:
+    """[asm 0bdc] The game's palette-set primitive: load ``count`` 6-bit DAC triples from DGROUP ``table_off``
+    into DAC colours 0..count-1 (``int 10h ax=0x1012, bx=0, cx=count`` from ``DS:table_off``). The runner owns the
+    DAC, so it reproduces the load. Used by the per-level palette (0ba0) and the OLDIES screen (0xb92 -> the
+    green/yellow table at 0x287e). Values are 6-bit; the VGA DAC expands them (``_dac8``)."""
+    d = state.data
+    if len(dos.vga_palette) < 256:                                  # ensure a full DAC (snapshots carry 256)
+        dos.vga_palette = list(dos.vga_palette) + [(0, 0, 0)] * (256 - len(dos.vga_palette))
+    for i in range(count):
+        b0 = _DS + ((table_off + i * 3) & 0xFFFF)
+        dos.vga_palette[i] = (_dac8(d[b0]), _dac8(d[b0 + 1]), _dac8(d[b0 + 2]))
+
+
 def native_load_level_palette(state, dos) -> None:
     """[asm 0ba0] Apply the per-level 16-colour VGA palette the standalone runner owns.
 
     PRE2 is a 16-colour planar game; each level has its own 16-entry palette. ``[0x2d8a]`` (the level) indexes the
     pointer table ``[0x2d00+level*2]``, whose 16 RGB triples (6-bit DAC) load into DAC colours 0..15 — exactly
-    what ``0ba0`` does via int 10h ax=0x1012/cx=0x10. native_level_init skips 0ba0 as 'render' (it touches no
-    DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap snapshot's palette. The
-    per-level palettes are global in DGROUP, so this just selects the right one (no asset reload needed)."""
+    what ``0ba0`` does via int 10h ax=0x1012/cx=0x10 (``native_load_dac_palette``). native_level_init skips 0ba0 as
+    'render' (it touches no DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap
+    snapshot's palette. The per-level palettes are global in DGROUP, so this just selects the right one."""
     d = state.data
     level = d[_DS + 0x2D8A]
-    base = _DS + (d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8))
-    if len(dos.vga_palette) < 256:                                  # ensure a full DAC (snapshots carry 256)
-        dos.vga_palette = list(dos.vga_palette) + [(0, 0, 0)] * (256 - len(dos.vga_palette))
-    for i in range(0x10):                                          # [asm 0bb8] cx=0x10 colours from [asm 0bb6] bx=0
-        r, g, b = d[base + i * 3], d[base + i * 3 + 1], d[base + i * 3 + 2]
-        dos.vga_palette[i] = (_dac8(r), _dac8(g), _dac8(b))
+    table_off = d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8)
+    native_load_dac_palette(state, dos, table_off, 0x10)
 
 
 def native_sync_render_state(state) -> None:

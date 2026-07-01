@@ -503,6 +503,24 @@ type table's 168 zeros / 88 ids — the table (in data seg `1A13`, intact) is th
 load-time truth; the cache is stale. **To verify decode/classify, capture at level
 load** (hook `4316`/`4232` with the asset live), not from a gameplay snapshot.
 
+## Front-end title sequence (mapped + fade VERIFIED 2026-06-30)
+
+The flow between OLDIES and the menu (main `00FE`–`010A`), all **TIMED** (no input until gameplay —
+verified on the near-coldstart demo). Measured in 70 Hz retrace (`44CD`) frames by deterministic
+replay (the per-frame budget must be large — `07c9` decodes `SAMPLE.SQZ`, a ~5.7M-instruction LZW
+pass; the native port unpacks it once in Python so the decode cost is irrelevant to timing).
+
+| location | name | confidence | role | verifier/test | known unknowns |
+|---|---|---|---|---|---|
+| `1030:07C9` | **intro/sound init** — detect digital sound HW (`1D6F`/`1D22`), `cs:[1d6c/d/e]` device flags; if `cs:[2]!=0` load `SAMPLE.SQZ` (sfx sample bank) → `[0xB59]`; zero the 11-entry sfx len table at `0x1009` | OBSERVED | (flow) | replay trace | the non-digital PCspk path (`0x292`) |
+| `1030:912B` | **TITUS screen** — load `TITUS.SQZ` (dx=`0xA304`) → `[0x2875]`/`[0x2DDA]`; `919F(cl=0x10)` 13h display; hold 70 (`9146 cx=0x46`); `9286` fade-out | OBSERVED | (scene) | fe oracle: 31 in + 70 hold + 16 out | — |
+| `1030:9090` | **PRESENT title** — load `PRESENT.SQZ` (dx=`0xA2F8`); `919F(cl=0xFF)` fade-in 256 (background); logo-top copy (`0x3A20` words from `+0x1030` para → A000); then the `911D` palette MORPH 234 (background+logo). Composed native scene byte-exact (490 frames) vs VM | VERIFIED | canonical (`native.front_end._native_present_screen`) | `tests/test_native_title.py` (RGB golden == VM framebuffer×palette) | — |
+| `1030:911D` | **PRESENT palette morph** — ramp each DAC component ±2 toward the `DS:0xACE7` target (snap at \|diff\|==1; loop repeats while any snapped), retrace every `0x52` writes with a counter CONTINUOUS across passes (phase = the BL the fade-in leaves = green of its last entry), displayed commits per DAC entry (3 comps) | VERIFIED | canonical (`recovered.front_end_fade.palette_morph_frames`) | `tests/test_front_end_fade.py` + byte-exact vs VM DAC (234 frames) | — |
+| `1030:2DFA` | **shared SPRITE-BANK build** (the main-loop "MENU" call is really this): decode `SPRITES.SQZ` (LZW) into 4-plane sprites, then per the `0x7190` descriptor table (460 sprites; `bp = ror(al,3)-decoded * ah`) prepend an OR-mask plane to each (mask=OR of 4 planes) → 5 planes. The 1.25x demux at 2EBA | VERIFIED | canonical (`recovered.sprite_bank.build_sprite_bank`) | `tests/test_sprite_bank.py` (golden 196230 B == VM bank) | the 26-byte paragraph-align slack (not sprite data) |
+| `1030:2EE2` | **sprite-bank offset tables** `[0x5f48]` (offset) / `[0x62e8]` (segment): per sprite the far pointer into the 5-plane bank, accumulating `bp*5`; offset wraps at `0x1000` (segment += `0x100`), normalized AFTER storing so a boundary sprite's offset can be ≥ `0x1000` | VERIFIED | canonical (`recovered.sprite_bank.build_sprite_offset_tables`) | `tests/test_sprite_bank.py` (goldens == VM tables, 64/64) | — |
+| `1030:919F` | **13h display + palette fade-IN** — set mode 13h, clear DAC, copy image (`91A4`/`926E`), then ramp DAC 0→target `+2`/pass, retrace every 32 entries, until no change. `cs:[9153]`=entry count | VERIFIED | canonical (`recovered.front_end_fade.fade_in_frames`) | `tests/test_front_end_fade.py` + byte-exact vs VM DAC (TITUS 31, PRESENT 256) | (the `91CF` self-modify of `cs:[9153]` is just the entry count) |
+| `1030:9286` | **palette fade-OUT** — ramp DAC →0 by `max(cur-4,0)` (`sub al,1;adc al,0` ×4), retrace every 32, until all black; runs one extra pass (`or bp,ax` keeps the pre-decrement value) | VERIFIED | canonical (`recovered.front_end_fade.fade_out_frames`) | `tests/test_front_end_fade.py` + byte-exact vs VM DAC (TITUS 16) | — |
+
 ## Gameplay effect overlays + shared RNG (VERIFIED — recovered 2026-06-24)
 
 The three effect passes that draw OVER the core `render_frame` output, plus the two

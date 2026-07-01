@@ -139,6 +139,42 @@ def _object_render_ignore(cpu):
     ]
 
 
+def _audio_mix_channel_ignore(cpu):
+    """Don't-care regions for audio_mix_channel (1030:218F).
+
+    (1) EXACT RANGE: DGROUP 0xB60..0xB64 (SP + channel-index spills), 0x10B9..0x10BB (BX spill),
+        and [fill_buf+0xA8 .. fill_buf+0x150) — the 1-block overrun just past the 0xA8 DMA block
+        (fill_buf = 1A0F:[0x10C5], read at entry).
+    (2) OWNER: audio_mix_channel (1030:218F..227B), the per-channel MOD mixer.
+    (3) WHY ASM WRITES IT: the mixer hijacks SP as a fast sample pointer — it spills the real SP to
+        [0xB60] (21D7) and restores it at 2239; spills BX to [0x10B9] (21FD) across the loop-overflow
+        path and restores at 2224; stashes the channel*2 index at [0xB62] (218F) and re-reads it at
+        2201/2241. Its inner `add [di],al` / release-fade also write 1+ bytes PAST the 0xA8 block when a
+        sample wraps/ends mid-block (di runs past block_len because loop-wraps don't decrement cx).
+    (4) WHY RECOVERED NEEDN'T: the recovered mix_channel computes with Python locals (no SP hijack, no
+        BX/index spills) and guards its block write at block_len, so it reaches the same 0xA8 PCM block +
+        channel state without the spills or the overrun byte.
+    (5) READ/WRITE-WATCH PROOF: a full code-segment byte-pattern scan for the absolute-disp16 operands
+        [0xB60]/[0xB62]/[0x10B9] finds accessors ONLY at 218F/21D7/21FD (writes) and 2201/2224/2239/2241
+        (reads) — every one inside 218F..227B; the ISR caller (20AB..218F) and the tracker (227C..) read
+        none. The overrun lands in the adjacent double-buffer block (the two fill_buf values are 0xA8
+        apart) and is overwritten by that block's next mix_sfx base-fill before the DMA plays it.
+    (6) DOWNSTREAM MATCH: with these neutralised, full-verify is 0-divergence for audio_mix_channel; the
+        0xA8 PCM block (the routine's real output) and the channel state (pos/end/frac at 0xB8A/0xB92/
+        0xBCA) are still diffed in full and match (and stay covered by the mixer's own contract-verify).
+    (7) MECHANISM-ONLY: the spills are dead the instant the routine returns (overwritten before the next
+        read); the overrun byte is past the DMA-played block and re-based by the next mix_sfx — neither is
+        audible nor read downstream."""
+    from pre2.bridge import audio as _audio
+    data = (0x1A0F << 4) & 0xFFFFF
+    fb = _audio.fill_buffer_flat(cpu.mem)              # phys addr of the 0xA8 fill block
+    return [
+        (data + 0x0B60, data + 0x0B64),               # (1) SP + channel-index register spills
+        (data + 0x10B9, data + 0x10BB),               # (1) BX register spill
+        (fb + 0xA8, fb + 0x150),                      # (1) 1-block overrun past the 0xA8 DMA block
+    ]
+
+
 def _frame_scroll_copy_ignore(cpu):
     """Don't-care region for frame_scroll_copy (1030:3A27). (`cpu` unused — fixed program address.)
 
@@ -165,6 +201,7 @@ def _frame_scroll_copy_ignore(cpu):
 # Add an entry ONLY under the IGNORE-REGION POLICY above (proven mechanism-only).
 _IGNORE = {
     (0x1030, 0x107B): _sqz_ignore,
+    (0x1030, 0x218F): _audio_mix_channel_ignore,
     (0x1030, 0x26FA): _object_render_ignore,
     (0x1030, 0x3A27): _frame_scroll_copy_ignore,
 }

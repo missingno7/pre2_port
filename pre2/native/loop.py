@@ -15,7 +15,7 @@ from collections import Counter
 
 from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
 from pre2.bridge.object_tick import LiveWalkerMem
-from pre2.checkpoints.common import Pre2HybridGap, Pre2RespawnTransition
+from pre2.checkpoints.common import Pre2HybridGap, Pre2LevelEndTransition, Pre2RespawnTransition
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
 from pre2.bridge import object_render as _obj_render
@@ -210,8 +210,10 @@ def native_level_state(state) -> None:
       * [0x6be5]==1 death (5063) / ==0xff game-over (5034) / [0x6be6] level-end (4F65) -> the carry paths that
         return to main's level change at 0x12f — not yet recovered, so fail loud (the death/game-over demos)."""
     rb, _ = readers(state)
+    if rb(0x6BE6) == 1:
+        raise Pre2LevelEndTransition()                            # [asm 4cba] level-end -> next level (a transition)
     if rb(0x6BE6) != 0:
-        raise Pre2HybridGap("native level-state: level-end (4F65 / next-level select, carry -> 0x12f) not recovered")
+        raise Pre2HybridGap("native level-state: level-warp ([0x6be6]>1 -> 4c74 warp table) not recovered")
     if rb(0x6BE4) == 1:
         raise Pre2RespawnTransition()                              # [asm 4f6c] respawn — a multi-frame transition
     if rb(0x6BE4) != 0:

@@ -62,6 +62,13 @@ def identify_image(source_image: bytes, game_root: str):
     return None
 
 
+def image_palette(name: str, game_root: str) -> bytes:
+    """The 256-colour 6-bit VGA palette (768 bytes) at the start of a decoded 13h image asset.
+
+    The fade routines ([[pre2.recovered.front_end_fade]]) ramp the DAC toward this palette."""
+    return bytes(b & 0x3F for b in _decoded(game_root, name)[:_IMAGE_OFF])
+
+
 def render_image_scene(name: str, game_root: str, with_logo: bool = True) -> bytes:
     """Return the recovered 64000-byte linear 256-colour image for ``name`` (decoded from the asset).
 

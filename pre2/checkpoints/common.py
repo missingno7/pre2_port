@@ -44,6 +44,15 @@ class Pre2RespawnTransition(Pre2HybridGap):
     transition is actually driven."""
 
 
+class Pre2LevelEndTransition(Pre2HybridGap):
+    """Signal (not a gap): the per-frame gameplay step reached the LEVEL-END transition (4C69's [0x6be6]==1 ->
+    4cba -> 4F65). The level ends, the next level loads, and gameplay continues there — a level change driven
+    outside the single-frame loop (like the respawn). ``native_level_state`` raises this; the runtime/flow driver
+    drives ``native_level_end`` (increment the level, load + re-init the next level, set the level-change flags).
+    Subclasses Pre2HybridGap so existing ``except Pre2HybridGap`` sites still treat it as "not a plain per-frame
+    step" — catch it FIRST where the transition is actually driven."""
+
+
 @dataclass
 class HookVerifyStats:
     verified: int = 0

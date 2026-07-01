@@ -1,28 +1,26 @@
-"""Play a Prehistorik 2 level with the VM-LESS native core.
+"""Play Prehistorik 2 with the VM-LESS native core — COLD BOOT from the OLDIES screen through the whole flow.
 
-The standalone gameplay runner: it bootstraps the EXE-loaded shared assets ONCE from a memory SNAPSHOT (cold
-boot-from-files isn't recovered yet), seeds a NativeGameState with the faithful VM-less level-init, then runs the
-*recovered* gameplay every frame — player, objects, camera, collision, the boss death/respawn — with NO emulator
-in the loop. Your keyboard drives it; ``native_render`` draws it.
+The standalone runner, with NO emulator anywhere: from a pre-extracted static boot image (the EXE's init memory,
+the VM's only build-time use) + the GOG ``*.SQZ`` assets, it drives the recovered FRONT-END flow (OLDIES credits ->
+TITUS title -> PREHISTORIK-2 title -> menu -> world map -> level) and then the recovered GAMEPLAY — no x86 is
+interpreted and ``PRE2.EXE`` is never executed at runtime. This is the VM-less counterpart of ``play.py --view``:
+it starts at the very first screen, exactly like the real game, and runs forward until it hits a not-yet-recovered
+gap (where it stops and reports, rather than silently faking anything).
 
-    python scripts/play_native.py                 # play LEVEL3
-    python scripts/play_native.py --level 1        # internal level index (0-based; 1 -> LEVEL2)
-    python scripts/play_native.py --fps 30         # raise/lower the game-tick rate (default ~24Hz)
+    python scripts/play_native.py                  # full cold start: OLDIES -> titles -> ... (the real boot)
+    python scripts/play_native.py --from-level 0    # DEBUG: skip the front-end, drop straight into LEVEL1 gameplay
+    python scripts/play_native.py --fps 30          # gameplay tick rate (front-end runs at its native 70Hz)
 
-Controls: arrow keys / numpad = move, SPACE = fire/jump, ESC = quit. The title bar shows the live FPS.
+Controls: SPACE = advance the OLDIES screen / fire+jump in game; arrow keys / numpad = move; ESC = quit.
 
-NOTE — the snapshot is NOT a replayed demo. ``--snapshot`` points at a recorded-demo DIRECTORY only because
-that's where a usable memory snapshot lives; the demo is never played back — it is just the source of the
-EXE-loaded asset state (the shared sprite bank etc. that ``native_level_load`` still defers). The cold-boot-from
--files + native front-end (which would remove the snapshot dependency entirely) are tracked separately (#10/#14).
+THE BOOT IMAGE is the EXE's initialized memory at the ``main`` entry, extracted ONCE by the VM (its only role, a
+build tool) and cached under ``artifacts/``; it is built automatically on first run if absent (the one build-time
+use of ``PRE2.EXE``). Copy the package + the boot image + ``assets/`` anywhere and run.
 
-KNOWN ROUGH EDGES (standalone-runtime gaps, not gameplay): the faithful renderer was built + verified OVER THE VM,
-where the ASM render cluster maintains the display-page / smooth-scroll render state each frame; the VM-less
-gameplay step does not maintain that render state, so tiles can corrupt once the camera scrolls. The game's logic
-tick is ~24Hz (the main loop waits 3 VGA retraces per iteration; 70Hz is only the display refresh the menu scroll
-rides), so ``--fps`` defaults to ~24. And it currently bootstraps the EXE-loaded assets from a fixed snapshot
-(LEVEL3), so a *different* ``--level`` shows that snapshot's palette + shared tiles, not the requested level's —
-the proper fix is the cold-boot-from-files (#10), which would load each level's own assets natively.
+STATUS: the front-end drives OLDIES + the two title screens byte-exact VM-less, then stops at the menu/world-map
+gap (still being recovered — #14). ``--from-level`` boots a level directly for gameplay testing (the front-end
+sets up per-level state the direct path approximates, so a directly-booted level is functional but not a
+substitute for the real flow). When the runner reaches an unrecovered gap it prints it and holds the last frame.
 """
 from __future__ import annotations
 
@@ -34,115 +32,149 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 DS = 0x1A0F << 4
-_DEFAULT_SNAPSHOT = "artifacts/demo_pre2_full_gorilla_20260628_203423"
+_BOOT_IMAGE = ROOT / "artifacts" / "pre2_boot_image.zz"
+_FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its FrontEndScene frames are per-retrace)
 
 
-def _ww(data, off, val):
-    data[DS + off] = val & 0xFF
-    data[DS + off + 1] = (val >> 8) & 0xFF
+def _ensure_boot_image(boot_image: Path) -> str:
+    """Return the boot-image path, building it from PRE2.EXE on first run (the VM's only, build-time use)."""
+    if not boot_image.exists():
+        from pre2.native.cold_boot import build_boot_image
+        exe = ROOT / "assets" / "pre2.exe"
+        if not exe.exists():
+            raise SystemExit(f"no boot image at {boot_image} and no PRE2.EXE at {exe} to build it from")
+        boot_image.parent.mkdir(parents=True, exist_ok=True)
+        print(f"building the boot image from {exe.name} (one-time; the runtime stays VM-less)...")
+        size = build_boot_image(str(exe), str(boot_image), game_root=str(ROOT / "assets"))
+        print(f"  wrote {boot_image} ({size} bytes)")
+    return str(boot_image)
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Play a PRE2 level with the VM-less native core")
-    ap.add_argument("--level", type=int, default=2, help="internal level index (0-based; 2 -> LEVEL3)")
-    ap.add_argument("--snapshot", default=_DEFAULT_SNAPSHOT,
-                    help="demo DIR whose memory snapshot bootstraps the EXE-loaded assets (NOT replayed)")
+    ap = argparse.ArgumentParser(description="Play PRE2 with the VM-less native core (cold boot from OLDIES)")
+    ap.add_argument("--from-level", type=int, default=None,
+                    help="DEBUG: skip the front-end and boot this 0-based level directly (0 -> LEVEL1)")
+    ap.add_argument("--boot-image", default=str(_BOOT_IMAGE),
+                    help="the static boot image (the EXE's init memory); built from PRE2.EXE if absent")
     ap.add_argument("--fps", type=int, default=24,
-                    help="game-tick rate cap; default ~24Hz (the main loop waits 3 VGA retraces). 70 = retrace")
+                    help="gameplay tick-rate cap; default ~24Hz (the main loop waits 3 VGA retraces)")
     ap.add_argument("--scale", type=int, default=2)
     args = ap.parse_args(argv)
 
     import numpy as np
     import pygame
-    from dos_re.input_demo import InputDemoPlayback
-    from pre2.runtime import load_pre2_snapshot
-    from pre2.native.state import NativeGameState
-    from pre2.native.render import native_load_level_palette, native_render
+    from dos_re.dos import DOSMachine
+    from pre2.checkpoints.common import Pre2HybridGap
+    from pre2.native.cold_boot import load_boot_image, native_cold_boot
+    from pre2.native.front_end import native_front_end
+    from pre2.native.input import apply_input, init_keyboard_input
+    from pre2.native.render import native_load_level_palette
     from pre2.native.runtime import native_frame_step
-    from pre2.native.level_init import native_level_init
-    from pre2.native.input import apply_input
-    from sdl_view import render_planar_rgb_from_planes
-    import play
+    from pre2.native.state import NativeGameState
+    from sdl_view import front_end_scene_to_rgb, render_planar_rgb_from_planes
 
     gr = str(ROOT / "assets")
-    print(f"LEVEL{args.level + 1}: bootstrapping the EXE-loaded assets from the snapshot in '{args.snapshot}' "
-          f"(the demo is NOT replayed — just its memory image), then VM-less native gameplay capped at {args.fps} fps...")
-    pb = InputDemoPlayback.load(str(ROOT / args.snapshot))
-    rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(), game_root=gr,
-                            native_replacements=True)
-    cpu = rt.cpu; cpu.trace_enabled = False
-    det = lambda: cpu.instruction_count / (2142 * 70); rt.dos.time_source = det; tick = {"next": 0.0}
-    for _ in range(30):                                              # warm up into a stable gameplay frame
-        play._advance_demo_frame(rt, chunk_steps=2142, sub_batch=2000, clock=det, pic=rt.dos.pic,
-                                 sound_blaster=None, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+    boot_image = _ensure_boot_image(Path(args.boot_image))
 
-    dos = rt.dos
-    disp = rt.program.memory.ega_display_start
-
-    snap_level = cpu.mem.data[DS + 0x2D8A]
-    if args.level != snap_level:                                     # the snapshot only carries ONE level's assets
-        print(f"  NOTE: --level {args.level} != the snapshot's bootstrap level {snap_level}. The per-level palette "
-              f"is now loaded correctly (0ba0) and native_level_load reloads the per-level LOCAL tiles, but the "
-              f"SHARED sprite bank + 42af tile tables are still the snapshot's (deferred in native_level_load), so "
-              f"SOME tiles/sprites will still be LEVEL{snap_level + 1}'s until those loaders land (#10).")
-
-    # --- seed a NativeGameState via the faithful VM-less level-init (load + re-init + player + centred camera,
-    #     every leaf byte-exact vs the ASM), VM-less from here on ---
-    state = NativeGameState(bytearray(cpu.mem.data))
-    state.data[DS + 0x2D8A] = args.level                            # select the level
-    native_level_init(state, game_root=gr)
-    native_load_level_palette(state, dos)                          # [asm 0ba0] the per-level 16-colour palette
-    state.data[DS + 0x27F4:DS + 0x27F4 + 0x90] = b"\x00" * 0x90      # clear residual input
-
-    print("Ready — arrow keys / numpad = move, SPACE = fire/jump, ESC = quit. (VM-less native gameplay)")
     pygame.init()
     screen = pygame.display.set_mode((320 * args.scale, 200 * args.scale))
-    pygame.display.set_caption(f"PRE2 — VM-less native gameplay (LEVEL{args.level + 1})")
     clock = pygame.time.Clock()
-    state_ref = {"running": True, "frames": 0}
+    ref = {"running": True, "last": None}
 
-    def pump():                                                      # keep the window responsive (incl. mid-bounce)
+    def pump():
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
-                state_ref["running"] = False
+                ref["running"] = False
 
-    def present(planes, page):
-        rgb = np.asarray(render_planar_rgb_from_planes(planes, page, dos.vga_palette), np.uint8)
-        surf = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))     # (200,320,3) -> surface
+    def present(rgb, fps, caption=None):
+        surf = pygame.surfarray.make_surface(np.asarray(rgb, np.uint8).swapaxes(0, 1))
         screen.blit(pygame.transform.scale(surf, screen.get_size()), (0, 0))
         pygame.display.flip()
-        clock.tick(args.fps)
-        state_ref["frames"] += 1
-        if state_ref["frames"] % 20 == 0:                           # show the live frame rate
-            pygame.display.set_caption(
-                f"PRE2 — VM-less native gameplay (LEVEL{args.level + 1})  —  {clock.get_fps():.0f} fps")
+        clock.tick(fps)
+        if caption:
+            pygame.display.set_caption(caption)
+        ref["last"] = rgb
 
-    while state_ref["running"]:
-        pump()
-        k = pygame.key.get_pressed()
-        apply_input(state,                                          # read input ONCE per game frame (the death
-                    left=k[pygame.K_LEFT] or k[pygame.K_KP4],       #   -bounce that follows ignores it, as in the
-                    right=k[pygame.K_RIGHT] or k[pygame.K_KP6],     #   original — it plays out over its 60 frames)
-                    up=k[pygame.K_UP] or k[pygame.K_KP8],
-                    down=k[pygame.K_DOWN] or k[pygame.K_KP2],
-                    fire=k[pygame.K_SPACE])
-        try:
-            # native_frame_step yields one frame normally, or the whole 60-frame death-bounce + checkpoint frame
-            # during a respawn — so the runner ANIMATES the respawn rather than teleporting to the checkpoint.
-            for planes, page in native_frame_step(state, dos, disp, game_root=gr):
-                state_ref["last"] = (planes, page)
-                present(planes, page)
-                pump()
-                if not state_ref["running"]:
-                    break
-        except Exception as e:                                      # never crash the window on an unrecovered gap
-            if state_ref.get("warned") != str(e):                   # (e.g. a render leaf not yet recovered for
-                print(f"  render/gameplay gap (holding last frame): {type(e).__name__}: {str(e)[:80]}")
-                state_ref["warned"] = str(e)                        #  this level — report once, hold last frame,
-            if state_ref.get("last"):                               #  do NOT re-render: that would re-raise)
-                present(*state_ref["last"])
+    def hold_last(msg):
+        """An unrecovered gap (or a finished run): print once, hold the last frame until the user quits."""
+        print(f"  {msg}")
+        pygame.display.set_caption(f"PRE2 VM-less — {msg[:80]}")
+        while ref["running"]:
+            pump()
+            if ref["last"] is not None:
+                present(ref["last"], 30)
             else:
-                clock.tick(args.fps)                                # nothing rendered yet — just pace + keep polling
+                clock.tick(30)
+
+    # ---- audio: the recovered ENHANCED player (VM-free), driven by the native frame's audio commands ----
+    native_audio = None
+    try:
+        from sdl_view import SdlEnhancedAudio
+        from pre2.native.audio import NativeAudio
+        native_audio = NativeAudio(SdlEnhancedAudio(pygame, gr, {}).post, gr)
+    except Exception as e:                                          # noqa: BLE001 — no audio device -> run silent
+        print(f"  (audio disabled: {type(e).__name__}: {str(e)[:60]})")
+
+    def gameplay_loop(state, dos):
+        """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
+        print("Gameplay — SPACE = fire/jump, arrows/numpad = move, ESC = quit. (VM-less native gameplay)")
+        n = 0
+        while ref["running"]:
+            pump()
+            k = pygame.key.get_pressed()
+            apply_input(state, left=k[pygame.K_LEFT] or k[pygame.K_KP4],
+                        right=k[pygame.K_RIGHT] or k[pygame.K_KP6],
+                        up=k[pygame.K_UP] or k[pygame.K_KP8],
+                        down=k[pygame.K_DOWN] or k[pygame.K_KP2], fire=k[pygame.K_SPACE])
+            disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+            try:
+                for planes, page in native_frame_step(state, dos, disp, game_root=gr):
+                    rgb = render_planar_rgb_from_planes(planes, page, dos.vga_palette)
+                    n += 1
+                    present(rgb, args.fps, None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
+                    pump()
+                    if not ref["running"]:
+                        break
+            except Exception as e:                                  # noqa: BLE001 — hold on an unrecovered gap
+                hold_last(f"gameplay gap: {type(e).__name__}: {str(e)[:80]}")
+                return
+            if native_audio is not None:
+                native_audio.poll(state)
+
+    if args.from_level is not None:
+        # ---- DEBUG path: jump straight into a level for gameplay testing (no front-end) ----
+        print(f"--from-level {args.from_level}: booting LEVEL{args.from_level + 1} directly (VM-less, no front-end)...")
+        state = native_cold_boot(gr, boot_image, level=args.from_level)
+        dos = DOSMachine(gr)
+        native_load_level_palette(state, dos)
+        gameplay_loop(state, dos)
+        pygame.quit()
+        return 0
+
+    # ---- the real cold start: OLDIES -> titles -> menu -> map -> level, all VM-less ----
+    print("Cold boot from the OLDIES screen (VM-less). SPACE to advance, ESC to quit...")
+    state = NativeGameState(load_boot_image(boot_image))
+    init_keyboard_input(state)                                     # the boot joystick-detect outcome (DC1 input)
+    dos = DOSMachine(gr)
+    reached_gameplay = False
+    try:
+        for scene in native_front_end(state, dos, 0, game_root=gr):
+            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — cold boot (front-end)")
+            pump()
+            k = pygame.key.get_pressed()
+            apply_input(state, fire=k[pygame.K_SPACE])             # OLDIES scene-wait (0bbe) reads the fire key
+            if not ref["running"]:
+                break
+        reached_gameplay = ref["running"]                          # the generator finished -> a level started
+    except Pre2HybridGap as e:
+        hold_last(f"front-end reached a not-yet-recovered gap: {str(e)[:110]}")
+    except Exception as e:                                         # noqa: BLE001
+        hold_last(f"front-end error: {type(e).__name__}: {str(e)[:90]}")
+
+    if reached_gameplay and ref["running"]:
+        native_load_level_palette(state, dos)
+        gameplay_loop(state, dos)
+
     pygame.quit()
     return 0
 

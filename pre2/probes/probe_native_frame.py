@@ -69,9 +69,19 @@ _SLOT_ATTR = {0x4F0A + i * 0x12 + 0x11 for i in range(0x75)}
 # 1C65 (the vsync/frame-sync wait inside 44FB) maintains the page-flip-pending counter [0x6be7] — timing/waiting
 # machinery the native port replaces with its heartbeat (lifecycle Phase 10), never gameplay state.
 _TIMING = {0x6BE7}
+# 4624's player-sprite render slot [0x6CA0..0x6CA2): a sibling of 454E's bg-save slot [0x6CA2..0x6CA6] — the
+# saved sprite position the renderer compares + writes (1030:460C cmp [0x6CA0] / 4624 mov [0x6CA0],dx). The
+# gameplay step never writes it (native_gameplay_frame leaves it at the seed; native_render owns it), so it is
+# render state, not gameplay. (Surfaced by the game-tick verifier at gorilla tick 585 as a 2-byte stale.)
+_PLAYER_REDRAW = {0x6CA0, 0x6CA1}
+# [0x6BBD] is the third combat_interaction REDRAW_DIRTY flag (with [0x2DF4]/[0x2DE0], already excluded above):
+# set when a consumed tile needs redraw, then read + cleared by the render (3668/animation). native_render owns
+# the clear, so the gameplay step leaves it set -> render-dirty signal, not gameplay state. (The consumed tile's
+# actual map/score change is verified elsewhere.) Surfaced by the game-tick verifier at gorilla tick 611.
+_REDRAW_DIRTY = {0x6BBD}
 _EXCL = (set((0x1004, 0x1005, 0x1006, 0x1007)) | set(range(0x27F0, 0x2800)) | set(range(0x2820, 0x2880))
          | set(range(0xAB0, 0xE00)) | set(RENDER_OFFSETS) | _RENDER_DRAWLIST | _PAGE_FLIP | _RENDER_COUNTERS
-         | _SLOT_ATTR | _SCROLL_RENDER | _TIMING)
+         | _SLOT_ATTR | _SCROLL_RENDER | _TIMING | _PLAYER_REDRAW | _REDRAW_DIRTY)
 
 
 def _run(demo, lim, totals):
