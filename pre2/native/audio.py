@@ -15,7 +15,6 @@ play_sfx writes), the VM-less equivalent of the 0x0282 entry hook.
 """
 from __future__ import annotations
 
-from pre2.bridge.audio import read_sfx
 from pre2.bridge.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
 
 _DS = 0x1A0F << 4
@@ -45,6 +44,11 @@ def native_play_sfx(state, dl: int) -> None:
     else:                                                                   # [asm 0292-02a1] PC-speaker note ptr
         ptr = (0x1037 + dl * 0xA) & 0xFFFF
         d[_DS + 0x1035] = ptr & 0xFF; d[_DS + 0x1036] = (ptr >> 8) & 0xFF
+    q = getattr(state, "sfx_queue", None)                                   # every CALL is a distinct trigger (a
+    if q is not None:                                                       #   repeated identical effect re-fires)
+        q.append(dl)
+        if len(q) > 64:                                                     # cap for a consumer-less run (the oracle)
+            del q[:-64]
 
 
 def native_emit_sfx(state, sfx) -> None:
@@ -112,7 +116,6 @@ class NativeAudio:
         self._emit = emit
         self._game_root = game_root
         self._song = None     # last song order-signature emitted (fire once per change)
-        self._sfx = None       # last SFX descriptor emitted (fire once per new sound)
 
     def poll(self, state) -> None:
         """Emit the audio commands the native frame just produced. Call once per displayed frame."""
@@ -125,29 +128,14 @@ class NativeAudio:
                 if cmd is not None:
                     self._emit(cmd)
 
-        # --- SFX: the recovered play_sfx wrote a new [0x1004]/[0x1006] descriptor; emit PlaySfx once ---
-        try:
-            sfx = read_sfx(state)
-        except Exception:                                       # noqa: BLE001 (no SFX state yet)
-            return
-        key = (sfx.pos, sfx.remaining)
-        if sfx.remaining and key != self._sfx and sfx_enabled(state):
-            self._sfx = key
-            self._emit(resolve_sfx(state, _sfx_index(state)))
-        elif not sfx.remaining:
-            self._sfx = None
-
-
-def _sfx_index(state) -> int:
-    """The active SFX index the recovered play_sfx selected — the descriptor at [0x1004]/[0x1006] equals the
-    table entry ``[0x1009 + dl*4]``, so recover ``dl`` by matching the live src against the descriptor table."""
-    from pre2.bridge.audio_commands import SFX_TABLE
-    d = state.data
-    base = (0x1A0F << 4)
-    src = d[base + 0x1004] | (d[base + 0x1005] << 8)
-    ln = d[base + 0x1006] | (d[base + 0x1007] << 8)
-    for dl in range(0x40):
-        t = base + SFX_TABLE + dl * 4
-        if (d[t] | (d[t + 1] << 8)) == src and (d[t + 2] | (d[t + 3] << 8)) == ln:   # match src+len (unique)
-            return dl
-    return 0
+        # --- SFX: native_play_sfx queued each TRIGGER this frame (one entry per call, so a repeated identical
+        #     effect — a held attack hitting each frame — fires each time). Emit + drain. ---
+        queue = getattr(state, "sfx_queue", None)
+        if queue:
+            if sfx_enabled(state):
+                for dl in queue:
+                    try:
+                        self._emit(resolve_sfx(state, dl))
+                    except Exception:                           # noqa: BLE001 (bank not loaded yet)
+                        break
+            queue.clear()

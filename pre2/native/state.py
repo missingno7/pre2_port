@@ -19,7 +19,7 @@ class NativeGameState:
     """The recovered game's memory image. Exposes ``.data`` (the 1 MB address space) so the existing bridges
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
-    __slots__ = ("data",)
+    __slots__ = ("data", "sfx_queue")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -27,6 +27,11 @@ class NativeGameState:
         if len(data) < ADDR_SPACE:
             data = data + bytearray(ADDR_SPACE - len(data))
         self.data = data
+        #: play_sfx TRIGGERS this frame (a list of effect indices). native_play_sfx appends one per CALL — so a
+        #: repeated identical effect (e.g. a held attack hitting each frame) fires each time, unlike the single
+        #: [0x1004] descriptor which is last-wins. NativeAudio drains it once per displayed frame; capped so a
+        #: consumer-less run (the forward oracle) can't grow it without bound.
+        self.sfx_queue: list[int] = []
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
