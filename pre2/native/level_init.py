@@ -113,3 +113,20 @@ def native_level_init(state, *, game_root: str) -> None:
     d[_DS + 0x2CEC] = 5; d[_DS + 0x2CED] = 0x22; d[_DS + 0x2CEE] = 0x86  # [asm 01fa] re-seed the RNG to the
     d[_DS + 0x2CEF] = 0x8D; d[_DS + 0x2CF0] = 0xE5                  # fixed level-start (a,b,c,d=0xe58d)
     d[_DS + 0x2874] = 0                                            # [asm 020f]
+
+
+def native_level_start(state, *, game_root: str) -> None:
+    """[asm main 0x13e..0x0155] The full LEVEL-START sequence main() runs when ENTERING a level — from the menu at
+    game start, and re-run on each level-END transition. It is ``native_level_init`` (the 447d/01cf load + re-init)
+    followed by the SEPARATE 0x0141-0x0155 level-start block: reset lives ``[0x27d8]=2``, the projectile
+    damage/tolerance ``[0x7b19]=0x14``, the BONUS-letter / utensil masks, and clear the level-state flags. Those
+    writes are NOT part of native_level_init (01cf) — the menu->gameplay handoff and cold boot must run them too,
+    else lives reads 0, combat damage is wrong, etc. (This is the block ``native_level_end`` already applied inline.)"""
+    native_level_init(state, game_root=game_root)                 # [asm 013e: 447d] load + re-init the level
+    d = state.data
+    d[_DS + 0x27D8] = 2                                            # [asm 0141] lives
+    d[_DS + 0x6CA7] = 0                                            # [asm 0146] BONUS-letters mask
+    d[_DS + 0x7B19] = 0x14                                         # [asm 014b] projectile damage / hit tolerance
+    d[_DS + 0x7B18] = 0                                            # [asm 0150]
+    d[_DS + 0x6CA8] = 0                                            # [asm 0155] utensils mask
+    d[_DS + 0x6BE6] = 0; d[_DS + 0x6BE4] = 0; d[_DS + 0x6BE5] = 0  # level-state flags are clear in gameplay

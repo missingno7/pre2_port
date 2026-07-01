@@ -43,6 +43,10 @@ from pre2.recovered.scene import (
 
 _DS = DATA_SEG << 4
 
+# The per-level song (indexed by [0x2d8a]) the loader loads at level start. L1 = MINES.TRK is verified from the
+# menu->L1 demo; the full per-level table is a follow-up (default MINES so any level still gets music).
+_LEVEL_SONGS = {0: "MINES.TRK"}
+
 
 @dataclass(frozen=True)
 class FrontEndScene:
@@ -106,6 +110,19 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
 
 
 def native_front_end(state, dos, display_page: int, *, game_root: str):
+    """Drive the whole VM-less front-end, advancing the wall-clock idle counter ``[0x27F0]`` by one 70Hz timer
+    tick per displayed frame. The front-end runs the timer exactly as the VM does (its scenes spin on the retrace),
+    so gameplay starts with ``[0x27F0]`` at a lived-in value rather than 0 — a value the VM never has (its timer
+    has run since boot). Without it the idle player at level start picks the wrong fidget pose (a crouch instead of
+    the upright stand, since the idle-fidget selector 5DC9 reads ``[0x27F0] & 0x1FF``). The inner generator
+    (:func:`_native_front_end_frames`) loads the level after its last displayed frame."""
+    from pre2.native.loop import native_idle_timer_tick
+    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root):
+        native_idle_timer_tick(state, ticks=1)                 # 1 timer tick per front-end retrace (70Hz)
+        yield scene
+
+
+def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
     """Drive the front-end scene state machine from the entry state, ``yield``ing each displayed scene frame, until
     a level starts — then the caller switches to ``native_frame_step`` for gameplay.
 
@@ -134,15 +151,23 @@ def native_front_end(state, dos, display_page: int, *, game_root: str):
     #     init + SAMPLE.SQZ load is an audio command (NativeAudio), not a visual frame. ---
     yield from _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70)
 
-    # --- PRESENT.SQZ title (9090): 02cc loads the menu song (an audio command, not a visual frame), then the
-    #     "PREHISTORIK 2" title — fade-IN 256 over the background, then the 911D palette MORPH 234 over the
-    #     background+logo (the title's colour reveal). The morph target is the static palette at DGROUP 0xACE7. ---
+    # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
+    #     audio-command state write so the runner's NativeAudio plays it; then the "PREHISTORIK 2" title — fade-IN
+    #     256 over the background, then the 911D palette MORPH 234 over the background+logo (the title's colour
+    #     reveal). The morph target is the static palette at DGROUP 0xACE7. ---
+    from pre2.native.audio import native_load_song
+    native_load_song(state, "PRESENTA.TRK", game_root)           # [asm 02cc] the PRESENT title song (first music)
     morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
     yield from _native_present_screen(game_root, morph_target)
 
+    # --- FRONT.SQZ (the HUD front-panel) is stacked permanently before the sprite bank ([0x2875] 0x27be -> 0x2cd7),
+    #     exactly as main() does between the titles and 2dfa. Without it the level later lands 0x519 paragraphs too
+    #     low and its parallax over-reads the wrong memory. (The Python title renders don't bump [0x2875].) ---
+    from pre2.native.assets import load_sqz
+    load_sqz(state, "FRONT.SQZ", game_root=game_root)             # [asm 107B] permanent front-panel load
     # --- 2dfa: decode the shared SPRITES.SQZ sprite bank into the game state (the title is still on screen — no new
     #     visible frame). This is the bank the world-map + gameplay need. Verified byte-exact (native_build_sprite_bank,
-    #     [[pre2-front-end-flow]]) and composes from the post-title state ([0x2875] 0x27be -> 0x57a8). ---
+    #     [[pre2-front-end-flow]]); composes from the post-FRONT state ([0x2875] 0x2cd7 -> 0x5cc1, the VM's level seg). ---
     from pre2.native.sprite_bank import native_build_sprite_bank
     native_build_sprite_bank(state, game_root=game_root)
 
@@ -169,15 +194,22 @@ def native_front_end(state, dos, display_page: int, *, game_root: str):
     # --- 96d5: the chosen 0Dh scrolling world-map — password entry (for '2') or mode-select (for '1'/fire). Renders
     #     pixel-exact VM-less (the caveman-tiled map scrolling with the text stamped on top). Mode-select confirm
     #     (fire) selects level 1 and returns here; password entry still fails loud (code entry not wired). ---
+    native_load_song(state, "CODE.TRK", game_root)              # the mode-select song (starts on entering 96d5, not the menu)
     yield from _native_menu_map(state, dos, game_root, "password" if choice == LS_PASSWORD else "mode_select")
 
-    # --- the map selected a level ([0x2d8a]). The REAL flow now runs main's 0x9520 CARTE scroll-in, then the level
-    #     song, then 447d + the 3ed6 level-load (01A5..01D2). We do NOT glue native_level_init here: the carte + the
-    #     exact load sequence are not yet recovered + verified byte-exact against the VM, so advancing would produce
-    #     an unverified (broken) level. Fail loud — the flow stops at the first unverified stage, as it must. ---
-    raise Pre2HybridGap(
-        "native front-end: the world-map selected a level, but the CARTE (0x9520) + the real level-load sequence "
-        "(main 01A5..01D2) are not yet recovered/verified byte-exact vs the VM. Not advancing to a glued level.")
+    # --- 9520 CARTE: the world-map scroll-in the real flow shows between the mode-select and the loader (main 0x01A8).
+    #     Loads MAP.SQZ (the map master), stamps the per-level 'you are here' marker (the player's position) onto it =
+    #     the de-planarize [0x667a]:[0x62da] (byte-exact vs the VM master), then scrolls the map in via the recovered +
+    #     byte-exact build_carte_page until fire, then hands to the loader. ---
+    yield from _native_carte(state, dos, game_root)
+
+    # --- the map selected a level ([0x2d8a]); the loader (main 01A5..01D2). native_level_start is VERIFIED byte-exact
+    #     vs the pure-ASM oracle's gameplay-entry seed (every core gameplay table identical; see [[pre2-level-init-island]]). ---
+    from pre2.native.level_init import native_level_start
+    native_load_song(state, _LEVEL_SONGS.get(state.data[_DS + 0x2D8A], "MINES.TRK"), game_root)  # level song (plays at start)
+    native_level_start(state, game_root=game_root)            # [asm 013e..0155] load + init + level-start (lives, etc.)
+    state.data[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)  # clear the residual key table (the DC1 raw keys)
+    return                                                     # the level is loaded -> the caller runs native_frame_step
 
 
 _ZERO_SINE = bytes(0x100)          # the password/mode-select map does not bounce (row stays 0), so the sine is unused
@@ -214,6 +246,8 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     cam = MapCamera(0, 0, 2, 0, 0, 0)                            # [asm 978D] phase seeds at 2
     prev_page = 0
     prev_arrow = False                                          # edge-detect the arrow for the BEGINNER/EXPERT toggle
+    bounce = state.data[(0x1030 << 4) + 5] != 0                # [asm 9AF5] cs:[5] (=3): the vertical sine-bounce is ON
+    sine = bytes(state.data[_DS + 0x6F90:_DS + 0x6F90 + 0x100])  # [asm 9B00] the row-bounce sine table (DGROUP 0x6f90)
     pal = tuple(dos.vga_palette)
 
     def scene(planes, page_off, pel):
@@ -222,15 +256,19 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
 
     yield scene(page.planes, 0, 0)                               # frame 0 = the seeded page
     while True:
-        cam = map_camera_update(cam, bounce=False, sine_table=_ZERO_SINE)   # [asm 9AE0] scroll left 4/frame
+        cam = map_camera_update(cam, bounce=bounce, sine_table=sine)   # [asm 9AE0] scroll left 4/frame + row sine-bounce
         ds, _ = map_pan(cam.x, cam.row)                          # [asm 97A8] display-start from the CURRENT x
         pel = cam.prev_x & 7                                    # the pel-pan LAGS one frame (= prev_x & 7)
         page_draw, page_clear = map_page_flip(ds, prev_page)     # [asm 97CA] page_draw=ds, page_clear=prev
+        # VISUAL APPROXIMATION (not byte-exact — see [[pre2-front-end-flow]]): the VM double-buffers the text across
+        # the two ring pages, which combined with the vertical sine-bounce we don't yet reproduce exactly, so the
+        # text would ghost/smear. Clear the text planes (2|3) each frame and re-stamp fresh so it stays clean. The
+        # BACKGROUND (planes 0,1) + the bounce ARE byte-exact; only this text layer is an approximation for now.
+        page.planes[2][:0x2000] = bytes(0x2000)
+        page.planes[3][:0x2000] = bytes(0x2000)
         for run in text_runs():                                 # [asm callback 9985/991F] stamp the text
-            # draw to the DISPLAYED page (page_clear) and clear on the back page (page_draw) — same "operate on the
-            # previous/display page" rule as the scroll below.
             draw_string(page.planes, cstr(run.addr), font, cam.blit_off, run.pen, run.advance, page_clear, page_draw)
-        scroll_shift_frame(page.planes, cam.prev_x, cam.x, 0, 0, page_clear)   # [asm 9804] pan the display page
+        scroll_shift_frame(page.planes, cam.prev_x, cam.x, cam.row, cam.prev_row, page_clear)   # [asm 9804] H + V (bounce) pan
         prev_page = page_draw
         yield scene(page.planes, ds, pel)
         apply_ds(state, decode_input(rb, rw))                  # DC1: host keys -> the FSM arrow/fire flags
@@ -249,6 +287,52 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
             raise Pre2HybridGap(                                # password entry (accumulate + validate) not wired yet
                 f"native front-end: the 96d5 password screen renders VM-less (pixel-exact). Next: the code entry "
                 f"(accumulate hex -> validate -> level) + the 965a carte visual (#14).")
+
+
+def _native_carte(state, dos, game_root: str):
+    """[asm 9520] The CARTE world-map scroll-in shown between the mode-select and the level load.
+
+    Loads ``MAP.SQZ`` (the 4-plane map master at ``[0x2875]``), stamps the per-level 'you are here' marker (the
+    player's position on the world map) onto it — the 9520 head de-planarizes it from ``[0x667a]:[0x62da]`` via
+    ``stamp_carte_marker``, byte-exact vs the VM's stamped master (the 0.6% overlay) — then reveals it column-by-column
+    with the recovered + byte-exact ``build_carte_page`` (965A) as the CRTC pans (``carte_display``). MAP.SQZ is a
+    TRANSIENT load (the loader reloads over it), so the load pointer ``[0x2875]`` is restored afterwards. Fire (once
+    released after the mode-select confirm) advances to the loader."""
+    from pre2.native.assets import load_sqz
+    from pre2.native.render import native_load_dac_palette
+    from pre2.recovered.carte import (build_carte_page, carte_display, carte_marker_offset,
+                                       stamp_carte_marker, SCROLL_START)
+    rb, rw = readers(state)
+    saved_top = rw(0x2875)                                       # [asm 9530] MAP.SQZ loads at the top...
+    seg = load_sqz(state, "MAP.SQZ", game_root=game_root)
+    state.data[_DS + 0x2875] = saved_top & 0xFF                  # ...but is transient — restore the load pointer so
+    state.data[_DS + 0x2876] = (saved_top >> 8) & 0xFF          # the loader stacks the level exactly where the VM does
+    master = bytes(state.data[(seg << 4):(seg << 4) + 0xFA00])   # the 4-plane map master (planes @0/3E80/7D00/BB80)
+    # [asm 9543-95CD] stamp the per-level 'you are here' marker (the player's caveman on the map) into the master.
+    lv = rb(0x2D8A)                                              # the level index picks its map (x,y) + the marker
+    dims = rw(0x7522); mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
+    di = carte_marker_offset(rw(0xB148 + lv * 4), rw(0xB14A + lv * 4))
+    msrc = (rw(0x667A) << 4) + rw(0x62DA)                        # [0x667a]:[0x62da] — mask + 4 colour planes
+    marker = bytes(state.data[msrc:msrc + 5 * mw * mh])
+    master = stamp_carte_marker(master, marker, di, mw, mh)
+    from pre2.native.audio import native_load_song
+    native_load_song(state, "CARTE.TRK", game_root)             # the carte song
+    native_load_dac_palette(state, dos, 0xB0E8, 0x10)           # [asm 95EB] the carte's 16-colour palette
+    pal = tuple(dos.vga_palette)
+    scroll_x = SCROLL_START                                     # [asm 95E2] carte begins at scroll 8
+    prev_fire = True                                            # require the mode-select fire to RELEASE first
+    while True:
+        planes = build_carte_page(master, scroll_x)            # [asm 9613] reveal the map up to scroll_x
+        ds, pel = carte_display(scroll_x)                      # [asm 97A8-style] CRTC display start + pel pan
+        yield FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
+                            page=ds, pel=pel, wrap=0x1FFF)
+        apply_ds(state, decode_input(rb, rw))
+        if scroll_x < 639:                                     # scroll the map in +1/frame (the VM's [0xb19d] rate)
+            scroll_x += 1
+        fire = (rb(0x27E8) | rb(0x2832)) != 0
+        if fire and not prev_fire:                             # a fresh fire press -> confirm -> the loader
+            return
+        prev_fire = fire
 
 
 def _native_title_screen(game_root: str, name: str, *, n_entries: int, hold: int):

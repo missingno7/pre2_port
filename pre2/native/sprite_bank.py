@@ -13,12 +13,14 @@ import os
 from pre2.codecs.sqz import unpack_sqz
 from pre2.native.state import DATA_SEG
 from pre2.recovered.sprite_bank import (
+    bottom_anchor_y_offsets,
     build_sprite_bank,
     build_sprite_offset_tables,
 )
 
 _DS = DATA_SEG << 4
 _TABLE = 0x7190        # the 0x7190 sprite descriptor table (static DGROUP data)
+_YOFFTAB = 0x752A      # [asm 2E1F] per-sprite (x_off, y_off) draw-offset table
 _OFFTAB = 0x5F48       # [asm 2F0E] per-sprite offset table
 _SEGTAB = 0x62E8       # [asm 2F12] per-sprite segment table
 _LOAD_TOP = 0x2875     # the bump-allocator load top
@@ -41,6 +43,14 @@ def native_build_sprite_bank(state, *, game_root: str, sprites_seg: int | None =
         sprites_seg = d[_DS + _LOAD_TOP] | (d[_DS + _LOAD_TOP + 1] << 8)
 
     table = bytes(d[_DS + _TABLE:_DS + _TABLE + 0x400])        # enough for the 460 entries + terminator
+
+    # [asm 2E15-2E29] the sprite-bank head's one-time Y draw-offset fixup: y_off = height - y_off per id. Without
+    # it, every body sprite (player + enemies) draws one full sprite-height too LOW (the club, a zero-height
+    # attachment, is unaffected). Runs ONCE here, exactly where 2DFA does it (before the demux).
+    draw = bytes(d[_DS + _YOFFTAB:_DS + _YOFFTAB + 0x400])
+    fixed = bottom_anchor_y_offsets(table, draw)
+    d[_DS + _YOFFTAB:_DS + _YOFFTAB + len(fixed)] = fixed
+
     with open(os.path.join(game_root, "SPRITES.SQZ"), "rb") as f:
         decoded = unpack_sqz(f.read())
 

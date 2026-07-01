@@ -42,6 +42,33 @@ def sprite_descriptor_sizes(table: bytes) -> list[int]:
     return sizes
 
 
+@oracle_link("1030:2E15",
+             "the sprite-bank head's Y draw-offset fixup: for each id (until the 0x7190 height byte [0x7191] "
+             "is 0) rewrite the [0x752B] Y offset in place as y_off = height - y_off (sub then neg). This "
+             "bottom-anchors the sprite: the renderer's baseline placement then subtracts height again, so "
+             "skipping this leaves every body sprite drawn one full sprite-height too LOW.",
+             "VERIFIED", merge_target="native_build_sprite_bank")
+def bottom_anchor_y_offsets(descriptor: bytes, draw_offsets: bytes) -> bytes:
+    """[asm 2E15-2E29] Convert the raw per-sprite Y draw-offset table (``[0x752A]`` byte pairs, ``[+1]`` = the
+    Y offset) into the bottom-anchored form the renderer expects.
+
+    ``descriptor`` is the ``[0x7190]`` table (word per id: low = width descriptor, high = **height**);
+    ``draw_offsets`` is the ``[0x752A]`` table (byte pair per id: ``[+0]`` = X offset, ``[+1]`` = Y offset).
+    For each id in order, while the height byte is non-zero, ``y_off = (height - y_off) & 0xFF`` (the ASM's
+    ``sub [0x752b],height`` then ``neg [0x752b]``). The loop stops at the first zero-height entry — the table
+    terminator. Returns a new ``[0x752A]`` table (X offsets untouched). This is the ONE-TIME cold-boot fixup at
+    the head of ``2DFA``; running it twice would double-transform, so it belongs with the sprite-bank build."""
+    out = bytearray(draw_offsets)
+    bx = 0
+    while bx + 1 < len(out) and bx + 1 < len(descriptor):
+        height = descriptor[bx + 1]                   # [asm 2E17] al = [bx+0x7191] (the descriptor's high byte)
+        if height == 0:                               # [asm 2E1B/2E1D] or al,al; je -> table terminator
+            break
+        out[bx + 1] = (height - out[bx + 1]) & 0xFF   # [asm 2E1F sub / 2E23 neg] y_off = height - y_off
+        bx += 2                                        # [asm 2E27/2E28] inc bx; inc bx
+    return bytes(out)
+
+
 @oracle_link("1030:2DFA",
              "shared sprite-bank build: decode SPRITES.SQZ (unpack_sqz) then prepend an OR-mask plane to "
              "each 4-plane sprite (-> 5 planes) per the 0x7190 descriptor table; the 1.25x demux at 2EBA.",

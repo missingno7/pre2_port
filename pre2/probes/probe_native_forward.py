@@ -50,7 +50,10 @@ _HUD = set(range(0x6F4E, 0x6FA0))
 # native_render maintain them; native_gameplay_frame does not). _EXCL already covers the horizontal [0x2DE0];
 # add the vertical [0x2DE2] for levels that scroll vertically (the gorilla demo doesn't, so it was never needed).
 _SCROLL_Y = {0x2DE2, 0x2DE3}
-_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y
+# the object-render (26FA) blit's per-sprite clipped-extent scratch word ([0x2DEC/D], written 27DE/27E1; the only
+# reader is the blit itself — the respawn probes already exclude it). Render-only, so exclude from the gameplay verify.
+_BLIT_SCRATCH = {0x2DEC, 0x2DED}
+_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y | _BLIT_SCRATCH
 
 
 def _run(demo, lim):

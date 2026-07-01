@@ -17,10 +17,14 @@ THE BOOT IMAGE is the EXE's initialized memory at the ``main`` entry, extracted 
 build tool) and cached under ``artifacts/``; it is built automatically on first run if absent (the one build-time
 use of ``PRE2.EXE``). Copy the package + the boot image + ``assets/`` anywhere and run.
 
-STATUS: the front-end drives OLDIES + the two title screens byte-exact VM-less, then stops at the menu/world-map
-gap (still being recovered — #14). ``--from-level`` boots a level directly for gameplay testing (the front-end
-sets up per-level state the direct path approximates, so a directly-booted level is functional but not a
-substitute for the real flow). When the runner reaches an unrecovered gap it prints it and holds the last frame.
+STATUS: the front-end drives OLDIES + the two title screens + the "press 1/2" menu + the mode-select world-map +
+the CARTE map scroll-in VM-less, then hands off to GAMEPLAY: the level-load is verified byte-exact vs the pure-ASM
+oracle's gameplay-entry seed (every core gameplay table identical), the secret/bonus tiles are hidden (3ead),
+lives/tally are set, the parallax sky is drawn (BACK0.SQZ -> the 0x7E80 base), and PRESENTA/menu/level music plays,
+so selecting a difficulty shows the carte (map scroll-in with the player's 'you are here' marker) and loads Level 1
+with the correct backdrop and no state divergence. Remaining gaps: SFX (native skips play_sfx's [0x1004] writes) and
+the 88D7 combat pass (can't hurt enemies). ``--from-level`` boots a level directly for testing.
+When the runner reaches an unrecovered gap it prints it and holds the last frame.
 """
 from __future__ import annotations
 
@@ -162,9 +166,16 @@ def main(argv=None) -> int:
             present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — cold boot (front-end)")
             pump()
             k = pygame.key.get_pressed()
-            apply_input(state, fire=k[pygame.K_SPACE])             # OLDIES scene-wait (0bbe) reads the fire key
+            # feed fire + the arrows to the front-end: the OLDIES scene-wait (0bbe) reads fire; the mode-select
+            # toggles BEGINNER<->EXPERT on UP/DOWN and the carte pans on the arrows (without these only beginner
+            # was selectable).
+            apply_input(state, fire=k[pygame.K_SPACE],
+                        left=k[pygame.K_LEFT] or k[pygame.K_KP4], right=k[pygame.K_RIGHT] or k[pygame.K_KP6],
+                        up=k[pygame.K_UP] or k[pygame.K_KP8], down=k[pygame.K_DOWN] or k[pygame.K_KP2])
             set_key(state, 0x02, k[pygame.K_1] or k[pygame.K_KP1])  # '1' -> [0x27f6] = start (mode-select)
             set_key(state, 0x03, k[pygame.K_2] or k[pygame.K_KP2])  # '2' -> [0x27f7] = password
+            if native_audio is not None:
+                native_audio.poll(state)                           # front-end music (PRESENTA title song, menu, carte)
             if not ref["running"]:
                 break
         reached_gameplay = ref["running"]                          # the generator finished -> a level started

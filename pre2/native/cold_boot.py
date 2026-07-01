@@ -18,8 +18,9 @@ from __future__ import annotations
 import pathlib
 import zlib
 
+from pre2.native.assets import load_sqz
 from pre2.native.input import init_keyboard_input
-from pre2.native.level_init import native_level_init
+from pre2.native.level_init import native_level_start
 from pre2.native.sprite_bank import native_build_sprite_bank
 from pre2.native.state import NativeGameState
 
@@ -63,8 +64,13 @@ def native_cold_boot(game_root: str, boot_image_path: str, *, level: int = 0) ->
     game files: the static boot image + the recovered native asset/level loaders. Returns a ready state
     (render it with ``native.render`` / step it with ``native.runtime`` — no emulator anywhere)."""
     state = NativeGameState(load_boot_image(boot_image_path))
+    # main() permanently stacks FRONT.SQZ (the HUD front-panel) into the load buffer BEFORE the sprite bank
+    # ([0x2875] 0x27be -> 0x2cd7), so the level then lands at 0x5cc1 — the exact segment the VM loads it at. The
+    # boot image is captured at OLDIES entry (before this load), so cold-boot must reproduce it: without it the
+    # level loads 0x519 paragraphs too low and the parallax background over-reads the wrong memory (black sky).
+    load_sqz(state, "FRONT.SQZ", game_root=game_root)            # [asm 107B] permanent front-panel load (bumps [0x2875])
     native_build_sprite_bank(state, game_root=game_root)          # the shared SPRITES.SQZ 5-plane bank
     init_keyboard_input(state)                                    # boot joystick-detect outcome (keyboard play)
     state.data[_DS + _LEVEL_SEL] = level & 0xFF
-    native_level_init(state, game_root=game_root)                 # load + init the level, VM-less
+    native_level_start(state, game_root=game_root)                # load + init + the level-start block (lives, etc.)
     return state

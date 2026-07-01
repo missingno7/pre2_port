@@ -178,6 +178,39 @@ def _ww(state, off: int, v: int) -> None:
     _wb(state, off + 1, v >> 8)
 
 
+_CS_BASE = 0x1030 << 4
+_TIMER_PHASE = _CS_BASE + 0x1D6B            # cs:[0x1d6b]: the timer ISR's mod-4 tick phase (07B2/07B7)
+_TICKS_PER_FRAME = 3                         # the main loop waits 3 VGA retraces (0264) -> 3 timer ticks / frame
+
+
+def native_idle_timer_tick(state, ticks: int = _TICKS_PER_FRAME) -> None:
+    """[asm 0264 -> 17C0] Advance the wall-clock idle counter ``[0x27F0]`` the way the timer ISR does.
+
+    ``[0x27F0]`` (a free-running 32-bit counter at ``[0x27F0]``/``[0x27F2]``) is bumped by the timer ISR
+    (``1030:17C9 add`` / ``17CE adc``) every 4th tick — i.e. whenever the mod-4 phase ``cs:[0x1d6b]`` wraps to 0
+    (``07B2 inc`` / ``07B7 and 3`` / ``07BD je 17C0``). ``ticks`` = how many 70Hz timer ticks fire this frame:
+    the gameplay main loop's 3-retrace wait (``44FB`` @ ``0264``) lets exactly **3** fire per frame (and it sits
+    AFTER the player step ``022F`` — the only gameplay reader, the idle-fidget selector at ``5DC9`` using
+    ``[0x27F0] & 0x1FF`` — so the player reads the frame-START value and the 3 ticks land at frame END); the
+    per-retrace FRONT-END runs at **1** tick/frame. Native runs no timer; reproducing this keeps ``[0x27F0]``
+    (and the idle animation it drives) in step. WITHOUT the front-end advancing it, ``[0x27F0]`` would be 0 at
+    level start — a value the VM never has (its timer has run since boot) — and the idle player would pick the
+    wrong fidget pose (a crouch instead of the upright stand). Proven byte-exact vs the VM's per-tick sequence."""
+    d = state.data
+    phase = d[_TIMER_PHASE]
+    lo = d[_DS_BASE + 0x27F0] | (d[_DS_BASE + 0x27F1] << 8)
+    hi = d[_DS_BASE + 0x27F2] | (d[_DS_BASE + 0x27F3] << 8)
+    for _ in range(ticks):
+        phase = (phase + 1) & 3                              # [asm 07B2/07B7] inc [0x1d6b]; and 3
+        if phase == 0:                                       # [asm 07BD je 17C0]
+            lo = (lo + 1) & 0xFFFF                           # [asm 17C9] add word [0x27f0], 1
+            if lo == 0:
+                hi = (hi + 1) & 0xFFFF                       # [asm 17CE] adc word [0x27f2], 0
+    d[_TIMER_PHASE] = phase
+    _ww(state, 0x27F0, lo)
+    _ww(state, 0x27F2, hi)
+
+
 def native_firefly_step(state) -> None:
     """[asm 0253: 54AB] Step the firefly swarm (animation + both RNGs) in place — the per-frame sim. The VRAM
     draw is the renderer's job; only the state contract (slots + RNG seeds + scratch) is applied here."""
@@ -281,7 +314,9 @@ def native_gameplay_frame(state) -> None:
     native_scroll_script(state)                                     # [asm 0256] 3922
     native_level_state(state)                                       # [asm 0259] 4C69 (carry -> level change @ 0x12f)
     native_respawn_gate(state)                                      # [asm 0261] 45AF
-    # [asm 0264] 44FB (4509 + 1C65) render/timing helper; [asm 0267] 6772 render commit — the renderer's job
+    # [asm 0264] 44FB (4509 + 1C65) render/timing helper; [asm 0267] 6772 render commit — the renderer's job.
+    # The 44FB 3-retrace WAIT is where the 70Hz timer fires 3× -> advance the [0x27F0] idle counter (fidget anim).
+    native_idle_timer_tick(state)                                   # [asm 0264: 44FB wait -> 17C0 timer]
     native_special_event(state)                                     # [asm 026A] 67D7
     native_camera_shake(state)                                      # [asm 026D] 4C30
     # [asm 0270] jmp 0214 — loop back

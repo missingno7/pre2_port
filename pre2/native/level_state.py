@@ -8,7 +8,7 @@ the level to its checkpoint and continues the gameplay loop. The death (5063) / 
 from __future__ import annotations
 
 from pre2.checkpoints.common import Pre2HybridGap
-from pre2.native.level_init import native_3af2, native_5237, native_level_init
+from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
 
@@ -103,10 +103,4 @@ def native_level_end(state, *, game_root: str) -> None:
     if level >= 0xA:
         raise Pre2HybridGap("native level-end: level >= 0xA warp table (4c74/4cba) not recovered")
     d[_DS + 0x2D8A] = (level + 1) & 0xFF                          # [asm 4cc4] next level (normal +1)
-    native_level_init(state, game_root=game_root)                # [asm 0x13e: 447d] load + re-init the next level
-    d[_DS + 0x27D8] = 2                                           # [asm 0141]
-    d[_DS + 0x6CA7] = 0                                           # [asm 0146] BONUS-letters mask
-    d[_DS + 0x7B19] = 0x14                                        # [asm 014b]
-    d[_DS + 0x7B18] = 0                                           # [asm 0150]
-    d[_DS + 0x6CA8] = 0                                           # [asm 0155] utensils mask
-    d[_DS + 0x6BE6] = 0; d[_DS + 0x6BE4] = 0; d[_DS + 0x6BE5] = 0  # the level-state flags are clear in gameplay
+    native_level_start(state, game_root=game_root)               # [asm 0x13e..0155] load + re-init + level-start flags

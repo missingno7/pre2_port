@@ -15,6 +15,7 @@ double-buffer dup, and the final ``[0x2875]`` load-pointer — fail loud (never 
 """
 from __future__ import annotations
 
+from pre2.codecs.sqz import unpack_sqz
 from pre2.native.assets import load_sqz_by_dx
 from pre2.native.state import DATA_SEG
 
@@ -125,6 +126,21 @@ def _rebase_entity_sprites(d) -> None:
         d[_DS + o] = v & 0xFF; d[_DS + o + 1] = (v >> 8) & 0xFF
 
 
+def _ensure_password_seed(d) -> None:
+    """[asm 932F 9336..9396] Reproduce 932F's lazy one-time seed init: if the ``[0xA335]`` "computed" flag is
+    clear, compute the BIOS-ROM checksum into ``[0xA333]`` (word) and set the flag. This is exactly the guard the
+    ASM runs on the FIRST password-generator call — and in the mode-select path that first call IS this 40bd
+    decor assignment (which is why the VM reaches gameplay with ``[0xA333]=0x20`` on the zeroed-BIOS GOG build).
+    Without it native reads ``[0xA333]=0`` -> the decor sprites diverge from the VM. Idempotent."""
+    from pre2.recovered.password import bios_seed
+    if d[_DS + 0xA335] != 0:                                 # [asm 933c] cmp byte [0xa335],0 / jne (already done)
+        return
+    seed = bios_seed(d)                                     # [asm 9343..9390] the F000/option-ROM checksum
+    d[_DS + 0xA333] = seed & 0xFF                            # [asm 9392] mov [0xa333], dx
+    d[_DS + 0xA334] = (seed >> 8) & 0xFF
+    d[_DS + 0xA335] = 1                                     # [asm 9396] mov byte [0xa335], 1
+
+
 def _assign_random_decor(d) -> None:
     """40bd: the random decorative-sprite assignment. Collect the float-effect entries ([0x8f1d], 70x stride 7)
     whose sprite ref ([si+4] & 0x1fff) is in [0x11b, 0x12b) into a pointer list at [0x6a88]; if the count is a
@@ -132,6 +148,7 @@ def _assign_random_decor(d) -> None:
     sprite (0x11b + a 4-bit nibble of the level's password code 932F, MSB-first, groups of 4 reusing the code).
     Deterministic via the recovered generator [[pre2-level-passwords]] (seed = machine fingerprint [0xA333])."""
     from pre2.recovered.password import DEFAULT_ROT, level_code
+    _ensure_password_seed(d)                                # [asm 40bd -> 932F] the first 932F call inits the seed
 
     ptrs = []
     for k in range(0x46):
@@ -170,6 +187,32 @@ def _assign_random_decor(d) -> None:
             d[_DS + di + 4] = val & 0xFF; d[_DS + di + 5] = (val >> 8) & 0xFF
 
 
+def _self_patch_secret_tiles(d) -> None:
+    """[asm 3ead] HIDE the secret/bonus tiles in the level-data grid. Walk the 0x50-entry bonus-cell list
+    ``[0x8c8d]`` (stride 5): each entry's ``[+3]`` word ``bx`` is a cell offset into the level data (``[0x2dda]``).
+    For a live entry (``bx != 0xFFFF``) swap ``level_data[bx]`` with the entry's ``[+0]`` byte — the HIDDEN tile —
+    and stash the displaced (revealed) tile in ``[+1]`` (so the reveal handler can restore it), counting the cell.
+    Then add the count to ``[0x2a74]`` (the level's collectible total the tally reads). WITHOUT this the secret
+    tiles render already-revealed (and [0x2a74] stays 0). Runs after 4182, before 40bd (so the count is doubled by
+    ``_count_decor``)."""
+    seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)
+    base = (seg << 4) & 0xFFFFF
+    dx = 0
+    for k in range(0x50):                                        # [asm 3eb5 cx=0x50]
+        si = 0x8C8D + k * 5                                      # [asm 3eb2/3ecb stride 5]
+        bx = d[_DS + si + 3] | (d[_DS + si + 4] << 8)            # [asm 3eba] cell offset
+        if bx == 0xFFFF:                                         # [asm 3ebd/3ec0]
+            continue
+        dx += 1                                                  # [asm 3ec2]
+        cell = (base + bx) & 0xFFFFF
+        al = d[_DS + si]                                         # [asm 3ec3] the hidden-tile replacement
+        d[_DS + si + 1] = d[cell]                                # [asm 3ec8] stash the original (revealed) tile
+        d[cell] = al                                             # [asm 3ec5] xchg -> patch the cell to hidden
+    v = ((d[_DS + 0x2A74] | (d[_DS + 0x2A75] << 8)) + dx) & 0xFFFF   # [asm 3ed0] [0x2a74] += count
+    d[_DS + 0x2A74] = v & 0xFF
+    d[_DS + 0x2A75] = (v >> 8) & 0xFF
+
+
 def _dup_double_buffer(d) -> None:
     """4065: dup the rebased [0x815e..] block to [0x9203..] (0x10a5 bytes, the working copy)."""
     d[_DS + 0x9203:_DS + 0x9203 + 0x10A5] = d[_DS + 0x815E:_DS + 0x815E + 0x10A5]
@@ -183,6 +226,7 @@ def native_level_load_objects(state) -> None:
     _per_level_pointers(d)           # 4038..4056
     _rebase_effect_sprites(d)        # 414d
     _rebase_entity_sprites(d)        # 4182
+    _self_patch_secret_tiles(d)      # 3ead: hide the secret/bonus tiles + count into [0x2a74]
     _assign_random_decor(d)          # 40bd
     _dup_double_buffer(d)            # 4065
     _count_decor(d)                  # 4073..40bb
@@ -234,18 +278,28 @@ def native_level_load_planar(state) -> None:
     write_slots(state, compute_local_slots(state, base_seg))         # 4316 (local)
 
 
-def native_level_load_background(state) -> None:
-    """The parallax-background planar blit [asm 3f8d..3faa]: copy the level data's leading 4-plane image
-    (``[0x2dda]:0``, 0x6240 bytes/plane, planes consecutive in the source) into the off-screen tail of each EGA
-    plane at ``0x9dc0..0x10000`` — the parallax base the renderer reads (render_frame ASSET region runs to 0x10000)."""
+_PARALLAX_BASE = 0x7E80      # BG_PTR_BIAS — the parallax-base the renderer reads (frame_renderer.py)
+_PARALLAX_PLANE = 0x1F40     # 200 rows * 0x28 = one screen per plane
+
+
+def native_level_load_background(state, *, game_root: str) -> None:
+    """Load the level's parallax BACKDROP into the ``0x7E80`` parallax base the renderer reads.
+
+    ``BACK<group>.SQZ`` (the C-string at ``[0x2da6]``, its group digit ``[0x2daa]`` set by the dgroup prologue) is a
+    STATIC 4-plane sky image — ``0x7d00`` bytes = 4 planes x ``0x1F40`` (200 rows x 0x28), planes consecutive — that
+    the renderer composites behind transparent/partial tiles (``BG_PTR_BIAS = 0x7E80`` in frame_renderer; the
+    camera-counteracting shift that keeps it fixed on screen is the renderer's job). Decoded straight into the four
+    EGA planes at ``0x7E80..0x9dc0``. Byte-exact vs the VM's ``0x7E80`` (100%, all four planes). (The old
+    ``[0x2dda]``-over-read blit to ``0x9dc0`` was a dead end — the renderer never reads ``0x9dc0``.)"""
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+
+    from pre2.native.assets import read_cstring, resolve_game_path
+    name = read_cstring(state, 0x2DA6)                             # BACK<group>.SQZ
+    back = unpack_sqz(resolve_game_path(game_root, name).read_bytes())
     d = state.data
-    seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)
-    src = (seg << 4) & 0xFFFFF
     for p in range(4):
-        s0 = src + p * 0x6240
-        dst = EGA_APERTURE + p * EGA_PLANE_STRIDE + 0x9DC0
-        d[dst:dst + 0x6240] = d[s0:s0 + 0x6240]
+        dst = EGA_APERTURE + p * EGA_PLANE_STRIDE + _PARALLAX_BASE
+        d[dst:dst + _PARALLAX_PLANE] = back[p * _PARALLAX_PLANE:(p + 1) * _PARALLAX_PLANE]
 
 
 def native_level_load_classify(state) -> None:
@@ -343,6 +397,11 @@ def native_level_load(state, level: int, *, game_root: str) -> None:
     parallax-background blit (its source over-reads past the level data into the next bump allocation, a
     memory-layout coupling — not just the level file). Tracked in [[pre2-level-init-island]]."""
     native_level_load_dgroup(state, level, game_root=game_root)
+    # [asm 3f8d] the parallax blit runs HERE — right after the LEVEL<n> load, BEFORE UNION/BACK0. LEVEL<n>.SQZ
+    # decodes LARGER than its reserved paragraphs ([0x2875] bump), so the blit's 4-plane over-read past the reserve
+    # reads LEVEL<n>'s decoded overflow PLUS the previous allocation still in memory (MAP.SQZ from the carte). Doing
+    # it here — before the object/UNION passes overwrite that tail — is what makes the standalone parallax match.
+    native_level_load_background(state, game_root=game_root)       # BACK<n>.SQZ -> the 0x7E80 parallax base (the sky)
     native_level_load_objects(state)
     native_level_load_anim_tables(state)                            # 42af: tile-animation tables [0x6688]
     native_level_load_planar(state)                                 # LOCAL tile cache (code < 0x100)

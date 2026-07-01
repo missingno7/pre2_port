@@ -57,6 +57,48 @@ def build_carte_page(asset: bytes, scroll_x: int, scroll_start: int = SCROLL_STA
     return planes
 
 
+@oracle_link("1030:9543",
+             "the carte 'you are here' marker de-planarization (9543..95CD): stamps the player-position "
+             "sprite from [0x667a]:[0x62da] (mask + 4 colour planes, each w*h bytes, consecutive) onto the "
+             "map master at di = ((y-0x20)&0xFF)*0x50 + (x>>3), where (x,y) = the per-level position word "
+             "pair [0xB148 + level*4] / [0xB14A + level*4] and (w,h) = ([0x7522]&0xFF)>>3 / [0x7522]>>8. "
+             "AND-mask then OR-plane, plane offsets 0/0x3E80/0x7D00/0xBB80 (the 4 map-asset planes), di "
+             "advances +1 per column and +(0x50-w) per row. Proven byte-exact vs the VM stamped master "
+             "(the 414-byte 0.6% overlay over MAP.SQZ).",
+             "VERIFIED", merge_target="render_scene")
+def stamp_carte_marker(asset: bytes, marker: bytes, di: int, w: int, h: int) -> bytes:
+    """Stamp the carte's per-level 'you are here' marker onto the decoded map master.
+
+    ``asset`` is the raw map master (``[0x2875]`` bytes, the same 0xFA00 blob :func:`build_carte_page`
+    consumes). ``marker`` is the ``5*w*h``-byte source at ``[0x667a]:[0x62da]`` — a mask plane followed by
+    four colour planes, each ``w*h`` bytes. ``di`` / ``w`` / ``h`` come from the per-level position table
+    and the marker dimensions (see the ``[asm]`` note). Returns a new master with the marker composited in
+    (``dst = (dst & ~mask) | colour`` on each of the 4 planes at offsets 0/0x3E80/0x7D00/0xBB80).
+    """
+    PLANES = (0x0000, 0x3E80, 0x7D00, 0xBB80)                   # [asm 958B-9598] the 4 map-asset plane bases
+    wh = w * h
+    buf = bytearray(0x10000)                                    # a full 64K segment (di+plane may wrap the word)
+    buf[:len(asset)] = asset
+    lin = 0
+    d = di & 0xFFFF
+    for _row in range(h):                                       # [asm 95C9-95CB] dh rows
+        for _col in range(w):                                   # [asm 95C5] cx=w byte columns
+            mask = marker[lin]                                  # [asm 9587] mask byte
+            inv = (~mask) & 0xFF                                # [asm 9589] not al
+            for p in range(4):
+                off = (d + PLANES[p]) & 0xFFFF
+                buf[off] = (buf[off] & inv) | marker[(p + 1) * wh + lin]  # [asm 958B..95B8] and mask, or colour
+            lin += 1                                            # [asm 95C3] inc si (source runs linearly)
+            d = (d + 1) & 0xFFFF                                # [asm 95C4] inc di
+        d = (d + (0x50 - w)) & 0xFFFF                           # [asm 95C7] di += 0x50 - w (next row)
+    return bytes(buf[:len(asset)])
+
+
+def carte_marker_offset(x_word: int, y_word: int) -> int:
+    """The map byte-offset ``di`` of the per-level marker: ``((y-0x20)&0xFF)*0x50 + (x>>3)`` [asm 954D-9560]."""
+    return (((y_word - 0x20) & 0xFF) * 0x50 + (x_word >> 3)) & 0xFFFF
+
+
 def carte_display(scroll_x: int, scroll_y: int = 0):
     """The on-screen view parameters for the carte at ``scroll_x``: ``(display_start, pel_pan)``.
 

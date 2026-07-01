@@ -30,6 +30,25 @@ def test_native_game_state_accessors():
     assert len(st.data) == 0x100000
 
 
+def test_native_idle_timer_tick_reproduces_vm():
+    # [0x27F0] is a free-running 32-bit wall-clock counter the timer ISR bumps every 4th tick (when the mod-4 phase
+    # cs:[0x1d6b] wraps); the idle-fidget animation reads it. The main loop's 3-retrace wait fires exactly 3 timer
+    # ticks/frame, so native advances it deterministically. These checkpoints ARE the VM's captured per-tick
+    # [0x27F0]/phase sequence (the menu->L1 demo, seed [0x27F0]=354 / phase 1) — where the old frozen counter made
+    # the idle fidget diverge at tick 212.
+    from pre2.native.loop import native_idle_timer_tick
+    CS = 0x1030 << 4
+    st = _state({0x27F0: 354 & 0xFF, 0x27F1: 354 >> 8, 0x27F2: 0, 0x27F3: 0})
+    st.data[CS + 0x1D6B] = 1                                # the timer phase captured at the gameplay seed
+    want = {1: (355, 0), 2: (355, 3), 3: (356, 2), 4: (357, 1), 5: (358, 0)}
+    for f in range(1, 6):
+        native_idle_timer_tick(st)
+        assert (st.rw(0x27F0), st.data[CS + 0x1D6B]) == want[f], f"frame {f}"
+    for _ in range(6, 213):
+        native_idle_timer_tick(st)
+    assert st.rw(0x27F0) == 513                             # the VM's [0x27F0] at tick 212 (byte-exact)
+
+
 def test_main_loop_spine_roadmap():
     # The roadmap: every per-frame main-loop call, classified. The VM-less core's coverage = the native share.
     assert len(MAIN_LOOP_SPINE) == 27
@@ -38,6 +57,27 @@ def test_main_loop_spine_roadmap():
     # (event-driven paths run as idle-no-op / armed-fail-loud, the recovered "native" pattern, so kind == native.)
     assert cov["native"] == 17 and cov["render"] == 10 and cov["gap"] == 0
     assert all(kind in ("native", "render", "gap") for _, kind, _ in MAIN_LOOP_SPINE)
+
+
+def test_native_sync_render_state_advances_animation():
+    # native_sync_render_state must advance the animated-tile remap cycle (1030:367D) that the gameplay pass omits,
+    # so the standalone renders animated tiles (waving foliage, water, ...) at the SAME frame the VM displays. Proven
+    # vs the pure-ASM oracle: without it the whole-scene render diverges on every animation-advance frame (~1 in 4);
+    # with it the gorilla level-3 gameplay is pixel-exact (150/150 frames). Here the mechanics: on a throttle-wrap
+    # frame the remap pointer [0x6BC2] steps +0x100; otherwise only the throttle [0x6BD4] increments.
+    from pre2.native.render import native_sync_render_state
+    # [0x6BBD]=1 animated tiles present; [0x6BF6]=0 slow -> mask 3; throttle 3 -> (3+1)&3==0 -> ADVANCE.
+    st = _state({0x6BBD: 1, 0x6BC2: 0x88, 0x6BC3: 0x66, 0x6BD4: 0x03, 0x6BF6: 0})
+    native_sync_render_state(st)
+    assert st.rw(0x6BC2) == 0x6788 and st.rb(0x6BD4) == 0x04          # remap ptr stepped 6688 -> 6788
+    # a non-wrap throttle increments the counter but does NOT step the pointer.
+    st2 = _state({0x6BBD: 1, 0x6BC2: 0x88, 0x6BC3: 0x66, 0x6BD4: 0x00, 0x6BF6: 0})
+    native_sync_render_state(st2)
+    assert st2.rw(0x6BC2) == 0x6688 and st2.rb(0x6BD4) == 0x01        # (0+1)&3 != 0 -> no step
+    # gate: no animated tiles ([0x6BBD]=0) -> nothing advances at all.
+    st3 = _state({0x6BBD: 0, 0x6BC2: 0x88, 0x6BC3: 0x66, 0x6BD4: 0x03})
+    native_sync_render_state(st3)
+    assert st3.rw(0x6BC2) == 0x6688 and st3.rb(0x6BD4) == 0x03
 
 
 def test_native_object_spawn_step_noop_when_inactive():

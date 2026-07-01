@@ -66,6 +66,22 @@ def native_sync_render_state(state) -> None:
         d[_DS + off] = val & 0xFF
         d[_DS + off + 1] = (val >> 8) & 0xFF
 
+    # Advance the animated-tile remap cycle (1030:367D) — the render-cluster step the gameplay pass omits. The
+    # VM steps [0x6BC2]/[0x6BD4] once per redraw, BEFORE the grid walk reads the current remap table, so without
+    # this the standalone renders animated tiles (waving foliage, water, …) one frame STALE on every advance
+    # frame (proven vs the pure-ASM oracle: forcing [0x6BC2] to the VM value drops the frame diff to 0). It is
+    # render-state ([0x6BC2]/[0x6BD4] are excluded from the gameplay verify), so it belongs here — run exactly
+    # once per displayed frame, matching the VM's per-redraw cadence.
+    from pre2.recovered.animation import advance_animation
+    fp = d[_DS + 0x6BC2] | (d[_DS + 0x6BC3] << 8)
+    thr = d[_DS + 0x6BD4]
+    active = d[_DS + 0x6BBD] != 0
+    speed = d[_DS + 0x6BF6] | (d[_DS + 0x6BF7] << 8)
+    fp, thr, _ = advance_animation(fp, thr, active, speed)
+    d[_DS + 0x6BC2] = fp & 0xFF
+    d[_DS + 0x6BC3] = (fp >> 8) & 0xFF
+    d[_DS + 0x6BD4] = thr & 0xFF
+
 
 def native_render(state, dos, display_page: int, *, game_root: str,
                   particle_capture=None, foreground_capture=None):

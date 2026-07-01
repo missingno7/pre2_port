@@ -17,7 +17,7 @@ Index → level/difficulty: index 0 == level 1 beginner and index 10 == level 1 
 from __future__ import annotations
 
 __all__ = ["PASSWORD_XOR", "DEFAULT_SEED", "DEFAULT_ROT", "LEVELS_PER_MODE",
-           "level_code", "password", "password_table", "validate_code"]
+           "bios_seed", "level_code", "password", "password_table", "validate_code"]
 
 PASSWORD_XOR = 0x55A3     # [asm 939C xor ax,0x55a3]
 DEFAULT_SEED = 0x20       # [asm 9390] the zeroed-BIOS fallback -> the seed on the GOG build under the VM/DOSBox
@@ -36,6 +36,35 @@ def level_code(index: int, seed: int = DEFAULT_SEED, rot: int = DEFAULT_ROT) -> 
     """The 16-bit password value for level ``index`` — recovers ``1030:932F``'s output
     (``rol16((index ^ 0x55A3) * seed, rot)``). Render as 4 upper-hex digits for the on-screen code."""
     return _rol16(((index ^ PASSWORD_XOR) * seed) & 0xFFFF, rot)
+
+
+def bios_seed(mem) -> int:
+    """[asm 932F 9343..9390] The one-time BIOS-ROM checksum that becomes ``[0xA333]`` (the password/decor seed).
+
+    ``mem`` is a 1 MB-addressable byte sequence (``mem[(seg << 4) + off]``). Sums the BIOS date bytes
+    ``F000:FFF0..FFFF`` (dl += b / dh sbb b) then every option/video ROM ``C000..EFFF`` that carries the
+    ``0xAA55`` signature (dl += b / dh xor b, 0x80 bytes, advancing by the ROM's declared size), and returns
+    the 16-bit ``dx``. When the total is 0 — as on the zeroed-BIOS GOG/DOSBox build — it falls back to ``0x20``
+    (``mov dl,0x20``), which is why this build's codes are the deterministic A305/A905 (see the module header)."""
+    dl = dh = 0
+    for si in range(0xFFF0, 0x10000):                        # [asm 934d] F000:FFF0..FFFF (16 date bytes)
+        b = mem[0xF0000 + si]
+        s = dl + b; cf = s >> 8; dl = s & 0xFF               # [asm 934d] add dl, es:[si]
+        dh = (dh - b - cf) & 0xFF                            # [asm 9350] sbb dh, es:[si]
+    ax = 0xC000                                              # [asm 9356] scan the option ROMs C000..EFFF
+    while (ax >> 8) < 0xF0:                                  # [asm 9387/938a] cmp ah,0xf0 / jb
+        base = (ax & 0xFFFF) << 4
+        if (mem[base] | (mem[base + 1] << 8)) == 0xAA55:     # [asm 935b] the ROM signature
+            for si in range(0x80):                           # [asm 9366-9370] sum 0x80 bytes
+                b = mem[base + si]
+                s = dl + b; cf = s >> 8; dl = s & 0xFF       # [asm 9369] add dl, es:[si]
+                dh = (dh ^ b) & 0xFF                         # [asm 936c] xor dh, es:[si]
+            bh = mem[base + 2]                               # [asm 9372] ROM size in 512-byte blocks
+            ax = (ax + ((bh << 8) >> 3)) & 0xFFFF            # [asm 9377-9384] advance ax by the ROM size (net)
+        else:
+            ax = (ax + 0x400) & 0xFFFF                       # [asm 9384] add ah,4 -> next 16 KB
+    dx = (dh << 8) | dl
+    return dx if dx != 0 else 0x20                           # [asm 938c-9390] or dx,dx / je -> mov dl,0x20
 
 
 def password(level: int, expert: bool = False, seed: int = DEFAULT_SEED, rot: int = DEFAULT_ROT) -> str:

@@ -18,6 +18,28 @@ from __future__ import annotations
 from pre2.bridge.audio import read_sfx
 from pre2.bridge.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
 
+_DS = 0x1A0F << 4
+_SONG_LENGTH = 0xDC2      # [asm 22FE] number of order positions
+_ORDER_TABLE = 0xDC7      # [asm 22B3] order table (pattern sequence)
+
+
+def native_load_song(state, name: str, game_root: str) -> None:
+    """Reproduce the song loader (``1030:02cc``) for the VM-less runtime: parse the standard ``.TRK`` module's
+    order list into ``[0xDC7]`` and its length into ``[0xDC2]`` — the fingerprint :class:`NativeAudio` matches to
+    identify + play the song. (The enhanced player streams the ``.TRK`` from disk, so only the order/length state
+    is needed; no module PCM has to be placed in memory.) Call it at the scene the VM loads the song: PRESENTA at
+    the PRESENT title, CODE at the menu, CARTE at the carte, the level song at level start."""
+    import os
+
+    from pre2.codecs.audio import load_trk
+    with open(os.path.join(game_root, name), "rb") as f:
+        mod = load_trk(f.read())
+    d = state.data
+    order = mod.order
+    d[_DS + _SONG_LENGTH] = len(order) & 0xFF
+    for i, o in enumerate(order[:0x100]):
+        d[_DS + _ORDER_TABLE + i] = o & 0xFF
+
 
 class NativeAudio:
     """Per-frame audio-command poller over a NativeGameState.

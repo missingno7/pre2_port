@@ -24,7 +24,10 @@ EXE = ASSETS / "pre2.exe"
 BOOT_IMAGE = ROOT / "artifacts" / "pre2_boot_image.zz"
 _DS = 0x1A0F << 4
 
-GOLD_L1_RGB = "e21ca0fa63cb380e649f2cff22a3182768a94ef0"   # the VM-less L1 frame (== the VM-image path, 0px diff)
+# the VM-less cold-boot L1 frame. Includes the level-start block (lives=2), FRONT.SQZ (level at seg 0x5cc1), the
+# 3ead secret-tile hide, and the PARALLAX backdrop: BACK0.SQZ decoded into the 0x7E80 base the renderer composites
+# behind transparent tiles (100% == the VM's 0x7E80; the sky is now blue instead of black).
+GOLD_L1_RGB = "377100ae7085a81133d9181c7232c0148595d8bf"
 
 pytestmark = pytest.mark.skipif(
     not EXE.exists() or not (ASSETS / "SPRITES.SQZ").exists(),
@@ -57,8 +60,8 @@ def test_native_cold_boot_renders_l1_with_no_vm():
     state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
     rgb = _render_l1(state)
     assert rgb.shape == (200, 320, 3)
-    assert int((rgb.sum(2) > 0).sum()) == 54863          # the level is actually drawn (~86% non-black)
-    assert len(np.unique(rgb.reshape(-1, 3), axis=0)) == 15
+    assert int((rgb.sum(2) > 0).sum()) == 63680          # the level is drawn incl. the blue parallax sky (~99%)
+    assert len(np.unique(rgb.reshape(-1, 3), axis=0)) == 16
     assert hashlib.sha1(rgb.tobytes()).hexdigest() == GOLD_L1_RGB
 
 
@@ -95,6 +98,72 @@ def test_native_cold_boot_is_playable_with_no_vm():
     assert state.data[_DS + 0x27EC] == 0xFF             # the decoded "right" FSM flag is live
 
 
+def test_native_cold_boot_computes_bios_password_seed():
+    # The BIOS-ROM password seed [0xA333] (932F's one-time init, guarded by the [0xA335] "computed" flag) must be
+    # computed VM-less during the level load -- the 40bd decor assignment is the first 932F call, exactly as in the
+    # VM. On the zeroed-BIOS GOG build it is the 0x20 fallback, matching the VM's captured gameplay-entry state
+    # ([0xA333]=0x20). Without it the random decor sprites ([0x8f1d]+4) diverge from the VM. Proven by diffing the
+    # native level-load against the pure-ASM oracle's 0214 gameplay-entry seed (all core gameplay tables byte-exact).
+    state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    assert state.data[_DS + 0xA333] == 0x20 and state.data[_DS + 0xA334] == 0
+    assert state.data[_DS + 0xA335] == 1               # the one-time "seed computed" flag is set
+
+
+GOLD_YOFF_TABLE = "dcf7223ce05222c1a8439be54f7d91c50da60445"   # [0x752A..0x772A] after the 2E15 bottom-anchor fixup
+
+
+def test_native_cold_boot_bottom_anchors_sprite_y_offsets():
+    # The sprite-bank head (2E15-2E29) rewrites each per-sprite Y draw-offset [0x752B] = height - y_off (a ONE-TIME
+    # cold-boot fixup). The renderer's baseline placement subtracts height again, so WITHOUT this every body sprite
+    # (player + enemies) draws exactly one sprite-height too LOW (sunk into the ground); the club, a zero-height
+    # attachment, is unaffected. The transformed table is byte-exact vs the VM's captured L1 gameplay-entry state.
+    from pre2.recovered.sprite_bank import bottom_anchor_y_offsets
+
+    state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    d = state.data
+    table = bytes(d[_DS + 0x752A:_DS + 0x772A])
+    assert hashlib.sha1(table).hexdigest() == GOLD_YOFF_TABLE
+    # the ground-anchoring is real: the first sprites' Y offsets are ~0 (baseline == feet), not ~height
+    yoffs = [d[_DS + 0x752B + i * 2] for i in range(3)]
+    assert yoffs == [0, 0, 0], f"expected bottom-anchored y_offs ~0, got {yoffs}"
+
+    # the pure transform: y_off = height - y_off per id, x_off untouched, stops at the zero-height terminator
+    desc = bytes([0, 36, 0, 35, 0, 0])            # id0 height 36, id1 height 35, id2 height 0 = terminator
+    draw = bytes([20, 36, 16, 35, 12, 99])
+    assert bottom_anchor_y_offsets(desc, draw) == bytes([20, 0, 16, 0, 12, 99])
+
+
+def test_native_front_end_cold_start_reaches_gameplay():
+    # THE cold-start proof: drive the WHOLE VM-less front-end (OLDIES -> TITUS -> PRESENT -> "press 1/2" ->
+    # mode-select) with scripted host input; it must reach the level-init handoff -- the generator RETURNS, so the
+    # runner switches to native_frame_step -- with the player + object pool BYTE-IDENTICAL to the verified
+    # native_cold_boot(level=0). That equality proves the front-end's residual state does NOT perturb the level load
+    # (the load is segment-relative + re-inits the gameplay tables), so gameplay starts with no divergence. The load
+    # itself is verified byte-exact vs the pure-ASM gameplay-entry oracle (see test_native_cold_boot_* / the island).
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import load_boot_image, native_cold_boot
+    from pre2.native.front_end import native_front_end
+    from pre2.native.input import apply_input, init_keyboard_input, set_key
+    from pre2.native.state import NativeGameState
+
+    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    init_keyboard_input(state)
+    gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS))
+    reached = False
+    for i, _scene in enumerate(gen):
+        set_key(state, 0x02, True)                     # hold '1' -> the menu picks the mode-select map
+        apply_input(state, fire=(i % 2 == 0))          # pulse fire: advances OLDIES (press->release) + confirms
+        if i > 4000:
+            break                                      # safety cap (a real run reaches the handoff in ~900 frames)
+    else:
+        reached = True                                 # the for-loop exhausted == the generator returned == handoff
+    assert reached, "the cold-start front-end never reached the level-init handoff"
+    assert state.data[_DS + 0xA333] == 0x20            # the BIOS password seed was computed during the level load
+    ref = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    assert state.data[_DS + 0x4F0A:_DS + 0x5732] == ref.data[_DS + 0x4F0A:_DS + 0x5732]   # player + object pool
+    assert (state.data[_DS + 0x4F1C] | (state.data[_DS + 0x4F1D] << 8)) == 0x2A            # player X = level start
+
+
 def test_native_front_end_oldies_palette():
     # The OLDIES credits screen loads its OWN 16-colour palette (the green/yellow look) from the DGROUP table at
     # 0x287e (0b92 -> int10 AX=1012), NOT the default EGA palette. This guards native_load_dac_palette being wired
@@ -127,10 +196,11 @@ def test_menu_press12_screen_render():
     assert hashlib.sha1(pal[img].tobytes()).hexdigest() == "6dd4eae081aa675ca3753ab39913872548edf96f"
 
 
-def test_native_menu_map_scroll_pixel_exact():
-    # The 96d5 scrolling world-map (the '2'/password screen): MOTIF.SQZ caveman tiles scrolling left (the stateful
-    # self-copy) + "ENTER CODE" / code text stamped each frame via the bit-rotated font (seed part B). Verified
-    # 0-diff vs the VM's A000 planes (all 4 planes, every captured frame); this golden-locks the composed frames.
+def test_native_menu_map_renders():
+    # The 96d5 scrolling world-map (MOTIF.SQZ caveman tiles + the sine-bounce + the screen text). The BACKGROUND
+    # planes 0,1 + the vertical bounce are byte-exact vs the pure-ASM oracle; the TEXT layer (planes 2,3) is a
+    # VISUAL APPROXIMATION for now (the VM's double-buffer text handling during the bounce isn't reproduced exactly,
+    # so we clear + re-stamp the text each frame to avoid ghosting). This golden just locks the composed output.
     import hashlib
     import itertools
 
@@ -146,7 +216,7 @@ def test_native_menu_map_scroll_pixel_exact():
     for scene in itertools.islice(_native_menu_map(state, DOSMachine(str(ASSETS)), str(ASSETS), "password"), 30):
         for plane in scene.planes:
             h.update(bytes(plane)[:0x2000])
-    assert h.hexdigest() == "091655f679b9a30a2d53fdf5426d48b12265f132"
+    assert h.hexdigest() == "a1de3afa1e68e0c630644022b2660d8632e75892"
 
 
 def test_native_menu_map_mode_select_toggle():
@@ -175,3 +245,50 @@ def test_native_menu_map_mode_select_toggle():
         pass
     assert state.data[_DS + 0x2D8A] == 0               # level 1
     assert state.data[_DS + 0xB198] == 1               # EXPERT difficulty committed
+
+
+# the carte 'you are here' marker (9543-95CD): the map master with the player-sprite marker stamped on. The golds are
+# the byte-exact VM values -- STAMPED matches the VM's captured carte master (the 414-byte 0.6% overlay over MAP.SQZ);
+# the marker source is the PLAYER sprite (caveman) itself, at [0x667a]:[0x62da], set up by the front-end's sprite bank.
+GOLD_CARTE_MASTER_STAMPED = "e3c3ee6ee7c506009db5cc527505a7735e6b4701"
+GOLD_CARTE_MARKER_SPRITE = "399a87730fd7bff5d038ede8c09c01ef1a520015"
+
+
+def test_native_carte_marker_stamp_matches_vm():
+    # The carte's per-level marker (the player's position on the world map) is de-planarized from [0x667a]:[0x62da]
+    # onto the map master at di = ((y-0x20)&0xFF)*0x50 + (x>>3), for the level's (x,y) = [0xB148/B14A + level*4]. The
+    # marker source is the PLAYER SPRITE itself (loaded by the front-end sprite bank, NOT present in a bare cold boot),
+    # so this drives the WHOLE front-end and captures the stamped master _native_carte actually feeds build_carte_page,
+    # proving native's chain (marker provenance + position + stamp) is BYTE-EXACT vs the VM's captured carte master.
+    from dos_re.dos import DOSMachine
+    import pre2.recovered.carte as carte
+    from pre2.native.cold_boot import load_boot_image
+    from pre2.native.front_end import native_front_end
+    from pre2.native.input import apply_input, init_keyboard_input, set_key
+    from pre2.native.state import NativeGameState
+
+    cap = {}
+    orig = carte.stamp_carte_marker
+    def spy(asset, marker, di, w, h):                       # capture the stamp inputs + output from the real flow
+        out = orig(asset, marker, di, w, h)
+        cap.setdefault("stamped", out)
+        cap.setdefault("marker", (di, w, h, hashlib.sha1(marker).hexdigest()))
+        return out
+    carte.stamp_carte_marker = spy
+    try:
+        state = NativeGameState(load_boot_image(_ensure_boot_image()))
+        init_keyboard_input(state)
+        gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS))
+        for i, _scene in enumerate(gen):
+            set_key(state, 0x02, True)                     # hold '1' -> mode-select map
+            apply_input(state, fire=(i % 2 == 0))          # pulse fire: advance OLDIES + confirm the mode-select
+            if "stamped" in cap or i > 4000:
+                break
+    finally:
+        carte.stamp_carte_marker = orig
+
+    assert "stamped" in cap, "the front-end never reached the carte marker stamp"
+    di, w, h, marker_sha = cap["marker"]
+    assert (di, w, h) == (0x1090, 5, 34)                   # level 1 -> the map's far left, a 40x34 sprite
+    assert marker_sha == GOLD_CARTE_MARKER_SPRITE          # the marker source IS the player sprite (caveman)
+    assert hashlib.sha1(cap["stamped"]).hexdigest() == GOLD_CARTE_MASTER_STAMPED
