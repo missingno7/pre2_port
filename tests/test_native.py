@@ -75,6 +75,28 @@ def test_native_combat_pass_idle_no_op():
     assert bytes(state.data[base + 0x4F0A:base + 0x5732]) == before   # idle -> no combat writes
 
 
+def test_native_trigger_teleport_enters_cave():
+    # [asm 52FE/5326] The position-trigger scan+teleport (cave/teleport entrance). Armed ([0x6BE1]!=0, momentum
+    # dormant), when the player's tile matches a [0x8367] table entry, native teleports to the entry's destination
+    # tile + camera and disarms. Reproduces the witnessed entry (src 0x2E7E -> dest tile 0x0636 / cam 0x0032).
+    from pre2.native.loop import native_trigger_scan
+    from pre2.native.state import NativeGameState
+
+    st = NativeGameState(bytearray(0x100000))
+    base = DATA_SEG << 4
+    ww = lambda o, v: st.data.__setitem__(slice(base + o, base + o + 2), bytes((v & 0xFF, (v >> 8) & 0xFF)))  # noqa: E731
+    ww(0x4F1C, 0x7E << 4); ww(0x4F1E, 0x2E << 4)              # player pixel pos -> tile (col 0x7E, row 0x2E) = 0x2E7E
+    st.data[base + 0x6BE1] = 1                                # armed
+    st.data[base + 0x6BC5] = 0                                # momentum dormant
+    st.data[base + 0x2D8A] = 0                                # level 1 (skip the level-6 special-case)
+    ww(0x8367, 0x2E7E); ww(0x8369, 0x0032); ww(0x836B, 0x0636); st.data[base + 0x836D] = 0   # table entry 0
+
+    native_trigger_scan(st)
+    assert (st.rw(0x4F1C), st.rw(0x4F1E)) == (0x0360, 0x0060)              # player at the cave destination tile<<4
+    assert (st.data[base + 0x2DE4], st.data[base + 0x2DE6]) == (0x32, 0x00)   # camera snapped to the destination
+    assert st.data[base + 0x6BE1] == 0                                    # trigger disarmed
+
+
 def test_native_sync_render_state_advances_animation():
     # native_sync_render_state must advance the animated-tile remap cycle (1030:367D) that the gameplay pass omits,
     # so the standalone renders animated tiles (waving foliage, water, ...) at the SAME frame the VM displays. Proven

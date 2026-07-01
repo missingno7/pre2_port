@@ -129,14 +129,52 @@ def native_object_system_step(state) -> None:
 
 
 def native_trigger_scan(state) -> None:
-    """[asm 52FE..5325] The per-frame position-trigger scan. When armed ([0x6BE1]!=0 and momentum dormant
-    [0x6BC5]==0) it matches the player's tile coords (549A) against the 20-entry table at [0x8367] and, on a hit,
-    teleports the player (5326+: zero velocity, reposition, reset camera). Unarmed it touches nothing — a
-    byte-exact no-op (witnessed: never armed across 4 demos / 1261 calls). The armed scan + teleport are
-    unrecovered (no witness), so an armed frame fails loud rather than guessing."""
-    rb, _ = readers(state)
+    """[asm 52FE..5325] The per-frame position-trigger scan (the cave/teleport-entrance scan). When armed
+    ([0x6BE1]!=0 and momentum dormant [0x6BC5]==0) it matches the player's tile coords (549A) against the 20-entry
+    table at [0x8367] (stride 7, ``[+0]`` = source tile); a NO match touches nothing (byte-exact no-op). A match
+    runs the 5326 teleport (reposition + animated camera scroll to the cave) — recovered in ``native_trigger_teleport``."""
+    rb, rw = readers(state)
     if rb(0x6BE1) != 0 and rb(0x6BC5) == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
-        raise Pre2HybridGap("native trigger 0x52FE armed ([0x6BE1]!=0) — position-trigger scan/teleport not recovered")
+        dx = _player_tile_coords(rw)                        # [asm 5313 -> 549A] the player's packed tile coord
+        si = 0x8367                                         # [asm 5316]
+        for _ in range(0x14):                               # [asm 5319 cx=0x14] the 20-entry table
+            if rw(si) == dx:                                # [asm 531C je 5326] a match -> the cave teleport
+                native_trigger_teleport(state, si)
+                return
+            si = (si + 7) & 0xFFFF                          # [asm 5320 stride 7]
+        # [asm 5325] no match -> ret (a byte-exact no-op)
+
+
+def native_trigger_teleport(state, si) -> None:
+    """[asm 5326..53F5] The cave/teleport-entrance teleport, reached on a position-trigger match. The matched
+    20-byte-stride entry ``si`` gives the destination: ``[si+2]`` = camera, ``[si+4]`` = player tile, ``[si+6]`` =
+    the ``[0x6BD9]`` flag. Zero the player's velocity, snap it to the destination tile (``[asm 5350]`` X = lo<<4,
+    ``[asm 535A]`` Y = hi<<4), snap the camera to the destination, set the flag, and disarm ``[0x6BE1]``.
+
+    The VM ANIMATES the camera there (``5361-5387``: ~80 busy-wait scroll steps via 3363/33AD/3414/3435) and
+    re-runs the frame's render+gameplay passes (``53D7``); the VM-less runtime snaps to the destination and lets
+    the faithful renderer draw the new area — so the cave is ENTERED in one frame instead of a scrolled transition
+    (functionally correct; the animated-scroll frames are not byte-reproduced)."""
+    rb, rw = readers(state)
+    dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
+    dest_tile = rw((si + 4) & 0xFFFF)                         # [si+4] destination player tile
+    flag = rb((si + 6) & 0xFFFF)                              # [si+6] -> [0x6BD9]
+    _ww(state, 0x4F22, 0)                                     # [asm 5326] Xvel = 0
+    _ww(state, 0x4F2A, 0)                                     # [asm 532C] Yvel = 0
+    _wb(state, 0x6BC4, 0)                                     # [asm 5335]
+    _ww(state, 0x4F1C, (dest_tile & 0xFF) << 4)              # [asm 5350] player X = tile.lo << 4
+    _ww(state, 0x4F1E, ((dest_tile >> 8) & 0xFF) << 4)       # [asm 535A] player Y = tile.hi << 4
+    _wb(state, 0x2DE4, dest_cam & 0xFF)                      # [asm 5377..] camera X snapped to the destination
+    _wb(state, 0x2DE6, (dest_cam >> 8) & 0xFF)              # [asm 5361..] camera Y snapped to the destination
+    _wb(state, 0x6BD9, flag)                                 # [asm 5391]
+    _wb(state, 0x6BE1, 0)                                     # [asm 5394] disarm the trigger
+    if rb(0x2D8A) == 5:                                       # [asm 5399] level-6 special-case state
+        _wb(state, 0x8166, rb(0x8166) & 1)                   # [asm 53A0]
+        for off, val in ((0xA324, 0), (0xA325, 5), (0xA326, 0), (0xA328, 0), (0xA32A, 1),
+                         (0xA329, 0), (0xA32B, 0x6E), (0xA32C, 8)):    # [asm 53A5-53CD]
+            _wb(state, off, val)
+        for k in range(0x69):                                # [asm 53CD-53D5] fill [0x5570..] with 0xFF
+            _wb(state, 0x5570 + k, 0xFF)
 
 
 def _player_tile_coords(rw) -> int:
