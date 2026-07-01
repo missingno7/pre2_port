@@ -189,14 +189,19 @@ def native_idle_timer_tick(state, ticks: int = _TICKS_PER_FRAME) -> None:
 
     ``[0x27F0]`` (a free-running 32-bit counter at ``[0x27F0]``/``[0x27F2]``) is bumped by the timer ISR
     (``1030:17C9 add`` / ``17CE adc``) every 4th tick — i.e. whenever the mod-4 phase ``cs:[0x1d6b]`` wraps to 0
-    (``07B2 inc`` / ``07B7 and 3`` / ``07BD je 17C0``). ``ticks`` = how many 70Hz timer ticks fire this frame:
-    the gameplay main loop's 3-retrace wait (``44FB`` @ ``0264``) lets exactly **3** fire per frame (and it sits
+    (``07B2 inc`` / ``07B7 and 3`` / ``07BD je 17C0``). ``ticks`` = how many timer ticks fire this frame; it sits
     AFTER the player step ``022F`` — the only gameplay reader, the idle-fidget selector at ``5DC9`` using
-    ``[0x27F0] & 0x1FF`` — so the player reads the frame-START value and the 3 ticks land at frame END); the
-    per-retrace FRONT-END runs at **1** tick/frame. Native runs no timer; reproducing this keeps ``[0x27F0]``
-    (and the idle animation it drives) in step. WITHOUT the front-end advancing it, ``[0x27F0]`` would be 0 at
-    level start — a value the VM never has (its timer has run since boot) — and the idle player would pick the
-    wrong fidget pose (a crouch instead of the upright stand). Proven byte-exact vs the VM's per-tick sequence."""
+    ``[0x27F0] & 0x1FF`` — so the player reads the frame-START value and this frame's ticks land at frame END.
+
+    CAVEAT (measured): ``ticks`` is only NOMINALLY the 3-retrace wait (``44FB`` @ ``0264``); the PIT is NOT
+    retrace-locked, so the VM actually fires a VARIABLE, INSTRUCTION-COUNT-driven number per frame — ~**8** in busy
+    L1 gameplay (measured 4..11 via the ``cs:[0x1d67]`` raw tick counter), ~**1** in the per-retrace front-end.
+    The VM-less core has no instruction count, so no fixed ``ticks`` is byte-exact across scenes; ``[0x27F0]`` is
+    therefore EXCLUDED from the forward verify. Its only downstream reader is the idle-fidget pose, which drifts
+    (triggers a few frames off) only after a LONG stationary idle — cosmetic, and re-arms the instant the player
+    moves. Getting ``[0x27F0]`` non-zero at level start still matters: at 0 the idle player picks the wrong fidget
+    (a crouch instead of the upright stand), so the front-end must advance it. Default ``ticks`` keeps the SHORT-idle
+    common case right; long-idle byte-exactness is unattainable VM-less (see [[pre2-native-render-state]])."""
     d = state.data
     phase = d[_TIMER_PHASE]
     lo = d[_DS_BASE + 0x27F0] | (d[_DS_BASE + 0x27F1] << 8)

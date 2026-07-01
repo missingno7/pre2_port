@@ -89,8 +89,17 @@ def _run(demo: str, frame_cap: int = 12000):
                             return False
                         s = 0x4F0A + ((o - 0x4F0A) // 0x12) * 0x12
                         return (o - s) < 4 and vd[s + 4] == 0xFF and vd[s + 5] == 0xFF
+                    # The idle-FIDGET animation ([0x4F20] frame / [0x4F28] anim-ptr / [0x4F2C] anim-A state) is
+                    # selected from the free-running idle timer [0x27F0] (5DC9 reads [0x27F0]&0x1FF). [0x27F0] is
+                    # driven by the VM's per-frame TIMER-tick count (~8/frame in busy L1, variable 4..11) — an
+                    # INSTRUCTION-COUNT quantity the VM-less core can't reproduce, so [0x27F0] is already excluded.
+                    # When the player is stationary (Xvel [0x4F22]==0, Yvel [0x4F2A]==0) these anim fields are the
+                    # pure downstream of that excluded timer, so skip them; the moment the player moves they become
+                    # velocity/state-driven again and ARE verified (this gate re-arms every frame).
+                    _IDLE_ANIM = {0x4F20, 0x4F21, 0x4F28, 0x4F29, 0x4F2C}
+                    idle = (vd[0x4F22] | vd[0x4F23] | vd[0x4F2A] | vd[0x4F2B]) == 0
                     diffs = [o for o in range(0x10000)
-                             if o not in _FWD_EXCL and not _empty_slot_residue(o)
+                             if o not in _FWD_EXCL and not (idle and o in _IDLE_ANIM) and not _empty_slot_residue(o)
                              and ((nd[o] ^ vd[o]) & (0x9F if o in _SLOT5_PAGE else 0xFF))]
                     if diffs:
                         print(f"  FIRST DIVERGENCE at gameplay frame {ns['matched']} (demo f{cur['f']}): {len(diffs)} diffs")
