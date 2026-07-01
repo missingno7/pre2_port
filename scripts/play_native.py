@@ -67,7 +67,7 @@ def main(argv=None) -> int:
     from pre2.checkpoints.common import Pre2HybridGap
     from pre2.native.cold_boot import load_boot_image, native_cold_boot
     from pre2.native.front_end import native_front_end
-    from pre2.native.input import apply_input, init_keyboard_input
+    from pre2.native.input import apply_input, init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
     from pre2.native.runtime import native_frame_step
     from pre2.native.state import NativeGameState
@@ -163,6 +163,8 @@ def main(argv=None) -> int:
             pump()
             k = pygame.key.get_pressed()
             apply_input(state, fire=k[pygame.K_SPACE])             # OLDIES scene-wait (0bbe) reads the fire key
+            set_key(state, 0x02, k[pygame.K_1] or k[pygame.K_KP1])  # '1' -> [0x27f6] = start (mode-select)
+            set_key(state, 0x03, k[pygame.K_2] or k[pygame.K_KP2])  # '2' -> [0x27f7] = password
             if not ref["running"]:
                 break
         reached_gameplay = ref["running"]                          # the generator finished -> a level started

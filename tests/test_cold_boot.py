@@ -110,3 +110,40 @@ def test_native_front_end_oldies_palette():
     scene = next(native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS)))
     assert scene.palette[2] == (0, 243, 0)              # green (0x287e entry 2), not the default EGA (0, 170, 0)
     assert scene.palette[5] == (243, 243, 113)          # yellow (0x287e entry 5)
+
+
+def test_menu_press12_screen_render():
+    # The "press 1/2" difficulty screen (8e45: MENU.SQZ = resource 8) is a 13h image faded in over 0xA0 DAC
+    # entries, the same leaf as the titles. Golden-locks the fully-faded frame (verified pixel-exact vs the VM's
+    # A000xDAC separately). The '1'/'2' dispatch itself is covered by tests/test_world_map.
+    import hashlib
+
+    from pre2.bridge.image_scene import image_palette, render_image_scene
+    from pre2.native.front_end import _expand_palette6
+    from pre2.recovered.front_end_fade import fade_in_frames
+
+    img = np.frombuffer(render_image_scene("MENU.SQZ", str(ASSETS)), np.uint8).reshape(200, 320)
+    pal = np.array(_expand_palette6(fade_in_frames(image_palette("MENU.SQZ", str(ASSETS)), 0xA0)[-1]), np.uint8)
+    assert hashlib.sha1(pal[img].tobytes()).hexdigest() == "6dd4eae081aa675ca3753ab39913872548edf96f"
+
+
+def test_native_menu_map_scroll_pixel_exact():
+    # The 96d5 scrolling world-map (the '2'/password screen): MOTIF.SQZ caveman tiles scrolling left (the stateful
+    # self-copy) + "ENTER CODE" / code text stamped each frame via the bit-rotated font (seed part B). Verified
+    # 0-diff vs the VM's A000 planes (all 4 planes, every captured frame); this golden-locks the composed frames.
+    import hashlib
+    import itertools
+
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import load_boot_image
+    from pre2.native.front_end import _native_menu_map
+    from pre2.native.input import init_keyboard_input
+    from pre2.native.state import NativeGameState
+
+    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    init_keyboard_input(state)
+    h = hashlib.sha1()
+    for scene in itertools.islice(_native_menu_map(state, DOSMachine(str(ASSETS)), str(ASSETS), "password"), 30):
+        for plane in scene.planes:
+            h.update(bytes(plane)[:0x2000])
+    assert h.hexdigest() == "091655f679b9a30a2d53fdf5426d48b12265f132"

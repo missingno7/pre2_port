@@ -146,13 +146,99 @@ def native_front_end(state, dos, display_page: int, *, game_root: str):
     from pre2.native.sprite_bank import native_build_sprite_bank
     native_build_sprite_bank(state, game_root=game_root)
 
-    # --- next: the world-map level-select. The flow is the 8e45 dispatch (the 13h "press 1/2" mode-select prompt) ->
-    #     96d5 the 0Dh scrolling world-map (mode-select 991f / password 9985 callback) -> 965a carte -> level-init ->
-    #     gameplay. Every leaf is recovered (recovered/world_map.py); composing + verifying each scene vs the VM (the
-    #     same A000×DAC diff method that proved OLDIES pixel-exact) is the next island. ---
-    raise Pre2HybridGap(
-        "native front-end: OLDIES + TITUS + PRESENT titles + the 2dfa sprite-bank decode driven VM-less (OLDIES "
-        "pixel-exact vs the VM). Next: the world-map level-select (8e45 'press 1/2' -> 96d5 scrolling map -> carte) (#14).")
+    # --- 8e45: the "press 1/2" difficulty screen (MENU.SQZ = resource 8, a 13h image) faded in over 0xA0 DAC
+    #     entries ([asm 8e67 cl=0xA0] -> 919f), then held while the dispatch waits for a choice. Pixel-exact vs the
+    #     VM. The dispatch flags [0x27f6]/[0x27f7] ARE the '1'/'2' key-table entries (0x27f4 + scancode 2/3); fire =
+    #     [0x282d]|[0x2810] (space/enter); auto-advance after 0x10E idle frames. ---
+    from pre2.recovered.world_map import LS_PASSWORD, LS_WAIT, level_select_dispatch
+    menu_img = render_image_scene("MENU.SQZ", game_root)
+    menu_fade = fade_in_frames(image_palette("MENU.SQZ", game_root), 0xA0)   # [asm 919f] black -> the menu palette
+    for p6 in menu_fade:
+        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img)
+    held8 = _expand_palette6(menu_fade[-1])
+    rb, _ = readers(state)
+    wait = 0
+    choice = LS_WAIT
+    while choice == LS_WAIT:                                                 # [asm 8e7b] the dispatch wait loop
+        choice = level_select_dispatch(rb(0x27F6), rb(0x27F7), rb(0x282D) | rb(0x2810), wait)  # 1 / 2 / fire / timeout
+        if choice != LS_WAIT:
+            break
+        yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img)     # hold the screen, poll again next frame
+        wait += 1
+
+    # --- 96d5: the chosen 0Dh scrolling world-map — password entry (for '2') or mode-select (for '1'/fire). Renders
+    #     pixel-exact VM-less (the caveman-tiled map scrolling with the text stamped on top). Mode-select confirm
+    #     (fire) selects level 1 and returns here; password entry still fails loud (code entry not wired). ---
+    yield from _native_menu_map(state, dos, game_root, "password" if choice == LS_PASSWORD else "mode_select")
+
+    # --- the map selected a level ([0x2d8a]); load it VM-less and hand off to native_frame_step. The generator
+    #     RETURNS here (no more scenes) — the runner switches to the gameplay loop. This closes the cold-boot flow:
+    #     OLDIES -> titles -> menu -> world-map -> LEVEL 1 gameplay, all VM-less. (The 965a carte scroll-in between
+    #     the map and gameplay is a deferred visual; the level-init/render/play is byte-exact.) ---
+    from pre2.native.level_init import native_level_init
+    native_level_init(state, game_root=game_root)
+
+
+_ZERO_SINE = bytes(0x100)          # the password/mode-select map does not bounce (row stays 0), so the sine is unused
+
+
+def _native_menu_map(state, dos, game_root: str, kind: str):
+    """[asm 96D5] Drive the 0Dh scrolling world-map screen VM-less (``kind`` = ``"password"`` 9985 / ``"mode_select"``
+    991F). Yields :class:`FrontEndScene` (MODE_PLANAR) frames — the caveman-tiled map (MOTIF.SQZ) scrolling left, with
+    the screen's text (``ENTER CODE`` + the code, or ``MODE`` + BEGINNER/EXPERT) stamped on top each frame via
+    ``draw_string`` against the bit-rotated font. Verified pixel-exact vs the VM (all planes, every frame). Raises
+    ``Pre2HybridGap`` on the exit — the carte + level-init handoff (the path to gameplay) is the next island."""
+    from pre2.codecs.sqz import unpack_sqz
+    from pre2.native.assets import resolve_game_path
+    from pre2.native.render import native_load_dac_palette
+    from pre2.recovered.menu_scene import MenuScenePage, build_shifted_font
+    from pre2.recovered.present import scroll_shift_frame
+    from pre2.recovered.text import draw_string
+    from pre2.recovered.world_map import (MapCamera, map_camera_update, map_page_flip, map_pan,
+                                          mode_select_text_runs, password_text_runs)
+    rb, rw = readers(state)
+    native_load_dac_palette(state, dos, 0xB118, 0x10)             # [asm 97A5] the map's 16-colour palette
+    page = MenuScenePage()
+    page.seed(unpack_sqz(resolve_game_path(game_root, "MOTIF.SQZ").read_bytes())[:0x3E80])  # [asm 96EC/9718] planes 0,1
+    fseg = rw(0x3D)                                               # the font segment ([0x3d])
+    font = build_shifted_font(bytes(state.data[(fseg << 4):(fseg << 4) + 0x3000]))          # [asm 972E] shift copies
+
+    def text_runs():
+        return password_text_runs() if kind == "password" else mode_select_text_runs(rb(0xB197))
+
+    def cstr(off):                                               # the NUL-terminated string at DS:off
+        end = state.data.index(0, _DS + (off & 0xFFFF))
+        return bytes(state.data[_DS + (off & 0xFFFF):end])
+
+    cam = MapCamera(0, 0, 2, 0, 0, 0)                            # [asm 978D] phase seeds at 2
+    prev_page = 0
+    pal = tuple(dos.vga_palette)
+
+    def scene(planes, page_off, pel):
+        return FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
+                             page=page_off, pel=pel, wrap=0x1FFF)
+
+    yield scene(page.planes, 0, 0)                               # frame 0 = the seeded page
+    while True:
+        cam = map_camera_update(cam, bounce=False, sine_table=_ZERO_SINE)   # [asm 9AE0] scroll left 4/frame
+        ds, _ = map_pan(cam.x, cam.row)                          # [asm 97A8] display-start from the CURRENT x
+        pel = cam.prev_x & 7                                    # the pel-pan LAGS one frame (= prev_x & 7)
+        page_draw, page_clear = map_page_flip(ds, prev_page)     # [asm 97CA] page_draw=ds, page_clear=prev
+        for run in text_runs():                                 # [asm callback 9985/991F] stamp the text
+            # draw to the DISPLAYED page (page_clear) and clear on the back page (page_draw) — same "operate on the
+            # previous/display page" rule as the scroll below.
+            draw_string(page.planes, cstr(run.addr), font, cam.blit_off, run.pen, run.advance, page_clear, page_draw)
+        scroll_shift_frame(page.planes, cam.prev_x, cam.x, 0, 0, page_clear)   # [asm 9804] pan the display page
+        prev_page = page_draw
+        yield scene(page.planes, ds, pel)
+        apply_ds(state, decode_input(rb, rw))                  # DC1: turn the host keys into the FSM fire flag
+        if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm
+            if kind == "mode_select":                          # [asm 8ED7] BEGINNER confirm -> level 1
+                state.data[_DS + 0x2D8A] = 0                    # select level 1 (the caller does the level-init)
+                return                                          # (the 965a carte scroll-in is a deferred visual)
+            raise Pre2HybridGap(                                # password entry (accumulate + validate) not wired yet
+                f"native front-end: the 96d5 password screen renders VM-less (pixel-exact). Next: the code entry "
+                f"(accumulate hex -> validate -> level) + the 965a carte visual (#14).")
 
 
 def _native_title_screen(game_root: str, name: str, *, n_entries: int, hold: int):
@@ -192,5 +278,12 @@ def _native_present_screen(game_root: str, morph_target: bytes):
         yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=background)
     # the 911D retrace counter enters with the BL the fade-in left = the green of its last entry (entry 0xFE)
     phase = held[(0xFF - 1) * 3 + 1]
-    for p6 in palette_morph_frames(held, morph_target, initial_phase=phase):     # [asm 911D] colour reveal
+    morph = palette_morph_frames(held, morph_target, initial_phase=phase)         # [asm 911D] colour reveal
+    for p6 in morph:
+        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=full)
+    # [asm 9286] fade the revealed title back OUT to black before the menu loads — the title-to-menu transition
+    # is fade-OUT then fade-in (the menu's own 919f mode-set clears instantly, so without this the title just
+    # snaps to black instead of fading). The whole 256-colour title fades to black (n=0x100), a ~120-frame ramp
+    # (the VM's DAC brightness falls from full to black over ~112 retraces before the menu fades in).
+    for p6 in fade_out_frames(morph[-1], 0x100):
         yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=full)

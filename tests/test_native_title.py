@@ -42,7 +42,7 @@ ACE7_FIXTURE = ROOT / "tests" / "fixtures" / "present_morph_ace7.bin"
 # SHA-1 of the concatenated 200x320x3 uint8 RGB of every frame — captured from the runs that matched the VM's
 # A000 framebuffer × palette byte-for-byte (TITUS 117/117, PRESENT 490/490).
 GOLD_TITUS_RGB = "a7c900c8ed75b16e1a82063c76a7e5e2fdd9720e"
-GOLD_PRESENT_RGB = "f958c5775934b1fab3dadb3e9a15ec3886a38308"
+GOLD_PRESENT_RGB = "41712601c8260b4f20a6faaf22f41e0c1584df8b"
 
 pytestmark = pytest.mark.skipif(
     not (ASSETS / "TITUS.SQZ").exists(), reason="original PRE2 title asset not present",
@@ -74,13 +74,18 @@ def test_native_titus_screen_byte_exact_vs_vm():
 def test_native_present_screen_byte_exact_vs_vm():
     morph_target = ACE7_FIXTURE.read_bytes()                     # DGROUP 0xACE7 (read from state in the game)
     frames = list(_native_present_screen(str(ASSETS), morph_target))
-    assert len(frames) == 256 + 234                              # fade-IN (background) + morph (background+logo)
+    # fade-IN 256 + morph 234 (both byte-exact vs the VM) + fade-OUT 136 (the title-to-menu transition: the whole
+    # 256-colour title ramps to black — the VM's DAC brightness falls full->black over ~112+ retraces before the
+    # menu fades in; the recovered fade_out_frames drives it).
+    assert len(frames) == 256 + 234 + 136
     assert all(s.mode == MODE_LINEAR for s in frames)
-    # the fade-in uses the background-only image, the morph the background+logo image -> two distinct images
+    # the fade-in uses the background-only image, the morph + fade-out the background+logo image -> two images
     assert len({s.linear for s in frames}) == 2
     rgb = [_scene_rgb(s) for s in frames]
     assert rgb[0].max() == 0                                     # fade-in opens black
     assert rgb[255].max() > 0                                    # background fully lit by the end of the fade-in
+    assert rgb[489].max() > 0                                    # title revealed at the end of the morph
+    assert rgb[-1].max() == 0                                    # fade-out ends black (then the menu fades in)
     digest = hashlib.sha1(b"".join(r.tobytes() for r in rgb)).hexdigest()
     assert digest == GOLD_PRESENT_RGB
 

@@ -32,6 +32,43 @@ from pre2.recovered.text import draw_string
 PLANE_LEN = 0x10000          # mirror the VM EGA plane: the leaves wrap row starts at 0x1FFF but a glyph
                              # cell's 3 bytes can spill a few bytes past 0x2000 (the VM plane is 0x10000)
 _BG_PLANE = 0x1F40           # bytes per bg plane in the initial fill [asm 9718: rep movsw cx=0xFA0]
+_FONT_SRC = 0x1FE0           # [asm 9736] the seed reads the glyph rows from font[0x1FE0..]
+_FONT_WORDS = 0x560          # [asm 9739] words per shift copy
+_SHIFT_COPY = 0x1080         # bytes per shift copy (0x560*3 + 0x60 pad) — draw_string's font_base step
+
+
+@oracle_link("1030:972E",
+             "the menu's bit-rotated font (the 96D5 seed's 2nd pass): 8 sub-pixel-shifted copies of the font "
+             "glyphs from [0x3d]:0x1FE0, each 0x1080 bytes, selected by draw_string's font_base=(scroll_x&7)*"
+             "0x1080. Each 16-bit glyph row (read big-endian) is shifted right by the copy index k, the k "
+             "shifted-out bits captured in a 3rd byte, so the menu text scrolls smoothly with the map.",
+             "VERIFIED", merge_target="render_scene")
+def build_shifted_font(font_seg: bytes) -> bytes:
+    """[asm 972E-9765] Build the menu's 8-shift font from the raw font segment (``[0x3d]``).
+
+    ``font_seg`` is the font segment's bytes (at least ``0x1FE0 + 0x560*2`` long). Returns the 0x8400-byte
+    bit-rotated font: 8 copies (shift 0..7), each ``0x1080`` bytes, that :func:`~pre2.recovered.text.draw_string`
+    indexes with ``font_base = (scroll_x & 7) * 0x1080``. Every glyph row is a 16-bit value read big-endian
+    (leftmost pixel = MSB), shifted right ``k`` bits for copy ``k`` (the overflow bits land in a trailing 3rd
+    byte), giving the sub-pixel horizontal offset the scrolling text needs."""
+    out = bytearray()
+    for shift in range(8):                                      # [asm 9732/975E dh = 0..7]
+        si = _FONT_SRC
+        for _ in range(_FONT_WORDS):                            # [asm 973C lodsw]
+            ax = font_seg[si] | (font_seg[si + 1] << 8)
+            ax = ((ax & 0xFF) << 8) | (ax >> 8)                # [asm 973D xchg ah,al -> big-endian]
+            carry = 0
+            for _ in range(shift):                             # [asm 9747 shr ax,1 ; rcr dl,1]
+                bit = ax & 1
+                ax >>= 1
+                carry = ((carry >> 1) | (bit << 7)) & 0xFF
+            ax = ((ax & 0xFF) << 8) | (ax >> 8)                # [asm 974F xchg ah,al -> little-endian]
+            out.append(ax & 0xFF)                              # [asm 9751 stosw]
+            out.append((ax >> 8) & 0xFF)
+            out.append(carry)                                  # [asm 9754 stosb]
+            si += 2
+        out.extend(b"\x00" * 0x60)                             # [asm 9757 pad: cx=0x30 words]
+    return bytes(out)
 
 
 @oracle_link("1030:96D5",
