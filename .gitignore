@@ -71,3 +71,4 @@ artifacts/*.wav
 
 # witness capture dumps (regenerable oracle/crash pickles; recovery scripts stay tracked)
 artifacts/*_witness/
+*.stackdump
