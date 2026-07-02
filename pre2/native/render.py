@@ -152,6 +152,11 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     #                                                                by the gameplay frame as 'render'); no-op idle
     if foreground_capture is None:
         foreground_capture = read_foreground_state(state)          # [3721] the front tile layer
+        # read_foreground_state reads the BACK page [0x2DD8] as the blit target (the VM's 3721 draws to the page
+        # being composed). But native renders the CORE frame to the DISPLAY page [0x2DD6] and never flips the two
+        # buffers, so [0x2DD8] is the OTHER (off-screen) buffer — the foreground tiles blit there and never show
+        # (user: "foreground tiles are not in foreground"). Retarget to the same page as the core frame.
+        foreground_capture.page = display_page & 0xFFFF
     if particle_capture is None:
         pf = read_particles(state)                                 # [4b8e] one-shot point particles
         particle_capture = pf if pf.particles else None

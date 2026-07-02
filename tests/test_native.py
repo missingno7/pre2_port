@@ -75,6 +75,28 @@ def test_native_combat_pass_idle_no_op():
     assert bytes(state.data[base + 0x4F0A:base + 0x5732]) == before   # idle -> no combat writes
 
 
+def test_native_foreground_targets_display_page(monkeypatch):
+    # [3721] The foreground tile layer (tiles drawn IN FRONT of sprites) must blit to the DISPLAY page [0x2DD6],
+    # not the back page [0x2DD8]. read_foreground_state reads [0x2DD8] (the VM draws 3721 to the page being
+    # composed), but native renders the core frame to the display page and never flips the buffers, so the
+    # foreground landed on the off-screen buffer (user: "foreground tiles are not in foreground"). native_render
+    # retargets it. Guards the page override.
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import native_cold_boot
+    import pre2.native.render as R
+
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    st = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    base = DATA_SEG << 4
+    disp = st.data[base + 0x2DD6] | (st.data[base + 0x2DD7] << 8)
+    fg = R.read_foreground_state(st)
+    assert fg.page != disp                                     # raw read targets the BACK page (the bug's premise)
+    monkeypatch.setattr(R, "read_foreground_state", lambda s: fg)   # native_render mutates THIS fg in place
+    dos = DOSMachine(str(ROOT / "assets")); R.native_load_level_palette(st, dos)
+    R.native_render(st, dos, disp, game_root=str(ROOT / "assets"), force_gameplay=True)
+    assert fg.page == disp                                     # retargeted to the DISPLAY page
+
+
 def test_native_light_palette_fade():
     # [asm 6772] The light-pickup DAC fade: native classifies 6772 as 'render' (the gameplay frame skips it), so
     # native_apply_palette_fade reproduces the per-frame ramp on dos.vga_palette. A "lights off" pickup sets

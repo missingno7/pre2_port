@@ -113,11 +113,21 @@ def _run(demo, lim):
         orig()
 
     cpu.step = sstep
-    det = lambda: cpu.instruction_count / (2142 * 70); rt.dos.time_source = det; tick = {"next": 0.0}; frame = 0
+    # Match the game-tick recording's clock EXACTLY (verify_native_tick_demo): the demo's own chunk_steps (default
+    # 2142) + present_hz, and the Sound Blaster ENABLED — the SB ISR/DMA is part of the per-frame instruction budget
+    # the demo clock runs on, so replaying without it shifts where every input lands (a different trajectory, so a
+    # different/false divergence). Audio output is dropped + excluded from the gameplay compare; only its timing counts.
+    from dos_re.runtime import enable_sound_blaster
+    meta = pb.manifest.get("metadata", {})
+    chunk = int(meta.get("chunk_steps", 2142)); hz = int(meta.get("present_hz", 70))
+    det = lambda: cpu.instruction_count / (chunk * hz); rt.dos.time_source = det; tick = {"next": 0.0}; frame = 0
+    sb = enable_sound_blaster(rt); sb.clock = det
     while not pb.finished(frame) and frame < lim and not ns["done"]:
         pb.apply_to_runtime(frame, rt, deliver=lambda r, sc: deliver_scancode(r, sc, max_steps=2_000_000))
-        play._advance_demo_frame(rt, chunk_steps=2142, sub_batch=2000, clock=det, pic=rt.dos.pic,
-                                 sound_blaster=None, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+        play._advance_demo_frame(rt, chunk_steps=chunk, sub_batch=2000, clock=det, pic=rt.dos.pic,
+                                 sound_blaster=sb, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+        if sb.pcm_out:
+            sb.pcm_out.clear()
         frame += 1
     tag = "OK" if not ns["done"] else "DIVERGED"
     print(f"  -> {demo.split('/')[-1]}: ran FORWARD {ns['matched']} clean frames "
@@ -127,6 +137,7 @@ def _run(demo, lim):
 
 def main():
     want = sys.argv[1] if len(sys.argv) > 1 else "gorilla"
+    lim = int(sys.argv[2]) if len(sys.argv) > 2 else 900
     demos = [d for d in [
         "artifacts/demo_pre2_full_gorilla_20260628_203423",
         "artifacts/demo_pre2_20260629_141422",
@@ -135,7 +146,7 @@ def main():
         demos = [f"artifacts/{want}"]
     for d in demos:
         print(f"\n{d.split('/')[-1]}:")
-        _run(d, 900)
+        _run(d, lim)
     return 0
 
 
