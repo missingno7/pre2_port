@@ -62,12 +62,14 @@ _PROJ_PTR = {0xA32E, 0xA32F}
 _FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y | _BLIT_SCRATCH | _PROJ_PTR
 
 
-def _run(demo, lim):
+def _run(demo, lim, pure=False):
     pb = InputDemoPlayback.load(str(ROOT / demo))
+    # oracle = PURE ASM (native_replacements=False) or the HYBRID VM. Pure ASM proves native == the original
+    # binary; a HYBRID-recorded demo desyncs in pure ASM (the demo-clock rides the instruction-per-tick count).
     rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
-                            game_root=str(ROOT / "assets"), native_replacements=True)
+                            game_root=str(ROOT / "assets"), native_replacements=not pure)
     cpu = rt.cpu; cpu.trace_enabled = False; mem = cpu.mem
-    ns = {"st": None, "kbd": None, "f": 0, "matched": 0, "done": False, "respawns": 0}
+    ns = {"st": None, "kbd": None, "idle": 0, "f": 0, "matched": 0, "done": False, "respawns": 0}
     orig = cpu.step
 
     def sstep():
@@ -80,8 +82,11 @@ def _run(demo, lim):
                 ns["kbd"] = None
             elif ip == DECODE and ns["st"] is not None:
                 ns["kbd"] = {o: mem.data[DS_BASE + o] for o in KBD}    # inject the demo's input this frame
+                ns["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)   # the PIT fidget timer
             elif ip == GAP_SITE and ns["st"] is not None and ns["kbd"] is not None:
                 st = ns["st"]
+                st.data[DS_BASE + 0x27F0] = ns["idle"] & 0xFF          # inject [0x27F0] (not VM-less-reproducible)
+                st.data[DS_BASE + 0x27F1] = (ns["idle"] >> 8) & 0xFF   # so the idle-fidget picks the VM's pose
                 for o, v in ns["kbd"].items():
                     st.data[DS_BASE + o] = v
                 err = None
@@ -149,8 +154,10 @@ def _run(demo, lim):
 
 
 def main():
-    want = sys.argv[1] if len(sys.argv) > 1 else "gorilla"
-    lim = int(sys.argv[2]) if len(sys.argv) > 2 else 900
+    pure = "--pure" in sys.argv
+    argv = [a for a in sys.argv if a != "--pure"]
+    want = argv[1] if len(argv) > 1 else "gorilla"
+    lim = int(argv[2]) if len(argv) > 2 else 900
     demos = [d for d in [
         "artifacts/demo_pre2_full_gorilla_20260628_203423",
         "artifacts/demo_pre2_20260629_141422",
@@ -158,8 +165,8 @@ def main():
     if not demos:
         demos = [f"artifacts/{want}"]
     for d in demos:
-        print(f"\n{d.split('/')[-1]}:")
-        _run(d, lim)
+        print(f"\n{d.split('/')[-1]}: [oracle={'PURE ASM' if pure else 'hybrid'}]")
+        _run(d, lim, pure)
     return 0
 
 
