@@ -56,6 +56,26 @@ def _reveal_frame(new_planes, page, k):
     return out, page
 
 
+def native_tally_scene(state, dos, display_page: int, *, game_root: str):
+    """The level-end TALLY screen — "SCORE nnnnnn / LEVEL COMPLETED nn%" over black (the recovered + VERIFIED
+    51A3 text panel, fonts bridge-fed from ``state``). A GENERATOR yielding ``(planes, page)`` forever; the
+    caller presents it for the tally hold, then advances (native_level_end -> carte -> next level).
+
+    Scope: this shows the tally TEXT (the % is exact from compute_percent; the score is [0x6C0E]/[0x6C10]). The
+    full 4CCB exit-anim CUTSCENE — the iris close (316F), the player walking in, and the food-item throw whose
+    fly-up COUNTS the score up (adding each item's value to [0x6C0E], sfx 8) — is the deferred level-end island;
+    here the score is the pre-count-up value and the character animation is not played."""
+    from pre2.bridge.tally_panel import read_tally_panel
+    from pre2.recovered.tally_panel import render_tally_panel
+    page = display_page & 0xFFFF
+    inp = read_tally_panel(state)                        # score + percent + bridge-fed glyph fonts
+    while True:
+        planes = [bytearray(0x10000) for _ in range(4)]  # black background
+        render_tally_panel(planes, inp.score, inp.percent, page,
+                           inp.digit_font, inp.letters, inp.pct_glyph)
+        yield planes, page
+
+
 def native_level_reveal(state, dos, display_page: int, *, game_root: str):
     """The level-START reveal: after a level loads, the VM snaps the palette to full over a BLACK screen and then
     reveals the drawn level with the 3054 center-out CURTAIN (verified vs the VM on the level-1 load witness

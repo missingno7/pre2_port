@@ -114,7 +114,7 @@ def main(argv=None) -> int:
     from pre2.native.front_end import native_front_end
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
-    from pre2.native.runtime import native_frame_step, native_level_reveal
+    from pre2.native.runtime import native_frame_step, native_level_reveal, native_tally_scene
     from pre2.native.state import NativeGameState
     from sdl_view import front_end_scene_to_rgb, render_planar_rgb_from_planes
 
@@ -201,13 +201,30 @@ def main(argv=None) -> int:
                 return
 
     def between_levels(state, dos):
-        """The between-levels flow (the VM's 4F65 -> BRAVO tally -> CARTE world map -> next-level load): advance
-        + load the next level (byte-exact), then drive the recovered CARTE scene with the 'you are here' marker
-        at the NEW level (the VM advances [0x2D8A] before the carte too). The exit-iris + the BRAVO tally scene
-        are not yet recovered (the next front-end island) — announced, never silently skipped."""
+        """The between-levels flow (the VM's 4F65 -> BRAVO tally -> CARTE world map -> next-level load): show the
+        level-end TALLY (SCORE / LEVEL COMPLETED %), advance + load the next level (byte-exact), then drive the
+        recovered CARTE scene with the 'you are here' marker at the NEW level (the VM advances [0x2D8A] before the
+        carte too). The full 4CCB exit-anim cutscene (iris + player walk + food-throw count-up) is deferred; the
+        tally TEXT is shown."""
+        from pre2.native.audio import native_load_song
         from pre2.native.front_end import _native_carte
         from pre2.native.level_state import native_level_end
-        print("  level complete -> carte (exit-iris + BRAVO tally scene not yet native — the next island)")
+        print("  level complete -> TALLY -> carte (the 4CCB walk/throw count-up cutscene is deferred)")
+        try:
+            native_load_song(state, "BRAVO.TRK", gr)               # the tally jingle
+        except Exception:                                          # noqa: BLE001 — no audio -> silent tally
+            pass
+        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        for held, (planes, page) in enumerate(native_tally_scene(state, dos, disp, game_root=gr)):
+            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
+                    "PRE2 VM-less — LEVEL COMPLETED")
+            pump()
+            drive_input(state)
+            if native_audio is not None:
+                native_audio.poll(state)
+            fire = state.data[DS + 0x27F4 + 0x39] != 0             # SPACE held -> skip the hold
+            if not ref["running"] or held > 220 or (held > 40 and fire):
+                break
         native_level_end(state, game_root=gr)
         for scene in _native_carte(state, dos, gr):                # fire (press after release) advances
             present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — world map")
