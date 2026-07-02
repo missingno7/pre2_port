@@ -29,8 +29,15 @@ import play
 
 
 def main() -> int:
-    demo = sys.argv[1] if len(sys.argv) > 1 else "artifacts/demo_pre2_full_gorilla_20260628_203423"
-    max_ticks = int(sys.argv[2]) if len(sys.argv) > 2 else 100_000
+    # ORACLE MODE: default PURE ASM (native_replacements=False) — record from the ORIGINAL PRE2.EXE so a pass
+    # proves native == the original binary. `--hybrid` records from the hybrid VM instead (native's own recovered
+    # logic); use it for demos RECORDED in the hybrid (play.py default), which desync in pure ASM because the
+    # gameplay hooks change the instruction-per-tick count that the demo's present-frame clock depends on — a
+    # faithful pure-ASM oracle needs a demo recorded with `play.py --no-replacements`.
+    hybrid = "--hybrid" in sys.argv
+    argv = [a for a in sys.argv if a != "--hybrid"]
+    demo = argv[1] if len(argv) > 1 else "artifacts/demo_pre2_full_gorilla_20260628_203423"
+    max_ticks = int(argv[2]) if len(argv) > 2 else 100_000
     tick_file = ROOT / demo / "game_tick_demo.bin"
     if tick_file.exists():
         from pre2.native.game_tick_demo import GameTickDemo
@@ -42,8 +49,15 @@ def main() -> int:
         meta = pb.manifest.get("metadata", {})
         chunk = int(meta.get("chunk_steps", 2142))          # the demo's OWN clock (old demos use 625/240 —
         hz = int(meta.get("present_hz", 70))                # hardcoding 2142 corrupts their trajectory)
+        # ORACLE = PURE ASM (native_replacements=False): record the tick timeline from the ORIGINAL PRE2.EXE with
+        # NO recovered hooks, so verifying native against it proves native == the original binary (not just == the
+        # hybrid, which runs the same recovered logic native does — a weaker, near-tautological check). The tick
+        # timeline is keyed to GAME TICKS (captured at DECODE/GAP_SITE), so the pure-ASM vs hybrid instruction-count
+        # clock difference (only the gameplay hooks' savings; the interpreted retrace-waits are identical here) does
+        # not change WHAT the game samples/computes per tick — it stays a faithful pure-ASM playthrough.
+        print(f"  oracle = {'HYBRID VM (recovered hooks)' if hybrid else 'PURE ASM (original PRE2.EXE)'}")
         rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
-                                game_root=str(ROOT / "assets"), native_replacements=True)
+                                game_root=str(ROOT / "assets"), native_replacements=hybrid)
         cpu = rt.cpu
         cpu.trace_enabled = False
         det = lambda: cpu.instruction_count / (chunk * hz)
