@@ -77,7 +77,8 @@ MAIN_LOOP_SPINE = [
     (0x3668, "render", "frame redraw cluster -> faithful renderer"),
     (0x35A1, "render", "dirty-grid redraw -> faithful renderer"),
     (0x3A27, "render", "scroll-copy window -> faithful renderer"),
-    (0x4B8E, "render", "particles_draw"),
+    (0x4B8E, "render", "particles_draw: pixels -> faithful renderer; STATE half (advance-Y writeback + slot kill "
+     "on the [0x7DE6] point-particle array) extracted into native_gameplay_frame (native_particle_consume)"),
     (0x26FA, "render", "moving-sprite renderer: pixels -> faithful renderer; STATE half (life/flags record "
      "mutation + [0x6bd5] tick) extracted into native_gameplay_frame (native_object_render_state)"),
     (0x3721, "render", "foreground-tile pass -> faithful renderer"),
@@ -381,6 +382,20 @@ def native_combat_pass(state) -> None:
     _wb(state, _COMBAT_FLAG, 0)                                      # [asm 891C] [0xA312] = 0
 
 
+def native_particle_consume(state) -> None:
+    """[asm 4B8E state half] The point-particle pass (spider-threads / fireflies / sparkles at [0x7DE6], 20 slots
+    of 6 bytes) advances each active slot by its angle/speed, plots one pixel, then KILLS the slot — so the array
+    is one-shot, gone by the next frame. The plot is render (the faithful renderer redraws it from a 4B8E-entry
+    snapshot); the STATE half — write the advanced Y back to [slot+2] and the kill sentinel [slot]=0xFFFF — is
+    gameplay-coupled (the effect-spawn handlers reuse a freed slot), so native must run it or the array fills up."""
+    from pre2.bridge.particles import apply_particle_writeback, read_particle_consume_inputs
+    from pre2.recovered.particles import advance_particle
+    slots, _cc, _cr, _yb, _pg, cos, sin = read_particle_consume_inputs(state)
+    if slots:                                                          # [asm 4BA9] active slots (X != 0xFFFF)
+        wb = [(i, advance_particle(x, y, a, s, cos, sin)[1]) for (i, x, y, a, s) in slots]   # [asm 4BC2-4BD2] ny
+        apply_particle_writeback(state, wb)                           # [asm 4BD2 -> 4C1D] [slot+2]=ny, [slot]=0xFFFF
+
+
 def native_gameplay_frame(state) -> None:
     """Drive the WHOLE per-frame main loop (0214..0270) over NativeGameState — VM-less, in spine order. The
     recovered gameplay systems run; the render calls (88D7, 8922, and the 3668/35A1/3A27/4B8E/26FA/3721/6772
@@ -402,10 +417,11 @@ def native_gameplay_frame(state) -> None:
     native_trigger_scan(state)                                      # [asm 0238] 52FE (position-trigger; no-op unarmed)
     native_proximity_trigger(state)                                 # [asm 023B] 53F6 (proximity trigger; no-op unfired)
     native_camera_follow(state)                                     # [asm 023E] 5643 (H+V camera follow/scroll)
-    # [asm 0241..0250] 3668/35A1/3A27/4B8E/26FA/3721 render cluster — the faithful renderer's job. One gameplay
-    # side effect is extracted: 26FA (object_render) bumps the free-running 16-bit frame counter [0x6bd5] that
-    # the animation phase reads ([0x6bd5]&1/&3/&7/&0xf) — in 11 gameplay calls incl. the player/object/particle
-    # passes. The prefix above already read it as N (frame start); the firefly/scroll/respawn/shake below read N+1.
+    # [asm 0241..0250] 3668/35A1/3A27/4B8E/26FA/3721 render cluster — the faithful renderer's job. Two gameplay
+    # side effects are extracted: 4B8E's particle consume (state half below) and 26FA (object_render), which bumps
+    # the free-running 16-bit frame counter [0x6bd5] that the animation phase reads ([0x6bd5]&1/&3/&7/&0xf) — in 11
+    # gameplay calls. The prefix above already read it as N (frame start); the firefly/scroll/respawn/shake read N+1.
+    native_particle_consume(state)                                  # [asm 0247: 4B8E state] advance-Y + kill [0x7DE6]
     _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                    # [asm 024D: 2708] inc word [0x6bd5]
     native_object_render_state(state)                               # [asm 024D: 26FA] record mutation (life/flags)
     native_firefly_step(state)                                      # [asm 0253] 54AB
