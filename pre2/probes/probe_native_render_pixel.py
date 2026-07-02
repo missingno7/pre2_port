@@ -76,6 +76,18 @@ def _run(demo: str, max_frames: int, out_dir: Path):
                     ns["done"] = True; orig(); return
                 n_rgb = np.asarray(render_planar_rgb_from_planes(planes, page, pal), np.uint8)
                 d = (vm_rgb != n_rgb).any(2); ndiff = int(d.sum())
+                if ndiff > ns["worst"] and ndiff > 50:            # save the WORST diff frame (vm/native/mask)
+                    ns["worst"] = ndiff
+                    try:
+                        from PIL import Image
+                        for tag, rgb in (("vm", vm_rgb), ("native", n_rgb)):
+                            Image.fromarray(rgb).resize((640, 400), 0).save(out_dir / f"pixworst_{tag}.png")
+                        Image.fromarray((d[:, :, None] * np.array([255, 0, 255], np.uint8)).astype(np.uint8)
+                                        ).resize((640, 400), 0).save(out_dir / "pixworst_mask.png")
+                        print(f"  new worst @frame {ns['n']}: {ndiff} px cols {int(np.where(d.any(0))[0].min())}.."
+                              f"{int(np.where(d.any(0))[0].max())}")
+                    except Exception:                            # noqa: BLE001
+                        pass
                 ns["worst"] = max(ns["worst"], ndiff)
                 if ndiff:
                     cols = np.where(d.any(0))[0]; rows = np.where(d.any(1))[0]
