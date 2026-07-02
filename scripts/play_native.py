@@ -40,6 +40,38 @@ _BOOT_IMAGE = ROOT / "artifacts" / "pre2_boot_image.zz"
 _FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its FrontEndScene frames are per-retrace)
 
 
+class DemoInput:
+    """Replay a recorded input demo's scancodes into the VM-less runtime for HANDS-FREE watching.
+
+    A recorded demo is a list of make/break scancode events keyed to a per-frame ``boundary`` counter (the
+    hybrid recorder's present-frame index). Here the boundary is advanced once per NATIVE displayed frame and the
+    make/break events are turned back into a held-key set, which the runtime writes into DC1's key table exactly
+    as a live keyboard would. This is APPROXIMATE across the front-end (native scene timing differs from the
+    recording, so menu/title waits can drift); it is faithful for gameplay, where the frame is the game tick.
+    Live keys are merged on top, so you can always nudge the flow (e.g. tap SPACE past a drifted OLDIES wait)."""
+
+    STD = (0x39, 0x48, 0x50, 0x4D, 0x4B, 0x02, 0x03)   # fire, up, down, right, left, '1', '2' (DC1 sources)
+
+    def __init__(self, playback):
+        self.events = list(playback.events)            # already sorted by (boundary, seq)
+        self.i = 0
+        self.boundary = 0
+        self.held: set[int] = set()
+
+    def step(self) -> None:
+        """Advance one native frame: apply every event due at/under the current boundary, then bump it."""
+        while self.i < len(self.events) and self.events[self.i].boundary <= self.boundary:
+            ev = self.events[self.i]; self.i += 1
+            if ev.kind == "scan":
+                sc = ev.value & 0xFF
+                (self.held.discard if sc & 0x80 else self.held.add)(sc & 0x7F)
+        self.boundary += 1
+
+    @property
+    def finished(self) -> bool:
+        return self.i >= len(self.events)
+
+
 def _ensure_boot_image(boot_image: Path) -> str:
     """Return the boot-image path, building it from PRE2.EXE on first run (the VM's only, build-time use)."""
     if not boot_image.exists():
@@ -58,6 +90,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Play PRE2 with the VM-less native core (cold boot from OLDIES)")
     ap.add_argument("--from-level", type=int, default=None,
                     help="DEBUG: skip the front-end and boot this 0-based level directly (0 -> LEVEL1)")
+    ap.add_argument("--snapshot", default=None,
+                    help="DEBUG: seed gameplay from a savestate dir (memory_1mb.bin) instead of cold-booting")
+    ap.add_argument("--play-demo", default=None,
+                    help="replay a recorded input demo (hands-free); live keys are merged on top. Approximate "
+                         "through the front-end, faithful in gameplay. Add --snapshot/--from-level to skip the menu.")
     ap.add_argument("--boot-image", default=str(_BOOT_IMAGE),
                     help="the static boot image (the EXE's init memory); built from PRE2.EXE if absent")
     ap.add_argument("--fps", type=int, default=24,
@@ -68,10 +105,11 @@ def main(argv=None) -> int:
     import numpy as np
     import pygame
     from dos_re.dos import DOSMachine
+    from dos_re.input_demo import InputDemoPlayback
     from pre2.checkpoints.common import Pre2HybridGap
     from pre2.native.cold_boot import load_boot_image, native_cold_boot
     from pre2.native.front_end import native_front_end
-    from pre2.native.input import apply_input, init_keyboard_input, set_key
+    from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
     from pre2.native.runtime import native_frame_step
     from pre2.native.state import NativeGameState
@@ -79,6 +117,9 @@ def main(argv=None) -> int:
 
     gr = str(ROOT / "assets")
     boot_image = _ensure_boot_image(Path(args.boot_image))
+    demo = DemoInput(InputDemoPlayback.load(args.play_demo)) if args.play_demo else None
+    if demo is not None:
+        print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
 
     pygame.init()
     screen = pygame.display.set_mode((320 * args.scale, 200 * args.scale))
@@ -110,6 +151,30 @@ def main(argv=None) -> int:
             else:
                 clock.tick(30)
 
+    def drive_input(state):
+        """Write DC1's key table from the demo (if replaying) merged with live host keys, then advance the demo
+        by one frame. Numpad + arrows = move, SPACE = fire/jump, 1/2 = mode-select. Shared by front-end + game."""
+        if demo is not None:
+            demo.step()
+        k = pygame.key.get_pressed()
+        held = set(demo.held) if demo is not None else set()
+        if k[pygame.K_SPACE]:
+            held.add(0x39)
+        if k[pygame.K_UP] or k[pygame.K_KP8]:
+            held.add(0x48)
+        if k[pygame.K_DOWN] or k[pygame.K_KP2]:
+            held.add(0x50)
+        if k[pygame.K_RIGHT] or k[pygame.K_KP6]:
+            held.add(0x4D)
+        if k[pygame.K_LEFT] or k[pygame.K_KP4]:
+            held.add(0x4B)
+        if k[pygame.K_1] or k[pygame.K_KP1]:
+            held.add(0x02)
+        if k[pygame.K_2]:
+            held.add(0x03)
+        for sc in set(DemoInput.STD) | held:
+            set_key(state, sc, sc in held)
+
     # ---- audio: the recovered ENHANCED player (VM-free), driven by the native frame's audio commands ----
     native_audio = None
     try:
@@ -125,11 +190,7 @@ def main(argv=None) -> int:
         n = 0
         while ref["running"]:
             pump()
-            k = pygame.key.get_pressed()
-            apply_input(state, left=k[pygame.K_LEFT] or k[pygame.K_KP4],
-                        right=k[pygame.K_RIGHT] or k[pygame.K_KP6],
-                        up=k[pygame.K_UP] or k[pygame.K_KP8],
-                        down=k[pygame.K_DOWN] or k[pygame.K_KP2], fire=k[pygame.K_SPACE])
+            drive_input(state)
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
             try:
                 for planes, page in native_frame_step(state, dos, disp, game_root=gr):
@@ -155,6 +216,28 @@ def main(argv=None) -> int:
         pygame.quit()
         return 0
 
+    if args.snapshot is not None:
+        # ---- DEBUG path: seed gameplay from a savestate's raw memory (VM-less), then run native forward ----
+        state = NativeGameState(bytearray((Path(args.snapshot) / "memory_1mb.bin").read_bytes()))
+        lvl = state.data[DS + 0x2D8A]
+        frame_ctr = state.data[DS + 0x6BD5] | (state.data[DS + 0x6BD6] << 8)
+        player_zero = not any(state.data[DS + 0x4F1C:DS + 0x4F20])   # X+Y both zero
+        if frame_ctr == 0 and player_zero:
+            # A savestate taken DURING a level-load / transition (F12 mid-curtain): the gameplay DGROUP is not
+            # populated yet (player/objects/camera/frame-counter all zero, ip parked in the loader's retrace
+            # wait). Native has no "resume a half-loaded level" path, so seed a CLEAN LEVEL{lvl+1} instead.
+            print(f"--snapshot: DGROUP is PRE-GAMEPLAY (level {lvl + 1} mid-load — player/objects/frame-counter "
+                  f"all zero). Native can't resume a half-loaded level; booting LEVEL{lvl + 1} fresh instead.")
+            state = native_cold_boot(gr, boot_image, level=lvl)
+        else:
+            print(f"--snapshot: seeding LEVEL{lvl + 1} gameplay from the savestate (VM-less)...")
+        init_keyboard_input(state)
+        dos = DOSMachine(gr)
+        native_load_level_palette(state, dos)
+        gameplay_loop(state, dos)
+        pygame.quit()
+        return 0
+
     # ---- the real cold start: OLDIES -> titles -> menu -> map -> level, all VM-less ----
     print("Cold boot from the OLDIES screen (VM-less). SPACE to advance, ESC to quit...")
     state = NativeGameState(load_boot_image(boot_image))
@@ -165,15 +248,9 @@ def main(argv=None) -> int:
         for scene in native_front_end(state, dos, 0, game_root=gr):
             present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — cold boot (front-end)")
             pump()
-            k = pygame.key.get_pressed()
-            # feed fire + the arrows to the front-end: the OLDIES scene-wait (0bbe) reads fire; the mode-select
-            # toggles BEGINNER<->EXPERT on UP/DOWN and the carte pans on the arrows (without these only beginner
-            # was selectable).
-            apply_input(state, fire=k[pygame.K_SPACE],
-                        left=k[pygame.K_LEFT] or k[pygame.K_KP4], right=k[pygame.K_RIGHT] or k[pygame.K_KP6],
-                        up=k[pygame.K_UP] or k[pygame.K_KP8], down=k[pygame.K_DOWN] or k[pygame.K_KP2])
-            set_key(state, 0x02, k[pygame.K_1] or k[pygame.K_KP1])  # '1' -> [0x27f6] = start (mode-select)
-            set_key(state, 0x03, k[pygame.K_2] or k[pygame.K_KP2])  # '2' -> [0x27f7] = password
+            # the OLDIES scene-wait (0bbe) reads fire; the mode-select toggles BEGINNER<->EXPERT on UP/DOWN and
+            # the carte pans on the arrows; '1'/'2' start / password. drive_input feeds all of these (demo + live).
+            drive_input(state)
             if native_audio is not None:
                 native_audio.poll(state)                           # front-end music (PRESENTA title song, menu, carte)
             if not ref["running"]:
