@@ -53,7 +53,13 @@ _SCROLL_Y = {0x2DE2, 0x2DE3}
 # the object-render (26FA) blit's per-sprite clipped-extent scratch word ([0x2DEC/D], written 27DE/27E1; the only
 # reader is the blit itself — the respawn probes already exclude it). Render-only, so exclude from the gameplay verify.
 _BLIT_SCRATCH = {0x2DEC, 0x2DED}
-_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y | _BLIT_SCRATCH
+# [0xA32E] PROJ_SLOT_PTR — the object projection's "last projected slot" scratch (object_inject 7DF0/697D): it
+# points at the object/render slot the projection writes the anim descriptor into. The projected slot CONTENTS
+# match the VM byte-exact; only which free slot the pool handed out differs (render-pool allocation order — the
+# render-record gap that "never cascades to gameplay", proven on gorilla). Render-record scratch -> exclude, like
+# the render slots. (demo 175517: after the death-bounce particle-consume fix this was the sole residual @tick1299.)
+_PROJ_PTR = {0xA32E, 0xA32F}
+_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y | _BLIT_SCRATCH | _PROJ_PTR
 
 
 def _run(demo, lim):
