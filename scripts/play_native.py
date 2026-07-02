@@ -114,8 +114,8 @@ def main(argv=None) -> int:
     from pre2.native.front_end import native_front_end
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
-    from pre2.native.runtime import (native_frame_step, native_iris_close, native_level_reveal,
-                                      native_tally_scene)
+    from pre2.native.runtime import (native_exit_anim, native_frame_step, native_iris_close,
+                                      native_level_reveal)
     from pre2.native.state import NativeGameState
     from sdl_view import front_end_scene_to_rgb, render_planar_rgb_from_planes
 
@@ -225,16 +225,15 @@ def main(argv=None) -> int:
         except Exception:                                          # noqa: BLE001 — no audio -> silent tally
             pass
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
-        for held, (planes, page) in enumerate(native_tally_scene(state, dos, disp, game_root=gr)):
+        for planes, page in native_exit_anim(state, dos, disp, game_root=gr):   # walk-in + food + count-up + walk-off
             present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
                     "PRE2 VM-less — LEVEL COMPLETED")
             pump()
             drive_input(state)
             if native_audio is not None:
                 native_audio.poll(state)
-            fire = state.data[DS + 0x27F4 + 0x39] != 0             # SPACE held -> skip the hold
-            if not ref["running"] or held > 220 or (held > 40 and fire):
-                break
+            if not ref["running"]:
+                return
         native_level_end(state, game_root=gr)
         for scene in _native_carte(state, dos, gr):                # fire (press after release) advances
             present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — world map")

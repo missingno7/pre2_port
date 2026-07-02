@@ -98,6 +98,159 @@ def native_iris_close(state, dos, display_page: int, *, game_root: str):
     ww(0x2DD0, 0)                                                             # iris closed -> off
 
 
+def native_exit_anim(state, dos, display_page: int, *, game_root: str):
+    """The animated level-end TALLY cutscene [asm 4CEA..4F53] — runs AFTER native_iris_close, on black. A
+    GENERATOR yielding ``(planes, page)`` per frame (composed by build_tally_scene = black + the object pass +
+    the SCORE/LEVEL-COMPLETED% panel). Beats: recenter the player to screen space + zero the camera (4CEA-4D1A);
+    the player walks in to (0x3C,0xAF) (4D3E); 3 food sprites slide in from the right to X~0x9B (4D8E); then IF
+    a bonus was collected ([0x6C9E]!=0) the player throws (4DF5) and the food flies UP counting the score up
+    (4E3A-4F0B: each item accelerates up, and on reaching Y>=0x91 adds its value from the [0xA353]/[0xA375]
+    tables to [0x6C0E] + sfx 8, refilled from the [0x6C12] queue); finally the player + food walk off (4F0E).
+
+    The player walk/food-slide beats are visually verified vs the VM (the player walks in + animates, the food
+    slides in, then walks off). The count-up beat (throw + food-fly-up + score add) is transcribed from
+    4E3A-4F0B but GATED OFF (_COUNT_UP_RECOVERED below): on the one witness it over-counts (native 610 vs the
+    VM's 200), so the shipped cutscene shows the honest pre-count-up score rather than a wrong rising one."""
+    from pre2.bridge.tally_scene import build_tally_scene
+    from pre2.recovered.player import player_advance_anim
+    _DS = (DATA_SEG << 4) & 0xFFFFF
+    d = state.data
+    page = display_page & 0xFFFF
+
+    def rw(o):
+        return d[_DS + (o & 0xFFFF)] | (d[_DS + ((o + 1) & 0xFFFF)] << 8)
+
+    def ww(o, v):
+        d[_DS + (o & 0xFFFF)] = v & 0xFF
+        d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+
+    def wb(o, v):
+        d[_DS + (o & 0xFFFF)] = v & 0xFF
+
+    def s16(v):
+        return v - 0x10000 if v & 0x8000 else v
+
+    def frame():
+        ap = rw(0x4F28)                                              # [asm 638B] step the player walk animation
+        fr, nptr, bcf = player_advance_anim(ap, d[_DS + 0x4F25], rw)
+        ww(0x4F20, fr); ww(0x4F28, nptr); wb(0x6BCF, bcf)
+        _ww_ctr()                                                   # advance the free-running frame counter
+        native_sync_render_state(state)
+        planes, _ = build_tally_scene(state, dos, game_root=game_root, page=page)
+        return planes, page
+
+    def _ww_ctr():
+        ww(0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                       # [0x6BD5]++ (51F0/count-up timing read it)
+
+    # [asm 4CEA-4D1A] recenter the player to screen space, zero the camera + velocities
+    ww(0x4F1E, (rw(0x4F1E) - (rw(0x2DE6) << 4)) & 0xFFFF)
+    ww(0x4F1C, (rw(0x4F1C) - (rw(0x2DE4) << 4)) & 0xFFFF)
+    ww(0x2DE4, 0); ww(0x2DE6, 0); ww(0x4F25, 0); ww(0x4F22, 0)
+    wb(0x6BC5, 0); ww(0x4F0E, 0xFFFF); ww(0x4F28, 0x7BA7)           # [asm 4D26-4D3B] free weapon slot, walk anim
+
+    # [asm 4D3E-4D8E] the player walks in to (0x3C, 0xAF)
+    while True:
+        moved = False
+        for off, tgt in ((0x4F1C, 0x3C), (0x4F1E, 0xAF)):
+            diff = s16((rw(off) - tgt) & 0xFFFF)
+            if abs(diff) >= 2:
+                ww(off, (rw(off) - (2 if diff > 0 else -2)) & 0xFFFF)
+                moved = True
+        if not moved:
+            break
+        yield frame()
+
+    # [asm 4D8E-4DE9] 3 food sprites slide in from the right (X=0x168) to X<=0x9B
+    for base, y, sid in ((0x4F2E, 0xAF, 0x64), (0x4F40, 0x94, 0x62), (0x4F52, 0x9B, 0x68)):
+        ww(base, 0x168); ww(base + 2, y); ww(base + 4, sid)
+    while s16(rw(0x4F2E)) > 0x9B:
+        for base in (0x4F2E, 0x4F40, 0x4F52):
+            ww(base, (rw(base) - 3) & 0xFFFF)
+        yield frame()
+
+    # [asm 4DF5-4F0B] the food-throw score COUNT-UP. TRANSCRIBED but NOT YET CORRECT: on the one available
+    # level-end witness (snapshot_pre2_20260702_111016) it over-counts (native score 610 vs the VM's 200) — the
+    # item-value table / queue-drain logic below needs a bonus-collecting witness to frame-verify. Gated OFF so
+    # the shipped cutscene shows the (verified) walk-in + food-slide + walk-off with the honest pre-count-up
+    # score, rather than a wrong rising score. Flip _COUNT_UP_RECOVERED once it matches the VM.
+    _COUNT_UP_RECOVERED = False
+    if _COUNT_UP_RECOVERED and rw(0x6C9E) != 0:                     # [asm 4DEB] a bonus was collected -> count-up
+        # [asm 4DF5-4E30] the player throws; the recoil velocity decays (6333 friction) to a stop
+        ww(0x4F28, 0x7C6B); ww(0x4F22, 0x40); wb(0x4F24, 2)
+        while rw(0x4F22) != 0:
+            ww(0x4F1C, (rw(0x4F1C) + s16(rw(0x4F22)) // 16) & 0xFFFF)   # [asm 4E1F-4E2A] X += Xvel>>4
+            v = abs(s16(rw(0x4F22))) - (0xC >> d[_DS + 0x4F24])          # [asm 6333] friction
+            v = 0 if v < 0 else (-v if s16(rw(0x4F22)) < 0 else v)
+            ww(0x4F22, v & 0xFFFF)
+            yield frame()
+        # [asm 4E32-4F0B] the food flies UP; on reaching the top each item adds its value to the score
+        ww(0x4F28, 0x7CAF)
+        while True:
+            alive = False
+            for k in range(0x14):                                  # the 20 effect render slots [0x52E8]
+                si = 0x52E8 + k * 0x12
+                if rw(si + 4) == 0xFFFF:
+                    continue
+                vel = rw(si + 0xE)
+                if vel < 0x80:
+                    vel = (vel + 8) & 0xFFFF; ww(si + 0xE, vel)     # [asm 4E61-4E6C] accelerate up
+                ww(si + 2, (rw(si + 2) + (vel >> 4)) & 0xFFFF)      # [asm 4E6F-4E77] Y += vel>>4
+                if s16(rw(si + 2)) < 0x91:
+                    alive = True
+                    continue
+                t = ((rw(si + 4) & 0x1FFF) - 0x6E) & 0xFFFF         # [asm 4E82-4E93] value = tables[food type]
+                vi = d[_DS + ((t - 0x5C8B) & 0xFFFF)]
+                val = rw((2 * vi - 0x5CAD) & 0xFFFF)
+                sc = (rw(0x6C0E) | (rw(0x6C10) << 16)) + val        # [asm 4E97-4E9B] score += value
+                ww(0x6C0E, sc & 0xFFFF); ww(0x6C10, (sc >> 16) & 0xFFFF)
+                ww(si + 4, 0xFFFF)                                  # [asm 4EA0] free the slot
+                _emit_sfx(state, 8)                                # [asm 4EA5-4EA8] sfx 8
+            if (rw(0x6BD5) & 7) == 0:                              # [asm 4EB0] refill from the [0x6C12] queue
+                _exit_anim_refill(state)
+            yield frame()
+            if not alive and not any(d[_DS + 0x6C12 + i] for i in range(0x71)):
+                break
+
+    # [asm 4F0E-4F52] the player + the food walk off to the left
+    ww(0x4F28, 0x7BA7)
+    while s16(rw(0x4F2E)) > -0x34:
+        for base in (0x4F2E, 0x4F40, 0x4F52):
+            ww(base, (rw(base) - 2) & 0xFFFF)
+        ww(0x4F1C, (rw(0x4F1C) + (3 if s16(rw(0x4F2E)) < 0 else 2)) & 0xFFFF)
+        yield frame()
+
+
+def _emit_sfx(state, idx):
+    from pre2.native.audio import native_emit_sfx
+    try:
+        native_emit_sfx(state, idx)
+    except Exception:                                              # noqa: BLE001 — audio is not gameplay
+        pass
+
+
+def _exit_anim_refill(state):
+    """[asm 4EBA-4F04] spawn one queued food item ([0x6C12]+di != 0) into a free [0x52E8] slot at (0x9B, 0)."""
+    _DS = (DATA_SEG << 4) & 0xFFFFF
+    d = state.data
+    di = None
+    for i in range(0x71):
+        if d[_DS + 0x6C12 + i]:
+            di = i
+            break
+    if di is None:
+        return
+    for k in range(0x14):
+        si = 0x52E8 + k * 0x12
+        if (d[_DS + si + 4] | (d[_DS + si + 5] << 8)) == 0xFFFF:
+            aid = (di + 0x6E) & 0xFFFF
+            d[_DS + si] = 0x9B; d[_DS + si + 1] = 0                # X = 0x9B
+            d[_DS + si + 2] = 0; d[_DS + si + 3] = 0               # Y = 0
+            d[_DS + si + 4] = aid & 0xFF; d[_DS + si + 5] = (aid >> 8) & 0xFF
+            d[_DS + si + 0xE] = 0; d[_DS + si + 0xF] = 0           # velocity = 0
+            d[_DS + 0x6C12 + di] -= 1                              # [asm 4EFF] dequeue
+            return
+
+
 def native_tally_scene(state, dos, display_page: int, *, game_root: str):
     """The level-end TALLY screen — "SCORE nnnnnn / LEVEL COMPLETED nn%" over black (the recovered + VERIFIED
     51A3 text panel, fonts bridge-fed from ``state``). A GENERATOR yielding ``(planes, page)`` forever; the
