@@ -65,6 +65,15 @@ def native_sync_render_state(state) -> None:
                      (0x2DE0, cam_x), (0x2DE2, cam_y)):
         d[_DS + off] = val & 0xFF
         d[_DS + off + 1] = (val >> 8) & 0xFF
+    # Also re-derive the scroll-copy SOURCE [0x2DBA] (the ring offset build_background_ring places tiles at)
+    # from the freshly-derived ring indices. native_camera_follow sets it during normal gameplay, but a camera
+    # JUMP that bypasses the follow — the death-respawn checkpoint (native_3af2) or a level start at a non-origin
+    # camera — leaves it pointing at the OLD ring position, so the rebuild lays the correct tiles at the wrong
+    # column offset (the level-6 respawn glitch: a narrow tree top rendered full-width + a garbage band).
+    from pre2.recovered.frame_renderer import calc_scroll_source
+    src = calc_scroll_source(d[_DS + 0x2DE8] | (d[_DS + 0x2DE9] << 8), d[_DS + 0x2DEA]) & 0xFFFF
+    d[_DS + 0x2DBA] = src & 0xFF
+    d[_DS + 0x2DBB] = (src >> 8) & 0xFF
 
     # Advance the animated-tile remap cycle (1030:367D) — the render-cluster step the gameplay pass omits. The
     # VM steps [0x6BC2]/[0x6BD4] once per redraw, BEFORE the grid walk reads the current remap table, so without
