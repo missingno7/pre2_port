@@ -76,6 +76,21 @@ def _expand_palette6(pal6: bytes) -> tuple:
     """6-bit DAC palette (768 bytes) -> 256 × (r,g,b) 8-bit, the way the VGA DAC expands it ([asm out 3C9])."""
     return tuple((_dac8(pal6[i * 3]), _dac8(pal6[i * 3 + 1]), _dac8(pal6[i * 3 + 2])) for i in range(256))
 
+
+def _planar_fade_out(state, pal6_off: int, planes, page: int, pel: int, wrap: int = 0x1FFF):
+    """[asm 9286] Fade a 0Dh PLANAR screen (menu-map / carte) OUT to black before the next screen — yields
+    :class:`FrontEndScene` frames holding the current planes while the 16-colour DAC dims to black.
+
+    The VM runs this DAC fade-out (the byte-exact 9286 ramp, reused from the title screens) between the
+    mode-select and the carte, and between the carte and the level load; native snapped instantly. ``pal6_off``
+    is the DGROUP offset of the screen's 16-entry 6-bit palette (menu-map 0xB118 / carte 0xB0E8). The planes are
+    frozen (a DAC fade changes only the palette), so we re-yield them with each fading DAC snapshot."""
+    pal6 = bytes(state.data[_DS + pal6_off:_DS + pal6_off + 0x10 * 3])   # the screen's 16-colour 6-bit palette
+    frozen = tuple(bytes(p) for p in planes)
+    for snap in fade_out_frames(pal6, 0x10):                             # [asm 9286] 16-entry DAC ramp to black
+        yield FrontEndScene(MODE_PLANAR, palette=_expand_palette6(snap), planes=frozen, page=page, pel=pel,
+                            wrap=wrap)
+
 # scene-wait phases (the ASM's two busy-wait loops at 0bbe)
 WAIT_PRESS = "press"
 WAIT_RELEASE = "release"
@@ -287,7 +302,8 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
                 state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x2D8A] = 0                    # BEGINNER/EXPERT both begin at level 1
-                return                                          # (the 965a carte scroll-in is a deferred visual)
+                yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)   # [asm 9286] fade to black
+                return                                          # ...then the carte (its own palette) scrolls in
             raise Pre2HybridGap(                                # password entry (accumulate + validate) not wired yet
                 f"native front-end: the 96d5 password screen renders VM-less (pixel-exact). Next: the code entry "
                 f"(accumulate hex -> validate -> level) + the 965a carte visual (#14).")
@@ -331,12 +347,15 @@ def _native_carte(state, dos, game_root: str):
         yield FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
                             page=ds, pel=pel, wrap=0x1FFF)
         apply_ds(state, decode_input(rb, rw))
-        if scroll_x < 639:                                     # scroll the map in +1/frame (the VM's [0xb19d] rate)
-            scroll_x += 1
         fire = (rb(0x27E8) | rb(0x2832)) != 0
-        if fire and not prev_fire:                             # a fresh fire press -> confirm -> the loader
+        # confirm on a fresh fire press OR when the scroll-in reaches the end (auto-advance) — either way the
+        # carte fades to black before the level loads (the VM does not snap from the map straight into gameplay).
+        if (fire and not prev_fire) or scroll_x >= 639:
+            yield from _planar_fade_out(state, 0xB0E8, planes, ds, pel)   # [asm 9286] fade to black -> the loader
             return
         prev_fire = fire
+        if scroll_x < 639:                                     # scroll the map in +1/frame (the VM's [0xb19d] rate)
+            scroll_x += 1
 
 
 def _native_title_screen(game_root: str, name: str, *, n_entries: int, hold: int):

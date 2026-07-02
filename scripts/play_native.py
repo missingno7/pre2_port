@@ -38,6 +38,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 DS = 0x1A0F << 4
 _BOOT_IMAGE = ROOT / "artifacts" / "pre2_boot_image.zz"
 _FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its FrontEndScene frames are per-retrace)
+_TRANSITION_FPS = 30          # curtains/fades: the VM's 3054/30C6 are vsync-paced sub-frame effects that span
+#                               ~20 retraces (~0.34s); presenting the ~11 reveal steps at 70Hz was ~2x too fast.
 
 
 class DemoInput:
@@ -193,7 +195,7 @@ def main(argv=None) -> int:
         appearing instantly. Driven once at every level start (cold boot + between-levels)."""
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
         for planes, page in native_level_reveal(state, dos, disp, game_root=gr):
-            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
+            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _TRANSITION_FPS,
                     "PRE2 VM-less — level start")
             pump()
             if native_audio is not None:
@@ -226,8 +228,8 @@ def main(argv=None) -> int:
             pass
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
         for planes, page in native_exit_anim(state, dos, disp, game_root=gr):   # walk-in + food + count-up + walk-off
-            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
-                    "PRE2 VM-less — LEVEL COMPLETED")
+            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _TRANSITION_FPS,
+                    "PRE2 VM-less — LEVEL COMPLETED")   # a main-loop (~23Hz) animation, NOT a 70Hz retrace scene
             pump()
             drive_input(state)
             if native_audio is not None:

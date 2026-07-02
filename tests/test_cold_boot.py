@@ -227,6 +227,7 @@ def test_native_menu_map_mode_select_toggle():
     from pre2.native.front_end import _native_menu_map
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.state import NativeGameState
+    from pre2.recovered.scene import MODE_PLANAR
 
     state = NativeGameState(load_boot_image(_ensure_boot_image()))
     init_keyboard_input(state)
@@ -238,11 +239,10 @@ def test_native_menu_map_mode_select_toggle():
     next(gen); next(gen)                                # arrow still held -> NO re-toggle (edge)
     assert state.data[_DS + 0xB197] == 1
     set_key(state, 0x48, False); set_key(state, 0x39, True)   # release, press fire
-    try:
-        next(gen)                                       # confirm -> the generator returns
-        raise AssertionError("expected the generator to return on confirm")
-    except StopIteration:
-        pass
+    frame = next(gen)                                   # confirm commits, then yields the [asm 9286] fade-OUT
+    assert frame.mode == MODE_PLANAR                    # the map fades to black before the carte (not an instant cut)
+    faded = [frame] + list(gen)                         # drain the rest of the DAC fade-out, then StopIteration
+    assert sum(faded[-1].palette[0]) == 0              # the last fade frame is fully black (DAC ramped to 0)
     assert state.data[_DS + 0x2D8A] == 0               # level 1
     assert state.data[_DS + 0xB198] == 1               # EXPERT difficulty committed
 

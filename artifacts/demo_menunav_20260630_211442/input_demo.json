@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "status": "complete",
+  "created_at": "2026-06-30T21:14:42",
+  "stopped_at": "2026-06-30T21:15:27",
+  "snapshot": "snapshot",
+  "metadata": {
+    "game": "pre2",
+    "exe": "pre2.exe",
+    "command_tail": "",
+    "chunk_steps": 2142,
+    "present_hz": 70,
+    "retrace_pulse": 0.06,
+    "timer_irq": true,
+    "fast_adlib": false,
+    "input_irq_steps": 2000000
+  },
+  "start_boundary": 0,
+  "end_boundary": 3162,
+  "event_count": 37,
+  "events": [
+    {
+      "boundary": 78,
+      "seq": 0,
+      "kind": "scan",
+      "value": 57
+    },
+    {
+      "boundary": 78,
+      "seq": 1,
+      "kind": "dos_key",
+      "value": 14624,
+      "scancode": 57,
+      "text": " "
+    },
+    {
+      "boundary": 83,
+      "seq": 2,
+      "kind": "scan",
+      "value": 185
+    },
+    {
+      "boundary": 1488,
+      "seq": 3,
+      "kind": "scan",
+      "value": 3
+    },
+    {
+      "boundary": 1488,
+      "seq": 4,
+      "kind": "dos_key",
+      "value": 795,
+      "scancode": 3,
+      "text": "\u011b"
+    },
+    {
+      "boundary": 1493,
+      "seq": 5,
+      "kind": "scan",
+      "value": 131
+    },
+    {
+      "boundary": 1676,
+      "seq": 6,
+      "kind": "scan",
+      "value": 30
+    },
+    {
+      "boundary": 1676,
+      "seq": 7,
+      "kind": "dos_key",
+      "value": 7777,
+      "scancode": 30,
+      "text": "a"
+    },
+    {
+      "boundary": 1683,
+      "seq": 8,
+      "kind": "scan",
+      "value": 158
+    },
+    {
+      "boundary": 1713,
+      "seq": 9,
+      "kind": "scan",
+      "value": 48
+    },
+    {
+      "boundary": 1713,
+      "seq": 10,
+      "kind": "dos_key",
+      "value": 12386,
+      "scancode": 48,
+      "text": "b"
+    },
+    {
+      "boundary": 1721,
+      "seq": 11,
+      "kind": "scan",
+      "value": 176
+    },
+    {
+      "boundary": 1743,
+      "seq": 12,
+      "kind": "scan",
+      "value": 46
+    },
+    {
+      "boundary": 1743,
+      "seq": 13,
+      "kind": "dos_key",
+      "value": 11875,
+      "scancode": 46,
+      "text": "c"
+    },
+    {
+      "boundary": 1749,
+      "seq": 14,
+      "kind": "scan",
+      "value": 174
+    },
+    {
+      "boundary": 1761,
+      "seq": 15,
+      "kind": "scan",
+      "value": 32
+    },
+    {
+      "boundary": 1761,
+      "seq": 16,
+      "kind": "dos_key",
+      "value": 8292,
+      "scancode": 32,
+      "text": "d"
+    },
+    {
+      "boundary": 1765,
+      "seq": 17,
+      "kind": "scan",
+      "value": 160
+    },
+    {
+      "boundary": 1996,
+      "seq": 18,
+      "kind": "scan",
+      "value": 57
+    },
+    {
+      "boundary": 1996,
+      "seq": 19,
+      "kind": "dos_key",
+      "value": 14624,
+      "scancode": 57,
+      "text": " "
+    },
+    {
+      "boundary": 2007,
+      "seq": 20,
+      "kind": "scan",
+      "value": 185
+    },
+    {
+      "boundary": 2292,
+      "seq": 21,
+      "kind": "scan",
+      "value": 2
+    },
+    {
+      "boundary": 2292,
+      "seq": 22,
+      "kind": "dos_key",
+      "value": 555,
+      "scancode": 2,
+      "text": "+"
+    },
+    {
+      "boundary": 2297,
+      "seq": 23,
+      "kind": "scan",
+      "value": 130
+    },
+    {
+      "boundary": 2520,
+      "seq": 24,
+      "kind": "scan",
+      "value": 72
+    },
+    {
+      "boundary": 2527,
+      "seq": 25,
+      "kind": "scan",
+      "value": 200
+    },
+    {
+      "boundary": 2634,
+      "seq": 26,
+      "kind": "scan",
+      "value": 57
+    },
+    {
+      "boundary": 2634,
+      "seq": 27,
+      "kind": "dos_key",
+      "value": 14624,
+      "scancode": 57,
+      "text": " "
+    },
+    {
+      "boundary": 2640,
+      "seq": 28,
+      "kind": "scan",
+      "value": 185
+    },
+    {
+      "boundary": 2863,
+      "seq": 29,
+      "kind": "scan",
+      "value": 57
+    },
+    {
+      "boundary": 2863,
+      "seq": 30,
+      "kind": "dos_key",
+      "value": 14624,
+      "scancode": 57,
+      "text": " "
+    },
+    {
+      "boundary": 2871,
+      "seq": 31,
+      "kind": "scan",
+      "value": 185
+    },
+    {
+      "boundary": 3041,
+      "seq": 32,
+      "kind": "scan",
+      "value": 77
+    },
+    {
+      "boundary": 3080,
+      "seq": 33,
+      "kind": "scan",
+      "value": 205
+    },
+    {
+      "boundary": 3082,
+      "seq": 34,
+      "kind": "scan",
+      "value": 57
+    },
+    {
+      "boundary": 3082,
+      "seq": 35,
+      "kind": "dos_key",
+      "value": 14624,
+      "scancode": 57,
+      "text": " "
+    },
+    {
+      "boundary": 3115,
+      "seq": 36,
+      "kind": "scan",
+      "value": 185
+    }
+  ]
+}
