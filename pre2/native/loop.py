@@ -88,7 +88,8 @@ MAIN_LOOP_SPINE = [
     (0x45AF, "render", "45AF respawn-animation draw -> faithful renderer"),
     (0x44FB, "render", "4509+1C65 render/timing helper"),
     (0x6772, "render", "render-frame commit (-> faithful renderer)"),
-    (0x67D7, "native", "native_special_event ([0x6ca7]==0x1f one-shot fails loud)"),
+    (0x67D7, "native", "native_special_event: BONUS-letters reward spawn ([0x6ca7]==0x1f -> 8D1B) + the [0x6ca8] "
+     "0x38-group completion; idle no-op"),
     (0x4C30, "native", "native_camera_shake"),
 ]
 
@@ -344,11 +345,22 @@ def native_respawn_gate(state) -> None:
 
 
 def native_special_event(state) -> None:
-    """[asm 026A: 67D7] A one-shot event when [0x6ca7] reaches 0x1f (capture player pos -> [0xa336], spawn via
-    8d1b). Idle ([0x6ca7] != 0x1f) it is a byte-exact no-op."""
-    rb, _ = readers(state)
-    if rb(0x6CA7) == 0x1F:
-        raise Pre2HybridGap("native special event (67D7: [0x6ca7]==0x1f) not recovered")
+    """[asm 026A: 67D7] The BONUS-letters event. When all 5 letters are collected ([0x6CA7]==0x1F), spawn the
+    reward sprite (0x6E) at the player (Y-0x70) via 8D1B, reset the mask, and arm [0x6BFF]/[0x6C00]. Otherwise, if
+    the [0x6CA8] 0x38-bit group is complete, clear it and set [0x6BE2]=0x294. Neither armed -> a byte-exact no-op."""
+    from pre2.recovered.combat_interaction import spawn_effect_burst
+    rb, rw = readers(state)
+    if rb(0x6CA7) == 0x1F:                                   # [asm 67D7] all 5 BONUS letters -> reward burst
+        _ww(state, 0xA336, rw(0x4F1C))                      # [asm 67DE] burst pos X = player X
+        _ww(state, 0xA338, (rw(0x4F1E) - 0x70) & 0xFFFF)    # [asm 67E4] pos Y = player Y - 0x70
+        _ww(state, 0xA33A, 0x6E)                            # [asm 67ED] reward sprite id
+        apply_ds(state, spawn_effect_burst(rb, rw, 0, 0, 1))   # [asm 67FA] 8D1B: spawn 1
+        _wb(state, 0x6CA7, 0)                               # [asm 67FD] reset the letters mask
+        _wb(state, 0x6BFF, 1)                              # [asm 6802]
+        _wb(state, 0x6C00, 0x2C)                           # [asm 6807]
+    elif (rb(0x6CA8) & 0x38) == 0x38:                       # [asm 680D-6814] the [0x6CA8] 0x38-group is complete
+        _wb(state, 0x6CA8, rb(0x6CA8) & 0xC7)              # [asm 6816] clear those bits
+        _ww(state, 0x6BE2, 0x294)                          # [asm 681B]
 
 
 def native_camera_shake(state) -> None:
