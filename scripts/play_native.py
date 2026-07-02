@@ -93,8 +93,11 @@ def main(argv=None) -> int:
     ap.add_argument("--snapshot", default=None,
                     help="DEBUG: seed gameplay from a savestate dir (memory_1mb.bin) instead of cold-booting")
     ap.add_argument("--play-demo", default=None,
-                    help="replay a recorded input demo (hands-free); live keys are merged on top. Approximate "
-                         "through the front-end, faithful in gameplay. Add --snapshot/--from-level to skip the menu.")
+                    help="replay a recorded demo. If DIR/game_tick_demo.bin exists (created once by "
+                         "scripts/verify_native_tick_demo.py DIR), the replay is DETERMINISTIC: seeded from the "
+                         "oracle's first gameplay tick, per-tick keys injected, gameplay digest checked vs the VM "
+                         "every tick. Otherwise falls back to APPROXIMATE scancode replay (cold boot + live keys "
+                         "merged; front-end timing drifts).")
     ap.add_argument("--boot-image", default=str(_BOOT_IMAGE),
                     help="the static boot image (the EXE's init memory); built from PRE2.EXE if absent")
     ap.add_argument("--fps", type=int, default=24,
@@ -227,6 +230,55 @@ def main(argv=None) -> int:
                 return
             if native_audio is not None:
                 native_audio.poll(state)
+
+    if args.play_demo:
+        tick_path = Path(args.play_demo) / "game_tick_demo.bin"
+        if tick_path.exists():
+            # ---- DETERMINISTIC tick replay: seed + per-tick keys + per-tick digest from the VM oracle ----
+            # (produced by scripts/verify_native_tick_demo.py; keyed to GAME TICKS, so it replays identically
+            # in every mode. Live keys are IGNORED during the replay — determinism first; ESC still quits.)
+            from pre2.checkpoints.common import Pre2LevelEndTransition
+            from pre2.native.game_tick_demo import GameTickDemo, _inject, gameplay_digest
+            gtd = GameTickDemo.load(tick_path)
+            print(f"tick replay: {gtd.n_ticks} game ticks (deterministic; digest-checked vs the VM oracle)")
+            state = NativeGameState(bytearray(gtd.seed))           # the VM's memory at the first gameplay tick
+            dos = DOSMachine(gr)
+            native_load_level_palette(state, dos)
+            div = None
+            i = 0
+            while ref["running"] and i < gtd.n_ticks:
+                pump()
+                _inject(state, gtd.keys[i])
+                disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+                try:
+                    for planes, page in native_frame_step(state, dos, disp, game_root=gr):
+                        present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), args.fps,
+                                f"PRE2 VM-less — tick replay {i}/{gtd.n_ticks}" if i % 20 == 0 else None)
+                        pump()
+                        if not ref["running"]:
+                            break
+                except Pre2LevelEndTransition:
+                    print(f"  tick replay: LEVEL END at tick {i} — the compare ends here; continuing live")
+                    between_levels(state, dos)
+                    break
+                except Exception as e:                             # noqa: BLE001
+                    hold_last(f"tick replay gap at tick {i}: {type(e).__name__}: {str(e)[:70]}")
+                    pygame.quit()
+                    return 0
+                if div is None and gameplay_digest(state.data[DS:DS + 0x10000]) != gtd.digests[i]:
+                    div = i
+                    print(f"  tick replay DIVERGENCE at tick {i} (gameplay digest mismatch) — continuing")
+                if native_audio is not None:
+                    native_audio.poll(state)
+                i += 1
+            if div is None and i:
+                print(f"  tick replay: {i} ticks reproduced byte-identically (digest matched every tick)")
+            if ref["running"]:
+                gameplay_loop(state, dos)                          # hand over to live play
+            pygame.quit()
+            return 0
+        print(f"(no {tick_path.name} in the demo — approximate input replay; run "
+              f"scripts/verify_native_tick_demo.py {args.play_demo} once to make it deterministic)")
 
     if args.from_level is not None:
         # ---- DEBUG path: jump straight into a level for gameplay testing (no front-end) ----

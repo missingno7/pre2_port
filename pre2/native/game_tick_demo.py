@@ -62,6 +62,43 @@ class GameTickDemo:
     def n_ticks(self) -> int:
         return len(self.keys)
 
+    # --- on-disk format (a single file, conventionally <input_demo_dir>/game_tick_demo.bin) --------------
+    _MAGIC = b"PRE2GTD1"
+
+    def save(self, path) -> None:
+        """Serialize: magic, u32 zlib(seed) length + payload, u32 n_ticks, u8 key-record length, the raw key
+        records, then the raw 20-byte SHA1 digests. Compact (the 1 MB seed compresses well) and stdlib-only."""
+        import struct
+        import zlib
+        zseed = zlib.compress(bytes(self.seed), 6)
+        klen = len(self.keys[0]) if self.keys else len(KBD)
+        blob = bytearray()
+        blob += self._MAGIC
+        blob += struct.pack("<I", len(zseed)) + zseed
+        blob += struct.pack("<IB", self.n_ticks, klen)
+        for k in self.keys:
+            blob += k
+        for d in self.digests:
+            blob += bytes.fromhex(d)
+        with open(path, "wb") as f:
+            f.write(blob)
+
+    @classmethod
+    def load(cls, path) -> "GameTickDemo":
+        import struct
+        import zlib
+        raw = open(path, "rb").read()
+        if raw[:8] != cls._MAGIC:
+            raise ValueError(f"{path}: not a game-tick demo (bad magic)")
+        off = 8
+        (zlen,) = struct.unpack_from("<I", raw, off); off += 4
+        seed = zlib.decompress(raw[off:off + zlen]); off += zlen
+        n, klen = struct.unpack_from("<IB", raw, off); off += 5
+        keys = [bytes(raw[off + i * klen:off + (i + 1) * klen]) for i in range(n)]
+        off += n * klen
+        digests = [raw[off + i * 20:off + (i + 1) * 20].hex() for i in range(n)]
+        return cls(seed=seed, keys=keys, digests=digests)
+
 
 def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTickDemo:
     """Drive an already-loaded VM ``rt`` and capture the game-tick timeline.

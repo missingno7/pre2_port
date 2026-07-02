@@ -30,29 +30,41 @@ import play
 
 def main() -> int:
     demo = sys.argv[1] if len(sys.argv) > 1 else "artifacts/demo_pre2_full_gorilla_20260628_203423"
-    pb = InputDemoPlayback.load(str(ROOT / demo))
-    rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
-                            game_root=str(ROOT / "assets"), native_replacements=True)
-    cpu = rt.cpu
-    cpu.trace_enabled = False
-    det = lambda: cpu.instruction_count / (2142 * 70)
-    rt.dos.time_source = det
-    tick = {"next": 0.0}
-    frame = [0]
-
-    def advance() -> bool:                       # drive the VM one present-frame with the demo's input (no SB)
-        if pb.finished(frame[0]):
-            return False
-        pb.apply_to_runtime(frame[0], rt, deliver=lambda r, sc: deliver_scancode(r, sc, max_steps=2_000_000))
-        play._advance_demo_frame(rt, chunk_steps=2142, sub_batch=2000, clock=det, pic=rt.dos.pic,
-                                 sound_blaster=None, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
-        frame[0] += 1
-        return True
-
     max_ticks = int(sys.argv[2]) if len(sys.argv) > 2 else 100_000
-    print(f"recording game-tick timeline from {demo.split('/')[-1]} (VM oracle, cap {max_ticks} ticks) ...")
-    gtd = record_from_vm(rt, advance_one_frame=advance, max_ticks=max_ticks)
-    print(f"  captured {gtd.n_ticks} game ticks (seed {len(gtd.seed):,} bytes)")
+    tick_file = ROOT / demo / "game_tick_demo.bin"
+    if tick_file.exists():
+        from pre2.native.game_tick_demo import GameTickDemo
+        gtd = GameTickDemo.load(tick_file)
+        print(f"loaded the recorded tick timeline {tick_file.name} ({gtd.n_ticks} ticks) — VM-free re-verify")
+    else:
+        pb = InputDemoPlayback.load(str(ROOT / demo))
+        meta = pb.manifest.get("metadata", {})
+        chunk = int(meta.get("chunk_steps", 2142))          # the demo's OWN clock (old demos use 625/240 —
+        hz = int(meta.get("present_hz", 70))                # hardcoding 2142 corrupts their trajectory)
+        rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
+                                game_root=str(ROOT / "assets"), native_replacements=True)
+        cpu = rt.cpu
+        cpu.trace_enabled = False
+        det = lambda: cpu.instruction_count / (chunk * hz)
+        rt.dos.time_source = det
+        tick = {"next": 0.0}
+        frame = [0]
+
+        def advance() -> bool:                   # drive the VM one present-frame with the demo's input (no SB)
+            if pb.finished(frame[0]):
+                return False
+            pb.apply_to_runtime(frame[0], rt, deliver=lambda r, sc: deliver_scancode(r, sc, max_steps=2_000_000))
+            play._advance_demo_frame(rt, chunk_steps=chunk, sub_batch=2000, clock=det, pic=rt.dos.pic,
+                                     sound_blaster=None, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+            frame[0] += 1
+            return True
+
+        print(f"recording game-tick timeline from {demo.split('/')[-1]} (VM oracle, cap {max_ticks} ticks) ...")
+        gtd = record_from_vm(rt, advance_one_frame=advance, max_ticks=max_ticks)
+        print(f"  captured {gtd.n_ticks} game ticks (seed {len(gtd.seed):,} bytes)")
+        if gtd.n_ticks:
+            gtd.save(tick_file)
+            print(f"  saved {tick_file.name} — play_native --play-demo replays it DETERMINISTICALLY from now on")
 
     print("verifying the VM-less native core against the timeline ...")
     n_ok, div = verify_native(gtd, game_root=str(ROOT / "assets"))
