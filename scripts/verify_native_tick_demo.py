@@ -80,8 +80,8 @@ def main() -> int:
     if div is None:
         print(f"  PASS: native reproduced ALL {n_ok} ticks byte-identically (gameplay digest matched every tick)")
         return 0
-    if div.startswith("LEVEL-END"):
-        print(f"  native reproduced {n_ok} gameplay ticks, then {div}")
+    if div.startswith("LEVEL-END") or div.startswith("GAME-OVER"):
+        print(f"  native reproduced ALL {n_ok} gameplay ticks byte-identically, then {div}")
         return 0
     print(f"  DIVERGED: native matched {n_ok}/{gtd.n_ticks} ticks, then {div}")
     return 1

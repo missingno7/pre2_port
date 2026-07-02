@@ -17,8 +17,8 @@ was built over the VM), so ``native_sync_render_state`` re-derives the tile-ring
 from __future__ import annotations
 
 from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
-                                     Pre2RespawnTransition)
-from pre2.native.level_state import native_4f6c
+                                     Pre2GameOverTransition, Pre2RespawnTransition)
+from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
 from pre2.native.state import DATA_SEG
@@ -366,9 +366,18 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # native_level_end); a state-only consumer calls native_level_end itself (see game_tick_demo).
         # (Must be re-raised EXPLICITLY: it subclasses Pre2HybridGap, which is swallowed below.)
         raise
+    except Pre2GameOverTransition:
+        # [asm 5063] death -> game-over restart. Render the death-bounce arc (native_5063 yields the 60 bounce
+        # frames), then RE-RAISE: the restart re-enters main's 0x12f front-end flow (447d + carte + level-1
+        # reload), which is the FLOW DRIVER's job (like level-end). native_5063 ends with the level/score reset
+        # (an unloaded state), so only the bounce frames are rendered here.
+        for _ in native_5063(state):
+            native_sync_render_state(state)
+            yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
+        raise
     except Pre2HybridGap:
-        # the death-to-menu carry path (5063/5034) — the state IS a real non-gameplay scene (game-over), so let
-        # the SceneKind classifier run (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
+        # the 5034 game-over carry path — a real non-gameplay scene, so let the SceneKind classifier run
+        # (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
         native_sync_render_state(state)
         yield native_render(state, dos, display_page, game_root=game_root)
         return

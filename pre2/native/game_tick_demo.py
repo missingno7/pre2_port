@@ -23,9 +23,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
-                                     Pre2RespawnTransition)
-from pre2.native.level_state import native_4f6c, native_level_end
+from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2GameOverTransition, Pre2HybridGap,
+                                     Pre2LevelEndTransition, Pre2RespawnTransition)
+from pre2.native.level_init import native_level_init
+from pre2.native.level_state import native_4f6c, native_5063, native_level_end
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.state import NativeGameState
 # Reuse the forward oracle's tick seams + the gameplay/render boundary (single source of truth):
@@ -57,17 +58,22 @@ class GameTickDemo:
     seed: bytes                                  # VM memory at the first gameplay FRAME_TOP (native seed)
     keys: list[bytes] = field(default_factory=list)     # per tick: bytes(len(KBD)) in KBD order
     digests: list[str] = field(default_factory=list)    # per tick: gameplay_digest AFTER the tick
+    idle: list[int] = field(default_factory=list)       # per tick: the VM's [0x27F0] idle-timer word at DECODE —
+    #   the PIT-driven counter the idle-fidget selector (5DC9: [0x27F0]&0x1FF) reads. It is INSTRUCTION-COUNT
+    #   driven (4..11 PIT ticks/frame), so no VM-less advance is byte-exact; inject the VM's value per tick so the
+    #   idle pose reproduces exactly (else a stationary player fidgets to a different frame -> [0x4F20/28/2C] drift).
 
     @property
     def n_ticks(self) -> int:
         return len(self.keys)
 
     # --- on-disk format (a single file, conventionally <input_demo_dir>/game_tick_demo.bin) --------------
-    _MAGIC = b"PRE2GTD1"
+    _MAGIC = b"PRE2GTD2"          # v2 adds the per-tick idle-timer [0x27F0] words after the digests
+    _MAGIC_V1 = b"PRE2GTD1"       # v1 (no idle timeline) — still loadable; idle defaults to 0 (no injection)
 
     def save(self, path) -> None:
         """Serialize: magic, u32 zlib(seed) length + payload, u32 n_ticks, u8 key-record length, the raw key
-        records, then the raw 20-byte SHA1 digests. Compact (the 1 MB seed compresses well) and stdlib-only."""
+        records, the raw 20-byte SHA1 digests, then the per-tick u16 idle-timer words. Compact + stdlib-only."""
         import struct
         import zlib
         zseed = zlib.compress(bytes(self.seed), 6)
@@ -80,6 +86,8 @@ class GameTickDemo:
             blob += k
         for d in self.digests:
             blob += bytes.fromhex(d)
+        for v in self.idle:
+            blob += struct.pack("<H", v & 0xFFFF)
         with open(path, "wb") as f:
             f.write(blob)
 
@@ -88,7 +96,8 @@ class GameTickDemo:
         import struct
         import zlib
         raw = open(path, "rb").read()
-        if raw[:8] != cls._MAGIC:
+        v2 = raw[:8] == cls._MAGIC
+        if not v2 and raw[:8] != cls._MAGIC_V1:
             raise ValueError(f"{path}: not a game-tick demo (bad magic)")
         off = 8
         (zlen,) = struct.unpack_from("<I", raw, off); off += 4
@@ -97,7 +106,9 @@ class GameTickDemo:
         keys = [bytes(raw[off + i * klen:off + (i + 1) * klen]) for i in range(n)]
         off += n * klen
         digests = [raw[off + i * 20:off + (i + 1) * 20].hex() for i in range(n)]
-        return cls(seed=seed, keys=keys, digests=digests)
+        off += n * 20
+        idle = ([struct.unpack_from("<H", raw, off + i * 2)[0] for i in range(n)] if v2 else [0] * n)
+        return cls(seed=seed, keys=keys, digests=digests, idle=idle)
 
 
 def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTickDemo:
@@ -124,8 +135,10 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
                 out.seed = rec["seed"]
             elif ip == DECODE and rec["seed"] is not None:
                 rec["keys"] = bytes(mem.data[DS_BASE + o] for o in KBD)
+                rec["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)  # the fidget timer
             elif ip == GAP_SITE and rec["keys"] is not None:
                 out.keys.append(rec["keys"])
+                out.idle.append(rec["idle"])
                 out.digests.append(gameplay_digest(mem.data[DS_BASE:DS_BASE + 0x10000]))
                 rec["keys"] = None
         orig()
@@ -139,9 +152,12 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
     return out
 
 
-def _inject(state: NativeGameState, keys: bytes) -> None:
+def _inject(state: NativeGameState, keys: bytes, idle: int | None = None) -> None:
     for o, v in zip(KBD, keys):
         state.data[DS_BASE + o] = v
+    if idle is not None:                              # inject the VM's PIT idle-timer so the idle-fidget selector
+        state.data[DS_BASE + 0x27F0] = idle & 0xFF   # (5DC9: [0x27F0]&0x1FF) picks the SAME pose as the VM — the
+        state.data[DS_BASE + 0x27F1] = (idle >> 8) & 0xFF   # counter is not VM-less-reproducible (PIT-driven)
 
 
 def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | None]:
@@ -153,7 +169,7 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
     its rendered bounce via ``native_4f6c``, exactly as the standalone runner does)."""
     state = NativeGameState(bytearray(demo.seed))
     for i, (keys, want) in enumerate(zip(demo.keys, demo.digests)):
-        _inject(state, keys)
+        _inject(state, keys, demo.idle[i] if i < len(demo.idle) else None)
         try:
             native_gameplay_frame(state)
         except Pre2CaveTeleport as tp:
@@ -168,6 +184,17 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
                     pass
             except Exception as e:                                  # noqa: BLE001
                 return i, f"tick {i}: respawn tail raised {type(e).__name__}: {str(e)[:80]}"
+        except Pre2GameOverTransition:
+            try:
+                for _ in native_5063(state):                        # death-bounce + reset to level 1 + score 0
+                    pass
+            except Exception as e:                                  # noqa: BLE001
+                return i, f"tick {i}: game-over tail raised {type(e).__name__}: {str(e)[:80]}"
+            # The game restarts via main's 0x12f FRONT-END re-entry (447d + 8e45 + the carte scene + level reload),
+            # not a plain level load — reproducing it byte-exact is front-end recovery, not gameplay. The gameplay
+            # tick compare ends here (native reproduced the whole run up to the death), exactly like LEVEL-END.
+            return i, (f"GAME-OVER at tick {i}: native played the death-bounce + reset to level 1 (5063); the "
+                       f"restart is main's 0x12f front-end flow (a scene, no gameplay counterpart)")
         except Pre2LevelEndTransition:
             before = state.data[DS_BASE + 0x2D8A]
             try:

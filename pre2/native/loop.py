@@ -15,8 +15,8 @@ from collections import Counter
 
 from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
 from pre2.bridge.object_tick import LiveWalkerMem
-from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
-                                     Pre2RespawnTransition)
+from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2GameOverTransition, Pre2HybridGap,
+                                     Pre2LevelEndTransition, Pre2RespawnTransition)
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
 from pre2.bridge import object_render as _obj_render
@@ -375,7 +375,7 @@ def native_level_state(state) -> None:
     if rb(0x6BE4) != 0:
         return                                                      # [0x6be4]==2: 4C69 idle (counter winding down)
     if rb(0x6BE5) == 1:
-        raise Pre2HybridGap("native level-state: death (5063, carry -> 0x12f) not recovered")
+        raise Pre2GameOverTransition()                            # [asm 5063] death -> game-over restart (level 1)
     if rb(0x6BE5) == 0xFF:
         raise Pre2HybridGap("native level-state: game-over (5034, carry -> 0x12f) not recovered")
 

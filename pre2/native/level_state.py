@@ -25,6 +25,29 @@ def native_51df(state) -> None:
     d[_DS + 0x6C9E] = 0; d[_DS + 0x6C9F] = 0                        # [asm 51e9] [0x6c9e] = 0 (word)
 
 
+def native_5063(state):
+    """[asm 5063] The DEATH -> GAME-OVER-RESTART handler (4C69's [0x6be5]==1). Plays the death-bounce (509d), then
+    resets to level 1 with a zero score and returns carry to main's 0x12f, which RELOADS level 1 (the game
+    restarts). A GENERATOR yielding the 60 bounce frames (like native_4f6c) so the flow driver renders the death
+    arc; after it drains, the caller reloads level 1 (native_level_init) and the gameplay loop continues.
+
+    The non-gameplay sub-calls are the flow driver's: 25c7 (a wait-for-key-release busy-wait, no DGROUP state),
+    the 0x11 game-over song (audio), and 9b23's game-over-screen A000 blit (render). 9b23's DGROUP camera reset
+    (it runs since [0x2879]==0 here) IS reproduced. The [0x2D8A]=0 + score-zero + 51df are the gameplay contract."""
+    d = state.data
+
+    def ww(o, v):
+        d[_DS + (o & 0xFFFF)] = v & 0xFF
+        d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+
+    yield from native_death_bounce_509d(state)                     # [asm 5069] 509d death-bounce (60 frames)
+    ww(0x2DE4, 0); ww(0x2DE6, 0); ww(0x6BF8, 0); d[_DS + 0x6BC4] = 0   # [asm 9b35-9b3e] camera reset (9b23)
+    ww(0x4F20, 0x0D)                                                # [asm 5078] the death pose
+    d[_DS + 0x2D8A] = 0                                             # [asm 507e] restart at level 1
+    ww(0x6C0E, 0); ww(0x6C10, 0); ww(0x6C0C, 0)                     # [asm 5083-508f] score = 0
+    native_51df(state)                                             # [asm 5095] cleanup
+
+
 def native_4f6c(state):
     """[asm 4F6C] The respawn-to-checkpoint handler (4C69's ``[0x6be4]==1`` target). Plays the death-bounce
     (509d), then — unless a real death is pending (``[0x2879]`` or ``[0x6be5]``) — snapshots the live

@@ -250,10 +250,22 @@ def main(argv=None) -> int:
         native_load_song(state, native_level_song_name(state), gr)  # [asm 01B7] carte song -> the level song
         reveal_level(state, dos)                                    # 3054 center-out curtain into the next level
 
+    def game_over_restart(state, dos):
+        """[asm 5063 -> main 0x12f] After the death-bounce (native_frame_step rendered it; native_5063 reset the
+        level to 1 + zeroed the score), restart the game at level 1. The VM re-enters main's front-end flow
+        (447d + carte); approximated here as a direct level-1 reload + curtain for the watched replay."""
+        from pre2.native.audio import native_load_song, native_level_song_name
+        from pre2.native.level_init import native_level_init
+        print("  GAME OVER -> restart at level 1")
+        native_level_init(state, game_root=gr)
+        native_load_song(state, native_level_song_name(state), gr)
+        native_load_level_palette(state, dos)
+        reveal_level(state, dos)
+
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, ESC = quit. (VM-less native gameplay)")
-        from pre2.checkpoints.common import Pre2LevelEndTransition
+        from pre2.checkpoints.common import Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
         while ref["running"]:
             pump()
@@ -269,6 +281,8 @@ def main(argv=None) -> int:
                         break
             except Pre2LevelEndTransition:
                 between_levels(state, dos)                          # tally/carte flow, then the next level
+            except Pre2GameOverTransition:
+                game_over_restart(state, dos)                      # death-bounce shown; restart at level 1
             except Exception as e:                                  # noqa: BLE001 — hold on an unrecovered gap
                 hold_last(f"gameplay gap: {type(e).__name__}: {str(e)[:80]}")
                 return
@@ -281,7 +295,7 @@ def main(argv=None) -> int:
             # ---- DETERMINISTIC tick replay: seed + per-tick keys + per-tick digest from the VM oracle ----
             # (produced by scripts/verify_native_tick_demo.py; keyed to GAME TICKS, so it replays identically
             # in every mode. Live keys are IGNORED during the replay — determinism first; ESC still quits.)
-            from pre2.checkpoints.common import Pre2LevelEndTransition
+            from pre2.checkpoints.common import Pre2GameOverTransition, Pre2LevelEndTransition
             from pre2.native.game_tick_demo import GameTickDemo, _inject, gameplay_digest
             gtd = GameTickDemo.load(tick_path)
             print(f"tick replay: {gtd.n_ticks} game ticks (deterministic; digest-checked vs the VM oracle)")
@@ -292,7 +306,7 @@ def main(argv=None) -> int:
             i = 0
             while ref["running"] and i < gtd.n_ticks:
                 pump()
-                _inject(state, gtd.keys[i])
+                _inject(state, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
                 disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
                 try:
                     for planes, page in native_frame_step(state, dos, disp, game_root=gr):
@@ -304,6 +318,10 @@ def main(argv=None) -> int:
                 except Pre2LevelEndTransition:
                     print(f"  tick replay: LEVEL END at tick {i} — the compare ends here; continuing live")
                     between_levels(state, dos)
+                    break
+                except Pre2GameOverTransition:
+                    print(f"  tick replay: GAME OVER at tick {i} — the compare ends here; restarting live")
+                    game_over_restart(state, dos)
                     break
                 except Exception as e:                             # noqa: BLE001
                     hold_last(f"tick replay gap at tick {i}: {type(e).__name__}: {str(e)[:70]}")

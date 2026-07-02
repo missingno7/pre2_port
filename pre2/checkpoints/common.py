@@ -53,6 +53,16 @@ class Pre2LevelEndTransition(Pre2HybridGap):
     step" — catch it FIRST where the transition is actually driven."""
 
 
+class Pre2GameOverTransition(Pre2HybridGap):
+    """Signal (not a gap): the per-frame gameplay step reached the DEATH -> GAME-OVER-RESTART transition (4C69's
+    [0x6be5]==1 -> 5063). The death-bounce plays out (509d, 60 rendered frames), then the game resets to level 1
+    with a zero score and re-enters main at 0x12f to reload level 1 — a game restart driven outside the
+    single-frame loop. ``native_level_state`` raises this; the runtime/flow driver drives ``native_5063`` as a
+    generator (rendering the bounce) then reloads level 1 (native_level_init) and the gameplay loop continues.
+    Subclasses Pre2HybridGap so existing ``except Pre2HybridGap`` sites still treat it as "not a plain per-frame
+    step" — catch it FIRST where the transition is actually driven."""
+
+
 class Pre2CaveTeleport(Pre2HybridGap):
     """Signal (not a gap): the position-trigger scan (52FE) matched a cave/teleport entrance — the multi-frame
     5326 transition (vertical fade-out curtain 30C6, the hidden camera pan to the destination, the 53D7
