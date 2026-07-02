@@ -21,6 +21,7 @@ from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelE
 from pre2.native.level_state import native_4f6c
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
+from pre2.native.state import DATA_SEG
 
 
 _VIEW_ROWS = 0xB0          # the gameplay viewport height in rows (the HUD band below stays)
@@ -54,6 +55,47 @@ def _reveal_frame(new_planes, page, k):
         out[p][page:page + view] = b"\x00" * view                  # dst starts black
     panel_copy(out, src, page, k)                        # reveal k center-out strip-pairs onto the display page
     return out, page
+
+
+def native_iris_close(state, dos, display_page: int, *, game_root: str):
+    """The level-end IRIS CLOSE (316F setup + the 31F4..32DD shrink loop): a circle centred on the player
+    shrinks to black over the frozen level frame. A GENERATOR yielding ``(planes, page)`` per shrink step.
+
+    316F [asm 31AC-31EE] centres the iris on the player (screen X/Y), picks the initial radius, and seeds the
+    accelerating shrink counters; the loop composes one iris frame (compose_iris via the recovered 31F4 geometry
+    + 32DE clear_span — native_render sees [0x2DD0]!=0 -> SceneKind.IRIS), then shrinks [0x2DD0] by [0x2DC0],
+    stepping [0x2DC0] up every 0x14 frames, until the circle closes. (The 316F object-clear is skipped: it frees
+    the gameplay objects for the exit-anim that follows, but native reloads the level fresh via native_level_end,
+    and skipping it keeps the frozen objects visible behind the iris — matching the VM's page snapshot.)"""
+    _DS = (DATA_SEG << 4) & 0xFFFFF
+    d = state.data
+
+    def rw(o):
+        return d[_DS + (o & 0xFFFF)] | (d[_DS + ((o + 1) & 0xFFFF)] << 8)
+
+    def ww(o, v):
+        d[_DS + (o & 0xFFFF)] = v & 0xFF
+        d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+
+    def s16(v):
+        return v - 0x10000 if v & 0x8000 else v
+
+    x_off = (rw(0x4F1C) - (rw(0x2DE4) << 4)) & 0xFFFF                          # [asm 31AC-31B9] player screen X
+    y_off = (((rw(0x4F1E) - (rw(0x2DE6) << 4)) & 0xFFFF) - 0x10 - d[_DS + 0x6BC4]) & 0xFFFF  # [asm 31BC-31D1]
+    clamp = (2 * s16(y_off)) & 0xFFFF                                          # [asm 31D4-31DF] max(2*Y, 0xF0)
+    if s16(clamp) < 0xF0:
+        clamp = 0xF0
+    ww(0x2DC8, x_off); ww(0x2DC6, y_off); ww(0x2DC4, clamp)
+    ww(0x2DD0, 0xE6); ww(0x2DC0, 4); ww(0x2DC2, 0)                            # [asm 31E2-31EE] radius + counters
+    while s16(rw(0x2DD0)) > 0:                                                # [asm 31F4..32DD] shrink loop
+        yield native_render(state, dos, display_page, game_root=game_root)    # IRIS kind (compose_iris)
+        c2 = (rw(0x2DC2) + 1) & 0xFFFF                                        # [asm 32B0-32C1] accel every 0x14
+        if c2 >= 0x14:
+            c2 = 0
+            ww(0x2DC0, (rw(0x2DC0) + 1) & 0xFFFF)
+        ww(0x2DC2, c2)
+        ww(0x2DD0, (rw(0x2DD0) - rw(0x2DC0)) & 0xFFFF)                        # [asm 32D1] radius -= step
+    ww(0x2DD0, 0)                                                             # iris closed -> off
 
 
 def native_tally_scene(state, dos, display_page: int, *, game_root: str):

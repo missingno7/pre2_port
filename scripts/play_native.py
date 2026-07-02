@@ -114,7 +114,8 @@ def main(argv=None) -> int:
     from pre2.native.front_end import native_front_end
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
-    from pre2.native.runtime import native_frame_step, native_level_reveal, native_tally_scene
+    from pre2.native.runtime import (native_frame_step, native_iris_close, native_level_reveal,
+                                      native_tally_scene)
     from pre2.native.state import NativeGameState
     from sdl_view import front_end_scene_to_rgb, render_planar_rgb_from_planes
 
@@ -209,7 +210,16 @@ def main(argv=None) -> int:
         from pre2.native.audio import native_load_song
         from pre2.native.front_end import _native_carte
         from pre2.native.level_state import native_level_end
-        print("  level complete -> TALLY -> carte (the 4CCB walk/throw count-up cutscene is deferred)")
+        print("  level complete -> IRIS close -> TALLY -> carte (the 4CCB walk/throw count-up is deferred)")
+        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        for planes, page in native_iris_close(state, dos, disp, game_root=gr):   # 316F circle-close on the player
+            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
+                    "PRE2 VM-less — level complete")
+            pump()
+            if native_audio is not None:
+                native_audio.poll(state)
+            if not ref["running"]:
+                return
         try:
             native_load_song(state, "BRAVO.TRK", gr)               # the tally jingle
         except Exception:                                          # noqa: BLE001 — no audio -> silent tally
