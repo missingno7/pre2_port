@@ -111,6 +111,10 @@ def native_object_spawn_step(state) -> None:
     try:
         if rb(0x91FE) != 0xFF:                # [asm 6822/6827] camera active -> 70D7
             apply_ds(state, camera_engine(rb, rw, tile_reader(state)))
+        if rb(0x2D8A) == 5 and (rb(0x8166) & 0xFE) == 0 and rw(0xA326) != 3:   # [asm 682C-683F] level-6 castle
+            # 6D34 = the level-6 castle camera/boss state machine (311 instr; writes the [0x5648] camera-target
+            # records via 6E43 + the [0xA32B] counter via 70CE). Not yet recovered — fail loud, don't diverge.
+            raise Pre2HybridGap("native object-spawn: level-6 castle camera/boss routine (6D34) not recovered")
         if rb(0x2D8A) == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
             apply_ds(state, tick_mode9_boss(rb, rw))
     except Pre2SpawnGap as exc:
