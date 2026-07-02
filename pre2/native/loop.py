@@ -160,7 +160,13 @@ def native_trigger_teleport(state, si) -> None:
     The VM ANIMATES the camera there (``5361-5387``: ~80 busy-wait scroll steps via 3363/33AD/3414/3435) and
     re-runs the frame's render+gameplay passes (``53D7``); the VM-less runtime snaps to the destination and lets
     the faithful renderer draw the new area — so the cave is ENTERED in one frame instead of a scrolled transition
-    (functionally correct; the animated-scroll frames are not byte-reproduced)."""
+    (functionally correct; the animated-scroll frames are not byte-reproduced).
+
+    In a long FORWARD verify this surfaces as a ONE-TICK drift of the free-running counters on the teleport frame:
+    the ``53D7`` re-run bumps the frame counter [0x6BD5] (via its 26FA), the scroll counter [0x2DBE] (its 3922) and
+    the [0x852x] entity timers once more than the snap, and the animated scroll leaves a non-zero sub-position
+    [0x2DE8]/[0x2DEA] the snap zeroes — e.g. demo 195135 @frame 206 (10 diffs, all downstream of that one re-run).
+    Byte-reproducing it is the [[pre2-faithful-transitions]] work (a wall-clock scroll controller), NOT a state bug."""
     rb, rw = readers(state)
     dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
     dest_tile = rw((si + 4) & 0xFFFF)                         # [si+4] destination player tile
