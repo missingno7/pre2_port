@@ -22,7 +22,7 @@ from pre2.bridge import object_render as _obj_render
 from pre2.recovered.object_inject import second_pass_tick
 from pre2.recovered.object_particles import project_particles
 from pre2.recovered.object_render import plan_record_update, plan_sprite
-from pre2.recovered.object_spawn import Pre2SpawnGap, camera_engine, tick_mode9_boss
+from pre2.recovered.object_spawn import Pre2SpawnGap, camera_engine, tick_level6_boss, tick_mode9_boss
 from pre2.recovered.object_tick import object_tick
 from pre2.recovered.terrain_entities import tick_terrain_entities
 from pre2.native.state import DATA_SEG
@@ -53,7 +53,7 @@ MAIN_LOOP_SPINE = [
     (0x581E, "native", "tick_popup_ring (effects-update popup)"),
     (0x88D7, "native", "native_combat_pass: the combat/pickup pass (4 projectiles + player vs enemies 8C21 then "
                        "bonus tiles 899E) — damage/kill, effect+debris burst pools, secret-tile collects, [0x4f2a] bounce"),
-    (0x6822, "native", "object system: camera_engine/tick_mode9_boss -> object_tick(684E) -> 2nd pass(6913)"),
+    (0x6822, "native", "object system: camera_engine/tick_level6_boss(6D34)/tick_mode9_boss -> object_tick(684E) -> 2nd pass(6913)"),
     (0x6210, "native", "tick_projectiles (effects-update)"),
     (0x60FE, "native", "tick_particles (effects-update)"),
     (0x60DF, "native", "tick_debris_pool (effects-update)"),
@@ -102,8 +102,9 @@ def spine_coverage() -> Counter:
 def native_object_spawn_step(state) -> None:
     """Run the recovered 6822 spawner branches over the :class:`NativeGameState` — the first native-driven
     main-loop call, no VM. Mirrors the 6822 dispatch: ``camera_engine`` when the camera is active
-    ([0x91FE]!=0xFF) and ``tick_mode9_boss`` in the mode-9 last-boss level ([0x2D8A]==9). Raises
-    :class:`Pre2HybridGap` on a gated/unrecovered path (the boss-death finale, the camera state-6 finale).
+    ([0x91FE]!=0xFF), ``tick_level6_boss`` (6D34) in the level-6 inside-a-tree level ([0x2D8A]==5, gated on
+    [0x8166]&0xFE==0 & [0xA326]!=3), and ``tick_mode9_boss`` in the mode-9 last-boss level ([0x2D8A]==9). Raises
+    :class:`Pre2HybridGap` on a gated/unrecovered path (the boss-death finales, the camera state-6 finale).
 
     (object_tick + the 2nd pass run via their own bridges; they move onto NativeGameState as those adapters do.)
     """
@@ -111,10 +112,8 @@ def native_object_spawn_step(state) -> None:
     try:
         if rb(0x91FE) != 0xFF:                # [asm 6822/6827] camera active -> 70D7
             apply_ds(state, camera_engine(rb, rw, tile_reader(state)))
-        if rb(0x2D8A) == 5 and (rb(0x8166) & 0xFE) == 0 and rw(0xA326) != 3:   # [asm 682C-683F] level-6 castle
-            # 6D34 = the level-6 castle camera/boss state machine (311 instr; writes the [0x5648] camera-target
-            # records via 6E43 + the [0xA32B] counter via 70CE). Not yet recovered — fail loud, don't diverge.
-            raise Pre2HybridGap("native object-spawn: level-6 castle camera/boss routine (6D34) not recovered")
+        if rb(0x2D8A) == 5 and (rb(0x8166) & 0xFE) == 0 and rw(0xA326) != 3:   # [asm 682C-6841] level-6 tree boss
+            apply_ds(state, tick_level6_boss(rb, rw))         # 6D34 (fails loud on the phase-3 death finale)
         if rb(0x2D8A) == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
             apply_ds(state, tick_mode9_boss(rb, rw))
     except Pre2SpawnGap as exc:

@@ -361,6 +361,12 @@ class _Ov:
             if wd == 2:
                 self._bytes[(off + 1) & 0xFFFF] = (val >> 8) & 0xFF
 
+    def wb(self, o, v):
+        self.apply({o & 0xFFFF: (v & 0xFF, 1)})
+
+    def ww(self, o, v):
+        self.apply({o & 0xFFFF: (v & 0xFFFF, 2)})
+
 
 CAM_TARGET_A = 0xA421
 CAM_TARGET_B = 0xA423
@@ -964,3 +970,262 @@ def tick_mode9_boss(rb, rw):
     ov.apply(boss_pre_interp(ov.rb, ov.rw))             # [asm 6B1C..6B90] script-advance + hit-detection
     ov.apply(boss_script_interp(ov.rb, ov.rw))          # [asm 6B91..6BDA] glyph-script interpreter
     return ov.writes
+
+
+# --- 6D34..70D6: the level-6 (inside-a-tree) camera/boss state machine ---
+#
+# Called by the object system (6822) only on level 6 ([0x2D8A]==5, gated on [0x8166]&0xFE==0 & [0xA326]!=3).
+# The boss is a set of camera-target records driven by a small state machine keyed on [0xA324..0xA32C]:
+#   [0xA324] hit-stun countdown | [0xA325] hits-per-phase (7) | [0xA326] PHASE 0/1/2 (3 = defeated, gated off) |
+#   [0xA328] main-target anim index | [0xA329]/[0xA32A] sub-indices | [0xA32B] spawn timer (saturating-dec each
+#   frame; fires the projectile-drop + phase logic at 0) | [0xA32C] re-seed countdown for [0xA32B].
+# It rewrites the effect row (7585), moves up to 5 falling projectiles (0x7DAF), bakes the target geometry from
+# three tables (0xA4B5/0xA485/0xA4E5 -> the render/target records 0x5648..0x5694), runs player<->boss collision,
+# and advances the phase when the player's club/projectiles hit a target. The boss-DEATH finale (94F3 x4 + burst
+# at phase 3) is not yet recovered (fail-loud), same as the 70D7 state-6 finale.
+L6_PROJ_LIST = 0x7DAF        # 5 boss projectiles, stride 0xB
+L6_PROJ_RENDER = 0x55EE      # their render slots, stride 0x12
+L6_STUN = 0xA324
+L6_HITS = 0xA325
+L6_PHASE = 0xA326
+L6_ANIM = 0xA328
+L6_SUB_B = 0xA329
+L6_SUB_A = 0xA32A
+L6_TIMER = 0xA32B
+L6_RESEED = 0xA32C
+RNG_A, RNG_B, RNG_C, RNG_D = 0x2CEC, 0x2CED, 0x2CEE, 0x2CEF   # rng_lcg (39DF) state
+
+
+def _sar16(v, n):
+    """Arithmetic right shift of a 16-bit value (sign-preserving), returned as a 16-bit word."""
+    return (_s16(v) >> n) & 0xFFFF
+
+
+def _l6_draw_rng(ov):
+    """[asm 39DF] advance rng_lcg over the [0x2CEC..0x2CEF] state (writing it back); return the AL byte."""
+    a, b, c, d, ret = rng_lcg(ov.rb(RNG_A), ov.rb(RNG_B), ov.rb(RNG_C), ov.rw(RNG_D))
+    ov.wb(RNG_A, a); ov.wb(RNG_B, b); ov.wb(RNG_C, c); ov.ww(RNG_D, d)
+    return ret & 0xFF
+
+
+def _l6_spawn_state_machine(ov):
+    """[asm 6E92..6F37] the [0xA32B]-timer state machine (reached only when [0xA324]==0 and [0xA32B]==0):
+    advance the sub-indices, drop a random falling projectile (unless the new [0xA32A]==1), reload [0xA32B],
+    and re-seed [0xA32B]/[0xA32C] from the rng when [0xA32C] underflows."""
+    ov.wb(L6_SUB_B, (ov.rb(L6_SUB_B) + 1) % 3)              # [asm 6E92]
+    al = (ov.rb(L6_SUB_A) + 1) % 3                          # [asm 6EA0]
+    ov.wb(L6_SUB_A, al)
+    ah = 1
+    if al != 1:                                            # [asm 6EB2 je 6F0F] (skip the spawn)
+        ah = 3
+        ov.wb(0x6BEA, 4)                                   # [asm 6EB6] camera shake
+        ov.ww(0x4F1C, (ov.rw(0x4F1C) + 2) & 0xFFFF)        # [asm 6EBB] nudge the player X
+        si = None                                          # [asm 6EC1-6ED0] find a free projectile slot
+        p = L6_PROJ_LIST
+        for _ in range(5):
+            if ov.rw((p + 4) & 0xFFFF) == 0xFFFF:
+                si = p
+                break
+            p = (p + 0xB) & 0xFFFF
+        if si is not None:                                 # [asm 6ED4]
+            ov.ww((si + 4) & 0xFFFF, 0x1B3)                # [asm 6ED4] sprite id
+            ov.ww((si + 2) & 0xFFFF, (ov.rw(0x4F1E) - 0x96) & 0xFFFF)   # [asm 6ED9] Y = playerY - 0x96
+            ret = _l6_draw_rng(ov)                         # [asm 6EE2] 39DF
+            al2 = ret & 0x7C                               # [asm 6EE7] and al,0x7c
+            if al2 & 4:                                    # [asm 6EE9 test/6EED neg] randomize the X sign
+                al2 = (-al2) & 0xFF
+            ov.ww(si & 0xFFFF, (_cbw(al2) + ov.rw(0x4F1C)) & 0xFFFF)   # [asm 6EEF-6EF4] X = playerX +/- offset
+            ov.ww((si + 6) & 0xFFFF, (((ret & 3) + 1) << 4) & 0xFFFF)  # [asm 6EF6-6F02] fall speed
+            ov.ww((si + 8) & 0xFFFF, 0)                    # [asm 6F05]
+            ov.wb((si + 0xA) & 0xFFFF, 4)                  # [asm 6F0A]
+    ov.wb(L6_TIMER, ah)                                    # [asm 6F0F]
+    reseed = (ov.rb(L6_RESEED) - 1) & 0xFF                 # [asm 6F13] dec [0xA32C]
+    ov.wb(L6_RESEED, reseed)
+    if reseed == 0:                                        # [asm 6F17 jne 6F3C]
+        ov.wb(L6_RESEED, ((_l6_draw_rng(ov) & 0xF) << 3) & 0xFF)          # [asm 6F19-6F24]
+        ov.wb(L6_TIMER, (((_l6_draw_rng(ov) & 0xF) << 3) + 0x40) & 0xFF)  # [asm 6F27-6F34]
+        ov.wb(L6_SUB_B, 0)                                 # [asm 6F37]
+
+
+def _l6_tail_6f8f(ov):
+    """[asm 6F8F..6FBA] the wait-path player collision: on overlap with target 0x5690 (and [0xA330] set) push the
+    player down. Returns True if it branched straight to the [0xA32B]-dec (i.e. skip the boss-hit + boundary)."""
+    if ov.rb(0x6BE4) != 0:                                 # [asm 6F94 je / 6F96 jmp 70CB]
+        return True
+    hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, 0x5690)   # [asm 6F9F] 8D7B
+    ov.apply(hb)
+    if hit and ov.rb(0xA330) != 0:                         # [asm 6FA2 jae / 6FA4 je 6FBB]
+        ax = 0xFF80 if ov.rb(0x27EA) != 0 else 0xFFC0      # [asm 6FAB-6FB5]
+        ov.ww(0x4F2A, ax)                                  # [asm 6FB8]
+    return False
+
+
+def _l6_bounce_6f59(ov):
+    """[asm 6F59..6F8D] the player bounced off a boss target: pop up ([0x4F2A]=0xFF60); above Y 0x7BB it is a
+    full crush (knockback + 3x the 824D hurt effect)."""
+    if _s16(ov.rw(0x4F1E)) > 0x7BB:                        # [asm 6F5F jg 6F69]
+        ov.ww(0x4F2A, 0xFF60); ov.wb(0x4F2D, 0x2C); ov.wb(0x6BD0, 0)   # [asm 6F69-6F74]
+        ov.wb(0x4F24, 3); ov.ww(0x4F22, 0xFF80)           # [asm 6F79-6F7E]
+        for _ in range(3):                                # [asm 6F84-6F8A] 824D x3
+            ov.apply(hurt_effect(ov.rb, ov.rw))
+    else:
+        ov.ww(0x4F2A, 0xFF60)                              # [asm 6F61]
+
+
+def _l6_boss_hit(ov):
+    """[asm 6FBB..70A4] test the player's club (0x4F0A) then the 4 thrown projectiles (0x4F2E) against the active
+    target record set (0x5648 + 0x24*[0xA326]); on a hit, kill the attacker, flash the target, and (every 7 hits)
+    advance the phase [0xA326]. Reaching phase 3 is the boss-death finale (94F3) -> fail loud."""
+    si = (0x5648 + 0x24 * ov.rb(L6_PHASE)) & 0xFFFF        # [asm 6FBB-6FC7]
+    hit_slot = None
+    if ov.rw(0x4F0E) != 0xFFFF:                            # [asm 6FC9] the player club (0x4F0A+4)
+        ov.wb(0xA312, 1)                                   # [asm 6FCF] full-tolerance hitbox
+        h, hb = hitbox_overlap(ov.rb, ov.rw, si, 0x4F0A)   # [asm 6FD4] 8D7B
+        ov.apply(hb); ov.wb(0xA312, 0)                     # [asm 6FD7]
+        if h:                                             # [asm 6FDC jb 7001]
+            hit_slot = 0x4F0A
+    if hit_slot is None:
+        di = 0x4F2E
+        for _ in range(4):                                # [asm 6FDE-6FFC] the 4 projectiles
+            if ov.rw((di + 4) & 0xFFFF) != 0xFFFF:         # [asm 6FE4]
+                ov.wb(0xA312, 1)
+                h, hb = hitbox_overlap(ov.rb, ov.rw, si, di)   # [asm 6FEF]
+                ov.apply(hb); ov.wb(0xA312, 0)
+                if h:                                     # [asm 6FF7 jb 7001]
+                    hit_slot = di
+                    break
+            di = (di + 0x12) & 0xFFFF                      # [asm 6FF9]
+    if hit_slot is None:                                  # [asm 6FFE jmp 70A5]
+        return
+    ov.wb((si + 5) & 0xFFFF, ov.rb((si + 5) & 0xFFFF) ^ 0x40)   # [asm 7001] flash the target
+    if ov.rw(L6_PHASE) != 0:                              # [asm 7005 je 7010]
+        ov.wb((si - 0xD) & 0xFFFF, ov.rb((si - 0xD) & 0xFFFF) ^ 0x40)   # [asm 700C]
+    ov.ww((hit_slot + 4) & 0xFFFF, 0xFFFF)                # [asm 7010] kill the attacker
+    ov.wb(L6_STUN, 6)                                     # [asm 7015] hit-stun
+    if ov.rw(L6_PHASE) < 2:                               # [asm 701A jae 702B]
+        ov.wb(L6_SUB_B, 3); ov.wb(L6_SUB_A, 3)            # [asm 7021-7026]
+    hits = (ov.rb(L6_HITS) - 1) & 0xFF                    # [asm 702B] dec [0xA325]
+    ov.wb(L6_HITS, hits)
+    if hits != 0:                                         # [asm 702F jne 70A5]
+        return
+    ov.wb(L6_HITS, 7)                                     # [asm 7031]
+    ov.ww(L6_PHASE, (ov.rw(L6_PHASE) + 1) & 0xFFFF)       # [asm 7036] advance the phase
+    if ov.rw(L6_PHASE) != 3:                              # [asm 703A jne 70A5]
+        return
+    raise Pre2SpawnGap("6D34 level-6 tree boss-death finale (94F3) unrecovered")   # [asm 7041-70A4]
+
+
+def _l6_finish(ov):
+    """[asm 70CB..70D6] saturating decrement of the spawn timer [0xA32B] (the `sub`/`adc` idiom)."""
+    v = ov.rb(L6_TIMER)
+    ov.wb(L6_TIMER, (v - 1) & 0xFF if v != 0 else 0)
+    return ov.writes
+
+
+@oracle_link("1030:6D34",
+             "the whole level-6 (inside-a-tree) camera/boss state machine: rewrite the effect row (7585), move "
+             "the 5 falling projectiles (0x7DAF -> render 0x55EE) with player collision (8D7B + 824D hurt), bake "
+             "the target geometry from the 0xA4B5/0xA485/0xA4E5 tables into the target records (0x5648..0x5694), "
+             "run the [0xA32B]-timer spawn state machine (drop a random projectile via 39DF), the player<->boss "
+             "collision tails, and the club/projectile-vs-boss hit + phase advance ([0xA326]++ every 7 hits). "
+             "Saturating-decrements [0xA32B] each frame. Composes the recovered init_effect_row/hitbox_overlap/"
+             "hurt_effect/rng_lcg over a read-through overlay; fails loud on the phase-3 boss-death finale (94F3).",
+             "OBSERVED", merge_target="object_spawn")
+def tick_level6_boss(rb, rw):
+    """[asm 6D34..70D6] Returns the ``{offset: (value, width)}`` write contract for the whole routine. Raises
+    :class:`Pre2SpawnGap` on the (unwitnessed) boss-death finale and the lives-depleted 824D death."""
+    ov = _Ov(rb, rw)
+
+    ov.apply(init_effect_row(((2 - ov.rw(L6_PHASE)) << 1) & 0xFFFF))   # [asm 6D34-6D3D] 7585 effect row
+
+    # [asm 6D40..6DDD] the 5 falling projectiles: move + player collision, projected to the render slots
+    bx = L6_PROJ_LIST
+    di = L6_PROJ_RENDER
+    for _ in range(5):
+        bp = ov.rw((bx + 4) & 0xFFFF)
+        if bp != 0xFFFF:                                  # [asm 6D4F] active slot
+            killed = False
+            if ov.rb(0x6BE4) == 0:                        # [asm 6D54] not the death freeze
+                hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, di)   # [asm 6D5B] 8D7B(player, projected slot)
+                ov.apply(hb)
+                if hit:                                   # [asm 6D5E jb -> knock the player back]
+                    ov.wb(0x4F2D, 0x2C); ov.wb(0x6BD0, 0)                 # [asm 6D60-6D65]
+                    ov.ww(0x4F2A, 0xFF80); ov.wb(0x4F24, 3); ov.ww(0x4F22, 0xFF80)   # [asm 6D6A-6D75]
+                    ov.apply(hurt_effect(ov.rb, ov.rw))   # [asm 6D7B] 824D
+                    bp = 0xFFFF
+                    ov.ww((bx + 4) & 0xFFFF, bp)          # [asm 6DC9-6DCC] kill source
+                    ov.ww((di + 4) & 0xFFFF, bp)          # [asm 6DCF]
+                    killed = True
+            if not killed:
+                # [asm 6D80] integrate the projectile (Y by [+6]>>4, X by an oscillating [+8]/[+A] accumulator)
+                ov.ww((bx + 2) & 0xFFFF, (ov.rw((bx + 2) & 0xFFFF) + _sar16(ov.rw((bx + 6) & 0xFFFF), 4)) & 0xFFFF)
+                ov.ww((bx + 8) & 0xFFFF, (ov.rw((bx + 8) & 0xFFFF) + _cbw(ov.rb((bx + 0xA) & 0xFFFF))) & 0xFFFF)
+                d8 = _s16(ov.rw((bx + 8) & 0xFFFF))       # [asm 6D95-6DA2] reverse at the +/-0x20 extents
+                if d8 >= 0x20 or d8 < -0x20:
+                    ov.wb((bx + 0xA) & 0xFFFF, (-ov.rb((bx + 0xA) & 0xFFFF)) & 0xFF)
+                dx4 = _sar16(ov.rw((bx + 8) & 0xFFFF), 4)   # [asm 6DA5]
+                if dx4 != 0:                              # [asm 6DAD je 6DB7]
+                    bp = (bp + (1 if _s16(dx4) > 0 else 2)) & 0xFFFF   # [asm 6DAF-6DB5] anim by drift sign
+                ov.ww(bx & 0xFFFF, (ov.rw(bx & 0xFFFF) + dx4) & 0xFFFF)   # [asm 6DB7] X += drift
+                ov.ww(di & 0xFFFF, ov.rw(bx & 0xFFFF))    # [asm 6DB9-6DBB] project X
+                y = ov.rw((bx + 2) & 0xFFFF)
+                ov.ww((di + 2) & 0xFFFF, y)               # [asm 6DBD-6DC0] project Y
+                if _s16(y) > 0x7D8:                       # [asm 6DC3 jle keeps]
+                    bp = 0xFFFF
+                    ov.ww((bx + 4) & 0xFFFF, bp)          # [asm 6DC9-6DCC] kill off the bottom
+                ov.ww((di + 4) & 0xFFFF, bp)              # [asm 6DCF]
+        di = (di + 0x12) & 0xFFFF                          # [asm 6DD2]
+        bx = (bx + 0xB) & 0xFFFF                           # [asm 6DD5]
+
+    # [asm 6DDE..6E57] bake the target geometry from the three tables
+    ov.ww(0x5670, 0xFFFF); ov.ww(0x565E, 0xFFFF)          # [asm 6DDE-6DE4]
+    if ov.rw(L6_PHASE) < 2:                               # [asm 6DE7 jae 6E12]
+        si = (0xC * ov.rb(L6_SUB_B) + 0xA4B5) & 0xFFFF     # [asm 6DEE-6DF6]
+        for src, dst in ((0, 0x566C), (2, 0x566E), (4, 0x5670), (6, 0x565A), (8, 0x565C), (0xA, 0x565E)):
+            ov.ww(dst, ov.rw((si + src) & 0xFFFF))        # [asm 6DFA-6E0F]
+    si = (0xC * ov.rb(L6_SUB_A) + 0xA485) & 0xFFFF         # [asm 6E12-6E18]
+    for src, dst in ((0, 0x5690), (2, 0x5692), (4, 0x5694), (6, 0x567E), (8, 0x5680), (0xA, 0x5682)):
+        ov.ww(dst, ov.rw((si + src) & 0xFFFF))            # [asm 6E1E-6E33]
+    si = (6 * ov.rb(L6_ANIM) + 0xA4E5) & 0xFFFF            # [asm 6E36-6E3C] the main target record
+    ov.ww(0x5648, ov.rw(si)); ov.ww(0x564A, ov.rw((si + 2) & 0xFFFF))   # [asm 6E42-6E47]
+    w2 = 0xFFFF if ov.rw(L6_PHASE) != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E52]
+    ov.ww(0x564C, w2)                                     # [asm 6E55]
+
+    if (ov.rb(0x6BD5) & 3) == 0:                          # [asm 6E58] cycle the anim index every 4th frame
+        ov.wb(L6_ANIM, (ov.rb(L6_ANIM) + 1) % 3)          # [asm 6E5F-6E6A]
+
+    # [asm 6E6D..] hit-stun countdown vs the spawn state machine, then the shared collision + boss-hit tails
+    stun = ov.rb(L6_STUN)
+    run_boss_hit = True
+    if stun != 0:                                         # [asm 6E6D-6E88]
+        if stun == 1:                                     # [asm 6E74-6E7F]
+            ov.wb(L6_SUB_B, 2); ov.wb(L6_SUB_A, (ov.rb(L6_SUB_A) - 1) & 0xFF)
+            ov.wb(L6_TIMER, (ov.rb(L6_TIMER) + 5) & 0xFF)
+        ov.wb(L6_STUN, (stun - 1) & 0xFF)                 # [asm 6E84]
+        run_boss_hit = not _l6_tail_6f8f(ov)              # [asm 6E88 jmp 6F8F]
+    elif ov.rb(L6_TIMER) != 0:                            # [asm 6E8B-6E90] still counting down -> wait
+        run_boss_hit = not _l6_tail_6f8f(ov)
+    else:
+        _l6_spawn_state_machine(ov)                       # [asm 6E92-6F37]
+        if ov.rb(0x6BE4) != 0:                            # [asm 6F3C-6F43]
+            return _l6_finish(ov)                         # [asm 6F43 jmp 70CB]
+        hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, 0x5690)   # [asm 6F4C]
+        ov.apply(hb)
+        bounced = hit
+        if not hit:
+            hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, 0x567E)   # [asm 6F54]
+            ov.apply(hb)
+            bounced = hit
+        if bounced:                                       # [asm 6F4F jb / 6F57 jae 6F8F]
+            _l6_bounce_6f59(ov)                           # [asm 6F59]
+        else:
+            run_boss_hit = not _l6_tail_6f8f(ov)          # [asm 6F57 jae 6F8F]
+
+    if run_boss_hit:
+        _l6_boss_hit(ov)                                  # [asm 6FBB-70A4]
+        if _s16(ov.rw(0x4F1C)) > 0x3D8:                   # [asm 70A5 jle 70CB] the right-boundary crush
+            ov.wb(0x4F2D, 0x2C); ov.wb(0x6BD0, 0); ov.ww(0x4F2A, 0xFF70)   # [asm 70AD-70B7]
+            ov.wb(0x4F24, 3); ov.ww(0x4F22, 0xFF60)       # [asm 70BD-70C2]
+            ov.apply(hurt_effect(ov.rb, ov.rw))           # [asm 70C8] 824D
+
+    return _l6_finish(ov)                                 # [asm 70CB-70D6]

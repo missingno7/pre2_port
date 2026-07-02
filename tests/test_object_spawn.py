@@ -15,7 +15,8 @@ from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_h
                                          camera_offset_lookup, camera_script_interp, camera_state_machine,
                                          camera_target_bounce, hurt_effect, inc_scroll_phase, init_effect_row,
                                          player_cursor_dist, scan_camera_targets, spawn_boss_bolt_1ca,
-                                         spawn_boss_bolt_1cb, tick_mode9_boss, tick_mode9_spawn, tick_scroll_cursor)
+                                         spawn_boss_bolt_1cb, tick_level6_boss, tick_mode9_boss, tick_mode9_spawn,
+                                         tick_scroll_cursor)
 
 _LO = 0x56A2
 
@@ -210,3 +211,16 @@ def test_camera_offset_lookup():
     rw = lambda o: tbl.get(o & 0xFFFF, 0)
     assert camera_offset_lookup(rw, 0x10, 0x20) == 0x1234       # first entry
     assert camera_offset_lookup(rw, 0x30, 0x40) == 0x5678       # scans past the first entry
+
+
+def test_tick_level6_boss_byte_exact():
+    # 6D34: the whole level-6 (inside-a-tree) camera/boss state machine. Golden = the live-ASM DGROUP transform
+    # captured on demo 115441's first level-6 frame (entry -> RET, 63 reads / 33 writes); the recovered function
+    # reproduces it byte-exact. The forward oracle (probe_native_forward_flow) additionally proves the spawn path
+    # (39DF projectile drop, fired once [0xA32B] counts to 0) across 17 frames of 115441 / 14 of 123017.
+    case = json.loads((Path(__file__).parent / "fixtures" / "object_spawn" / "tick_level6_boss.json").read_text())[0]
+    rb_d = {int(k): v for k, v in case["rb"].items()}
+    golden = {int(k): tuple(v) for k, v in case["writes"].items()}
+    rb = lambda o: rb_d[o & 0xFFFF]                       # noqa: E731 (KeyError if a regression reads new bytes)
+    rw = lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)    # noqa: E731
+    assert tick_level6_boss(rb, rw) == golden
