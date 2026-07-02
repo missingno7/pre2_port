@@ -323,11 +323,20 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # byte-exact vs the ASM 509d loop: pre2/probes/probe_native_respawn_anim.py. force_gameplay: the
         # checkpoint restore sits the camera at the level origin (e.g. this demo's level-6 checkpoint at (0,0)),
         # which the camera!=0 SceneKind heuristic would wrongly read as the game-over/tally SCENE.
+        last = None
         for _ in native_4f6c(state):
             native_sync_render_state(state)
-            yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
-        native_sync_render_state(state)
-        yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)   # the checkpoint
+            last = native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
+            yield last
+        # native_4f6c has restored the checkpoint. The VM finishes the respawn with the SAME transition as a
+        # cave entrance (verified on demo 115310's level-6 death): the death frame fades to black (30C6) then the
+        # checkpoint curtains in center-out (3054). Compose both here (native snapped straight to the checkpoint
+        # before).
+        if last is not None:
+            base_planes, base_page = last
+            for k in range(1, 10):                          # [asm 30C6] fade the death frame to black
+                yield _vfade_frame(base_planes, base_page, k)
+        yield from native_level_reveal(state, dos, display_page, game_root=game_root)   # [asm 3054] curtain in
         return
     except Pre2LevelEndTransition:
         # PROPAGATES to the caller — the between-levels flow (the VM's 4F65 -> BRAVO tally scene -> CARTE world
