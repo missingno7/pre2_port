@@ -252,15 +252,25 @@ def main(argv=None) -> int:
 
     def game_over_restart(state, dos):
         """[asm 5063 -> main 0x12f] After the death-bounce (native_frame_step rendered it; native_5063 reset the
-        level to 1 + zeroed the score), restart the game at level 1. The VM re-enters main's front-end flow
-        (447d + carte); approximated here as a direct level-1 reload + curtain for the watched replay."""
+        level to 1 + zeroed the score), the VM re-enters main's front-end flow (447d -> 8e45 press-1/2 -> the
+        9520 carte -> level reload). For the watched replay we show the CARTE (the recovered, byte-exact world-map
+        scroll-in) then reload level 1 — matching the VM's game-over -> map -> level 1, minus the difficulty
+        re-select (the committed difficulty persists across the restart)."""
         from pre2.native.audio import native_load_song, native_level_song_name
+        from pre2.native.front_end import _native_carte
         from pre2.native.level_init import native_level_init
-        print("  GAME OVER -> restart at level 1")
-        native_level_init(state, game_root=gr)
+        print("  GAME OVER -> world map -> restart at level 1")
+        for scene in _native_carte(state, dos, gr):                # [asm 9520] the map scroll-in (fire advances)
+            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — world map (game-over restart)")
+            pump(); drive_input(state)
+            if native_audio is not None:
+                native_audio.poll(state)                           # CARTE.TRK
+            if not ref["running"]:
+                return
+        native_level_init(state, game_root=gr)                     # [main 013e] reload level 1
         native_load_song(state, native_level_song_name(state), gr)
-        native_load_level_palette(state, dos)
-        reveal_level(state, dos)
+        native_load_level_palette(state, dos)                      # restore the level palette after the carte DAC
+        reveal_level(state, dos)                                    # 3054 center-out curtain into level 1
 
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
