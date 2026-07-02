@@ -108,6 +108,13 @@ def _run(demo, lim):
                     print(f"  FIRST DIVERGENCE at frame {ns['f']} (ran {ns['matched']} clean): {len(diffs)} diffs")
                     for o in diffs[:28]:
                         print(f"     {o:#06x}: n{nd[o]:02x} v{vd[o]:02x}")
+                    # dispatch/respawn diagnostic: the 4C69 selectors + pending-death + the backup source
+                    for o, nm in ((0x6BE4, "respawn"), (0x6BE5, "gameover"), (0x6BE6, "levelend"),
+                                  (0x2879, "realdeath"), (0x920E, "backup[0x8169-src]"), (0x8169, "working")):
+                        print(f"     DIAG {o:#06x} {nm:20s}: n{nd[o]:02x} v{vd[o]:02x}")
+                    lo89 = [o for o in diffs if 0x815E <= o < 0x9203]
+                    hi92 = [o for o in diffs if 0x9203 <= o < 0xA2A8]
+                    print(f"     DIAG diffs in working[0x815E..0x9203]={len(lo89)}  backup[0x9203..0xA2A8]={len(hi92)}")
                     ns["done"] = True; orig(); return
                 ns["matched"] += 1; ns["f"] += 1
         orig()

@@ -585,7 +585,12 @@ def native_death_bounce_509d(state):
         apply_ds(state, tick_projectiles(rw, rb))                  # [asm 50eb] 6210
         apply_ds(state, tick_particles(rw, rb, tile_reader(state)))  # [asm 50ee] 60FE
         apply_ds(state, tick_debris_pool(rw))                      # [asm 50f1] 60DF
-        # [asm 50f4-5103] 3668/35A1/3A27/4B8E/26FA/3721 render — only 26FA's [0x6bd5] frame tick is gameplay:
+        # [asm 50f4-5103] 3668/35A1/3A27/4B8E/26FA/3721. 4B8E's STATE half is GAMEPLAY (advance-Y + KILL expired
+        # [0x7DE6] particles): the bounce's 6822 SPAWNS point-effects (an orbit object emits 3/frame via 7FD9), so
+        # without the per-frame kill the 20-slot [0x7DE6] list fills over the 60 bounce frames and find_free (8014,
+        # unbounded) walks off the end into the [0x9203] backup — corrupting it, which the respawn's 5251 restore
+        # then propagates into the working tables (the tick-1299 divergence, demo 175517). Run it like 509d does.
+        native_particle_consume(state)                            # [asm 50fx] 4B8E state (advance-Y + kill [0x7DE6])
         _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)              # [asm 26fa:2708]
         native_firefly_step(state)                                 # [asm 5106] 54AB
         native_scroll_script(state)                                # [asm 5109] 3922
