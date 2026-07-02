@@ -20,9 +20,9 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from dos_re.input_demo import InputDemoPlayback                       # noqa: E402
 from dos_re.interrupts import deliver_scancode                        # noqa: E402
-from pre2.checkpoints.common import Pre2HybridGap, Pre2RespawnTransition  # noqa: E402
+from pre2.checkpoints.common import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition  # noqa: E402
 from pre2.native.level_state import native_4f6c                       # noqa: E402
-from pre2.native.loop import native_gameplay_frame                    # noqa: E402
+from pre2.native.loop import native_cave_teleport, native_gameplay_frame  # noqa: E402
 from pre2.native.state import NativeGameState                         # noqa: E402
 from pre2.probes.probe_native_frame import (                          # noqa: E402
     DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, _EXCL, _SLOT5_PAGE)
@@ -81,6 +81,12 @@ def _run(demo, lim):
                 err = None
                 try:
                     native_gameplay_frame(st)
+                except Pre2CaveTeleport as tp:
+                    try:
+                        for _ in native_cave_teleport(st, tp.si):     # drain the transition (state-only)
+                            pass
+                    except Exception as e:                            # noqa: BLE001
+                        err = "cave-teleport: " + str(e)[:64]
                 except Pre2RespawnTransition:
                     try:
                         for _ in native_4f6c(st):

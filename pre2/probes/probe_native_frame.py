@@ -29,11 +29,11 @@ from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
 from pre2.runtime import load_pre2_snapshot
 from pre2.native.state import NativeGameState
-from pre2.native.loop import native_gameplay_frame
+from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.level_state import native_4f6c
 from pre2.native.player import RENDER_OFFSETS
 from pre2.recovered.input_decode import _KBD_SOURCES
-from pre2.checkpoints.common import Pre2HybridGap, Pre2RespawnTransition
+from pre2.checkpoints.common import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition
 import play
 
 DS = 0x1A0F
@@ -107,6 +107,13 @@ def _run(demo, lim, totals):
                     state.data[DS_BASE + o] = v
                 try:
                     native_gameplay_frame(state)
+                except Pre2CaveTeleport as tp:                           # the cave teleport is a multi-frame
+                    try:                                                #   TRANSITION: drive it to completion so
+                        for _ in native_cave_teleport(state, tp.si):    #   the endpoint still verifies vs the VM
+                            pass
+                    except Pre2HybridGap:
+                        st["gap"] += 1
+                        pend["seed"] = None; pend["kbd"] = None; orig(); return
                 except Pre2RespawnTransition:                            # the respawn is a multi-frame TRANSITION
                     try:                                                #   (4C69 [0x6be4]==1 -> 4F6C): drive it to
                         for _ in native_4f6c(state):                    #   completion so the whole-loop verify still

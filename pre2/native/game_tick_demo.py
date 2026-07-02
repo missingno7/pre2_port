@@ -23,9 +23,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from pre2.checkpoints.common import Pre2HybridGap, Pre2LevelEndTransition, Pre2RespawnTransition
+from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
+                                     Pre2RespawnTransition)
 from pre2.native.level_state import native_4f6c, native_level_end
-from pre2.native.loop import native_gameplay_frame
+from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.state import NativeGameState
 # Reuse the forward oracle's tick seams + the gameplay/render boundary (single source of truth):
 from pre2.probes.probe_native_frame import DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, _SLOT5_PAGE
@@ -118,6 +119,12 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
         _inject(state, keys)
         try:
             native_gameplay_frame(state)
+        except Pre2CaveTeleport as tp:
+            try:
+                for _ in native_cave_teleport(state, tp.si):        # drain the transition (state-only)
+                    pass
+            except Exception as e:                                  # noqa: BLE001
+                return i, f"tick {i}: cave teleport raised {type(e).__name__}: {str(e)[:80]}"
         except Pre2RespawnTransition:
             try:
                 for _ in native_4f6c(state):

@@ -53,6 +53,20 @@ class Pre2LevelEndTransition(Pre2HybridGap):
     step" — catch it FIRST where the transition is actually driven."""
 
 
+class Pre2CaveTeleport(Pre2HybridGap):
+    """Signal (not a gap): the position-trigger scan (52FE) matched a cave/teleport entrance — the multi-frame
+    5326 transition (vertical fade-out curtain 30C6, the hidden camera pan to the destination, the 53D7
+    mini-pass, the 3054 center-out reveal, then the frame's remainder). ``native_trigger_scan`` raises this
+    BEFORE mutating anything; the runtime/flow driver drives ``native_cave_teleport(state, si)`` as a generator,
+    rendering each yielded phase (a state-only consumer just drains it). ``si`` = the matched [0x8367] table
+    entry offset. Subclasses Pre2HybridGap so existing ``except Pre2HybridGap`` sites still treat it as "not a
+    plain per-frame step" — catch it FIRST where the transition is actually driven."""
+
+    def __init__(self, si: int):
+        super().__init__(f"cave teleport (5326) at table entry {si:#06x}")
+        self.si = si
+
+
 @dataclass
 class HookVerifyStats:
     verified: int = 0

@@ -22,7 +22,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from dos_re.input_demo import InputDemoPlayback                       # noqa: E402
 from dos_re.interrupts import deliver_scancode                        # noqa: E402
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE              # noqa: E402
-from pre2.native.loop import native_gameplay_frame                    # noqa: E402
+from pre2.checkpoints.common import Pre2CaveTeleport                  # noqa: E402
+from pre2.native.loop import native_cave_teleport, native_gameplay_frame  # noqa: E402
 from pre2.native.render import native_render, native_sync_render_state  # noqa: E402
 from pre2.native.state import NativeGameState                         # noqa: E402
 from pre2.probes.probe_native_frame import KBD                        # noqa: E402
@@ -63,7 +64,12 @@ def _run(demo: str, max_frames: int, out_dir: Path):
                 for o, v in ns["kbd"].items():
                     st.data[DS_BASE + o] = v
                 try:
-                    native_gameplay_frame(st); native_sync_render_state(st)
+                    try:
+                        native_gameplay_frame(st)
+                    except Pre2CaveTeleport as tp:                    # drain the transition (state-only)
+                        for _ in native_cave_teleport(st, tp.si):
+                            pass
+                    native_sync_render_state(st)
                     planes, page = native_render(st, rt.dos, disp, game_root=gr)
                 except Exception as e:                                # noqa: BLE001
                     print(f"  frame {ns['n']}: native raised {type(e).__name__}: {str(e)[:70]}")

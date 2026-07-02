@@ -15,7 +15,8 @@ from collections import Counter
 
 from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
 from pre2.bridge.object_tick import LiveWalkerMem
-from pre2.checkpoints.common import Pre2HybridGap, Pre2LevelEndTransition, Pre2RespawnTransition
+from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
+                                     Pre2RespawnTransition)
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
 from pre2.bridge import object_render as _obj_render
@@ -26,7 +27,8 @@ from pre2.recovered.object_spawn import Pre2SpawnGap, camera_engine, tick_level6
 from pre2.recovered.object_tick import object_tick
 from pre2.recovered.terrain_entities import tick_terrain_entities
 from pre2.native.state import DATA_SEG
-from pre2.native.camera_scroll import native_camera_follow
+from pre2.native.camera_scroll import _v_scroll_down, _v_scroll_up, native_camera_follow
+from pre2.bridge.camera_pan import apply_camera_pan
 from pre2.native.player import native_player_interaction, native_player_step
 
 
@@ -137,55 +139,87 @@ def native_trigger_scan(state) -> None:
     """[asm 52FE..5325] The per-frame position-trigger scan (the cave/teleport-entrance scan). When armed
     ([0x6BE1]!=0 and momentum dormant [0x6BC5]==0) it matches the player's tile coords (549A) against the 20-entry
     table at [0x8367] (stride 7, ``[+0]`` = source tile); a NO match touches nothing (byte-exact no-op). A match
-    runs the 5326 teleport (reposition + animated camera scroll to the cave) — recovered in ``native_trigger_teleport``."""
+    raises :class:`Pre2CaveTeleport` (BEFORE mutating anything) — the caller drives the multi-frame 5326
+    transition via the ``native_cave_teleport`` generator (fade-out curtain, hidden pan, mini-pass, reveal,
+    then the frame's remainder)."""
     rb, rw = readers(state)
     if rb(0x6BE1) != 0 and rb(0x6BC5) == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
         dx = _player_tile_coords(rw)                        # [asm 5313 -> 549A] the player's packed tile coord
         si = 0x8367                                         # [asm 5316]
         for _ in range(0x14):                               # [asm 5319 cx=0x14] the 20-entry table
             if rw(si) == dx:                                # [asm 531C je 5326] a match -> the cave teleport
-                native_trigger_teleport(state, si)
-                return
+                raise Pre2CaveTeleport(si)
             si = (si + 7) & 0xFFFF                          # [asm 5320 stride 7]
         # [asm 5325] no match -> ret (a byte-exact no-op)
 
 
-def native_trigger_teleport(state, si) -> None:
-    """[asm 5326..53F5] The cave/teleport-entrance teleport, reached on a position-trigger match. The matched
-    20-byte-stride entry ``si`` gives the destination: ``[si+2]`` = camera, ``[si+4]`` = player tile, ``[si+6]`` =
-    the ``[0x6BD9]`` flag. Zero the player's velocity, snap it to the destination tile (``[asm 5350]`` X = lo<<4,
-    ``[asm 535A]`` Y = hi<<4), snap the camera to the destination, set the flag, and disarm ``[0x6BE1]``.
+def native_cave_teleport(state, si):
+    """[asm 5326..53F5] The whole cave/teleport-entrance TRANSITION, as a generator (the runtime renders each
+    yielded phase; a state-only consumer just drains it). The matched 20-byte-stride entry ``si`` gives the
+    destination: ``[si+2]`` = camera (lo=X, hi=Y), ``[si+4]`` = player tile, ``[si+6]`` = the ``[0x6BD9]`` flag.
 
-    The VM ANIMATES the camera there (``5361-5387``: ~80 busy-wait scroll steps via 3363/33AD/3414/3435) and
-    re-runs the frame's render+gameplay passes (``53D7``); the VM-less runtime snaps to the destination and lets
-    the faithful renderer draw the new area — so the cave is ENTERED in one frame instead of a scrolled transition
-    (functionally correct; the animated-scroll frames are not byte-reproduced).
-
-    In a long FORWARD verify this surfaces as a ONE-TICK drift of the free-running counters on the teleport frame:
-    the ``53D7`` re-run bumps the frame counter [0x6BD5] (via its 26FA), the scroll counter [0x2DBE] (its 3922) and
-    the [0x852x] entity timers once more than the snap, and the animated scroll leaves a non-zero sub-position
-    [0x2DE8]/[0x2DEA] the snap zeroes — e.g. demo 195135 @frame 206 (10 diffs, all downstream of that one re-run).
-    Byte-reproducing it is the [[pre2-faithful-transitions]] work (a wall-clock scroll controller), NOT a state bug."""
+    Faithful sequence (verified against the VM on snapshot_pre2_20260702_105949):
+      1. ``[asm 5326-532C]`` zero the velocities; ``[asm 5332]`` the 30C6 VERTICAL FADE-OUT curtain (the play
+         area collapses to black, HUD stays) -> yields ``("fade", k)`` (VRAM-only; no DGROUP state).
+      2. ``[asm 5335-535A]`` reset the scroll accumulator, snap the player to the destination tile; [0x8164] is
+         saved and forced to 0xEC so the right-pan clamp can't block the pan ``[asm 533A/533F]``.
+      3. ``[asm 5361-5387]`` the HIDDEN camera pan: Y steps first (3363 up / 33AD down, dl=0x10 = one full row
+         per call), then X (3414 left / 3435 right) — 1 unit per step behind the black curtain, yielding
+         ``("pan",)`` each step. The step primitives maintain the real scroll state ([0x2DE6]/[0x2DE4],
+         [0x2DEA]/[0x2DE8], [0x2DBA], [0x6BC4]) exactly as the ASM.
+      4. ``[asm 5389-5394]`` restore [0x8164]; [0x6BD9] = [si+6]; disarm [0x6BE1]. ``[asm 5399-53D5]`` the
+         level-6 (inside-a-tree) boss re-init when [0x2D8A]==5.
+      5. ``[asm 53D7-53F2]`` the arrival MINI-PASS: 35A1/3A27/3721 are render; the GAMEPLAY calls run natively —
+         4907 (terrain), 8922 (projector), 6822 (object system), 26FA ([0x6BD5]++ + record mutation), 54AB
+         (fireflies), 3922 (scroll counter). This is the extra tick the forward oracle used to see as the
+         "one-tick drift" (demo 195135 @frame 206) — now byte-reproduced. 3054 is the CENTER-OUT REVEAL curtain
+         -> yields ``("reveal", k)`` k=1..10 (the panel_copy strip pairs).
+      6. The interrupted frame's REMAINDER (the post-0238 spine) — ``_frame_tail_after_trigger``."""
     rb, rw = readers(state)
     dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
+    dest_x, dest_y = dest_cam & 0xFF, (dest_cam >> 8) & 0xFF
     dest_tile = rw((si + 4) & 0xFFFF)                         # [si+4] destination player tile
     flag = rb((si + 6) & 0xFFFF)                              # [si+6] -> [0x6BD9]
     _ww(state, 0x4F22, 0)                                     # [asm 5326] Xvel = 0
     _ww(state, 0x4F2A, 0)                                     # [asm 532C] Yvel = 0
-    _wb(state, 0x6BC4, 0)                                     # [asm 5335]
+    for k in range(1, 10):                                    # [asm 5332] 30C6 vertical fade-out (VRAM-only)
+        yield ("fade", k)
+    _wb(state, 0x6BC4, 0)                                     # [asm 5335] vertical sub-tile accumulator
+    saved_8164 = rw(0x8164)                                   # [asm 533A] push [0x8164]
+    _ww(state, 0x8164, 0xEC)                                  # [asm 533F] pan clamp -> max (don't block the pan)
     _ww(state, 0x4F1C, (dest_tile & 0xFF) << 4)              # [asm 5350] player X = tile.lo << 4
     _ww(state, 0x4F1E, ((dest_tile >> 8) & 0xFF) << 4)       # [asm 535A] player Y = tile.hi << 4
-    _wb(state, 0x2DE4, dest_cam & 0xFF)                      # [asm 5377..] camera X snapped to the destination
-    _wb(state, 0x2DE6, (dest_cam >> 8) & 0xFF)              # [asm 5361..] camera Y snapped to the destination
+    while rb(0x2DE6) != dest_y:                               # [asm 5361-5375] vertical pan first
+        ok = _v_scroll_up(state, 0x10) if rb(0x2DE6) > dest_y else _v_scroll_down(state, 0x10)
+        if not ok:                                            # the ASM would spin forever; we fail loud
+            raise Pre2HybridGap(f"cave pan blocked vertically at [0x2DE6]={rb(0x2DE6)} dest={dest_y}")
+        yield ("pan",)
+    while rb(0x2DE4) != dest_x:                               # [asm 5377-5387] then horizontal
+        ok = apply_camera_pan(state, "left" if rb(0x2DE4) > dest_x else "right")
+        if not ok:
+            raise Pre2HybridGap(f"cave pan blocked horizontally at [0x2DE4]={rb(0x2DE4)} dest={dest_x}")
+        yield ("pan",)
+    _ww(state, 0x8164, saved_8164)                            # [asm 538A] pop [0x8164]
     _wb(state, 0x6BD9, flag)                                 # [asm 5391]
     _wb(state, 0x6BE1, 0)                                     # [asm 5394] disarm the trigger
-    if rb(0x2D8A) == 5:                                       # [asm 5399] level-6 special-case state
+    if rb(0x2D8A) == 5:                                       # [asm 5399] level-6 (inside-a-tree) boss re-init
         _wb(state, 0x8166, rb(0x8166) & 1)                   # [asm 53A0]
         for off, val in ((0xA324, 0), (0xA325, 5), (0xA326, 0), (0xA328, 0), (0xA32A, 1),
                          (0xA329, 0), (0xA32B, 0x6E), (0xA32C, 8)):    # [asm 53A5-53CD]
             _wb(state, off, val)
         for k in range(0x69):                                # [asm 53CD-53D5] fill [0x5570..] with 0xFF
             _wb(state, 0x5570 + k, 0xFF)
+    # [asm 53D7-53F2] the arrival mini-pass (35A1/3A27/3721 = render; the gameplay calls run natively):
+    _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 53DD] 4907
+    apply_ds(state, project_particles(rb, rw))                # [asm 53E0] 8922
+    native_object_system_step(state)                          # [asm 53E3] 6822
+    _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)             # [asm 53E6: 26FA] inc word [0x6bd5]
+    native_object_render_state(state)                         # [asm 53E6: 26FA] record mutation (life/flags)
+    native_firefly_step(state)                                # [asm 53EC] 54AB
+    native_scroll_script(state)                               # [asm 53EF] 3922
+    for k in range(1, 11):                                    # [asm 53F2] 3054 center-out reveal (VRAM-only)
+        yield ("reveal", k)
+    _frame_tail_after_trigger(state)                          # the interrupted frame's remainder (023B..026D)
 
 
 def _player_tile_coords(rw) -> int:
@@ -469,7 +503,15 @@ def native_gameplay_frame(state) -> None:
     native_player_step(state)                                       # [asm 022F] 5850 (whole player update)
     native_player_interaction(state)                                # [asm 0232] 8295 (player<->world pass)
     apply_ds(state, project_particles(rb, rw))                      # [asm 0235] 8922 effect-sprite projector
-    native_trigger_scan(state)                                      # [asm 0238] 52FE (position-trigger; no-op unarmed)
+    native_trigger_scan(state)                                      # [asm 0238] 52FE (raises Pre2CaveTeleport on a
+    #   match — the caller drives native_cave_teleport, which finishes with _frame_tail_after_trigger itself)
+    _frame_tail_after_trigger(state)                                # [asm 023B..026D] the frame's remainder
+
+
+def _frame_tail_after_trigger(state) -> None:
+    """The main-loop frame REMAINDER after the position-trigger scan ([asm 023B..026D]) — shared by the normal
+    frame and the cave-teleport transition (whose 5326 runs mid-scan, then the frame continues here)."""
+    rb, rw = readers(state)
     native_proximity_trigger(state)                                 # [asm 023B] 53F6 (proximity trigger; no-op unfired)
     native_camera_follow(state)                                     # [asm 023E] 5643 (H+V camera follow/scroll)
     # [asm 0241..0250] 3668/35A1/3A27/4B8E/26FA/3721 render cluster — the faithful renderer's job. Two gameplay

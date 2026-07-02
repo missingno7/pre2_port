@@ -75,25 +75,35 @@ def test_native_combat_pass_idle_no_op():
     assert bytes(state.data[base + 0x4F0A:base + 0x5732]) == before   # idle -> no combat writes
 
 
-def test_native_trigger_teleport_enters_cave():
-    # [asm 52FE/5326] The position-trigger scan+teleport (cave/teleport entrance). Armed ([0x6BE1]!=0, momentum
-    # dormant), when the player's tile matches a [0x8367] table entry, native teleports to the entry's destination
-    # tile + camera and disarms. Reproduces the witnessed entry (src 0x2E7E -> dest tile 0x0636 / cam 0x0032).
-    from pre2.native.loop import native_trigger_scan
-    from pre2.native.state import NativeGameState
+def test_native_cave_teleport_enters_cave():
+    # [asm 52FE/5326] The position-trigger scan raises Pre2CaveTeleport on a table match; driving the
+    # native_cave_teleport generator plays the WHOLE transition: the 30C6 fade-out yields, the hidden camera pan
+    # (1 unit/step via the real scroll primitives), the destination snap + disarm, the 53D7 mini-pass, the 3054
+    # reveal yields, and the frame remainder. Runs over a real cold-booted LEVEL1 state so the pan + mini-pass
+    # execute against real level structures.
+    from pre2.checkpoints.common import Pre2CaveTeleport
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.loop import native_cave_teleport, native_trigger_scan
 
-    st = NativeGameState(bytearray(0x100000))
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    st = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
     base = DATA_SEG << 4
     ww = lambda o, v: st.data.__setitem__(slice(base + o, base + o + 2), bytes((v & 0xFF, (v >> 8) & 0xFF)))  # noqa: E731
     ww(0x4F1C, 0x7E << 4); ww(0x4F1E, 0x2E << 4)              # player pixel pos -> tile (col 0x7E, row 0x2E) = 0x2E7E
     st.data[base + 0x6BE1] = 1                                # armed
     st.data[base + 0x6BC5] = 0                                # momentum dormant
-    st.data[base + 0x2D8A] = 0                                # level 1 (skip the level-6 special-case)
     ww(0x8367, 0x2E7E); ww(0x8369, 0x0032); ww(0x836B, 0x0636); st.data[base + 0x836D] = 0   # table entry 0
 
-    native_trigger_scan(st)
+    try:
+        native_trigger_scan(st)
+        raise AssertionError("expected Pre2CaveTeleport")
+    except Pre2CaveTeleport as tp:
+        phases = [p[0] for p in native_cave_teleport(st, tp.si)]
+    assert phases.count("fade") == 9                          # the 30C6 fade-out curtain steps
+    assert phases.count("reveal") == 10                       # the 3054 center-out reveal strip-pairs
+    assert phases.count("pan") > 0                            # the hidden camera pan stepped
     assert (st.rw(0x4F1C), st.rw(0x4F1E)) == (0x0360, 0x0060)              # player at the cave destination tile<<4
-    assert (st.data[base + 0x2DE4], st.data[base + 0x2DE6]) == (0x32, 0x00)   # camera snapped to the destination
+    assert (st.data[base + 0x2DE4], st.data[base + 0x2DE6]) == (0x32, 0x00)   # camera panned to the destination
     assert st.data[base + 0x6BE1] == 0                                    # trigger disarmed
 
 
