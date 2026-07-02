@@ -97,6 +97,36 @@ def test_native_trigger_teleport_enters_cave():
     assert st.data[base + 0x6BE1] == 0                                    # trigger disarmed
 
 
+def test_native_proximity_trigger_mapmod():
+    # [asm 53F6/5427] The proximity-trigger map modification (breakable wall / opening passage): a FIRED entry
+    # ([+4]==0xFFFE) shifts its height x width tile block UP one row in the level map ([0x2DDA]) and reveals a
+    # fresh bottom row from the level asset ([0x2875]:[si+6]), counting down [si+8]. Craft a 1-wide x 2-high block.
+    from pre2.native.loop import native_proximity_trigger
+    from pre2.native.state import NativeGameState
+
+    st = NativeGameState(bytearray(0x100000))
+    base = DATA_SEG << 4
+    ww = lambda o, v: st.data.__setitem__(slice(base + o, base + o + 2), bytes((v & 0xFF, (v >> 8) & 0xFF)))  # noqa: E731
+    ww(0x2DDA, 0x3000); ww(0x2875, 0x4000)                   # level-map seg 0x3000, asset seg 0x4000
+    st.data[base + 0x6BD5] = 0                               # [0x6BD5]&3==0 -> an active map-mod frame
+    ww(0x4F1C, 0x800); ww(0x4F1E, 0x800)                     # player tile 0x8080 (far from the empty entries' tile 0)
+    ww(0x83F3, 0x200); st.data[base + 0x83F5] = 1; st.data[base + 0x83F6] = 2   # entry0: anchor 0x200, w1 h2
+    ww(0x83F3 + 4, 0xFFFE); ww(0x83F3 + 6, 0x50); st.data[base + 0x83F3 + 8] = 2  # fired, srcptr 0x50, cnt 2
+    st.data[0x30000 + 0x200] = 0xBB                          # map tiles (below the anchor) + the reveal source
+    st.data[0x30000 + 0x300] = 0xCC
+    st.data[0x40000 + 0x50] = 0xDD
+
+    native_proximity_trigger(st)
+    assert st.data[0x30000 + 0x100] == 0xBB                  # shifted up one row (from 0x200)
+    assert st.data[0x30000 + 0x200] == 0xCC                  # shifted up one row (from 0x300)
+    assert st.data[0x30000 + 0x300] == 0xDD                  # fresh bottom row revealed from the asset
+    assert st.rw(0x83F3) == 0x100                            # [si] -= 0x100
+    assert st.rw(0x83F3 + 6) == 0x4F                         # [si+6] -= width
+    assert st.data[base + 0x83F3 + 8] == 1                   # [si+8] countdown
+    assert st.data[base + 0x83F3 + 4] == 0xFE               # still fired (cnt not yet 0)
+    assert st.data[base + 0x6BEA] == 7                       # camera shake armed
+
+
 def test_native_sync_render_state_advances_animation():
     # native_sync_render_state must advance the animated-tile remap cycle (1030:367D) that the gameplay pass omits,
     # so the standalone renders animated tiles (waving foliage, water, ...) at the SAME frame the VM displays. Proven

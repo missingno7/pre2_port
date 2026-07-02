@@ -189,21 +189,55 @@ def _player_tile_coords(rw) -> int:
 
 
 def native_proximity_trigger(state) -> None:
-    """[asm 53F6..541A] The per-frame proximity-trigger scan: 15 entries at [0x83F3] (stride 0xA), field [+4] =
-    a trigger's packed tile coord (0xFFFF inactive, 0xFFFE already-fired). When the player comes within 8 of an
-    armed entry it fires (-> a map modification via 653D); a fired entry re-applies its tile mod each frame. With
-    no trigger in range and none fired the scan writes nothing — a byte-exact no-op (witnessed never fires across
-    4 demos / 1261 calls). The map-modifying fire path (5427+/653D) is unrecovered, so a firing frame fails loud."""
-    _, rw = readers(state)
+    """[asm 53F6..5497] The per-frame proximity-trigger scan (breakable-wall / opening-passage triggers): 15
+    entries at [0x83F3] (stride 0xA), field [+4] = a packed tile coord (0xFFFF inactive, 0xFFFE already-fired).
+    When the player comes within 8 (packed) of an armed entry it FIRES ([+4]=0xFFFE, camera shake [0x6BEA]=7); a
+    fired entry re-applies its map modification (native_proximity_mapmod) each frame. No trigger in range and
+    none fired -> a byte-exact no-op."""
+    rb, rw = readers(state)
     dx = _player_tile_coords(rw)
     si = 0x83F3
     for _ in range(0xF):
         entry = rw((si + 4) & 0xFFFF)
-        if entry == 0xFFFE:                                       # [asm 5407 je 5427] already fired -> map mod
-            raise Pre2HybridGap("native trigger 0x53F6: a proximity trigger has fired (653D map-mod) — not recovered")
-        if entry != 0xFFFF and ((dx - entry) & 0xFFFF) <= 8:     # [asm 540C-5413 jbe 541B] player in range -> fire
-            raise Pre2HybridGap("native trigger 0x53F6: player fired a proximity trigger (653D map-mod) — not recovered")
+        if entry == 0xFFFE:                                       # [asm 5407 je 5427] already fired -> the map mod
+            native_proximity_mapmod(state, si)
+        elif entry != 0xFFFF and ((dx - entry) & 0xFFFF) <= 8:   # [asm 540C-5413 jbe 541B] in range -> FIRST fire
+            _ww(state, (si + 4) & 0xFFFF, 0xFFFE)                # [asm 541B] mark fired
+            _wb(state, 0x6BEA, 7)                                # [asm 5420] camera shake
         si = (si + 0xA) & 0xFFFF
+
+
+def native_proximity_mapmod(state, si) -> None:
+    """[asm 5427..5497] The fired-trigger map modification (a wall rising / passage opening): every 4th frame
+    ([0x6BD5]&3==0), shift the entry's ``height``x``width`` tile block ([si+3]x[si+2]) UP one row in the level map
+    (es=[0x2DDA]), move the block anchor [si] up (-=0x100), reveal a fresh bottom row from the level asset
+    ([0x2875]:[si+6]), advance the source ([si+6]-=width), and count down [si+8] — disarming ([si+4]=0xFFFF) at 0.
+    The per-tile 653D re-blit is a render side-effect (the faithful renderer redraws the changed tiles)."""
+    rb, rw = readers(state)
+    _wb(state, 0x6BEA, 7)                                        # [asm 5429] camera shake
+    if (rb(0x6BD5) & 3) != 0:                                    # [asm 542E] only acts every 4th frame
+        return
+    eb = (rw(0x2DDA) << 4) & 0xFFFFF                             # [asm 5435] level-map segment
+    sb = (rw(0x2875) << 4) & 0xFFFFF                             # [asm 5471] level-asset (reveal source) segment
+    width = rb((si + 2) & 0xFFFF)                                # [asm 5439]
+    height = rb((si + 3) & 0xFFFF)                               # [asm 543B]
+    di = (rw(si) - 0x100) & 0xFFFF                               # [asm 543F/5445] block anchor, one row up
+    for _row in range(height):                                   # [asm 5449-5463] shift the block up one row
+        for _col in range(width):
+            state.data[(eb + di) & 0xFFFFF] = state.data[(eb + ((di + 0x100) & 0xFFFF)) & 0xFFFFF]   # [asm 544B-5450]
+            di = (di + 1) & 0xFFFF
+        di = (di - width + 0x100) & 0xFFFF                       # [asm 545B-545D] next row
+    _ww(state, si, (rw(si) - 0x100) & 0xFFFF)                    # [asm 5465] [si] -= 0x100
+    bx = rw((si + 6) & 0xFFFF)                                   # [asm 5469] source pointer
+    for _col in range(width):                                    # [asm 5471-5483] reveal a fresh bottom row
+        state.data[(eb + di) & 0xFFFFF] = state.data[(sb + bx) & 0xFFFFF]
+        di = (di + 1) & 0xFFFF
+        bx = (bx + 1) & 0xFFFF
+    _ww(state, (si + 6) & 0xFFFF, (rw((si + 6) & 0xFFFF) - width) & 0xFFFF)   # [asm 5488] [si+6] -= width
+    cnt = (rb((si + 8) & 0xFFFF) - 1) & 0xFF                     # [asm 548B] countdown
+    _wb(state, (si + 8) & 0xFFFF, cnt)
+    if cnt == 0:                                                 # [asm 548E]
+        _ww(state, (si + 4) & 0xFFFF, 0xFFFF)                    # [asm 5490] done -> disarm
 
 
 _DS_BASE = DATA_SEG << 4
