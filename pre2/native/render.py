@@ -158,7 +158,13 @@ def native_render(state, dos, display_page: int, *, game_root: str,
         # (user: "foreground tiles are not in foreground"). Retarget to the same page as the core frame.
         foreground_capture.page = display_page & 0xFFFF
     if particle_capture is None:
-        pf = read_particles(state)                                 # [4b8e] one-shot point particles
+        # prefer the pre-consume snapshot native_gameplay_frame stashed at the 4B8E entry (the one-shot [0x7DE6]
+        # particles — spider-threads/sparkles — are KILLED by the consume, so the live read here would be empty);
+        # fall back to a live read for callers that render without a preceding gameplay frame.
+        pf = getattr(state, "particle_capture", None)
+        state.particle_capture = None                              # one-shot handoff — don't reuse a stale frame
+        if pf is None:
+            pf = read_particles(state)                             # [4b8e] one-shot point particles (live)
         particle_capture = pf if pf.particles else None
     fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
     gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx,

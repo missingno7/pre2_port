@@ -518,6 +518,9 @@ def _frame_tail_after_trigger(state) -> None:
     # side effects are extracted: 4B8E's particle consume (state half below) and 26FA (object_render), which bumps
     # the free-running 16-bit frame counter [0x6bd5] that the animation phase reads ([0x6bd5]&1/&3/&7/&0xf) — in 11
     # gameplay calls. The prefix above already read it as N (frame start); the firefly/scroll/respawn/shake read N+1.
+    from pre2.bridge.particles import read_particles
+    state.particle_capture = read_particles(state)                  # snapshot [0x7DE6] at the 4B8E ENTRY (spider-
+    #   threads/sparkles) so native_render can DRAW them — the consume below KILLS the one-shot slots
     native_particle_consume(state)                                  # [asm 0247: 4B8E state] advance-Y + kill [0x7DE6]
     _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                    # [asm 024D: 2708] inc word [0x6bd5]
     native_object_render_state(state)                               # [asm 024D: 26FA] record mutation (life/flags)

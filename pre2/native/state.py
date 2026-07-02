@@ -19,7 +19,7 @@ class NativeGameState:
     """The recovered game's memory image. Exposes ``.data`` (the 1 MB address space) so the existing bridges
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
-    __slots__ = ("data", "sfx_queue")
+    __slots__ = ("data", "sfx_queue", "particle_capture")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -32,6 +32,10 @@ class NativeGameState:
         #: [0x1004] descriptor which is last-wins. NativeAudio drains it once per displayed frame; capped so a
         #: consumer-less run (the forward oracle) can't grow it without bound.
         self.sfx_queue: list[int] = []
+        #: the [0x7DE6] point particles (spider-threads/sparkles/fireflies) snapshotted at the 4B8E ENTRY — i.e.
+        #: BEFORE native_particle_consume kills them (they're one-shot). native_render draws from this so the
+        #: effects show; None when unset (native_render then reads the live [0x7DE6], empty after the consume).
+        self.particle_capture = None
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
