@@ -83,7 +83,7 @@ def native_level_reveal(state, dos, display_page: int, *, game_root: str):
     ``(planes, page)`` per curtain step; drive it once at each level start (cold boot + between-levels next level)
     so the level curtains in instead of appearing instantly."""
     native_sync_render_state(state)
-    planes, page = native_render(state, dos, display_page, game_root=game_root)
+    planes, page = native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
     for k in range(1, 11):                                # [asm 3054] 10 center-out strip-pairs, vsync-paced
         yield _reveal_frame(planes, page, k)
     yield planes, page                                   # the fully-revealed level
@@ -103,7 +103,7 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # black while the camera pans behind it, then the center-out reveal of the new room. The generator owns
         # ALL the state work (incl. the 53D7 mini-pass + the frame's remainder); we only compose the visuals.
         native_sync_render_state(state)
-        base_planes, base_page = native_render(state, dos, display_page, game_root=game_root)
+        base_planes, base_page = native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
         new = {}
         pan_n = 0
         for phase in native_cave_teleport(state, tp.si):
@@ -116,20 +116,23 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
             else:                                     # ("reveal", k)
                 if "planes" not in new:
                     native_sync_render_state(state)   # the camera is at the destination now
-                    new["planes"], new["page"] = native_render(state, dos, display_page, game_root=game_root)
+                    new["planes"], new["page"] = native_render(state, dos, display_page, game_root=game_root,
+                                                               force_gameplay=True)
                 yield _reveal_frame(new["planes"], new["page"], phase[1])
         native_sync_render_state(state)
-        yield native_render(state, dos, display_page, game_root=game_root)   # the settled arrival frame
+        yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)   # settled arrival
         return
     except Pre2RespawnTransition:
         # the respawn fired this frame (the prefix already ran the death hit). Drive native_4f6c — a per-frame
         # generator — rendering EACH of the 60 bounce frames, then the checkpoint frame. Verified per-frame
-        # byte-exact vs the ASM 509d loop: pre2/probes/probe_native_respawn_anim.py.
+        # byte-exact vs the ASM 509d loop: pre2/probes/probe_native_respawn_anim.py. force_gameplay: the
+        # checkpoint restore sits the camera at the level origin (e.g. this demo's level-6 checkpoint at (0,0)),
+        # which the camera!=0 SceneKind heuristic would wrongly read as the game-over/tally SCENE.
         for _ in native_4f6c(state):
             native_sync_render_state(state)
-            yield native_render(state, dos, display_page, game_root=game_root)
+            yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
         native_sync_render_state(state)
-        yield native_render(state, dos, display_page, game_root=game_root)   # the checkpoint, post-restore
+        yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)   # the checkpoint
         return
     except Pre2LevelEndTransition:
         # PROPAGATES to the caller — the between-levels flow (the VM's 4F65 -> BRAVO tally scene -> CARTE world
@@ -138,6 +141,10 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # (Must be re-raised EXPLICITLY: it subclasses Pre2HybridGap, which is swallowed below.)
         raise
     except Pre2HybridGap:
-        pass   # the death-to-menu carry path (5063/5034) — not a silent ASM fallback; re-render the state
+        # the death-to-menu carry path (5063/5034) — the state IS a real non-gameplay scene (game-over), so let
+        # the SceneKind classifier run (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
+        native_sync_render_state(state)
+        yield native_render(state, dos, display_page, game_root=game_root)
+        return
     native_sync_render_state(state)   # re-derive the render-only tile-ring + prev-camera mirrors from the camera
-    yield native_render(state, dos, display_page, game_root=game_root)
+    yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)   # a normal gameplay frame

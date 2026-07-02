@@ -38,13 +38,20 @@ class GameVisualState:
     effects: object = None        # GameplayEffects overlays (particles/foreground/fireflies) or None
 
 
-def capture_game_visual_state(mem, dos, display_page: int, *, game_root, effects=None) -> GameVisualState:
+def capture_game_visual_state(mem, dos, display_page: int, *, game_root, effects=None,
+                              force_gameplay: bool = False) -> GameVisualState:
     """Capture the GameVisualState for the committed (displayed) page. Call ONLY at the frame-commit
     boundary (1030:6772) so the read is consistent with ``display_page``. ``display_page`` is the
     CRTC ``ega_display_start`` at that instant (the page on screen). ``effects`` is the captured
-    :class:`~pre2.bridge.gameplay_effects.GameplayEffects` overlay bundle (drawn after the core frame)."""
+    :class:`~pre2.bridge.gameplay_effects.GameplayEffects` overlay bundle (drawn after the core frame).
+
+    ``force_gameplay`` overrides the SceneKind heuristic to GAMEPLAY. The VM-less runtime sets it because it
+    only calls this on a KNOWN gameplay frame (native_frame_step's normal/respawn/reveal paths — real scenes
+    are raised as transitions and handled elsewhere), so a camera at the origin — a respawn checkpoint or a
+    level that starts at (0,0) — is gameplay, not a scene. Without it ``is_gameplay_frame`` (camera != 0)
+    mis-classifies those as the 0Dh game-over/tally SCENE and fails loud (its documented blind spot)."""
     page = display_page & 0xFFFF
-    kind = derive_scene_kind(mem, dos)
+    kind = SceneKind.GAMEPLAY if force_gameplay else derive_scene_kind(mem, dos)
     iris = None
     rs = None
     if kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):

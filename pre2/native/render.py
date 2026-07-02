@@ -84,7 +84,7 @@ def native_sync_render_state(state) -> None:
 
 
 def native_render(state, dos, display_page: int, *, game_root: str,
-                  particle_capture=None, foreground_capture=None):
+                  particle_capture=None, foreground_capture=None, force_gameplay: bool = False):
     """Render one gameplay frame from ``state`` (a NativeGameState). ``dos`` carries the VGA palette + registers;
     ``display_page`` is the on-screen page (``ega_display_start``). ``particle_capture``/``foreground_capture``
     are the mid-frame overlay captures; when not supplied (the standalone path) they are read straight from the
@@ -101,5 +101,6 @@ def native_render(state, dos, display_page: int, *, game_root: str,
         pf = read_particles(state)                                 # [4b8e] one-shot point particles
         particle_capture = pf if pf.particles else None
     fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
-    gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx)
+    gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx,
+                                    force_gameplay=force_gameplay)
     return render_game_visual_state(gvs)
