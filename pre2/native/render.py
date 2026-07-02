@@ -92,6 +92,50 @@ def native_sync_render_state(state) -> None:
     d[_DS + 0x6BD4] = thr & 0xFF
 
 
+_LIGHT_DARK_PAL = 0xACB7   # [asm 6791] the fixed "lights off" dark 16-colour palette (6-bit RGB)
+
+
+def native_apply_palette_fade(state, dos) -> None:
+    """[asm 6772] The per-frame gameplay DAC fade between the level palette ``[0x2D00+level]`` and the dark
+    "lights off" palette ``0xACB7``, driven by the light pickups (player_interaction 876C/8790: ``[0x6C01]``=fade
+    to dark, ``[0x6C02]``=fade to the level palette, ``[0x6C03]``=step, ``[0x6C04]``=LIGHT_STATE resting bit).
+
+    native classifies 6772 as 'render' so the VM-less gameplay frame skips it — reproduce the DAC ramp here on
+    ``dos.vga_palette`` (colours 0..15), else the "lights off/on" fade is invisible (native keeps the static level
+    palette). No-op in the common case (no active fade and the lights on)."""
+    d = state.data
+    active = d[_DS + 0x6C01] | d[_DS + 0x6C02]
+    if not active and d[_DS + 0x6C04] == 0:                          # [asm 6779] no fade + lights on -> level pal
+        return
+    level = d[_DS + 0x2D8A]
+    lvl_pal = d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8)   # [asm 6787]
+
+    def g(off, k):
+        return d[_DS + ((off + k) & 0xFFFF)]
+
+    if active:
+        step = (d[_DS + 0x6C03] + 1) & 0xFF                          # [asm 677B] inc [0x6C03]
+        d[_DS + 0x6C03] = step
+        s_off, b_off = lvl_pal, _LIGHT_DARK_PAL                      # [asm 6787/6791]
+        if d[_DS + 0x6C02]:                                          # [asm 6799-67A0] [0x6C02] -> swap src/dst
+            s_off, b_off = b_off, s_off
+        anim = 0
+        dac = []
+        for k in range(0x30):                                        # [asm 67A2-67C6] 16 colours x 3
+            s = g(s_off, k); b = g(b_off, k); diff = s - b
+            if abs(diff) > step:                                     # [asm 67B3 ja] ramp s toward b
+                dac.append((s - step) if diff >= 0 else (s + step))
+                anim += 1
+            else:                                                   # [asm 67B7] within a step -> snap to b
+                dac.append(b)
+        if anim == 0:                                               # [asm 67C8-67D1] fade complete
+            d[_DS + 0x6C01] = 0; d[_DS + 0x6C02] = 0
+    else:                                                            # at rest with the lights off -> the dark pal
+        dac = [g(_LIGHT_DARK_PAL, k) for k in range(0x30)]
+    for c in range(0x10):
+        dos.vga_palette[c] = (_dac8(dac[c * 3]), _dac8(dac[c * 3 + 1]), _dac8(dac[c * 3 + 2]))
+
+
 def native_render(state, dos, display_page: int, *, game_root: str,
                   particle_capture=None, foreground_capture=None, force_gameplay: bool = False):
     """Render one gameplay frame from ``state`` (a NativeGameState). ``dos`` carries the VGA palette + registers;
@@ -104,6 +148,8 @@ def native_render(state, dos, display_page: int, *, game_root: str,
 
     Mirrors the faithful renderer's commit-boundary capture (bridge/faithful_session.py), but sourced from
     native game state instead of the VM. Raises FaithfulVisualGap for non-gameplay scenes (no silent fallback)."""
+    native_apply_palette_fade(state, dos)                          # [asm 6772] the light-pickup DAC fade (skipped
+    #                                                                by the gameplay frame as 'render'); no-op idle
     if foreground_capture is None:
         foreground_capture = read_foreground_state(state)          # [3721] the front tile layer
     if particle_capture is None:

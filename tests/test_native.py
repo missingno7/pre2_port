@@ -75,6 +75,39 @@ def test_native_combat_pass_idle_no_op():
     assert bytes(state.data[base + 0x4F0A:base + 0x5732]) == before   # idle -> no combat writes
 
 
+def test_native_light_palette_fade():
+    # [asm 6772] The light-pickup DAC fade: native classifies 6772 as 'render' (the gameplay frame skips it), so
+    # native_apply_palette_fade reproduces the per-frame ramp on dos.vga_palette. A "lights off" pickup sets
+    # [0x6C01]=1/[0x6C03]=0/[0x6C04]=1; the palette must ramp colours 0..15 from the level palette toward the dark
+    # 0xACB7 palette and then clear the flags. Guards the direction + completion (was: native kept the static pal).
+    from dos_re.dos import DOSMachine, _dac8
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.render import native_apply_palette_fade, native_load_level_palette, _LIGHT_DARK_PAL
+
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    st = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    dos = DOSMachine(str(ROOT / "assets"))
+    native_load_level_palette(st, dos)
+    base = DATA_SEG << 4
+    bright = tuple(dos.vga_palette[3])
+    dark = (_dac8(st.data[base + _LIGHT_DARK_PAL + 9]), _dac8(st.data[base + _LIGHT_DARK_PAL + 10]),
+            _dac8(st.data[base + _LIGHT_DARK_PAL + 11]))            # colour 3 of the 0xACB7 dark palette
+    assert bright != dark
+
+    # no active fade + lights on -> the static level palette stands (no-op)
+    native_apply_palette_fade(st, dos)
+    assert tuple(dos.vga_palette[3]) == bright
+
+    # the light-OFF pickup (id 0xea): fade toward the dark palette
+    st.data[base + 0x6C01] = 1; st.data[base + 0x6C02] = 0; st.data[base + 0x6C03] = 0; st.data[base + 0x6C04] = 1
+    steps = 0
+    while (st.data[base + 0x6C01] | st.data[base + 0x6C02]) and steps < 300:
+        native_apply_palette_fade(st, dos); steps += 1
+    assert 0 < steps < 300                                          # it converged
+    assert tuple(dos.vga_palette[3]) == dark                        # ended at the dark target
+    assert st.data[base + 0x6C01] == 0 and st.data[base + 0x6C02] == 0   # [asm 67C8] flags cleared on completion
+
+
 def test_native_cave_teleport_enters_cave():
     # [asm 52FE/5326] The position-trigger scan raises Pre2CaveTeleport on a table match; driving the
     # native_cave_teleport generator plays the WHOLE transition: the 30C6 fade-out yields, the hidden camera pan
