@@ -184,9 +184,29 @@ def main(argv=None) -> int:
     except Exception as e:                                          # noqa: BLE001 — no audio device -> run silent
         print(f"  (audio disabled: {type(e).__name__}: {str(e)[:60]})")
 
+    def between_levels(state, dos):
+        """The between-levels flow (the VM's 4F65 -> BRAVO tally -> CARTE world map -> next-level load): advance
+        + load the next level (byte-exact), then drive the recovered CARTE scene with the 'you are here' marker
+        at the NEW level (the VM advances [0x2D8A] before the carte too). The exit-iris + the BRAVO tally scene
+        are not yet recovered (the next front-end island) — announced, never silently skipped."""
+        from pre2.native.front_end import _native_carte
+        from pre2.native.level_state import native_level_end
+        print("  level complete -> carte (exit-iris + BRAVO tally scene not yet native — the next island)")
+        native_level_end(state, game_root=gr)
+        for scene in _native_carte(state, dos, gr):                # fire (press after release) advances
+            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — world map")
+            pump()
+            drive_input(state)
+            if native_audio is not None:
+                native_audio.poll(state)                           # CARTE.TRK
+            if not ref["running"]:
+                return
+        native_load_level_palette(state, dos)                      # restore the level palette after the carte DAC
+
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, ESC = quit. (VM-less native gameplay)")
+        from pre2.checkpoints.common import Pre2LevelEndTransition
         n = 0
         while ref["running"]:
             pump()
@@ -200,6 +220,8 @@ def main(argv=None) -> int:
                     pump()
                     if not ref["running"]:
                         break
+            except Pre2LevelEndTransition:
+                between_levels(state, dos)                          # tally/carte flow, then the next level
             except Exception as e:                                  # noqa: BLE001 — hold on an unrecovered gap
                 hold_last(f"gameplay gap: {type(e).__name__}: {str(e)[:80]}")
                 return

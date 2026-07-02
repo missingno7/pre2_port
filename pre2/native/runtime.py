@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
                                      Pre2RespawnTransition)
-from pre2.native.level_state import native_4f6c, native_level_end
+from pre2.native.level_state import native_4f6c
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
 
@@ -99,13 +99,11 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         yield native_render(state, dos, display_page, game_root=game_root)   # the checkpoint, post-restore
         return
     except Pre2LevelEndTransition:
-        # the level ended this frame -> advance to the next level (increment + load + re-init) and continue
-        # gameplay there. (The VM's exit anim + DAC fade are the renderer's / flow driver's job; the gameplay
-        # end state — the next level loaded + ready — is byte-exact.)
-        native_level_end(state, game_root=game_root)
-        native_sync_render_state(state)
-        yield native_render(state, dos, display_page, game_root=game_root)   # the first frame of the next level
-        return
+        # PROPAGATES to the caller — the between-levels flow (the VM's 4F65 -> BRAVO tally scene -> CARTE world
+        # map -> next-level load) is the FLOW DRIVER's job (play_native drives the carte scene +
+        # native_level_end); a state-only consumer calls native_level_end itself (see game_tick_demo).
+        # (Must be re-raised EXPLICITLY: it subclasses Pre2HybridGap, which is swallowed below.)
+        raise
     except Pre2HybridGap:
         pass   # the death-to-menu carry path (5063/5034) — not a silent ASM fallback; re-render the state
     native_sync_render_state(state)   # re-derive the render-only tile-ring + prev-camera mirrors from the camera
