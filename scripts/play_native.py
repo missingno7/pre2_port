@@ -246,6 +246,8 @@ def main(argv=None) -> int:
             if not ref["running"]:
                 return
         native_load_level_palette(state, dos)                      # restore the level palette after the carte DAC
+        from pre2.native.audio import native_level_song_name
+        native_load_song(state, native_level_song_name(state), gr)  # [asm 01B7] carte song -> the level song
         reveal_level(state, dos)                                    # 3054 center-out curtain into the next level
 
     def gameplay_loop(state, dos):

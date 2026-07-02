@@ -88,6 +88,33 @@ def native_load_sfx_bank(state, game_root: str, *, seg: int = _SFX_BANK_SEG) -> 
     d[_CS + _SFX_DEV_FLAGS[0]] = 1                          # digital device present -> the SB/digital path
 
 
+# [asm 01AB-01B7] the per-level song: `bl=[0x2d8a]; al=[bx+0x2d20]; call 0x2cc` — the level indexes the song-index
+# table [0x2D20], and the loader (0x2cc/0x492) maps that index to the in-EMS module. Native streams the .TRK from
+# disk, so we map the song index -> filename here. The [0x2D20] table is read LIVE from the game state (it's static
+# DGROUP data, always present); the index->file map was recovered by matching each level's loaded order table
+# ([0xDC7], strict full match) to the disk .TRK across the snapshot corpus, plus the code-confirmed front-end songs.
+_SONG_INDEX_TO_FILE = {
+    0: "PRES.TRK",       # L3-L5 (distinctive 13-entry order; the identity-order matches are transient loads)
+    1: "CARTE.TRK",      # the carte scroll-in [asm 96E3 ax=1]
+    2: "CODE.TRK",       # the mode-select menu [asm 952D ax=2]
+    4: "GLACE.TRK",      # L7/L8 (verified across the level-6/7 snapshots)
+    9: "MINES.TRK",      # L1/L2 (verified across the level-0/1 snapshots + the menu->L1 demo)
+    10: "MYSTERY.TRK",   # L9
+    13: "MONSTER.TRK",   # L6/L10 (the boss levels)
+    15: "BRAVO.TRK",     # the level-end tally [asm 4CE7 ax=0xf]
+}
+
+
+def native_level_song_name(state) -> str:
+    """[asm 01AB-01B7] The music for the CURRENT level: song index = ``[0x2D20 + [0x2d8a]]`` mapped to its .TRK.
+    The VM loads this right after the carte (main 01B7), which native's flow must reproduce so the level music
+    replaces the carte song. Falls back to MINES for an unmapped index (any level still gets level music)."""
+    d = state.data
+    level = d[_DS + 0x2D8A]
+    idx = d[_DS + 0x2D20 + level]
+    return _SONG_INDEX_TO_FILE.get(idx, "MINES.TRK")
+
+
 def native_load_song(state, name: str, game_root: str) -> None:
     """Reproduce the song loader (``1030:02cc``) for the VM-less runtime: parse the standard ``.TRK`` module's
     order list into ``[0xDC7]`` and its length into ``[0xDC2]`` — the fingerprint :class:`NativeAudio` matches to

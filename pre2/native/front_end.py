@@ -43,10 +43,6 @@ from pre2.recovered.scene import (
 
 _DS = DATA_SEG << 4
 
-# The per-level song (indexed by [0x2d8a]) the loader loads at level start. L1 = MINES.TRK is verified from the
-# menu->L1 demo; the full per-level table is a follow-up (default MINES so any level still gets music).
-_LEVEL_SONGS = {0: "MINES.TRK"}
-
 
 @dataclass(frozen=True)
 class FrontEndScene:
@@ -224,8 +220,9 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
 
     # --- the map selected a level ([0x2d8a]); the loader (main 01A5..01D2). native_level_start is VERIFIED byte-exact
     #     vs the pure-ASM oracle's gameplay-entry seed (every core gameplay table identical; see [[pre2-level-init-island]]). ---
+    from pre2.native.audio import native_level_song_name
     from pre2.native.level_init import native_level_start
-    native_load_song(state, _LEVEL_SONGS.get(state.data[_DS + 0x2D8A], "MINES.TRK"), game_root)  # level song (plays at start)
+    native_load_song(state, native_level_song_name(state), game_root)   # [asm 01B7] the level song (plays at start)
     native_level_start(state, game_root=game_root)            # [asm 013e..0155] load + init + level-start (lives, etc.)
     state.data[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)  # clear the residual key table (the DC1 raw keys)
     return                                                     # the level is loaded -> the caller runs native_frame_step
