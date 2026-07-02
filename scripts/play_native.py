@@ -114,7 +114,7 @@ def main(argv=None) -> int:
     from pre2.native.front_end import native_front_end
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
-    from pre2.native.runtime import native_frame_step
+    from pre2.native.runtime import native_frame_step, native_level_reveal
     from pre2.native.state import NativeGameState
     from sdl_view import front_end_scene_to_rgb, render_planar_rgb_from_planes
 
@@ -187,6 +187,19 @@ def main(argv=None) -> int:
     except Exception as e:                                          # noqa: BLE001 — no audio device -> run silent
         print(f"  (audio disabled: {type(e).__name__}: {str(e)[:60]})")
 
+    def reveal_level(state, dos):
+        """Curtain the freshly-loaded level in (the VM's 3054 center-out level-start reveal) instead of it
+        appearing instantly. Driven once at every level start (cold boot + between-levels)."""
+        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        for planes, page in native_level_reveal(state, dos, disp, game_root=gr):
+            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
+                    "PRE2 VM-less — level start")
+            pump()
+            if native_audio is not None:
+                native_audio.poll(state)
+            if not ref["running"]:
+                return
+
     def between_levels(state, dos):
         """The between-levels flow (the VM's 4F65 -> BRAVO tally -> CARTE world map -> next-level load): advance
         + load the next level (byte-exact), then drive the recovered CARTE scene with the 'you are here' marker
@@ -205,6 +218,7 @@ def main(argv=None) -> int:
             if not ref["running"]:
                 return
         native_load_level_palette(state, dos)                      # restore the level palette after the carte DAC
+        reveal_level(state, dos)                                    # 3054 center-out curtain into the next level
 
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
@@ -286,6 +300,7 @@ def main(argv=None) -> int:
         state = native_cold_boot(gr, boot_image, level=args.from_level)
         dos = DOSMachine(gr)
         native_load_level_palette(state, dos)
+        reveal_level(state, dos)                                    # 3054 center-out curtain into the level
         gameplay_loop(state, dos)
         pygame.quit()
         return 0
@@ -308,6 +323,7 @@ def main(argv=None) -> int:
         init_keyboard_input(state)
         dos = DOSMachine(gr)
         native_load_level_palette(state, dos)
+        reveal_level(state, dos)                                    # 3054 center-out curtain into the level
         gameplay_loop(state, dos)
         pygame.quit()
         return 0
@@ -337,6 +353,7 @@ def main(argv=None) -> int:
 
     if reached_gameplay and ref["running"]:
         native_load_level_palette(state, dos)
+        reveal_level(state, dos)                                    # 3054 center-out curtain into the level
         gameplay_loop(state, dos)
 
     pygame.quit()

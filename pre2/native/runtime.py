@@ -56,6 +56,19 @@ def _reveal_frame(new_planes, page, k):
     return out, page
 
 
+def native_level_reveal(state, dos, display_page: int, *, game_root: str):
+    """The level-START reveal: after a level loads, the VM snaps the palette to full over a BLACK screen and then
+    reveals the drawn level with the 3054 center-out CURTAIN (verified vs the VM on the level-1 load witness
+    snapshot_pre2_20260702_105416: black at f272 -> ~90% center-out at f288 -> full at f296). A GENERATOR yielding
+    ``(planes, page)`` per curtain step; drive it once at each level start (cold boot + between-levels next level)
+    so the level curtains in instead of appearing instantly."""
+    native_sync_render_state(state)
+    planes, page = native_render(state, dos, display_page, game_root=game_root)
+    for k in range(1, 11):                                # [asm 3054] 10 center-out strip-pairs, vsync-paced
+        yield _reveal_frame(planes, page, k)
+    yield planes, page                                   # the fully-revealed level
+
+
 def native_frame_step(state, dos, display_page: int, *, game_root: str):
     """Advance the recovered gameplay over ``state`` (in place) and ``yield`` each frame to display as
     ``(planes, page)`` — the four EGA plane buffers + committed page, ready to present.
