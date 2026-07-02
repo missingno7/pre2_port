@@ -56,9 +56,11 @@ _RENDER_DRAWLIST = set(range(0x52E8, 0x5450)) | set(range(0x8F1D, 0x9107))
 _PAGE_FLIP = {0x2DD6, 0x2DD7, 0x2DD8, 0x2DD9}
 _RENDER_COUNTERS = {0x27EE, 0x27EF, 0x6BD4, 0x6BC3}
 # 35A1 (dirty-grid redraw) + 3A27 (scroll-copy) own the smooth HORIZONTAL-scroll render state (5643/camera_follow
-# does only the vertical): the displayed scroll-X counter [0x2de0] and the dirty-grid / background-pointer block
+# does only the vertical): the displayed scroll-X counter [0x2de0], the scroll-copy SOURCE pointer [0x2dba/bb]
+# (calc_scroll_source; render_frame's `scroll_src` ring-buffer offset — the renderer 3A27/348D owns it, the
+# gameplay step's camera-follow only writes it as a by-product), and the dirty-grid / background-pointer block
 # [0x2dee..0x2df8) (incl. [0x2df6] bg ptr) — render, run by native_render, not the gameplay step.
-_SCROLL_RENDER = {0x2DE0, 0x2DE1} | set(range(0x2DEE, 0x2DF8))
+_SCROLL_RENDER = {0x2DBA, 0x2DBB, 0x2DE0, 0x2DE1} | set(range(0x2DEE, 0x2DF8))
 # each object slot's +5 byte holds render page/visibility flags (bits 0x20|0x40) that 26FA (object_render) writes
 # -> mask just those two bits so the gameplay low bits still verify (slots: base 0x4F0A, stride 0x12).
 _SLOT5_PAGE = {0x4F0A + i * 0x12 + 5 for i in range(0x75)}
@@ -79,9 +81,17 @@ _PLAYER_REDRAW = {0x6CA0, 0x6CA1}
 # the clear, so the gameplay step leaves it set -> render-dirty signal, not gameplay state. (The consumed tile's
 # actual map/score change is verified elsewhere.) Surfaced by the game-tick verifier at gorilla tick 611.
 _REDRAW_DIRTY = {0x6BBD}
-_EXCL = (set((0x1004, 0x1005, 0x1006, 0x1007)) | set(range(0x27F0, 0x2800)) | set(range(0x2820, 0x2880))
-         | set(range(0xAB0, 0xE00)) | set(RENDER_OFFSETS) | _RENDER_DRAWLIST | _PAGE_FLIP | _RENDER_COUNTERS
-         | _SLOT_ATTR | _SCROLL_RENDER | _TIMING | _PLAYER_REDRAW | _REDRAW_DIRTY)
+# the SFX / sound-engine working block. play_sfx (0282) writes the descriptor [0x1004-0x1007] (already above);
+# the sound engine then owns [0x1035..0x1220): the 11 PC-speaker note structs [0x1035..0x10A5] AND the digital
+# SoundBlaster channel/mix + DMA-block state [0x10A5..0x1218] the SB ISR churns every frame while a sound plays
+# (observed extent over a full level demo; the block size is fixed by the game's SB driver). This is AUDIO, not
+# gameplay: the VM-less core has no SB (its audio is a separate native system), so it never writes this region.
+# It MUST be excluded or a demo replayed WITH the SB (as recorded) diverges here every tick even though the
+# gameplay is byte-identical — the trap that made a desynced tick-demo look like it "passed".
+_SFX_ENGINE = set(range(0x1035, 0x1220))
+_EXCL = (set((0x1004, 0x1005, 0x1006, 0x1007)) | _SFX_ENGINE | set(range(0x27F0, 0x2800))
+         | set(range(0x2820, 0x2880)) | set(range(0xAB0, 0xE00)) | set(RENDER_OFFSETS) | _RENDER_DRAWLIST
+         | _PAGE_FLIP | _RENDER_COUNTERS | _SLOT_ATTR | _SCROLL_RENDER | _TIMING | _PLAYER_REDRAW | _REDRAW_DIRTY)
 
 
 def _run(demo, lim, totals):

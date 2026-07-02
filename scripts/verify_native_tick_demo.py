@@ -37,6 +37,7 @@ def main() -> int:
         gtd = GameTickDemo.load(tick_file)
         print(f"loaded the recorded tick timeline {tick_file.name} ({gtd.n_ticks} ticks) — VM-free re-verify")
     else:
+        from dos_re.runtime import enable_sound_blaster
         pb = InputDemoPlayback.load(str(ROOT / demo))
         meta = pb.manifest.get("metadata", {})
         chunk = int(meta.get("chunk_steps", 2142))          # the demo's OWN clock (old demos use 625/240 —
@@ -47,15 +48,23 @@ def main() -> int:
         cpu.trace_enabled = False
         det = lambda: cpu.instruction_count / (chunk * hz)
         rt.dos.time_source = det
+        # CRITICAL: replay with the Sound Blaster ENABLED, exactly as play.py's _run_replay_headless does. The
+        # SB ISR/DMA contributes to the per-frame INSTRUCTION budget the demo clock runs on; recording the tick
+        # timeline WITHOUT it shifts where every input lands (the demo desyncs — player fell into a pit instead
+        # of playing). Audio is dropped (no sink) + excluded from the gameplay digest; only its timing matters.
+        sb = enable_sound_blaster(rt)
+        sb.clock = det
         tick = {"next": 0.0}
         frame = [0]
 
-        def advance() -> bool:                   # drive the VM one present-frame with the demo's input (no SB)
+        def advance() -> bool:                   # drive the VM one present-frame with the demo's input (SB on)
             if pb.finished(frame[0]):
                 return False
             pb.apply_to_runtime(frame[0], rt, deliver=lambda r, sc: deliver_scancode(r, sc, max_steps=2_000_000))
             play._advance_demo_frame(rt, chunk_steps=chunk, sub_batch=2000, clock=det, pic=rt.dos.pic,
-                                     sound_blaster=None, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+                                     sound_blaster=sb, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+            if sb.pcm_out:
+                sb.pcm_out.clear()
             frame[0] += 1
             return True
 
