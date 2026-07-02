@@ -168,7 +168,7 @@ def _move_default(ov, b):
         if ov.rw((b + 0xA) & 0xFFFF) != cnt:                 # [asm 4A7E]
             ov.ww((b + 0xC) & 0xFFFF, cnt)
         else:
-            ov.wb((b + 7) & 0xFFFF, (-_s8(s7)) & 0xFF)       # [asm 4A83] reverse
+            ov.ww((b + 7) & 0xFFFF, (-ov.rw((b + 7) & 0xFFFF)) & 0xFFFF)   # [asm 4A83] neg WORD [si+7] (reverse dir)
             ov.ww((b + 0xC) & 0xFFFF, 0)
 
 
