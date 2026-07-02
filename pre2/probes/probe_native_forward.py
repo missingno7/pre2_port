@@ -113,8 +113,17 @@ def _run(demo, lim, pure=False):
                     print(f"  frame {ns['f']:4d}: native could NOT complete the frame -> {err}")
                     ns["done"] = True; orig(); return
                 nd = st.data[DS_BASE:DS_BASE + 0x10000]; vd = mem.data[DS_BASE:DS_BASE + 0x10000]
+                # an EMPTY render slot ([+4]==0xFFFF in BOTH) keeps STALE projected X/Y (fields 0-3) — render
+                # residue gameplay never reads (native's projection doesn't refresh a freed slot, so it drifts).
+                # Exclude it, like the sibling probe_native_forward_flow. Slot 1 (the player, 0x4F1C) is KEPT.
+                stale = set()
+                for b in range(_SLOT_BASE, 0x5732, _SLOT_STRIDE):
+                    if b != 0x4F1C and (nd[b + 4] | (nd[b + 5] << 8)) == 0xFFFF \
+                            and (vd[b + 4] | (vd[b + 5] << 8)) == 0xFFFF:
+                        stale |= {b, b + 1, b + 2, b + 3}
                 diffs = [o for o in range(0x10000)
-                         if o not in _FWD_EXCL and ((nd[o] ^ vd[o]) & (0x9F if o in _SLOT5_PAGE else 0xFF))]
+                         if o not in _FWD_EXCL and o not in stale
+                         and ((nd[o] ^ vd[o]) & (0x9F if o in _SLOT5_PAGE else 0xFF))]
                 if diffs:
                     print(f"  FIRST DIVERGENCE at frame {ns['f']} (ran {ns['matched']} clean): {len(diffs)} diffs")
                     for o in diffs[:28]:
