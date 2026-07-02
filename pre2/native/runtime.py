@@ -103,14 +103,15 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str):
     GENERATOR yielding ``(planes, page)`` per frame (composed by build_tally_scene = black + the object pass +
     the SCORE/LEVEL-COMPLETED% panel). Beats: recenter the player to screen space + zero the camera (4CEA-4D1A);
     the player walks in to (0x3C,0xAF) (4D3E); 3 food sprites slide in from the right to X~0x9B (4D8E); then IF
-    a bonus was collected ([0x6C9E]!=0) the player throws (4DF5) and the food flies UP counting the score up
-    (4E3A-4F0B: each item accelerates up, and on reaching Y>=0x91 adds its value from the [0xA353]/[0xA375]
-    tables to [0x6C0E] + sfx 8, refilled from the [0x6C12] queue); finally the player + food walk off (4F0E).
+    a bonus was collected ([0x6C9E]!=0) the player throws (4DF5) and the collected food FALLS into the pot,
+    counting the score up (4E3A-4F0B: each queued item spawns at the top (Y=0), accelerates DOWN, and on reaching
+    the pot line Y>=0x91 adds its value — byte [(id&0x1FFF)-0x6E-0x5C8B] indexes the word table at 2*vi-0x5CAD —
+    to [0x6C0E:0x6C10] + sfx 8, one item dequeued from the [0x6C12] queue every 8 frames); finally the player +
+    food walk off (4F0E).
 
-    The player walk/food-slide beats are visually verified vs the VM (the player walks in + animates, the food
-    slides in, then walks off). The count-up beat (throw + food-fly-up + score add) is transcribed from
-    4E3A-4F0B but GATED OFF (_COUNT_UP_RECOVERED below): on the one witness it over-counts (native 610 vs the
-    VM's 200), so the shipped cutscene shows the honest pre-count-up score rather than a wrong rising one."""
+    The count-up is byte-verified vs the VM on the level-1 exit witness (snapshot_pre2_20260702_111016): with the
+    316F object-clear reproduced at the entry (below), the count adds exactly the VM's 100 (score 100 -> 200).
+    Without that clear it over-counted (610) by also scanning the LEVEL's leftover [0x52E8] effect sprites."""
     from pre2.bridge.tally_scene import build_tally_scene
     from pre2.recovered.player import player_advance_anim
     _DS = (DATA_SEG << 4) & 0xFFFFF
@@ -142,6 +143,17 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str):
     def _ww_ctr():
         ww(0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                       # [0x6BD5]++ (51F0/count-up timing read it)
 
+    # [asm 316F->318B-31AA] clear the object/effect slots for the tally. The VM does this at the iris-close
+    # entry (316F), which first snapshots the frozen frame to A000 (3177-3184) so the iris still shows the level;
+    # native's iris renders the live (frozen) slots instead, so the clear is deferred to here — the post-iris
+    # state is identical. Without it the count-up below scans the LEVEL's leftover [0x52E8] effect sprites (still
+    # at their mid-level Y, already past the Y>=0x91 collect line) and over-counts. Clears the sprite-id word
+    # [slot+4]=0xFFFF for 0x73 slots from 0x4F2E (the player record @0x4F1C is before the range and survives).
+    for _k in range(0x73):
+        _so = (0x4F2E + _k * 0x12) & 0xFFFF
+        d[_DS + _so + 4] = 0xFF
+        d[_DS + _so + 5] = 0xFF
+
     # [asm 4CEA-4D1A] recenter the player to screen space, zero the camera + velocities
     ww(0x4F1E, (rw(0x4F1E) - (rw(0x2DE6) << 4)) & 0xFFFF)
     ww(0x4F1C, (rw(0x4F1C) - (rw(0x2DE4) << 4)) & 0xFFFF)
@@ -168,12 +180,11 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str):
             ww(base, (rw(base) - 3) & 0xFFFF)
         yield frame()
 
-    # [asm 4DF5-4F0B] the food-throw score COUNT-UP. TRANSCRIBED but NOT YET CORRECT: on the one available
-    # level-end witness (snapshot_pre2_20260702_111016) it over-counts (native score 610 vs the VM's 200) — the
-    # item-value table / queue-drain logic below needs a bonus-collecting witness to frame-verify. Gated OFF so
-    # the shipped cutscene shows the (verified) walk-in + food-slide + walk-off with the honest pre-count-up
-    # score, rather than a wrong rising score. Flip _COUNT_UP_RECOVERED once it matches the VM.
-    _COUNT_UP_RECOVERED = False
+    # [asm 4DF5-4F0B] the food-throw score COUNT-UP — byte-verified vs the VM (adds exactly the VM's 100 on the
+    # snapshot_pre2_20260702_111016 exit witness: score 100 -> 200) now that the 316F object-clear (above) removes
+    # the level's leftover [0x52E8] effect sprites. The player throws, then each collected item ([0x6C12] queue)
+    # spawns at the top and falls into the pot, adding its value.
+    _COUNT_UP_RECOVERED = True
     if _COUNT_UP_RECOVERED and rw(0x6C9E) != 0:                     # [asm 4DEB] a bonus was collected -> count-up
         # [asm 4DF5-4E30] the player throws; the recoil velocity decays (6333 friction) to a stop
         ww(0x4F28, 0x7C6B); ww(0x4F22, 0x40); wb(0x4F24, 2)
@@ -183,20 +194,25 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str):
             v = 0 if v < 0 else (-v if s16(rw(0x4F22)) < 0 else v)
             ww(0x4F22, v & 0xFFFF)
             yield frame()
-        # [asm 4E32-4F0B] the food flies UP; on reaching the top each item adds its value to the score
-        ww(0x4F28, 0x7CAF)
+        # [asm 4E32-4F0B] the food falls into the pot; each item on reaching the pot line adds its value.
+        # Loop shape matches the ASM: render (top, [0x6BD5]++), the slot fall/collect scan, then the refill —
+        # a refill that SPAWNS a queued item continues (jmp 4E3A); termination (4F07) only fires on a refill
+        # frame that finds the queue EMPTY and no slot still falling. (My earlier break-every-frame quit the
+        # instant the last item spawned — before it could fall — leaving the score uncounted.)
+        ww(0x4F28, 0x7CAF)                                          # [asm 4E32] the throw/count-up anim
         while True:
+            yield frame()                                          # [asm 4E3A-4E50] render (26FA bumps [0x6BD5])
             alive = False
-            for k in range(0x14):                                  # the 20 effect render slots [0x52E8]
+            for k in range(0x14):                                  # [asm 4E53-4EAE] the 20 effect slots [0x52E8]
                 si = 0x52E8 + k * 0x12
                 if rw(si + 4) == 0xFFFF:
                     continue
+                alive = True                                        # [asm 4E7A] inc bp — any non-empty slot
                 vel = rw(si + 0xE)
                 if vel < 0x80:
-                    vel = (vel + 8) & 0xFFFF; ww(si + 0xE, vel)     # [asm 4E61-4E6C] accelerate up
-                ww(si + 2, (rw(si + 2) + (vel >> 4)) & 0xFFFF)      # [asm 4E6F-4E77] Y += vel>>4
-                if s16(rw(si + 2)) < 0x91:
-                    alive = True
+                    vel = (vel + 8) & 0xFFFF; ww(si + 0xE, vel)     # [asm 4E61-4E6C] accelerate the fall
+                ww(si + 2, (rw(si + 2) + (vel >> 4)) & 0xFFFF)      # [asm 4E6F-4E77] Y += vel>>4 (falls into the pot)
+                if s16(rw(si + 2)) < 0x91:                          # [asm 4E7B] not at the pot line yet -> keep falling
                     continue
                 t = ((rw(si + 4) & 0x1FFF) - 0x6E) & 0xFFFF         # [asm 4E82-4E93] value = tables[food type]
                 vi = d[_DS + ((t - 0x5C8B) & 0xFFFF)]
@@ -205,11 +221,11 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str):
                 ww(0x6C0E, sc & 0xFFFF); ww(0x6C10, (sc >> 16) & 0xFFFF)
                 ww(si + 4, 0xFFFF)                                  # [asm 4EA0] free the slot
                 _emit_sfx(state, 8)                                # [asm 4EA5-4EA8] sfx 8
-            if (rw(0x6BD5) & 7) == 0:                              # [asm 4EB0] refill from the [0x6C12] queue
-                _exit_anim_refill(state)
-            yield frame()
-            if not alive and not any(d[_DS + 0x6C12 + i] for i in range(0x71)):
-                break
+            if (rw(0x6BD5) & 7) == 0:                              # [asm 4EB0] a refill frame (every 8)
+                if _exit_anim_refill(state):                       # [asm 4ED5] spawned a queued item -> continue
+                    continue
+                if not alive:                                      # [asm 4F07] queue empty AND no slot falling -> done
+                    break
 
     # [asm 4F0E-4F52] the player + the food walk off to the left
     ww(0x4F28, 0x7BA7)
@@ -228,8 +244,13 @@ def _emit_sfx(state, idx):
         pass
 
 
-def _exit_anim_refill(state):
-    """[asm 4EBA-4F04] spawn one queued food item ([0x6C12]+di != 0) into a free [0x52E8] slot at (0x9B, 0)."""
+def _exit_anim_refill(state) -> bool:
+    """[asm 4EBA-4F04] Spawn one queued food item ([0x6C12]+di != 0) into a free [0x52E8] slot at (0x9B, 0).
+
+    Returns True iff a queued item was FOUND (whether or not a free slot was available — the ASM retries next
+    refill when the pool is full, dequeuing only after a successful spawn at 4EFF), False iff the whole queue is
+    empty (the ASM's 4EC9 al>=0x71 exhausted-scan -> the 4F07 termination check). The caller uses this to
+    continue vs terminate the count-up."""
     _DS = (DATA_SEG << 4) & 0xFFFFF
     d = state.data
     di = None
@@ -238,7 +259,7 @@ def _exit_anim_refill(state):
             di = i
             break
     if di is None:
-        return
+        return False                                              # [asm 4EC9/4F07] the queue is empty
     for k in range(0x14):
         si = 0x52E8 + k * 0x12
         if (d[_DS + si + 4] | (d[_DS + si + 5] << 8)) == 0xFFFF:
@@ -248,7 +269,8 @@ def _exit_anim_refill(state):
             d[_DS + si + 4] = aid & 0xFF; d[_DS + si + 5] = (aid >> 8) & 0xFF
             d[_DS + si + 0xE] = 0; d[_DS + si + 0xF] = 0           # velocity = 0
             d[_DS + 0x6C12 + di] -= 1                              # [asm 4EFF] dequeue
-            return
+            return True
+    return True                                                   # [asm 4EEB] found an item but the pool is full
 
 
 def native_tally_scene(state, dos, display_page: int, *, game_root: str):
