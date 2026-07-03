@@ -16,7 +16,7 @@ was built over the VM), so ``native_sync_render_state`` re-derives the tile-ring
 """
 from __future__ import annotations
 
-from pre2.gaps import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
+from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2HybridGap, Pre2LevelEndTransition,
                                      Pre2GameOverTransition, Pre2RespawnTransition)
 from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
@@ -406,9 +406,14 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
             native_sync_render_state(state)
             yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
         raise
+    except Pre2GameComplete:
+        # [asm 5034] THE END — the player cleared the final level 0xE. The game-complete SCENE (THEEND.SQZ fade +
+        # the 25F6 creators screen -> menu) is the FLOW DRIVER's job (play_native's the_end_restart). Re-raise
+        # EXPLICITLY: it subclasses Pre2HybridGap, which the handler below swallows.
+        raise
     except Pre2HybridGap:
-        # the 5034 game-over carry path — a real non-gameplay scene, so let the SceneKind classifier run
-        # (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
+        # a real non-gameplay scene reached via a carry path we don't drive as a transition — let the SceneKind
+        # classifier run (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
         native_sync_render_state(state)
         yield native_render(state, dos, display_page, game_root=game_root)
         return
