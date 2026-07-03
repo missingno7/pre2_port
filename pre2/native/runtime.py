@@ -16,8 +16,8 @@ was built over the VM), so ``native_sync_render_state`` re-derives the tile-ring
 """
 from __future__ import annotations
 
-from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2HybridGap, Pre2LevelEndTransition,
-                                     Pre2GameOverTransition, Pre2RespawnTransition)
+from pre2.gaps import (Pre2CaveTeleport, Pre2CheatCredits, Pre2GameComplete, Pre2HybridGap,
+                                     Pre2LevelEndTransition, Pre2GameOverTransition, Pre2RespawnTransition)
 from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
@@ -410,6 +410,10 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # [asm 5034] THE END — the player cleared the final level 0xE. The game-complete SCENE (THEEND.SQZ fade +
         # the 25F6 creators screen -> menu) is the FLOW DRIVER's job (play_native's the_end_restart). Re-raise
         # EXPLICITLY: it subclasses Pre2HybridGap, which the handler below swallows.
+        raise
+    except Pre2CheatCredits:
+        # [asm 247B->2505] the dev-credits cheat combo — an OVERLAY scene the flow driver shows then RESUMES the
+        # same level. Re-raise EXPLICITLY (subclasses Pre2HybridGap, swallowed below).
         raise
     except Pre2HybridGap:
         # a real non-gameplay scene reached via a carry path we don't drive as a transition — let the SceneKind

@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
+from pre2.gaps import (Pre2CaveTeleport, Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
                                      Pre2LevelEndTransition, Pre2RespawnTransition)
 from pre2.native.level_init import native_level_init
 from pre2.native.level_state import native_4f6c, native_5063, native_level_end
@@ -220,6 +220,10 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
             # up to the game's completion.
             return i, (f"GAME-COMPLETE at tick {i}: native reached THE END (level 0xE cleared, 5034); the ending "
                        f"screen is main's 0x12f front-end flow (a scene, no gameplay counterpart)")
+        except Pre2CheatCredits:
+            # The 247B dev-credits cheat combo fired — a pure overlay SCENE (2505) with no gameplay-tick
+            # counterpart, so the tick compare ends here (native reproduced the run up to the combo).
+            return i, f"CHEAT-CREDITS at tick {i}: native detected the 247B dev-credits combo (a scene overlay)"
         except Pre2LevelEndTransition:
             before = state.data[DS_BASE + 0x2D8A]
             try:

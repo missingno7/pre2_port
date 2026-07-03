@@ -17,7 +17,7 @@ Verified byte-exact (DGROUP) vs the ASM 5850->5A95 over the demos: pre2/probes/p
 from __future__ import annotations
 
 from pre2.bridge.input_decode import apply_ds, readers
-from pre2.gaps import Pre2HybridGap
+from pre2.gaps import Pre2CheatCredits, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.input_decode import Pre2InputGap, decode_input
 from pre2.recovered.object_inject import find_free_object_slot
@@ -51,6 +51,20 @@ def _keycombo_active(rb) -> bool:
     return rb(0x2811) != 0 and rb(0x282C) != 0 and rb(0x2805) != 0
 
 
+def _cheat_combo_confirmed(rb) -> bool:
+    """The full 247B trigger: the three combo keys held (Ctrl 0x1D / Alt 0x38 / scancode 0x11) AND NO OTHER key
+    pressed — [asm 2488-24A7] scans every scancode flag [0x27F4+sc] for sc in 1..0x7E, skipping the three combo
+    scancodes, and aborts if any other is down. Exactly matches, else the routine is a no-op."""
+    if not _keycombo_active(rb):
+        return False
+    for sc in range(1, 0x7F):
+        if sc in (0x11, 0x1D, 0x38):
+            continue
+        if rb(0x27F4 + sc) != 0:
+            return False
+    return True
+
+
 def native_player_step(state) -> None:
     """Run the whole 5850 player update over the NativeGameState in place (no VM)."""
     rb, rw = readers(state)
@@ -60,8 +74,8 @@ def native_player_step(state) -> None:
         raise Pre2HybridGap("native player: death/respawn path (65AF) not recovered")
     if rb(_PAUSE_FLAG) != 0:                                            # [asm 587C-588F]
         raise Pre2HybridGap("native player: pause spin ([0x2830]) not handled")
-    if _keycombo_active(rb):                                            # [asm 5892 -> 247B]
-        raise Pre2HybridGap("native player: cheat-combo action (247B->2505) not recovered")
+    if _keycombo_active(rb) and _cheat_combo_confirmed(rb):             # [asm 5892 -> 247B] the dev-credits combo
+        raise Pre2CheatCredits()                                        #   Ctrl+Alt+W(/Z), no other key -> 2505
 
     # [asm 5897/58A1] 454E render bg-save + 6294 vblank spin -> not gameplay state, skipped.
     try:

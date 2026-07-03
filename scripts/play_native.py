@@ -399,10 +399,34 @@ def main(argv=None) -> int:
         native_load_level_palette(state, dos)
         reveal_level(state, dos)
 
+    def show_cheat_credits(state, dos):
+        """[asm 247B->2505] The dev-credits cheat combo (Ctrl+Alt+W/Z, no other key). Show the OLDIES-style
+        developer-credits screen over black, hold for fire (0BBE), restore the level palette (0BA0), and RESUME
+        the same level (the combo is a pure overlay — gameplay state is untouched)."""
+        from pre2.bridge.oldies_scene import build_credits_scene
+        from pre2.native.front_end import WAIT_PRESS, native_scene_wait
+        from pre2.native.render import native_load_dac_palette
+        from pre2.native.front_end import FrontEndScene
+        from pre2.recovered.scene import MODE_PLANAR
+        print("  CHEAT COMBO -> developer credits (247B); press fire to resume")
+        native_load_dac_palette(state, dos, 0x287E)                # [asm 0b92] the OLDIES green/yellow palette
+        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        phase = WAIT_PRESS
+        while ref["running"]:
+            planes, _ = build_credits_scene(state, page=disp)      # [asm 2505] the dev-name text over black
+            scene = FrontEndScene(MODE_PLANAR, palette=tuple(dos.vga_palette),
+                                  planes=tuple(bytes(p) for p in planes), page=disp)
+            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — developer credits")
+            pump(); drive_input(state)
+            phase, done = native_scene_wait(state, phase)          # [asm 0bbe] fire press -> release
+            if done:
+                break
+        native_load_level_palette(state, dos)                      # [asm 0ba0] restore the level palette; resume
+
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, ESC = quit. (VM-less native gameplay)")
-        from pre2.gaps import Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
+        from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
         while ref["running"]:
             pump()
@@ -422,6 +446,8 @@ def main(argv=None) -> int:
                         break
             except Pre2LevelEndTransition:
                 between_levels(state, dos)                          # tally/carte flow, then the next level
+            except Pre2CheatCredits:
+                show_cheat_credits(state, dos)                     # dev-credits overlay, then resume this level
             except Pre2GameComplete:
                 the_end_restart(state, dos)                        # THE END screen; then menu -> restart at level 1
             except Pre2GameOverTransition:

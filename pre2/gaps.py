@@ -78,6 +78,15 @@ class Pre2GameComplete(Pre2HybridGap):
     step" — catch it FIRST where the transition is actually driven."""
 
 
+class Pre2CheatCredits(Pre2HybridGap):
+    """Signal (not a gap): the 247B cheat-combo fired mid-gameplay — Left Ctrl + Left Alt + scancode 0x11 (W on
+    QWERTY / Z on the French AZERTY the game was built on, for Eric ZMIRO) held with NO other key down. It shows
+    the hidden DEVELOPER-CREDITS screen (2505: the same 0Dh OLDIES font/palette, the dev-name line script), waits
+    for fire (0BBE), restores the level palette (0BA0), and returns to gameplay where it left off. A pure overlay
+    (no gameplay-state change), so ``native_player_step`` raises it and the flow driver shows the scene then resumes
+    the SAME level. Subclasses Pre2HybridGap; catch it FIRST where the credits scene is driven."""
+
+
 class Pre2CaveTeleport(Pre2HybridGap):
     """Signal (not a gap): the position-trigger scan (52FE) matched a cave/teleport entrance — the multi-frame
     5326 transition (vertical fade-out curtain 30C6, the hidden camera pan to the destination, the 53D7

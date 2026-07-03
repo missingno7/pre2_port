@@ -59,3 +59,36 @@ def build_oldies_scene(mem, *, page):
     lines, font = read_oldies(mem)
     bg = RecoveredBackground(tuple(bytes(0x10000) for _ in range(4)))
     return compose_scene(bg, [lambda pl, pg: render_oldies(pl, lines, pg, font)], page)
+
+
+# The 247B cheat-combo DEVELOPER-CREDITS screen (2505) — same 0Dh OLDIES font ([0x3d]) + palette ([0x287e]) +
+# 0xC31 draw as the OLDIES screen, a different line script (the dev names). (row [0x2385], indent [0x2383],
+# string offset in seg 1A0F) — the constant layout from [asm 2505].
+_CREDITS = (
+    (0x0140, 1, 0x2930),    # "CODER> DESIGNER AND ARTIST DIRECTOR>"
+    (0x0370, 14, 0x2955),   # "ERIC ZMIRO"
+    (0x07D0, 4, 0x2960),    # ">MAIN GRAPHICS AND BACKGROUND>"
+    (0x0A00, 11, 0x297F),   # "FRANCIS FOURNIER"
+    (0x0E60, 9, 0x2990),    # ">MONSTERS AND HEROS>"
+    (0x1090, 11, 0x29A5),   # "LYES  BELAIDOUNI"
+    (0x1770, 15, 0x29B6),   # "THANKS TO"
+    (0x1A40, 2, 0x29C0),    # "CRISTELLE> GIL ESPECHE AND CORINNE>"
+    (0x1C20, 0, 0x29E4),    # "SEBASTIEN BECHET AND OLIVIER AKA DELTA>"
+)
+
+
+def read_credits(mem):
+    """Return (lines, font): the resolved 2505 credit lines [(row, indent, text)] + the 8x12 font."""
+    d = mem.data
+    lines = [(row, indent, _read_string(d, off)) for row, indent, off in _CREDITS]
+    font_seg = d[(_DATA << 4) + 0x3D] | (d[(_DATA << 4) + 0x3E] << 8)
+    fbase = (font_seg << 4) & 0xFFFFF
+    return lines, bytes(d[fbase:fbase + 0x1800])
+
+
+def build_credits_scene(mem, *, page):
+    """Compose the cheat-combo developer-credits scene (2505): black background + the dev-name text, drawn with
+    the same recovered OLDIES glyph blitter (render_oldies)."""
+    lines, font = read_credits(mem)
+    bg = RecoveredBackground(tuple(bytes(0x10000) for _ in range(4)))
+    return compose_scene(bg, [lambda pl, pg: render_oldies(pl, lines, pg, font)], page)
