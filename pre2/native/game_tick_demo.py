@@ -34,6 +34,7 @@ from pre2.native.seams import (DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, KEY_SA
                                _FWD_EXCL, _SLOT5_PAGE, _SLOT_BASE, _SLOT_STRIDE)
 
 DS = 0x1A0F
+FIDGET_READ = 0x5DCC   # [asm 5DCC] the idle-fidget selector's `mov ax,[0x27F0]` (the PIT-timer read point)
 
 
 def gameplay_digest(dgroup: bytes | bytearray) -> str:
@@ -148,6 +149,12 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
                 # included). Pure ASM: 0F0A wins (correct). Hybrid: only 0DC1 (correct). See KEY_SAMPLE.
                 rec["keys"] = bytes(mem.data[DS_BASE + o] for o in KBD)
                 rec["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)  # the fidget timer
+            elif ip == FIDGET_READ and rec["keys"] is not None:
+                # [asm 5DCC] the idle-fidget selector reads [0x27F0] HERE, not at DECODE — and the free-running
+                # timer advances within the frame (PIT-driven, not VM-less-reproducible), so the value the fidget
+                # sees differs from DECODE's by the mid-frame increment. Capture it AT the read so native's inject
+                # gives its VM-less fidget the exact key the VM used (else the low-9-bit key can wrap -> wrong pose).
+                rec["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)
             elif ip == GAP_SITE and rec["keys"] is not None:
                 out.keys.append(rec["keys"])
                 out.idle.append(rec["idle"])
