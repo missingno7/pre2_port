@@ -255,6 +255,9 @@ def native_menu_flow(state, dos, game_root: str):
     level-start block runs: lives/BONUS/utensils reset, exactly the VM's fresh-start ax!=0 path). Shared by
     the cold boot AND the game-over restart (main 011C re-enters the front-end at this screen)."""
     from pre2.native.audio import native_load_song
+    native_load_song(state, "PRESENTA.TRK", game_root)   # [asm 015a/0107 ax=3] the title/MENU song — the shared
+    #   restart path (main 0x141) reloads it before 8e45, so a return here from THE END (FINAL.TRK) or the game-over
+    #   scene (BOULA.TRK) switches back to the menu music. Idempotent on the cold boot (the PRESENT title just set it).
     # --- 8e45: the "press 1/2" difficulty screen (MENU.SQZ = resource 8, a 13h image) faded in over 0xA0 DAC
     #     entries ([asm 8e67 cl=0xA0] -> 919f), then held while the dispatch waits for a choice. Pixel-exact vs the
     #     VM. The dispatch flags [0x27f6]/[0x27f7] ARE the '1'/'2' key-table entries (0x27f4 + scancode 2/3); fire =

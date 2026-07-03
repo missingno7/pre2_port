@@ -97,10 +97,12 @@ _SONG_INDEX_TO_FILE = {
     0: "PRES.TRK",       # L3-L5 (distinctive 13-entry order; the identity-order matches are transient loads)
     1: "CARTE.TRK",      # the carte scroll-in [asm 96E3 ax=1]
     2: "CODE.TRK",       # the mode-select menu [asm 952D ax=2]
+    3: "PRESENTA.TRK",   # the title/MENU song [asm 0107/015a ax=3] (loaded by name in native_menu_flow too)
     4: "GLACE.TRK",      # L7/L8 (verified across the level-6/7 snapshots)
     9: "MINES.TRK",      # L1/L2 (verified across the level-0/1 snapshots + the menu->L1 demo)
     10: "MYSTERY.TRK",   # L9
     13: "MONSTER.TRK",   # L6/L10 (the boss levels)
+    14: "FINAL.TRK",     # L0xE = the final "© 1993 TITUS" room (fingerprint-matched vs the L0xE snapshot's order)
     15: "BRAVO.TRK",     # the level-end tally [asm 4CE7 ax=0xf]
 }
 
