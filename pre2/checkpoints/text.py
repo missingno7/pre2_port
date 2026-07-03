@@ -21,7 +21,7 @@ from dos_re.hooks import registry
 from pre2.bridge import text as _tx
 from pre2.recovered.text import draw_string
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x9886)
 _EXIT = (0x1030, 0x98FF)

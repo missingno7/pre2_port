@@ -15,7 +15,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.recovered.camera_shake import apply_camera_shake
 
-from .common import report
+from pre2.gaps import report
 
 _DS = 0x1A0F
 _ENTRY = (0x1030, 0x4C30)

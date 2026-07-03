@@ -24,7 +24,7 @@ from pre2.recovered.frame_renderer import (
     scroll_copy,
 )
 
-from .common import report
+from pre2.gaps import report
 
 # GOG build: the video code region is the old offset + 0x1F (the compositor at
 # ~3B60 calls grid 35A1 / scroll 3A27 / panel 3054 = old 35A1/3A27/3054 + 0x1F).

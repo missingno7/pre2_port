@@ -24,7 +24,7 @@ from dos_re.hooks import registry
 from pre2.bridge import present as _pr
 from pre2.recovered.present import scroll_blit_column, scroll_shift_frame
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x965A)
 _EXIT = (0x1030, 0x969C)

@@ -71,19 +71,22 @@ class ObjectScaleUnsupported(Exception):
 
 class AnimResult:
     """The contract of one animation-advance step (1030:6881..68E6)."""
-    __slots__ = ("sprite_id", "script_ptr", "attr_a340")
+    __slots__ = ("sprite_id", "script_ptr", "attr_a340", "shake")
 
-    def __init__(self, sprite_id: int, script_ptr: int, attr_a340: int):
+    def __init__(self, sprite_id: int, script_ptr: int, attr_a340: int, shake: bool = False):
         self.sprite_id = sprite_id      # new [si+4] = (old & 0x6000) | frame | flip
         self.script_ptr = script_ptr    # new [si+0xC] (advanced past the consumed frame)
         self.attr_a340 = attr_a340      # the [0xA340] scratch byte the step writes
+        self.shake = shake              # [asm 68AA-68B1] scale==7 -> the caller writes [0x6BEA]=9 (screen shake)
 
     def __eq__(self, o):
         return (isinstance(o, AnimResult) and self.sprite_id == o.sprite_id
-                and self.script_ptr == o.script_ptr and self.attr_a340 == o.attr_a340)
+                and self.script_ptr == o.script_ptr and self.attr_a340 == o.attr_a340
+                and self.shake == o.shake)
 
     def __repr__(self):
-        return f"AnimResult(id={self.sprite_id:#06x}, ptr={self.script_ptr:#06x}, a340={self.attr_a340:#04x})"
+        return (f"AnimResult(id={self.sprite_id:#06x}, ptr={self.script_ptr:#06x}, a340={self.attr_a340:#04x}"
+                + (", shake" if self.shake else "") + ")")
 
 
 def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, scale: int) -> AnimResult:
@@ -98,8 +101,9 @@ def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, s
     byte ``((raw>>8)&0xE0)|scale``. ``scale`` is ``[0x6BE2]``; non-zero is a zoom level -> the ``0xA801``
     region-remap (6-byte entries ``{lo, hi, remapped_frame}``): a frame within ``[lo,hi]`` is remapped to
     ``remapped_frame + 0x35`` and the script FREEZES (no advance); a frame below the table passes through.
-    Verified byte-exact vs ASM on snapshot 143131 (scale 0x294). The ``scale==7`` sub-case (zoom + shake
-    ``[0x6BEA]=9``, a side effect) stays :class:`ObjectScaleUnsupported` (not witnessed)."""
+    Verified byte-exact vs ASM on snapshot 143131 (scale 0x294). The ``scale==7`` level [asm 68AA-68B1]
+    ADDITIONALLY arms the screen shake — returned as ``AnimResult.shake`` (the caller writes ``[0x6BEA]=9``,
+    consumed by the recovered ``apply_camera_shake``) — then falls into the SAME remap walk (68B6)."""
     bx = script_ptr & 0xFFFF
     for _ in range(256):                                     # [asm 6884-688D] resolve back-jumps
         raw = read_word(bx)
@@ -111,9 +115,10 @@ def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, s
     a340 = ((raw >> 8) & 0xE0) | (scale & 0xFF)              # [asm 6891-689B] scratch attribute byte
     frame = (((raw & _FRAME_MASK) + FRAME_BASE) & _FRAME_MASK)   # [asm 6891 mask, 689F +0x138, 68B9/68D7 mask]
     advance = True                                           # the script ptr advances unless a remap fires
+    shake = False
     if scale != 0:                                           # [asm 68A3 jne] zoom active -> 0xA801 region remap
-        if scale == 7:                                       # [asm 68AA/68B1] this level ALSO sets shake
-            raise ObjectScaleUnsupported("scale==7 (zoom+shake [0x6BEA]=9) sub-case not witnessed")
+        shake = scale == 7                                   # [asm 68AA-68B1] level 7 ALSO arms the shake
+        #   ([0x6BEA]=9, the caller's write) then FALLS THROUGH into the same remap walk (68B6)
         di = REMAP_TABLE                                     # [asm 68B6] di=0xA801; walk the 6-byte entries
         for _ in range(256):                                 # [asm 68BC..68C8]
             if frame < read_word(di):                        # [68BE jb] below this range's lo -> use frame as-is
@@ -130,7 +135,7 @@ def advance_animation(script_ptr: int, read_word, old_id: int, flip_byte: int, s
     # [asm 68D2 inc bx;inc bx;mov [si+0xC],bx] runs only when NOT remapped (the remap's 68D0 jmp skips it),
     # so a remap leaves [si+0xC] at its OLD value (the input), not the back-jump-resolved bx.
     return AnimResult(sprite_id=new_id, script_ptr=(bx + 2) & 0xFFFF if advance else (script_ptr & 0xFFFF),
-                      attr_a340=a340)
+                      attr_a340=a340, shake=shake)
 
 
 # -- despawn-if-far-from-player (1030:8084, + the 7CFF tail) ------------------------------------------- #

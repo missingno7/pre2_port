@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge.render_state import read_renderer_state, retarget_page
 from pre2.codecs.sqz import unpack_sqz
 from pre2.recovered.gameover_background import render_gameover_background

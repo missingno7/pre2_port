@@ -1007,7 +1007,11 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
     fast_adlib = bool(meta.get("fast_adlib", getattr(args, "fast_adlib", False)))
     exe = Path(args.exe)
     game_root = Path(args.game_root)
-    return load_pre2_snapshot(exe, playback.snapshot_path(), game_root=game_root, fast_adlib=fast_adlib)
+    # Execution mode is the SAME axis as the live viewer: --no-replacements => pure ASM oracle, else hybrid.
+    # (Previously omitted here, so --play-demo silently ran hybrid regardless of --no-replacements.)
+    native = not bool(getattr(args, "no_replacements", False))
+    return load_pre2_snapshot(exe, playback.snapshot_path(), game_root=game_root,
+                              fast_adlib=fast_adlib, native_replacements=native)
 
 
 def _maybe_install_song_load_ff(rt, args) -> None:

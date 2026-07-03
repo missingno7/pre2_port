@@ -291,7 +291,7 @@ def native_level_load_background(state, *, game_root: str) -> None:
     camera-counteracting shift that keeps it fixed on screen is the renderer's job). Decoded straight into the four
     EGA planes at ``0x7E80..0x9dc0``. Byte-exact vs the VM's ``0x7E80`` (100%, all four planes). (The old
     ``[0x2dda]``-over-read blit to ``0x9dc0`` was a dead end — the renderer never reads ``0x9dc0``.)"""
-    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+    from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
     from pre2.native.assets import read_cstring, resolve_game_path
     name = read_cstring(state, 0x2DA6)                             # BACK<group>.SQZ

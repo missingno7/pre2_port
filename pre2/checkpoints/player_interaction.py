@@ -22,7 +22,7 @@ from pre2.checkpoints.player import _emit_sfx
 from pre2.recovered.object_inject import find_free_object_slot
 from pre2.recovered.player_interaction import player_interaction_tick
 
-from .common import report
+from pre2.gaps import report
 
 _DS = 0x1A0F
 _ENTRY = (0x1030, 0x8295)

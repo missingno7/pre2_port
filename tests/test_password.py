@@ -79,3 +79,58 @@ def test_validate_code_rejects_unknown():
     valid = {level_code(i) for i in range(0x13)}
     bogus = next(v for v in range(0x10000) if v not in valid)
     assert validate_code(bogus) is None
+
+
+# --- the native front-end ENTER-CODE accumulation (front_end._password_step, 1030:9985/99AA-9ADF) ---------------
+from pre2.native.front_end import _password_init, _password_step   # noqa: E402
+from pre2.native.state import DATA_SEG, NativeGameState            # noqa: E402
+
+_DS = DATA_SEG << 4
+_SCAN = {"A": 0x1E, "B": 0x30, "C": 0x2E, "D": 0x20, "E": 0x12, "F": 0x21, "0": 0x0B, "1": 0x02, "2": 0x03,
+         "3": 0x04, "4": 0x05, "5": 0x06, "6": 0x07, "7": 0x08, "8": 0x09, "9": 0x0A}   # make code per hex char
+
+
+def _pw_state():
+    st = NativeGameState(bytearray(0x100000))
+    st.data[(0x1030 << 4) + 5] = 3                          # cs:[5] rotate count
+    for ch, sc in _SCAN.items():
+        st.data[_DS + 0xB068 + sc] = ord(ch)               # the [0xB068] scancode->ASCII table
+    st.data[_DS + 0xB068 + 0x39] = 0x2D                    # space -> '-' (ignored)
+    _password_init(st)
+    return st
+
+
+def _pw_enter(st, code):
+    r = None
+    for ch in code:
+        st.data[_DS + 0x2874] = _SCAN[ch]                  # the runner's scancode latch [asm 99BE]
+        r = _password_step(st)
+    return r
+
+
+def test_password_step_accepts_valid_code_and_selects_level():
+    st = _pw_state()
+    assert _pw_enter(st, "A305") == (0, False) and st.data[_DS + 0x2D8A] == 0 and st.data[_DS + 0xB197] == 0
+    st = _pw_state()
+    assert _pw_enter(st, "A105") == (2, False) and st.data[_DS + 0x2D8A] == 2      # L3 beginner
+    st = _pw_state()
+    assert _pw_enter(st, "A905") == (0, True) and st.data[_DS + 0x2D8A] == 0 and st.data[_DS + 0xB197] == 1
+
+
+def test_password_step_rejects_and_resets():
+    st = _pw_state()
+    st.data[_DS + 0x2D8A] = 7
+    assert _pw_enter(st, "1111") is None
+    assert st.data[_DS + 0x2D8A] == 7                       # a bad code selects nothing
+    assert bytes(st.data[_DS + 0xB170:_DS + 0xB174]) == b"[[[["   # buffer reset for a retry
+
+
+def test_password_step_validates_only_on_fourth_char_and_ignores_non_hex():
+    st = _pw_state()
+    for n, ch in enumerate("A10"):
+        st.data[_DS + 0x2874] = _SCAN[ch]
+        assert _password_step(st) is None and st.data[_DS + 0xB1A8] == n + 1
+    st.data[_DS + 0x2874] = 0x39                            # space -> '-' -> ignored (no 4th char)
+    assert _password_step(st) is None and st.data[_DS + 0xB1A8] == 3
+    st.data[_DS + 0x2874] = _SCAN["5"]
+    assert _password_step(st) == (2, False)

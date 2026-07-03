@@ -20,46 +20,20 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from dos_re.input_demo import InputDemoPlayback                       # noqa: E402
 from dos_re.interrupts import deliver_scancode                        # noqa: E402
-from pre2.checkpoints.common import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition  # noqa: E402
+from pre2.gaps import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition  # noqa: E402
 from pre2.native.level_state import native_4f6c                       # noqa: E402
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame  # noqa: E402
 from pre2.native.state import NativeGameState                         # noqa: E402
 from pre2.probes.probe_native_frame import (                          # noqa: E402
-    DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, _EXCL, _SLOT5_PAGE)
+    DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, KEY_SAMPLE, _EXCL, _SLOT5_PAGE)
 from pre2.runtime import load_pre2_snapshot                           # noqa: E402
 import play                                                           # noqa: E402
 
-DS = 0x1A0F
-# the demo-RLE playback cursor + scratch (DS:0x3F {byte,count}) is input plumbing the standalone runner never uses
-# (it reads live input), so exclude it from the forward gameplay compare.
-_DEMO_RLE = set(range(0x3C, 0x60))
-# the render slot array (base 0x4F0A, stride 0x12): slot 1 is the player, slots >=2 are render records.
-# native NOW maintains these (8922 project_particles + the 26FA record-mutation half are wired into
-# native_gameplay_frame), so with this exclusion the WHOLE gorilla demo runs forward clean = GAMEPLAY reproduced.
-# A pure-RENDER residual still diverges ~frame 141 without the exclusion (a remaining render producer: 4B8E
-# particles_draw / the terrain 0x5570 compaction) — it never cascades into gameplay (the 318-frame run proves it),
-# so it is excluded here to keep this the clean gameplay-completeness metric. Slot 1 + all entity DATA stay checked.
-_SLOT_BASE, _SLOT_STRIDE = 0x4F0A, 0x12
-_NSLOTS = max((p - (_SLOT_BASE + 5)) // _SLOT_STRIDE for p in _SLOT5_PAGE) + 1
-_RENDER_SLOTS = {_SLOT_BASE + k * _SLOT_STRIDE + f for k in range(2, _NSLOTS) for f in (4, 5, 0xC, 0xD)}
-# the HUD (45B8, render — native skips it) FORMATS its DGROUP layout buffers each frame: the 6-digit score string
-# [0x6F52], the BONUS-letter table [0x6F86], etc. native never writes them, so they go stale in the forward run
-# (the score VALUE is gameplay + stays checked; only the formatted display band is excluded).
-_HUD = set(range(0x6F4E, 0x6FA0))
-# the previous-camera cells [0x2DE0]/[0x2DE2] are render scroll state (the runner's native_sync_render_state +
-# native_render maintain them; native_gameplay_frame does not). _EXCL already covers the horizontal [0x2DE0];
-# add the vertical [0x2DE2] for levels that scroll vertically (the gorilla demo doesn't, so it was never needed).
-_SCROLL_Y = {0x2DE2, 0x2DE3}
-# the object-render (26FA) blit's per-sprite clipped-extent scratch word ([0x2DEC/D], written 27DE/27E1; the only
-# reader is the blit itself — the respawn probes already exclude it). Render-only, so exclude from the gameplay verify.
-_BLIT_SCRATCH = {0x2DEC, 0x2DED}
-# [0xA32E] PROJ_SLOT_PTR — the object projection's "last projected slot" scratch (object_inject 7DF0/697D): it
-# points at the object/render slot the projection writes the anim descriptor into. The projected slot CONTENTS
-# match the VM byte-exact; only which free slot the pool handed out differs (render-pool allocation order — the
-# render-record gap that "never cascades to gameplay", proven on gorilla). Render-record scratch -> exclude, like
-# the render slots. (demo 175517: after the death-bounce particle-consume fix this was the sole residual @tick1299.)
-_PROJ_PTR = {0xA32E, 0xA32F}
-_FWD_EXCL = set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y | _BLIT_SCRATCH | _PROJ_PTR
+# The forward-oracle ownership additions (_DEMO_RLE.._PROJ_PTR + _FWD_EXCL) moved VERBATIM to
+# pre2/native/seams.py (game_tick_demo's digest is defined by _FWD_EXCL and native must not import the
+# probes — they pull the VM at top level). Re-exported so the probe surface is unchanged.
+from pre2.native.seams import (DS, _DEMO_RLE, _SLOT_BASE, _SLOT_STRIDE, _NSLOTS, _RENDER_SLOTS,   # noqa: E402,F401
+                               _HUD, _SCROLL_Y, _BLIT_SCRATCH, _PROJ_PTR, _FWD_EXCL)
 
 
 def _run(demo, lim, pure=False):
@@ -80,9 +54,9 @@ def _run(demo, lim, pure=False):
                 if ns["st"] is None:
                     ns["st"] = NativeGameState(bytearray(mem.data))   # seed ONCE, then carry forward
                 ns["kbd"] = None
-            elif ip == DECODE and ns["st"] is not None:
-                ns["kbd"] = {o: mem.data[DS_BASE + o] for o in KBD}    # inject the demo's input this frame
-                ns["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)   # the PIT fidget timer
+            elif ip in (DECODE, KEY_SAMPLE) and ns["st"] is not None:   # base at 0DC1 (always hit; hybrid DC1 is a
+                ns["kbd"] = {o: mem.data[DS_BASE + o] for o in KBD}      # replaced hook reading here), overwritten at
+                ns["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)   # 0F0A (pure ASM, post-reads)
             elif ip == GAP_SITE and ns["st"] is not None and ns["kbd"] is not None:
                 st = ns["st"]
                 st.data[DS_BASE + 0x27F0] = ns["idle"] & 0xFF          # inject [0x27F0] (not VM-less-reproducible)

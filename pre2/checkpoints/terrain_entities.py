@@ -16,7 +16,7 @@ from dos_re.hooks import registry
 from pre2.bridge import effects_update as bridge
 from pre2.recovered.terrain_entities import tick_terrain_entities
 
-from .common import report
+from pre2.gaps import report
 
 _DS_BASE = (0x1A0F << 4) & 0xFFFFF
 _RET = 0x4B04

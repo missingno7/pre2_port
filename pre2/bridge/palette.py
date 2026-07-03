@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dos_re.dos import _dac8
+from pre2.native.vga import _dac8
 
 _DS = 0x1A0F                 # DGROUP segment (GOG build)
 _SEL = 0x2D8A               # [asm 677F] index into the palette-pointer table

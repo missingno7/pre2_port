@@ -19,7 +19,7 @@ from dos_re.hooks import registry
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.recovered.scene_scroll import window_scroll_copy
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x9C87)
 _EXIT = (0x1030, 0x9CBF)

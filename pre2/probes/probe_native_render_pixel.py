@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from dos_re.input_demo import InputDemoPlayback                       # noqa: E402
 from dos_re.interrupts import deliver_scancode                        # noqa: E402
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE              # noqa: E402
-from pre2.checkpoints.common import Pre2CaveTeleport                  # noqa: E402
+from pre2.gaps import Pre2CaveTeleport                  # noqa: E402
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame  # noqa: E402
 from pre2.native.render import native_render, native_sync_render_state  # noqa: E402
 from pre2.native.state import NativeGameState                         # noqa: E402

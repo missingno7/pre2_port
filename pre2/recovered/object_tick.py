@@ -117,6 +117,8 @@ def object_tick(mem) -> None:
         except ObjectScaleUnsupported as e:
             raise Pre2ObjectGap(f"slot {slot}: {e}") from e
         mem.ww(si + 4, anim.sprite_id); mem.ww(si + 0xC, anim.script_ptr); mem.wb(0xA340, anim.attr_a340)
+        if anim.shake:                                           # [asm 68B1] zoom level 7 ([0x6BE2]==7) arms the
+            mem.wb(0x6BEA, 9)                                    #   screen shake (recovered apply_camera_shake reads it)
 
         idx = mem.rb(d + 1)                                      # [68EC] mov bl,[bx+1]
         tbl = (idx << 1) & 0xFF                                  # [68EF-68F1] xor bh,bh ; shl bl,1 (8-BIT: the

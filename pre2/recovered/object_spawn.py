@@ -14,7 +14,7 @@ the live hook emits separately (like the other play_sfx seams) — it is outside
 from __future__ import annotations
 
 from pre2.islands import oracle_link
-from pre2.recovered.combat_interaction import hitbox_overlap, spawn_effect_burst
+from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite_id, spawn_effect_burst
 from pre2.recovered.prng import rng_lcg
 
 
@@ -41,19 +41,33 @@ EFFECT_DX = 5               # [asm 75A9]
 EFFECT_Y = 0xAA             # [asm 758B] dx
 
 
+# Sentinel key in the writes dict (like the player FSM's SCROLL_REQUEST): [asm 7599-759C] when cx>0, 7585
+# loads SONG 0xD (MONSTER.TRK, the BOSS MUSIC) via 02CC before writing the boss health-bar row. The adapters
+# POP it (never a DGROUP write): native -> state.song_request; hybrid -> run the real 02CC with ax=0xD.
+SONG_REQUEST = "__song"
+BOSS_SONG_INDEX = 0xD       # [asm 7599 mov ax,0xd] the 02CC song index (MONSTER.TRK)
+# Sentinel: the mode-9 boss GLYPH id the script interpreter selected this tick ([asm 6BD3] AL at the 6C0D
+# call). The renderer needs it to draw the boss image (6C0D), and it is NOT reliably derivable from the
+# post-tick script cursor — so the interpreter latches it into the contract; adapters pop it.
+GLYPH_LATCH = "__boss_glyph"
+
+
 @oracle_link("1030:7585",
              "the shared effect-row list-init: spawn min(cx,8) sprite-0x135 effects into the 8-slot list "
              "0x56A2 (stride 0x12) as a horizontal row — [+4]=0x135, [+0]=X (0xD, step 5), [+2]=Y (0xAA) — "
              "then fill the remaining slots with the 0xFFFF terminator. ``cx`` is the spawn count from the "
-             "caller (70D7/6ADD/6D34). Side-effect (excluded from this contract): plays sound 0xD via 0x2CC "
-             "when cx>0.",
+             "caller (70D7/6ADD/6D34). When cx>0 it FIRST loads song 0xD (MONSTER.TRK, the boss music) via "
+             "0x2CC [asm 7599-759C] — returned as the SONG_REQUEST sentinel, popped by the adapters.",
              "OBSERVED", merge_target="object_spawn")
 def init_effect_row(cx):
-    """[asm 7585] ``cx`` = the caller's spawn count. Returns the ``{offset: (value, width)}`` 0x56A2 contract."""
-    writes: dict[int, tuple[int, int]] = {}
+    """[asm 7585] ``cx`` = the caller's spawn count. Returns the ``{offset: (value, width)}`` 0x56A2 contract
+    (+ the ``SONG_REQUEST`` sentinel when cx>0 — the boss-music load the adapters emit)."""
+    writes: dict = {}
     n = cx if cx < EFFECT_ROW_N else EFFECT_ROW_N        # [asm 758E-7593] cap at 8
     si = EFFECT_ROW_LO
     x = EFFECT_X0
+    if n:                                                # [asm 7597 jcxz / 7599-759C] boss music on a live row
+        writes[SONG_REQUEST] = BOSS_SONG_INDEX
     for _ in range(n):                                   # [asm 759F-75AF] the spawned row
         writes[(si + 4) & 0xFFFF] = (EFFECT_SPRITE, 2)
         writes[si & 0xFFFF] = (x, 2)
@@ -90,18 +104,28 @@ TARGET_SPRITES = (0x19C, 0x19D)
 
 
 def _target_collision(rb, rw, si, writes):
-    """[asm 8182] test one sprite ``si`` against the camera targets; accumulate hitbox + free writes into
-    ``writes``; return CF (a hit vs target B, or a freed 0x19C/0x19D vs target A)."""
-    if rw((si + 4) & 0xFFFF) == 0xFFFF:                  # [asm 8182] inactive
+    """[asm 8182] test one sprite ``si`` against the camera targets; accumulate the hitbox + free writes into
+    ``writes``; return the ASM's CF at the RET.
+
+    Two paths, and only ONE signals a "response" hit to the caller (scan_camera_targets fires its scroll
+    response iff this returns True):
+      * TARGET-A [asm 819C]: if target A's OWN id is a 0x19C/0x19D breakable, a hitbox overlap FREES the
+        projectile ([si+4]=0xFFFF) and then ``jmp 81B2 -> clc -> ret`` = CF **0 (False)** — the projectile is
+        consumed but this is NOT a response hit. (A wrong True here fired the scroll response on every level-9
+        breakable — underflowing [0x91FC] into the state-6 dive; finish-game demo tick 24.)
+      * TARGET-B [asm 81A8-81AF]: the overlap CF is returned as-is (81AF ret) — THIS is the response hit
+        (the boss/target that decrements [0x91FC]; the gorilla damages through here, not target A)."""
+    if rw((si + 4) & 0xFFFF) == 0xFFFF:                  # [asm 8182/8186 je 81B2] inactive -> clc (False)
         return False
-    if (rw((si + 4) & 0xFFFF) & 0x1FFF) in TARGET_SPRITES:    # [asm 818F-819A] 0x19C/0x19D -> target A
-        hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_A))    # [asm 819C] 8D7B
+    di = rw(TARGET_A)                                     # [asm 8188] di = [0xA423] (the target record ptr)
+    if (rw((di + 4) & 0xFFFF) & 0x1FFF) in TARGET_SPRITES:   # [asm 818C-819A] TARGET_A's OWN id is 0x19C/0x19D
+        hit, hb = hitbox_overlap(rb, rw, si, di)             # [asm 819C] 8D7B (si vs target A)
         for off, (val, wid) in hb.items():
             writes[off] = (val, wid)
-        if hit:                                          # [asm 819F-81A6] free on hit
-            writes[(si + 4) & 0xFFFF] = (0xFFFF, 2)
-            return True
-    hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_B))   # [asm 81A8-81AC] target B
+        if hit:                                          # [asm 819F jae 81A8 / 81A1-81A6]
+            writes[(si + 4) & 0xFFFF] = (0xFFFF, 2)       # free the projectile, then jmp 81B2 -> clc:
+            return False                                  #   consumed, but NOT a response hit
+    hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_B))   # [asm 81A8-81AC] target B -> 81AF ret (CF as-is)
     for off, (val, wid) in hb.items():
         writes[off] = (val, wid)
     return hit
@@ -264,6 +288,22 @@ HURT_FX_Y = 0xA338        # ... SPAWN_Y (player_Y - 0x30)
 HURT_FX_SPRITE = 0xA33A   # ... BURST_SPRITE (0x2046)
 
 
+@oracle_link("1030:65B3",
+             "player death, armed by 824D when energy [0x27D6] underflows (the scroll-boundary crush chain). This "
+             "is the SAME 65B3 the 5A96 ground/off-camera death sites reach, so it delegates to the single canonical "
+             "recovered copy (player_collision._offcamera_trigger) and adapts its plain-byte writes to the "
+             "object_spawn (value, width) contract: consume a life [0x27D8] + reset energy [0x27D6]=0 + arm the "
+             "death->respawn dispatch [0x6BE4]=2, or arm game-over [0x6BE5]=1 when out of lives. The 4C69 "
+             "level-state machine runs the actual death-bounce / respawn / game-over (native: native_level_state -> "
+             "Pre2RespawnTransition / Pre2GameOverTransition).",
+             "OBSERVED", merge_target="object_spawn")
+def player_death(rb, rw):
+    """[asm 65B3] Returns the ``{offset: (value, width)}`` writes that arm the death/respawn/game-over dispatch.
+    Thin adapter over the canonical 65B3 (``player_collision._offcamera_trigger``) — single source of the logic."""
+    from pre2.recovered.player_collision import _offcamera_trigger
+    return {o: (v, 1) for o, v in _offcamera_trigger(rb).items()}
+
+
 @oracle_link("1030:824D",
              "the player-hurt effect when the scroll boundary crushes the player (bottom of the 81B4 chain): "
              "tick the damage cooldown [0x6BC9] (reload 5 + lose a life [0x27D6] on underflow -> player death "
@@ -281,8 +321,8 @@ def hurt_effect(rb, rw):
         cd = 5
         lives = (rb(LIVES) - 1) & 0xFF
         writes[LIVES] = (lives, 1)
-        if lives & 0x80:                                 # [asm 825F] lives underflow -> 65B3 player death
-            raise Pre2SpawnGap("824D player death (65B3) unrecovered")
+        if lives & 0x80:                                 # [asm 825F] energy underflow -> 65B3 player death
+            writes.update(player_death(rb, rw))          # [asm 8261] arm the 4C69 death/respawn dispatch
     else:
         writes[HURT_COOLDOWN] = (cd, 1)
     writes[HURT_FX_X] = (rw(PLAYER_X), 2)                # [asm 8264]
@@ -353,7 +393,11 @@ class _Ov:
         return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
 
     def apply(self, writes):
-        for off, (val, wd) in writes.items():
+        for off, v in writes.items():
+            if isinstance(off, str):                     # sentinel (SONG_REQUEST) — pass through to the contract
+                self.writes[off] = v
+                continue
+            val, wd = v
             off &= 0xFFFF
             self.writes.pop(off, None)
             self.writes[off] = (val, wd)
@@ -422,17 +466,68 @@ def _cam_scroll_velocity(rb, rw):
     return w
 
 
+@oracle_link("1030:94F3",
+             "the boss-death diamond burst: spawn 4 sprites at the [0xA336]/[0xA338] origin, each a RANDOM "
+             "bonus-popup sprite id from roll_bonus_sprite_id (8C13, advancing the rng), Xvel cycling +/-0x20/"
+             "+/-0x10 and Yvel 0xFF60 stepping down 0x10 — via the verified spawn_effect_burst over a read-through "
+             "overlay. (Like boss_hit_burst 6BDB, but with a rolled sprite id per spawn.)",
+             "OBSERVED", merge_target="object_spawn")
+def boss_death_burst_94f3(rb, rw):
+    """[asm 94F3..951E] Returns the ``{offset: (value, width)}`` writes (4 spawned 0x50A8 slots + rng state)."""
+    ov = _Ov(rb, rw)
+    ax, dx = 0x20, 0xFF60                                  # [asm 94F9-94FC]
+    for _ in range(4):                                     # [asm 94F6 cx=4]
+        sid, (a, b, c, d) = roll_bonus_sprite_id(          # [asm 9504] 8C13 (advances the rng)
+            (ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF)))
+        ov.apply({0x2CEC: (a, 1), 0x2CED: (b, 1), 0x2CEE: (c, 1), 0x2CEF: (d, 2)})   # rng writeback
+        ov.apply({0xA33A: (sid, 2)})                       # [asm 9507] the burst sprite id
+        ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [asm 950B] 8D1B (one sprite)
+        ax = (-ax) & 0xFFFF                                # [asm 950E] neg ax
+        if not (ax & 0x8000):                              # [asm 9510] js -> skip the step
+            ax = (ax - 0x10) & 0xFFFF                      # [asm 9512]
+            dx = (dx - 0x10) & 0xFFFF                      # [asm 9515]
+    return ov.writes
+
+
+@oracle_link("1030:7491",
+             "the camera state-6 boss-REACH finale (the gorilla defeat): disable the camera SM ([0x91FE]=0xFF), "
+             "clear the 5 boss target render records ([0x564C..0x5694]=0xFFFF), then spawn 4 death-bursts (94F3) "
+             "in a diamond around the boss origin [0x5648]/[0x564A] (+0,0 / +0x20,+0x20 / -0x20,+0x20 / -0x40,"
+             "-0x20) plus one final sprite (id 0x63, no velocity). Composes boss_death_burst_94f3 + "
+             "spawn_effect_burst over a read-through overlay.",
+             "OBSERVED", merge_target="object_spawn")
+def camera_state6_finale(rb, rw):
+    """[asm 7491..74E9] Returns the ``{offset: (value, width)}`` write contract for the boss-reach finale."""
+    ov = _Ov(rb, rw)
+    ov.apply({0x91FE: (0xFF, 1)})                          # [asm 7491] disable the camera state machine
+    for off in (0x564C, 0x565E, 0x5670, 0x5682, 0x5694):  # [asm 7496-74A5] clear the 5 target render records
+        ov.apply({off: (0xFFFF, 2)})
+    ov.apply({0xA336: (ov.rw(0x5648), 2), 0xA338: (ov.rw(0x564A), 2)})   # [asm 74A8-74B1] the boss origin
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 74B4] burst 1 at (X, Y)
+    ov.apply({0xA336: ((ov.rw(0xA336) + 0x20) & 0xFFFF, 2),                # [asm 74B7-74BC]
+              0xA338: ((ov.rw(0xA338) + 0x20) & 0xFFFF, 2)})
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 74C1] burst 2 at (X+0x20, Y+0x20)
+    ov.apply({0xA336: ((ov.rw(0xA336) - 0x40) & 0xFFFF, 2)})               # [asm 74C4]
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 74C9] burst 3 at (X-0x20, Y+0x20)
+    ov.apply({0xA336: ((ov.rw(0xA336) - 0x20) & 0xFFFF, 2),                # [asm 74CC-74D1]
+              0xA338: ((ov.rw(0xA338) - 0x40) & 0xFFFF, 2)})
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 74D6] burst 4 at (X-0x40, Y-0x20)
+    ov.apply({0xA33A: (0x63, 2)})                          # [asm 74E0] final sprite id 0x63
+    ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0, 0, 1))   # [asm 74D9-74E6] 8D1B (Xvel=0, Yvel=0)
+    return ov.writes
+
+
 @oracle_link("1030:71AB",
              "the camera SEQUENCER: an 8-state machine on [0x91FE] driving the level-intro/boss camera pan. Each "
              "state advances the timer [0xA3F7], gates on the player-cursor distance [0xA3FB] / level param "
              "[0x91FC], sets the active camera-script pointer [0xA401], computes the scroll velocity "
              "[0x6C06]/[0x6C08], and transitions [0x91FE]; composes the recovered inc_scroll_phase (757A) + "
-             "camera_boundary_collision (81B4). State 6 is the boss-reach FINALE (disable + 94F3 x4 + burst, RETs "
-             "directly) and is gated (Pre2SpawnGap, unrecovered 94F3).",
+             "camera_boundary_collision (81B4). State 6 is the boss-reach FINALE (camera_state6_finale: disable + "
+             "94F3 x4 + burst, RETs directly at 74E9).",
              "OBSERVED", merge_target="object_spawn")
 def camera_state_machine(rb, rw):
-    """[asm 71AB..7534] Returns the ``{offset: (value, width)}`` writes at the 7534 exit. Raises
-    :class:`Pre2SpawnGap` on the state-6 finale (94F3, which RETs at 74E9 instead of reaching 7534)."""
+    """[asm 71AB..7534] Returns the ``{offset: (value, width)}`` writes at the 7534 exit (or the state-6 finale's
+    writes, which the ASM RETs at 74E9)."""
     state = rb(CAM_STATE)
     dist = rw(DIST_X)
     w = {}
@@ -559,7 +654,9 @@ def camera_state_machine(rb, rw):
         w[SCRIPT_PTR] = (0xA480, 2)                        # [asm 7481]
         if _s16(rw(SCROLL_VY)) < 0:                        # [asm 7487] jge 7491
             return w
-        raise Pre2SpawnGap("70D7 camera state-6 boss-reach finale (94F3) unrecovered")   # [asm 7491-74E9]
+        for off, vw in camera_state6_finale(rb, rw).items():   # [asm 7491-74E9] the boss-reach death finale
+            w[off] = vw
+        return w
 
     if state == 7:                                        # [asm 74EA]
         t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 74F1]
@@ -744,8 +841,11 @@ def camera_engine(rb, rw, read_tile):
     ov.apply(dist_w)
     if cull:                                                # [asm 7195/71A8] too far -> jmp 7579
         return ov.writes
+    # [asm 747A-748C] the state-6 boss-reach finale (state 6 & SCROLL_VY>=0) RETs at 74E9 -> skips 7534
+    finale = ov.rb(CAM_STATE) == 6 and _s16(ov.rw(SCROLL_VY)) >= 0
     ov.apply(camera_state_machine(ov.rb, ov.rw))           # [asm 71AB..7534] the camera sequencer
-    ov.apply(camera_script_interp(ov.rb, ov.rw))           # [asm 7534..7579] its bytecode script
+    if not finale:
+        ov.apply(camera_script_interp(ov.rb, ov.rw))       # [asm 7534..7579] its bytecode script
     return ov.writes
 
 
@@ -901,6 +1001,7 @@ def boss_script_interp(rb, rw):
             ov.apply({BOSS_SCRIPT_PTR: (bx, 2)})          # [asm 6BCD]
         else:                                             # [asm 6BD3] glyph -> advance, render (6C0D), return
             ov.apply({BOSS_SCRIPT_PTR: ((ov.rw(BOSS_SCRIPT_PTR) + 1) & 0xFFFF, 2)})
+            ov.writes[GLYPH_LATCH] = al                   # [asm 6BD7] the glyph AL handed to the 6C0D render
             break
     else:
         raise Pre2SpawnGap("6B91 boss-script interpreter ran 4096 opcodes without reaching a glyph")
@@ -923,8 +1024,8 @@ BOSS_ZONE_Y = (0x1E, 0x32)
              "0), and cycle [0xA516]&3 (every 4th -> [0xA517]=0xA540).",
              "OBSERVED", merge_target="object_spawn")
 def boss_pre_interp(rb, rw):
-    """[asm 6B1C..6B90] Returns the ``{offset: (value, width)}`` write contract. Raises :class:`Pre2SpawnGap`
-    on the boss-death burst (6BDB, health depleted)."""
+    """[asm 6B1C..6B90] Returns the ``{offset: (value, width)}`` write contract. On the killing hit (boss health
+    depleted to 0) it also spawns the 6BDB diamond death-burst (the verified boss_hit_burst)."""
     ov = _Ov(rb, rw)
     if ov.rb(BOSS_DWELL) == 0:                            # [asm 6B1C] dwell expired -> next script entry
         bx = ov.rw(M9_PTR)                                # [asm 6B23]
@@ -943,8 +1044,8 @@ def boss_pre_interp(rb, rw):
             nh = ((h - 1) & 0xFF) if h else 0
             ov.apply({M9_COUNT: (nh, 1)})
             if nh == 0:                                   # [asm 6B74] health depleted -> 6BDB death-burst
-                raise Pre2SpawnGap("6B76 boss death-burst 6BDB (health depleted)")
-            c = (ov.rb(BOSS_CYCLE) + 1) & 3               # [asm 6B79-6B7D]
+                ov.apply(boss_hit_burst(ov.rb, ov.rw))    # [asm 6B76] the diamond burst; then fall through to 6B79
+            c = (ov.rb(BOSS_CYCLE) + 1) & 3               # [asm 6B79-6B7D] (runs on both the hit and kill paths)
             ov.apply({BOSS_CYCLE: (c, 1)})
             if c == 0:                                    # [asm 6B82]
                 ov.apply({BOSS_SCRIPT_PTR: (0xA540, 2)})  # [asm 6B84]
@@ -958,15 +1059,18 @@ def boss_pre_interp(rb, rw):
              "the whole mode-9 last-boss engine (6ADD..6BDA): the head (seed + per-frame effect row) -> while "
              "the boss is alive ([0xA519]!=0) the script-advance + projectile-hit detection (boss_pre_interp) -> "
              "the glyph-script interpreter (boss_script_interp), all over one read-through overlay so each stage "
-             "sees the prior writes. Raises Pre2SpawnGap on the boss-death paths (the 6C0D finale when "
-             "[0xA519]==0, and the 6BDB death-burst); 6C0D glyph render + sfx are render/audio seams.",
+             "sees the prior writes. On the killing hit it spawns the 6BDB death-burst; once the boss is dead "
+             "([0xA519]==0) the head runs and the 6C0D victory-glyph render (a pure page blit, no DGROUP writes) is "
+             "skipped as a render seam so the contract ends there.",
              "VERIFIED", merge_target="object_spawn")
 def tick_mode9_boss(rb, rw):
     """[asm 6ADD..6BDA] Returns the ``{offset: (value, width)}`` write contract for the whole boss engine."""
     ov = _Ov(rb, rw)
     ov.apply(tick_mode9_spawn(ov.rb, ov.rw))             # [asm 6ADD..6B0C] head (seed + spawn row)
-    if ov.rw(M9_COUNT) == 0:                             # [asm 6B0F] boss dead -> 6C0D finale (render seam)
-        raise Pre2SpawnGap("6ADD mode-9 finale 6C0D (boss dead)")
+    if ov.rw(M9_COUNT) == 0:                             # [asm 6B0F] boss dead -> 6C0D victory-glyph render (a
+        return ov.writes                                 # pure page blit, es:[di], NO DGROUP writes) then RET; the
+        #                                                  glyph render is native's own renderer's job, not a
+        #                                                  gameplay-state write — so the contract ends at the head.
     ov.apply(boss_pre_interp(ov.rb, ov.rw))             # [asm 6B1C..6B90] script-advance + hit-detection
     ov.apply(boss_script_interp(ov.rb, ov.rw))          # [asm 6B91..6BDA] glyph-script interpreter
     return ov.writes
@@ -982,7 +1086,7 @@ def tick_mode9_boss(rb, rw):
 # It rewrites the effect row (7585), moves up to 5 falling projectiles (0x7DAF), bakes the target geometry from
 # three tables (0xA4B5/0xA485/0xA4E5 -> the render/target records 0x5648..0x5694), runs player<->boss collision,
 # and advances the phase when the player's club/projectiles hit a target. The boss-DEATH finale (94F3 x4 + burst
-# at phase 3) is not yet recovered (fail-loud), same as the 70D7 state-6 finale.
+# at phase 3) is _l6_tree_death_finale, recovered + byte-exact (as is the 70D7 state-6 finale camera_state6_finale).
 L6_PROJ_LIST = 0x7DAF        # 5 boss projectiles, stride 0xB
 L6_PROJ_RENDER = 0x55EE      # their render slots, stride 0x12
 L6_STUN = 0xA324
@@ -1072,10 +1176,35 @@ def _l6_bounce_6f59(ov):
         ov.ww(0x4F2A, 0xFF60)                              # [asm 6F61]
 
 
+def _l6_tree_death_finale(rb, rw):
+    """[asm 7041..70A4] The level-6 tree phase-3 boss-death finale: 4 death-bursts (94F3) in a diamond around the
+    boss origin ([0x5648]-0xC8, [0x564A]) + a final sprite (0x63, no velocity), then clear the 5 L6 projectile
+    render slots [0x55EE] and the 5 boss target records [0x5648]. Returns the {offset:(value,width)} writes."""
+    ov = _Ov(rb, rw)
+    ov.ww(0xA336, (ov.rw(0x5648) - 0xC8) & 0xFFFF)        # [asm 7041-7047] boss origin (camera-relative)
+    ov.ww(0xA338, ov.rw(0x564A))                          # [asm 704A-704D]
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 7050] burst 1
+    ov.ww(0xA336, (ov.rw(0xA336) + 0x20) & 0xFFFF)        # [asm 7053]
+    ov.ww(0xA338, (ov.rw(0xA338) + 0x20) & 0xFFFF)        # [asm 7058]
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 705D] burst 2
+    ov.ww(0xA336, (ov.rw(0xA336) - 0x40) & 0xFFFF)        # [asm 7060]
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 7065] burst 3
+    ov.ww(0xA336, (ov.rw(0xA336) - 0x20) & 0xFFFF)        # [asm 7068]
+    ov.ww(0xA338, (ov.rw(0xA338) - 0x40) & 0xFFFF)        # [asm 706D]
+    ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 7072] burst 4
+    ov.ww(0xA33A, 0x63)                                   # [asm 707C]
+    ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0, 0, 1))  # [asm 7075-7082] final sprite (no velocity)
+    for k in range(5):                                    # [asm 7085-7093] clear the 5 L6 projectile render slots
+        ov.ww((L6_PROJ_RENDER + k * 0x12 + 4) & 0xFFFF, 0xFFFF)
+    for k in range(5):                                    # [asm 7095-70A3] clear the 5 L6 boss target records
+        ov.ww((0x5648 + k * 0x12 + 4) & 0xFFFF, 0xFFFF)
+    return ov.writes
+
+
 def _l6_boss_hit(ov):
     """[asm 6FBB..70A4] test the player's club (0x4F0A) then the 4 thrown projectiles (0x4F2E) against the active
     target record set (0x5648 + 0x24*[0xA326]); on a hit, kill the attacker, flash the target, and (every 7 hits)
-    advance the phase [0xA326]. Reaching phase 3 is the boss-death finale (94F3) -> fail loud."""
+    advance the phase [0xA326]. Reaching phase 3 runs the boss-death finale (94F3 x4 + burst)."""
     si = (0x5648 + 0x24 * ov.rb(L6_PHASE)) & 0xFFFF        # [asm 6FBB-6FC7]
     hit_slot = None
     if ov.rw(0x4F0E) != 0xFFFF:                            # [asm 6FC9] the player club (0x4F0A+4)
@@ -1112,7 +1241,7 @@ def _l6_boss_hit(ov):
     ov.ww(L6_PHASE, (ov.rw(L6_PHASE) + 1) & 0xFFFF)       # [asm 7036] advance the phase
     if ov.rw(L6_PHASE) != 3:                              # [asm 703A jne 70A5]
         return
-    raise Pre2SpawnGap("6D34 level-6 tree boss-death finale (94F3) unrecovered")   # [asm 7041-70A4]
+    ov.apply(_l6_tree_death_finale(ov.rb, ov.rw))         # [asm 7041-70A4] the phase-3 boss-death finale
 
 
 def _l6_finish(ov):

@@ -15,7 +15,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.codecs.sqz import sqz_bump_advance, unpack_sqz
 
-from .common import Pre2HybridGap, _read_cstring, report
+from pre2.gaps import Pre2HybridGap, _read_cstring, report
 
 # GOG data segment + the asset load pointer the caller sets before this routine and
 # reads back after (where the decoded asset lands): [1A0F:2875].

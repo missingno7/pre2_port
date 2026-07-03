@@ -21,7 +21,7 @@ from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge.tally_panel import read_tally_panel
 from pre2.recovered.tally_panel import render_tally_panel
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x51A3)
 _EXIT = (0x1030, 0x51DE)

@@ -23,7 +23,7 @@ from pre2.recovered.hud import (
     HUD_BONUS_DI, HUD_ENERGY_DI, HUD_GLYPH_ROWS, HUD_LIVES_DI, HUD_MAX_HEARTS, HUD_SCORE_DI, draw_hud,
 )
 
-from .common import report
+from pre2.gaps import report
 
 _DS = 0x1A0F
 _EXIT = (0x1030, 0x45AB)     # dynamic HUD routine exit (pop es; pop ds; ret @45AD), reached via 46EB

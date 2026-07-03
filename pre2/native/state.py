@@ -19,7 +19,7 @@ class NativeGameState:
     """The recovered game's memory image. Exposes ``.data`` (the 1 MB address space) so the existing bridges
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
-    __slots__ = ("data", "sfx_queue", "particle_capture")
+    __slots__ = ("data", "sfx_queue", "particle_capture", "flash_slots", "song_request", "boss_glyph")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -36,6 +36,18 @@ class NativeGameState:
         #: BEFORE native_particle_consume kills them (they're one-shot). native_render draws from this so the
         #: effects show; None when unset (native_render then reads the live [0x7DE6], empty after the consume).
         self.particle_capture = None
+        #: render-record slots whose OPAQUE/flash flag (id bit14 = [+5]&0x40) was set when the 26FA record-mutation
+        #: ran this frame — the VM's 26FA reads it to draw the sprite as a solid white flash silhouette, then CLEARS
+        #: it (asm 28BA) in the SAME pass, so it is gone by the commit boundary native_render reads. Captured by
+        #: native_object_render_state (pre-clear) and re-applied by native_render so the hit/death flash shows.
+        self.flash_slots: list[int] | None = None
+        #: a song-load request from a recovered routine (the 7585 boss-music 02CC call, SONG_REQUEST sentinel):
+        #: the 02CC song INDEX. NativeAudio.poll consumes it (loads the .TRK once per song change) — the gameplay
+        #: frame itself stays file-free.
+        self.song_request: int | None = None
+        #: the mode-9 final-boss glyph id the script interpreter selected this tick ([asm 6BD3] -> the 6C0D
+        #: render). The renderer (bridge _boss_glyph_tiles) reads it to draw the boss image; None off level 9.
+        self.boss_glyph: int | None = None
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":

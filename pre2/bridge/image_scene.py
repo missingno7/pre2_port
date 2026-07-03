@@ -27,6 +27,7 @@ _RENDERERS = {
     "MENU2.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],
     "TITUS.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],
     "MOTIF.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],
+    "THEEND.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],   # THE END (5034): 768-byte pal + 13h image
 }
 
 _decode_cache: dict = {}
@@ -55,9 +56,10 @@ def identify_image(source_image: bytes, game_root: str):
     head = source_image[:256]
     for name in _RENDERERS:
         try:
-            if head == _fingerprint(game_root, name):
-                return name
-        except FileNotFoundError:
+            fp = _fingerprint(game_root, name)
+            if any(fp) and head == fp:      # skip a DEGENERATE all-zero fingerprint (a black-topped image like
+                return name                  # THEEND.SQZ can't be identified by its top row — and would match a
+        except FileNotFoundError:            # blank screen; native renders THEEND explicitly, never by fingerprint)
             continue
     return None
 
@@ -67,6 +69,18 @@ def image_palette(name: str, game_root: str) -> bytes:
 
     The fade routines ([[pre2.recovered.front_end_fade]]) ramp the DAC toward this palette."""
     return bytes(b & 0x3F for b in _decoded(game_root, name)[:_IMAGE_OFF])
+
+
+def title_planar_image(name: str, game_root: str) -> tuple:
+    """[asm resource-0xC, loaded via 0x10492 type-1] Decode a 16-colour PLANAR EGA image asset to its four
+    8000-byte bitplanes + 16-entry 6-bit palette. The attract-title jungle screen (MENU2.SQZ) is NOT a 13h
+    linear image (despite the stale _RENDERERS entry) — it is 4 concatenated EGA planes (40*200 bytes each)
+    with a trailing 48-byte 6-bit palette (total 32048). Returns ``(planes: tuple[bytes*4], pal6: bytes[48])``."""
+    dec = _decoded(game_root, name)
+    plane_len = 320 * 200 // 8                       # 8000 bytes per EGA plane
+    planes = tuple(bytes(dec[p * plane_len:(p + 1) * plane_len]) for p in range(4))
+    pal6 = bytes(b & 0x3F for b in dec[4 * plane_len:4 * plane_len + 0x10 * 3])
+    return planes, pal6
 
 
 def render_image_scene(name: str, game_root: str, with_logo: bool = True) -> bytes:

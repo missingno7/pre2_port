@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
 # The default VGA palette: the 16 standard EGA/VGA colours followed by a grey
 # ramp, used only when a snapshot has no saved DAC palette.

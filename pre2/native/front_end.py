@@ -28,11 +28,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dos_re.dos import _dac8
+from pre2.native.vga import _dac8
 from pre2.bridge.image_scene import image_palette, render_image_scene
 from pre2.bridge.input_decode import apply_ds, readers
 from pre2.bridge.oldies_scene import build_oldies_scene
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
@@ -120,6 +120,58 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
     return phase, fire == 0                                    # [asm 0bd9] jne: loop until released -> RET 0bdb
 
 
+def _native_attract(state, dos, game_root: str):
+    """[asm 8E98] The menu-idle ATTRACT: show the PREHISTORIK-2 title (the VM's resource-0xC blit), then the CARTE
+    (as a normal level load does), then play the demo's level ([0x83E]) in DEMO-PLAYBACK input mode ([0x2879]=1).
+    The DS:0x3F demo buffer drives the caveman; any key ([0x2874]) or the 0x55AA end sentinel makes DC1 set [0x6BE5]
+    (a game-over-style death), which kills the player and returns to the menu. Yields each frame; on the end
+    transition it clears the demo state and returns, and the caller re-shows the menu. The title + carte run at the
+    70Hz front-end rate; only the gameplay ([0x2879]=1) runs at the game rate (play_native picks the fps)."""
+    from pre2.gaps import (Pre2CaveTeleport, Pre2GameOverTransition, Pre2HybridGap,
+                                          Pre2LevelEndTransition, Pre2RespawnTransition)
+    from pre2.native.attract_title import native_attract_title
+    from pre2.native.audio import native_level_song_name, native_load_song
+    from pre2.native.level_init import native_level_start
+    from pre2.native.render import native_load_level_palette
+    from pre2.native.runtime import native_frame_step
+    d = state.data
+    d[_DS + 0x2D8A] = d[_DS + 0x83E]                          # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
+    d[_DS + 0xB198] = d[_DS + 0x83D]                          # [asm 8ec4]
+    # --- [asm 8F2D] the animated MENU2 title (caveman runs across the PREHISTORIK-2 jungle chased by a dino),
+    #     then the carte, exactly as a normal level start shows them. Pixel-exact vs the VM (attract_title;
+    #     119 frames, 0 diff). Replaces the earlier static-title stand-in (user: "should be a game-like screen
+    #     with a running character"). [0x2879] stays 0 — the animation is a scripted scene, NOT the demo. ---
+    yield from native_attract_title(state, game_root)        # [asm 8f2d] the running-caveman title animation
+    yield from _native_carte(state, dos, game_root)          # [asm 9520] the world-map scroll-in (auto-advances)
+    # --- now the gameplay demo ---
+    d[_DS + 0x2879] = 1                                       # [asm 8eb6] demo-playback input mode
+    d[_DS + 0x287A] = 0; d[_DS + 0x287B] = 0                  # reset the demo cursor + current byte/count
+    d[_DS + 0x287C] = 0; d[_DS + 0x287D] = 0
+    d[_DS + 0x2874] = 0                                       # no pending key yet
+    for sel in (0x6BE4, 0x6BE5, 0x6BE6):                      # clear the death/end selectors
+        d[_DS + sel] = 0
+    d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)         # clear the residual key table
+    native_load_song(state, native_level_song_name(state), game_root)
+    native_level_start(state, game_root=game_root)           # load the demo's level
+    native_load_level_palette(state, dos)                    # [asm 0ba0] the per-level DAC palette (else the demo
+    #                                                          renders under the leftover MENU palette — wrong colours)
+    disp = d[_DS + 0x2DD6] | (d[_DS + 0x2DD7] << 8)
+    try:
+        while True:
+            for planes, page in native_frame_step(state, dos, disp, game_root=game_root):
+                yield FrontEndScene(MODE_PLANAR, palette=tuple(dos.vga_palette),
+                                    planes=tuple(bytes(p) for p in planes), page=page)
+            disp = d[_DS + 0x2DD6] | (d[_DS + 0x2DD7] << 8)
+    except (Pre2GameOverTransition, Pre2LevelEndTransition, Pre2RespawnTransition,
+            Pre2CaveTeleport, Pre2HybridGap):
+        pass                                                 # any end/gap in the idle demo -> back to the menu
+    d[_DS + 0x2879] = 0                                       # back to live keyboard input
+    d[_DS + 0x287A] = 0; d[_DS + 0x287B] = 0
+    for sel in (0x6BE4, 0x6BE5, 0x6BE6):
+        d[_DS + sel] = 0
+    d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
+
+
 def native_front_end(state, dos, display_page: int, *, game_root: str):
     """Drive the whole VM-less front-end, advancing the wall-clock idle counter ``[0x27F0]`` by one 70Hz timer
     tick per displayed frame. The front-end runs the timer exactly as the VM does (its scenes spin on the retrace),
@@ -179,38 +231,64 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
     #     exactly as main() does between the titles and 2dfa. Without it the level later lands 0x519 paragraphs too
     #     low and its parallax over-reads the wrong memory. (The Python title renders don't bump [0x2875].) ---
     from pre2.native.assets import load_sqz
-    load_sqz(state, "FRONT.SQZ", game_root=game_root)             # [asm 107B] permanent front-panel load
+    _front_seg = load_sqz(state, "FRONT.SQZ", game_root=game_root)  # [asm 107B] permanent front-panel load
+    state.data[_DS + 0x3B] = _front_seg & 0xFF                     # [asm 0123] mov [0x3b],ax — the FOREGROUND tile-gfx
+    state.data[_DS + 0x3C] = (_front_seg >> 8) & 0xFF             # bank the front pass (3721) reads; missing = no foliage
     # --- 2dfa: decode the shared SPRITES.SQZ sprite bank into the game state (the title is still on screen — no new
     #     visible frame). This is the bank the world-map + gameplay need. Verified byte-exact (native_build_sprite_bank,
     #     [[pre2-front-end-flow]]); composes from the post-FRONT state ([0x2875] 0x2cd7 -> 0x5cc1, the VM's level seg). ---
     from pre2.native.sprite_bank import native_build_sprite_bank
     native_build_sprite_bank(state, game_root=game_root)
+    _top = state.data[_DS + 0x2875] | (state.data[_DS + 0x2876] << 8)   # [asm 0129-012c] mov ax,[0x2875]; mov [0x39],ax
+    state.data[_DS + 0x39] = _top & 0xFF                                # save the post-front-end load-top as the
+    state.data[_DS + 0x3A] = (_top >> 8) & 0xFF                        # per-level allocation RESET base (restart frees to here)
 
+    # --- 8e45 onward (press-1/2 menu -> mode-select/password map -> carte -> loader): shared with the
+    #     GAME-OVER restart (main 011C re-enters the flow HERE — 447d -> 8e45 -> carte -> level reload). ---
+    yield from native_menu_flow(state, dos, game_root)
+    return                                                     # the level is loaded -> the caller runs native_frame_step
+
+
+def native_menu_flow(state, dos, game_root: str):
+    """[asm 8e45..01D2] The front-end from the press-1/2 MENU through the loaded level: menu (+ the idle
+    ATTRACT loop), the mode-select/password map, the CARTE, then the loader (native_level_start — the FRESH
+    level-start block runs: lives/BONUS/utensils reset, exactly the VM's fresh-start ax!=0 path). Shared by
+    the cold boot AND the game-over restart (main 011C re-enters the front-end at this screen)."""
+    from pre2.native.audio import native_load_song
     # --- 8e45: the "press 1/2" difficulty screen (MENU.SQZ = resource 8, a 13h image) faded in over 0xA0 DAC
     #     entries ([asm 8e67 cl=0xA0] -> 919f), then held while the dispatch waits for a choice. Pixel-exact vs the
     #     VM. The dispatch flags [0x27f6]/[0x27f7] ARE the '1'/'2' key-table entries (0x27f4 + scancode 2/3); fire =
     #     [0x282d]|[0x2810] (space/enter); auto-advance after 0x10E idle frames. ---
-    from pre2.recovered.world_map import LS_PASSWORD, LS_WAIT, level_select_dispatch
+    from pre2.recovered.world_map import LS_AUTO_ADVANCE, LS_PASSWORD, LS_WAIT, level_select_dispatch
     menu_img = render_image_scene("MENU.SQZ", game_root)
     menu_fade = fade_in_frames(image_palette("MENU.SQZ", game_root), 0xA0)   # [asm 919f] black -> the menu palette
-    for p6 in menu_fade:
-        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img)
-    held8 = _expand_palette6(menu_fade[-1])
     rb, _ = readers(state)
-    wait = 0
-    choice = LS_WAIT
-    while choice == LS_WAIT:                                                 # [asm 8e7b] the dispatch wait loop
-        choice = level_select_dispatch(rb(0x27F6), rb(0x27F7), rb(0x282D) | rb(0x2810), wait)  # 1 / 2 / fire / timeout
-        if choice != LS_WAIT:
-            break
-        yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img)     # hold the screen, poll again next frame
-        wait += 1
-
-    # --- 96d5: the chosen 0Dh scrolling world-map — password entry (for '2') or mode-select (for '1'/fire). Renders
-    #     pixel-exact VM-less (the caveman-tiled map scrolling with the text stamped on top). Mode-select confirm
-    #     (fire) selects level 1 and returns here; password entry still fails loud (code entry not wired). ---
-    native_load_song(state, "CODE.TRK", game_root)              # the mode-select song (starts on entering 96d5, not the menu)
-    yield from _native_menu_map(state, dos, game_root, "password" if choice == LS_PASSWORD else "mode_select")
+    while True:                                                             # the MENU <-> ATTRACT <-> CODE loop [asm 8e45]
+        for p6 in menu_fade:                                                # fade the menu in (first entry + after each return)
+            yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img)
+        held8 = _expand_palette6(menu_fade[-1])
+        wait = 0
+        choice = LS_WAIT
+        while choice == LS_WAIT:                                            # [asm 8e7b] the dispatch wait loop
+            choice = level_select_dispatch(rb(0x27F6), rb(0x27F7), rb(0x282D) | rb(0x2810), wait)  # 1/2/fire/timeout
+            if choice != LS_WAIT:
+                break
+            yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img)   # hold the screen, poll again next frame
+            wait += 1
+        if choice == LS_AUTO_ADVANCE:
+            yield from _native_attract(state, dos, game_root)              # [asm 8E98] idle timeout -> attract, then re-loop
+            continue
+        # --- 96d5: the chosen 0Dh scrolling world-map — password entry (for '2') or mode-select (for '1'/fire).
+        #     Pixel-exact VM-less (the caveman-tiled map scrolling with the text stamped on top). ---
+        native_load_song(state, "CODE.TRK", game_root)          # the map song (starts on entering 96d5, not the menu)
+        if choice == LS_PASSWORD:
+            state.data[_DS + 0x2D8A] = 0xFF                     # [asm 8ee9] no level chosen yet (the match writes it)
+            yield from _native_menu_map(state, dos, game_root, "password")
+            if state.data[_DS + 0x2D8A] & 0x80:                 # [asm 8ef1-8ef8] fire with NO valid code -> back to
+                continue                                        #   the press-1/2 menu (jmp 8e45), NOT stuck on ----
+            break                                               # a matched code chose its level -> the carte/loader
+        yield from _native_menu_map(state, dos, game_root, "mode_select")
+        break
 
     # --- 9520 CARTE: the world-map scroll-in the real flow shows between the mode-select and the loader (main 0x01A8).
     #     Loads MAP.SQZ (the map master), stamps the per-level 'you are here' marker (the player's position) onto it =
@@ -228,7 +306,68 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
     return                                                     # the level is loaded -> the caller runs native_frame_step
 
 
+
 _ZERO_SINE = bytes(0x100)          # the password/mode-select map does not bounce (row stays 0), so the sine is unused
+
+_PW_CHAR_TABLE = 0xB068     # DS:[0xB068 + scancode] = the ASCII char for a make code [asm 99DD]
+_PW_SCAN_LATCH = 0x2874     # the last-typed scancode the runner writes from a hex keydown [asm 99BE]
+_PW_CODE = 0xB1B9           # the accumulated 16-bit code
+_PW_ECHO = 0xB170           # the 4-char on-screen code buffer ("[[[[" when empty)
+_PW_CURSOR = 0xB1A8         # echo cursor / entered-char count (0..4)
+
+
+def _password_init(state) -> None:
+    """Reset the ENTER-CODE input on entry (empty '[[[[' buffer, no chars, no stale scancode)."""
+    d = state.data
+    d[_DS + _PW_SCAN_LATCH] = 0
+    d[_DS + _PW_ECHO:_DS + _PW_ECHO + 4] = b"[[[["            # [asm 9ACB] the empty-slot placeholders (0x5B)
+    d[_DS + _PW_CURSOR] = 0; d[_DS + _PW_CURSOR + 1] = 0
+    d[_DS + _PW_CODE] = 0; d[_DS + _PW_CODE + 1] = 0
+
+
+def _password_step(state):
+    """[asm 9985/99AA-9ADF] One frame of the ENTER-CODE accumulation. The runner writes the last-typed hex
+    scancode into ``[0x2874]``; this maps it to a hex char via the scancode->ASCII table ``[0xB068]``, shifts the
+    nibble into the 16-bit code ``[0xB1B9]``, echoes the char into the on-screen buffer ``[0xB170]``, and on the
+    4th char validates via the recovered validator (``932F`` == :func:`validate_code`). On a match it commits
+    ``[0x2D8A]``=level + ``[0xB197]``=expert, then resets the buffer for the next attempt. Returns the matched
+    ``(level, expert)`` or ``None``."""
+    from pre2.recovered.password import DEFAULT_SEED, validate_code
+    rb, rw = readers(state)
+
+    def wb(o, v):
+        state.data[_DS + (o & 0xFFFF)] = v & 0xFF
+
+    def ww(o, v):
+        state.data[_DS + (o & 0xFFFF)] = v & 0xFF
+        state.data[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+
+    scan = rb(_PW_SCAN_LATCH)                                # [asm 99BE] the pending make code
+    if not scan or (scan & 0x80):                           # [asm 99C2] none / a break code -> nothing
+        return None
+    wb(_PW_SCAN_LATCH, 0)                                    # [asm 99D6] consume it
+    al = rb((_PW_CHAR_TABLE + scan) & 0xFFFF)                # [asm 99DD] scancode -> ASCII
+    if al == 0x2D:                                          # [asm 99E1] '-' (a non-code key, e.g. space) -> ignore
+        return None
+    ah = (al - 0x30) & 0xFF                                 # [asm 99EA] char - '0'
+    if ah > 9:                                              # [asm 99ED/99F2] 'A'..'F' -> extra -7
+        ah = (ah - 7) & 0xFF
+    ww(_PW_CODE, ((rw(_PW_CODE) << 4) | (ah & 0x0F)) & 0xFFFF)   # [asm 99F5-9A0D] shift the nibble in
+    cur = rw(_PW_CURSOR)                                    # [asm 9A11] echo cursor / char count
+    wb((_PW_ECHO + cur) & 0xFFFF, al)                       # [asm 9A15] echo the char (the screen re-renders it)
+    ww(_PW_CURSOR, (cur + 1) & 0xFFFF)                      # [asm 9A19]
+    if (cur + 1) < 4:                                       # [asm 9A1F] need 4 chars before validating
+        return None
+    code = rw(_PW_CODE)                                     # 4 chars entered -> validate [asm 9A6E-9A7F]
+    seed = rw(0xA333) or DEFAULT_SEED                       # [asm 932F] the BIOS seed (0 on the GOG build -> 0x20)
+    rot = state.data[(0x1030 << 4) + 5]                     # cs:[5] rotate count (== 3 on this build)
+    m = validate_code(code, seed, rot)
+    _password_init(state)                                  # [asm 9AC8-9AD9] clear the buffer for the next attempt
+    if m is not None:                                      # [asm 9A9B-9AAA] a level matched
+        level, expert = m
+        wb(0x2D8A, level)                                  # [asm 9AA6] the selected level
+        wb(0xB197, 1 if expert else 0)                     # [asm 9AAA] beginner / expert
+    return m
 
 
 def _native_menu_map(state, dos, game_root: str, kind: str):
@@ -270,6 +409,9 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
         return FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
                              page=page_off, pel=pel, wrap=0x1FFF)
 
+    matched = None                                              # (password) a valid ENTER-CODE accepted -> its level
+    if kind == "password":
+        _password_init(state)                                  # start with the empty '[[[[' buffer, no stale key
     yield scene(page.planes, 0, 0)                               # frame 0 = the seeded page
     while True:
         cam = map_camera_update(cam, bounce=bounce, sine_table=sine)   # [asm 9AE0] scroll left 4/frame + row sine-bounce
@@ -294,16 +436,26 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
             if arrow_sc and not prev_arrow and mode_select_input(arrow_sc, False).toggle:
                 state.data[_DS + 0xB197] ^= 1                  # flip the selection (the text re-renders next frame)
             prev_arrow = bool(arrow_sc)
-        if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm
+        elif kind == "password":                               # [asm 9985] accumulate the typed hex code
+            m = _password_step(state)
+            if m is not None:                                  # a VALID 4-char code AUTO-ADVANCES (no separate
+                matched = m                                    # confirm) — [0x2D8A]/[0xB197] hold the matched level.
+                state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
+                state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
+                yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)   # [asm 9286] fade to black
+                return                                          # ...then the carte + loader for the chosen level
+        if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm / leave
             if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
                 state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x2D8A] = 0                    # BEGINNER/EXPERT both begin at level 1
                 yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)   # [asm 9286] fade to black
                 return                                          # ...then the carte (its own palette) scrolls in
-            raise Pre2HybridGap(                                # password entry (accumulate + validate) not wired yet
-                f"native front-end: the 96d5 password screen renders VM-less (pixel-exact). Next: the code entry "
-                f"(accumulate hex -> validate -> level) + the 965a carte visual (#14).")
+            # password: FIRE with no valid code EXITS the screen too — [0x2D8A] stays 0xFF (set at entry, 8EE9)
+            # and the 8E45 dispatch loops back to the press-1/2 menu ([asm 8EF1-8EF8] jge/jmp — the original
+            # "give up on the code" escape; a valid 4-char code instead auto-advanced above with its level).
+            yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)       # [asm 9286] fade to black
+            return
 
 
 def _native_carte(state, dos, game_root: str):
@@ -374,6 +526,74 @@ def _native_title_screen(game_root: str, name: str, *, n_entries: int, hold: int
         yield FrontEndScene(MODE_LINEAR, palette=held8, linear=image)
     for p6 in fade_out:                                                 # [asm 914E -> 9286] fade-out retrace frames
         yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
+
+
+def native_the_end(state, game_root: str):
+    """[asm 5034] THE END — the game-complete screen (the player cleared the final level 0xE, [0x6be5]==0xFF).
+
+    Loads ``THEEND.SQZ`` (a 16-colour 13h image, ``dx=0x6ba0`` -> 107B) and shows it the way 5034 does: fade it
+    IN (919F, ``cl=0x10`` = 16 DAC entries), HOLD it while the scene-wait (0BBE) waits for the fire key to be
+    pressed AND released, then fade it OUT (9286). A GENERATOR yielding :class:`FrontEndScene` frames so the flow
+    driver presents the whole sequence; when it returns the caller re-enters the front-end (attract/title), which
+    is where 5034's carry (-> main 0x12f) lands. FINAL.TRK (the ending song) is loaded by the caller (audio seam).
+
+    The 16-colour asset + 0x10 fade + 0BBE wait are the same primitives as ``_native_title_screen`` (TITUS) and
+    ``native_scene_wait`` (the OLDIES wait), reused rather than re-derived."""
+    image = render_image_scene("THEEND.SQZ", game_root)                # [asm 5052->919F] 64000-byte 13h image
+    pal6 = image_palette("THEEND.SQZ", game_root)                      # [asm 5052] DS:si palette (16 live entries)
+    fade_in = fade_in_frames(pal6, 0x10)                               # [asm 919F cl=0x10] black -> target
+    held = fade_in[-1]
+    for p6 in fade_in:                                                 # [asm 919F] fade-in retrace frames
+        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
+    held8 = _expand_palette6(held)
+    phase = WAIT_PRESS                                                 # [asm 5055 -> 0BBE] wait for fire press+release
+    while True:
+        yield FrontEndScene(MODE_LINEAR, palette=held8, linear=image)
+        phase, done = native_scene_wait(state, phase)
+        if done:
+            break
+    for p6 in fade_out_frames(held, 0x10):                             # [asm 5058 -> 9286] fade-out retrace frames
+        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
+    # [asm 505B] the CREATORS screen (year-gated Easter egg) follows the THEEND fade-out, in the same 5034 call.
+    yield from native_creators_screen(state, game_root)
+
+
+# --- the CREATORS "HOLLY DAY IN MEYRUES!" photo screen (25F6) — mode 12h (640x480 planar, grayscale) ---
+MODE_CREATORS = 0x12       # VGA 640x480x16 planar, one-off (the only 12h screen); grayscale DAC ramp
+_CREATORS_W, _CREATORS_H = 640, 480
+_CREATORS_PLANE = 0x81B0   # [asm 2671 cx=0x40d8 words] bytes per plane blitted (80 * 415 rows)
+_CREATORS_ROWBYTES = 80
+
+
+def native_creators_screen(state, game_root: str):
+    """[asm 25F6] The developers' "HOLLY DAY IN MEYRUES!" photo montage shown after THE END (call 505B), gated
+    on the system year ``[0x37] >= 0x7CA`` (1994) — an Easter egg that is always on now.
+
+    A mode-12h (640x480) 4-plane GRAYSCALE screen: LEVELH.SQZ supplies planes 0,1 (blit 2652-2681, map-mask
+    0x01/0x02) and LEVELI.SQZ planes 2,3 (blit 268D-26BC, map-mask 0x04/0x08); the DAC is a 16-step grey ramp
+    ([asm 2636-264B] 0,4,8,..,0x3C). A GENERATOR yielding one :class:`FrontEndScene` (MODE_CREATORS) per frame
+    while the scene-wait (0BBE) holds for the fire key; when it returns the caller continues to the menu.
+
+    Native decodes the two SQZ assets directly (the VM's 12h planar blit needs no CRTC emulation) and hands the
+    four 640x480 bit-planes + the grey palette to the runner, which deplanarizes them (like the 0Dh screens but
+    at 640-wide). No DGROUP writes — a pure render scene, so it needs no oracle."""
+    if (state.data[_DS + 0x37] | (state.data[_DS + 0x38] << 8)) < 0x7CA:   # [asm 25F6] year < 1994 -> skip
+        return
+    from pre2.codecs.sqz import unpack_sqz
+    import os
+    with open(os.path.join(game_root, "LEVELH.SQZ"), "rb") as f:
+        h = unpack_sqz(f.read())
+    with open(os.path.join(game_root, "LEVELI.SQZ"), "rb") as f:
+        i = unpack_sqz(f.read())
+    P = _CREATORS_PLANE
+    planes = (bytes(h[0:P]), bytes(h[P:2 * P]), bytes(i[0:P]), bytes(i[P:2 * P]))   # planes 0,1,2,3
+    grey = tuple((_dac8(v * 4), _dac8(v * 4), _dac8(v * 4)) for v in range(16)) + ((0, 0, 0),) * 240
+    phase = WAIT_PRESS                                                     # [asm 26BE -> 0BBE] wait for fire
+    while True:
+        yield FrontEndScene(MODE_CREATORS, palette=grey, planes=planes)
+        phase, done = native_scene_wait(state, phase)
+        if done:
+            break
 
 
 def _native_present_screen(game_root: str, morph_target: bytes):

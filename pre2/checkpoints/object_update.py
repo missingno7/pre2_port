@@ -17,7 +17,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.recovered.object_update import NO_X_MOVE, apply_velocity
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x6861)     # mov ax,[si+0xA]  (start of the velocity integrate)
 _NEXT = (0x1030, 0x6875)      # mov bx,[si+6]    (first instruction after the block)

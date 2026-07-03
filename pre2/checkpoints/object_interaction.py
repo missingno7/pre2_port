@@ -18,7 +18,7 @@ from dos_re.hooks import registry
 from pre2.bridge import object_interaction as _io
 from pre2.recovered.combat_interaction import bonus_pickup_scan, projectile_vs_enemies
 
-from .common import report
+from pre2.gaps import report
 from .player import _emit_sfx
 
 _ENEMY = (0x1030, 0x8C21)

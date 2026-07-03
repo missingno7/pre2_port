@@ -19,7 +19,7 @@ from dos_re.hooks import registry
 from pre2.bridge import palette as _pal
 from pre2.recovered.transition import fade_palette
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x6772)
 _EXIT = (0x1030, 0x67D6)

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from dos_re.input_demo import InputDemoPlayback                       # noqa: E402
-from pre2.checkpoints.common import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition  # noqa: E402
+from pre2.gaps import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition  # noqa: E402
 from pre2.native.level_state import native_4f6c                       # noqa: E402
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame  # noqa: E402
 from pre2.native.state import NativeGameState                         # noqa: E402

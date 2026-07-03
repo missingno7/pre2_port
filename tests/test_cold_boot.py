@@ -16,12 +16,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pre2.native.cold_boot import build_boot_image, native_cold_boot
+from pre2.native.boot_data import build_boot_memory
+from pre2.native.cold_boot import native_cold_boot
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "assets"
-EXE = ASSETS / "pre2.exe"
-BOOT_IMAGE = ROOT / "artifacts" / "pre2_boot_image.zz"
 _DS = 0x1A0F << 4
 
 # the VM-less cold-boot L1 frame. Includes the level-start block (lives=2), FRONT.SQZ (level at seg 0x5cc1), the
@@ -30,16 +29,9 @@ _DS = 0x1A0F << 4
 GOLD_L1_RGB = "377100ae7085a81133d9181c7232c0148595d8bf"
 
 pytestmark = pytest.mark.skipif(
-    not EXE.exists() or not (ASSETS / "SPRITES.SQZ").exists(),
-    reason="PRE2.EXE / assets not present",
+    not (ASSETS / "SPRITES.SQZ").exists(),
+    reason="game assets not present",
 )
-
-
-def _ensure_boot_image() -> str:
-    if not BOOT_IMAGE.exists():
-        BOOT_IMAGE.parent.mkdir(parents=True, exist_ok=True)
-        build_boot_image(str(EXE), str(BOOT_IMAGE), game_root=str(ASSETS))   # the VM's one build-time use
-    return str(BOOT_IMAGE)
 
 
 def _render_l1(state) -> np.ndarray:
@@ -57,7 +49,7 @@ def _render_l1(state) -> np.ndarray:
 
 def test_native_cold_boot_renders_l1_with_no_vm():
     # RUNTIME path: no create_pre2_runtime / no cpu — just the bundle + the native loaders.
-    state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    state = native_cold_boot(str(ASSETS), level=0)
     rgb = _render_l1(state)
     assert rgb.shape == (200, 320, 3)
     assert int((rgb.sum(2) > 0).sum()) == 63680          # the level is drawn incl. the blue parallax sky (~99%)
@@ -66,8 +58,7 @@ def test_native_cold_boot_renders_l1_with_no_vm():
 
 
 def test_boot_image_round_trips():
-    from pre2.native.cold_boot import load_boot_image
-    image = load_boot_image(_ensure_boot_image())
+    image = build_boot_memory()
     assert len(image) >= 0x100000                        # the full real-mode address space
     assert image[(0x1A0F << 4) + 0x7190]                 # the static [0x7190] sprite-descriptor table is present
     # captured at the OLDIES entry (240A), AFTER main's boot init: the font seg [0x3D] is loaded (nonzero) so the
@@ -88,7 +79,7 @@ def test_native_cold_boot_is_playable_with_no_vm():
     from pre2.native.input import apply_input
     from pre2.native.loop import native_gameplay_frame
 
-    state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    state = native_cold_boot(str(ASSETS), level=0)
     assert state.data[_DS + 0x27E4] == 0xFF              # joystick marked absent -> DC1 reads the keyboard
     x0 = _sx(state, 0x4F1C)
     for _ in range(40):                                 # hold RIGHT; the VM-less gameplay step must complete each
@@ -104,7 +95,7 @@ def test_native_cold_boot_computes_bios_password_seed():
     # VM. On the zeroed-BIOS GOG build it is the 0x20 fallback, matching the VM's captured gameplay-entry state
     # ([0xA333]=0x20). Without it the random decor sprites ([0x8f1d]+4) diverge from the VM. Proven by diffing the
     # native level-load against the pure-ASM oracle's 0214 gameplay-entry seed (all core gameplay tables byte-exact).
-    state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    state = native_cold_boot(str(ASSETS), level=0)
     assert state.data[_DS + 0xA333] == 0x20 and state.data[_DS + 0xA334] == 0
     assert state.data[_DS + 0xA335] == 1               # the one-time "seed computed" flag is set
 
@@ -119,7 +110,7 @@ def test_native_cold_boot_bottom_anchors_sprite_y_offsets():
     # attachment, is unaffected. The transformed table is byte-exact vs the VM's captured L1 gameplay-entry state.
     from pre2.recovered.sprite_bank import bottom_anchor_y_offsets
 
-    state = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    state = native_cold_boot(str(ASSETS), level=0)
     d = state.data
     table = bytes(d[_DS + 0x752A:_DS + 0x772A])
     assert hashlib.sha1(table).hexdigest() == GOLD_YOFF_TABLE
@@ -141,12 +132,12 @@ def test_native_front_end_cold_start_reaches_gameplay():
     # (the load is segment-relative + re-inits the gameplay tables), so gameplay starts with no divergence. The load
     # itself is verified byte-exact vs the pure-ASM gameplay-entry oracle (see test_native_cold_boot_* / the island).
     from dos_re.dos import DOSMachine
-    from pre2.native.cold_boot import load_boot_image, native_cold_boot
+    from pre2.native.cold_boot import native_cold_boot
     from pre2.native.front_end import native_front_end
     from pre2.native.input import apply_input, init_keyboard_input, set_key
     from pre2.native.state import NativeGameState
 
-    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    state = NativeGameState(build_boot_memory())
     init_keyboard_input(state)
     gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS))
     reached = False
@@ -159,7 +150,7 @@ def test_native_front_end_cold_start_reaches_gameplay():
         reached = True                                 # the for-loop exhausted == the generator returned == handoff
     assert reached, "the cold-start front-end never reached the level-init handoff"
     assert state.data[_DS + 0xA333] == 0x20            # the BIOS password seed was computed during the level load
-    ref = native_cold_boot(str(ASSETS), _ensure_boot_image(), level=0)
+    ref = native_cold_boot(str(ASSETS), level=0)
     assert state.data[_DS + 0x4F0A:_DS + 0x5732] == ref.data[_DS + 0x4F0A:_DS + 0x5732]   # player + object pool
     assert (state.data[_DS + 0x4F1C] | (state.data[_DS + 0x4F1D] << 8)) == 0x2A            # player X = level start
 
@@ -169,12 +160,11 @@ def test_native_front_end_oldies_palette():
     # 0x287e (0b92 -> int10 AX=1012), NOT the default EGA palette. This guards native_load_dac_palette being wired
     # into the front-end; the whole OLDIES frame is pixel-exact vs the VM (verified separately with the emulator).
     from dos_re.dos import DOSMachine
-    from pre2.native.cold_boot import load_boot_image
     from pre2.native.front_end import native_front_end
     from pre2.native.input import init_keyboard_input
     from pre2.native.state import NativeGameState
 
-    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    state = NativeGameState(build_boot_memory())
     init_keyboard_input(state)
     scene = next(native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS)))
     assert scene.palette[2] == (0, 243, 0)              # green (0x287e entry 2), not the default EGA (0, 170, 0)
@@ -205,12 +195,11 @@ def test_native_menu_map_renders():
     import itertools
 
     from dos_re.dos import DOSMachine
-    from pre2.native.cold_boot import load_boot_image
     from pre2.native.front_end import _native_menu_map
     from pre2.native.input import init_keyboard_input
     from pre2.native.state import NativeGameState
 
-    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    state = NativeGameState(build_boot_memory())
     init_keyboard_input(state)
     h = hashlib.sha1()
     for scene in itertools.islice(_native_menu_map(state, DOSMachine(str(ASSETS)), str(ASSETS), "password"), 30):
@@ -223,13 +212,12 @@ def test_native_menu_map_mode_select_toggle():
     # The mode-select map: an arrow toggles BEGINNER<->EXPERT ([0xB197], edge-detected — no re-toggle while held);
     # fire commits the difficulty ([0xB198]/[0x83D]) and starts level 1 ([0x2D8A]=0), returning from the generator.
     from dos_re.dos import DOSMachine
-    from pre2.native.cold_boot import load_boot_image
     from pre2.native.front_end import _native_menu_map
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.state import NativeGameState
     from pre2.recovered.scene import MODE_PLANAR
 
-    state = NativeGameState(load_boot_image(_ensure_boot_image()))
+    state = NativeGameState(build_boot_memory())
     init_keyboard_input(state)
     gen = _native_menu_map(state, DOSMachine(str(ASSETS)), str(ASSETS), "mode_select")
     next(gen); next(gen)                                # seed + first frame
@@ -262,7 +250,6 @@ def test_native_carte_marker_stamp_matches_vm():
     # proving native's chain (marker provenance + position + stamp) is BYTE-EXACT vs the VM's captured carte master.
     from dos_re.dos import DOSMachine
     import pre2.recovered.carte as carte
-    from pre2.native.cold_boot import load_boot_image
     from pre2.native.front_end import native_front_end
     from pre2.native.input import apply_input, init_keyboard_input, set_key
     from pre2.native.state import NativeGameState
@@ -276,7 +263,7 @@ def test_native_carte_marker_stamp_matches_vm():
         return out
     carte.stamp_carte_marker = spy
     try:
-        state = NativeGameState(load_boot_image(_ensure_boot_image()))
+        state = NativeGameState(build_boot_memory())
         init_keyboard_input(state)
         gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS))
         for i, _scene in enumerate(gen):

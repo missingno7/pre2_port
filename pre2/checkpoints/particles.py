@@ -22,7 +22,7 @@ from pre2.bridge.particles import (PARTICLE_BASE, apply_particle_writeback,
 from pre2.bridge.sprites import plane_views
 from pre2.recovered.particles import PARTICLE_COUNT, PARTICLE_STRIDE, consume_particles
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x4B8E)
 _EXIT = (0x1030, 0x4C2F)

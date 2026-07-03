@@ -54,7 +54,7 @@ def _sqz_ignore(cpu):
     Ignoring it keeps the real contract (output bytes + [2875]) fully checked while
     not drowning a genuine divergence in ~60 KB of benign buffer noise.
     """
-    from pre2.checkpoints.common import _read_cstring
+    from pre2.gaps import _read_cstring
     from pre2.codecs.sqz import sqz_bump_advance, unpack_sqz
     mem = cpu.mem
     out_seg = mem.rw(0x1A0F, 0x2875)

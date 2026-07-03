@@ -17,7 +17,7 @@ from dos_re.hooks import registry
 from pre2.bridge import sprites as _spr
 from pre2.recovered.renderer import blit_sprite, dest_rows
 
-from .common import Pre2HybridGap, report
+from pre2.gaps import Pre2HybridGap, report
 
 # GOG build: data seg 1A0F, video code region old+0x1F, ds offsets old+4.
 _DATA_SEG = 0x1A0F

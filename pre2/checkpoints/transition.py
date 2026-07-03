@@ -22,7 +22,7 @@ from dos_re.hooks import registry
 from pre2.bridge import transition as _tr
 from pre2.recovered.transition import compose_iris
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x31F4)
 _EXIT = (0x1030, 0x32B0)

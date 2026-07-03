@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pre2.bridge.input_decode import readers
 from pre2.bridge.camera_pan import apply_camera_pan
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.frame_renderer import calc_scroll_source
 

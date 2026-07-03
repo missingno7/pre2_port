@@ -16,7 +16,7 @@ was built over the VM), so ``native_sync_render_state`` re-derives the tile-ring
 """
 from __future__ import annotations
 
-from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
+from pre2.gaps import (Pre2CaveTeleport, Pre2HybridGap, Pre2LevelEndTransition,
                                      Pre2GameOverTransition, Pre2RespawnTransition)
 from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
@@ -26,6 +26,9 @@ from pre2.native.state import DATA_SEG
 
 _VIEW_ROWS = 0xB0          # the gameplay viewport height in rows (the HUD band below stays)
 _ROW_BYTES = 0x28
+_CAVE_BLACK_FRAMES = 6     # cave-teleport: how many all-black frames to show while the camera pans behind the
+#                            curtain. The pan is dozens of steps for a far cave; presenting one per step made the
+#                            black last ~2s. It carries no visual info (fully black), so cap it to a brief blink.
 
 
 def _vfade_frame(base_planes, page, k):
@@ -55,6 +58,25 @@ def _reveal_frame(new_planes, page, k):
         out[p][page:page + view] = b"\x00" * view                  # dst starts black
     panel_copy(out, src, page, k)                        # reveal k center-out strip-pairs onto the display page
     return out, page
+
+
+def _paint_player_over_iris(state, planes, page: int) -> None:
+    """Draw the player sprite (slot 0x4F1C) ON TOP of a composed iris frame, so it stays visible as the iris
+    fades everything else to black (the level-end effect: the world irises away but the player holds on top).
+    compose_iris blacks everything outside the shrinking circle — including the player once the circle passes it —
+    so re-paint the player after, targeting the just-composed display ``page``."""
+    from dataclasses import replace
+    from pre2.bridge import object_render as _obj
+    from pre2.recovered.object_render import paint_sprite, plan_sprite
+    spr = _obj.read_sprite(state, 0x4F1C)                     # the player render record
+    if spr.sprite_id == 0xFFFF:
+        return
+    cam = replace(_obj.read_camera(state, frame_pre_inc=False), dest_page=page & 0xFFFF)
+    draw = plan_sprite(spr, _obj.read_attr(state, spr.sprite_id), cam)
+    if draw is None:
+        return
+    src = _obj.read_source(state, draw.src_seg, draw.src_off, draw.src_bw * draw.full_rows * 6 + 64)
+    paint_sprite(planes, draw, src, cam.row_stride)
 
 
 def native_iris_close(state, dos, display_page: int, *, game_root: str):
@@ -88,7 +110,9 @@ def native_iris_close(state, dos, display_page: int, *, game_root: str):
     ww(0x2DC8, x_off); ww(0x2DC6, y_off); ww(0x2DC4, clamp)
     ww(0x2DD0, 0xE6); ww(0x2DC0, 4); ww(0x2DC2, 0)                            # [asm 31E2-31EE] radius + counters
     while s16(rw(0x2DD0)) > 0:                                                # [asm 31F4..32DD] shrink loop
-        yield native_render(state, dos, display_page, game_root=game_root)    # IRIS kind (compose_iris)
+        planes, page = native_render(state, dos, display_page, game_root=game_root)   # IRIS kind (compose_iris)
+        _paint_player_over_iris(state, planes, page)                          # keep the player ON TOP of the fade
+        yield planes, page
         c2 = (rw(0x2DC2) + 1) & 0xFFFF                                        # [asm 32B0-32C1] accel every 0x14
         if c2 >= 0x14:
             c2 = 0
@@ -98,7 +122,7 @@ def native_iris_close(state, dos, display_page: int, *, game_root: str):
     ww(0x2DD0, 0)                                                             # iris closed -> off
 
 
-def native_exit_anim(state, dos, display_page: int, *, game_root: str):
+def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_only: bool = False):
     """The animated level-end TALLY cutscene [asm 4CEA..4F53] — runs AFTER native_iris_close, on black. A
     GENERATOR yielding ``(planes, page)`` per frame (composed by build_tally_scene = black + the object pass +
     the SCORE/LEVEL-COMPLETED% panel). Beats: recenter the player to screen space + zero the camera (4CEA-4D1A);
@@ -136,7 +160,10 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str):
         fr, nptr, bcf = player_advance_anim(ap, d[_DS + 0x4F25], rw)
         ww(0x4F20, fr); ww(0x4F28, nptr); wb(0x6BCF, bcf)
         _ww_ctr()                                                   # advance the free-running frame counter
-        native_sync_render_state(state)
+        native_sync_render_state(state)                            # cheap; maintains the tile-ring indices
+        #                                                            [0x2DE8]/[0x2DEA] the VM's render cluster updates
+        if state_only:                                              # the tick-demo verifier drains the STATE
+            return None, page                                       # mutations only (count-up) — skip the tally BLIT
         planes, _ = build_tally_scene(state, dos, game_root=game_root, page=page)
         return planes, page
 
@@ -327,9 +354,13 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
             if phase[0] == "fade":
                 yield _vfade_frame(base_planes, base_page, phase[1])
             elif phase[0] == "pan":
+                # The hidden camera pan yields one step per row/column moved — a far cave is DOZENS of steps, and
+                # presenting a black frame per (2) steps made the between-curtains black last ~2s. The pan is
+                # fully-black anyway, so its length carries no information: present a SHORT FIXED number of black
+                # frames (a brief blink) and drive the remaining pan silently to the destination.
                 pan_n += 1
-                if pan_n % 2 == 0:                    # black anyway — present every 2nd step (the VM pans at
-                    yield _vfade_frame(base_planes, base_page, 9)   # 70Hz, gameplay presents at ~24)
+                if pan_n <= 2 * _CAVE_BLACK_FRAMES and pan_n % 2 == 0:
+                    yield _vfade_frame(base_planes, base_page, 9)
             else:                                     # ("reveal", k)
                 if "planes" not in new:
                     native_sync_render_state(state)   # the camera is at the destination now

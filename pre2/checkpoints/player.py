@@ -20,7 +20,7 @@ from pre2.recovered.player import (
     player_fsm_step, player_tick_timers, player_x_integrate, player_y_integrate,
 )
 
-from .common import Pre2HybridGap, report
+from pre2.gaps import Pre2HybridGap, report
 
 _FSM_ENTRY = (0x1030, 0x58A7)  # after the input-decode call (DC1); start of the FSM front-end
 _FSM_EXIT = (0x1030, 0x5A0F)   # == the X-integrate entry: the FSM handler dispatch (5A0B) returns here

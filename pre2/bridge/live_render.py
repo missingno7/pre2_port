@@ -15,7 +15,7 @@ recovered — see docs/pre2/scene_island.md; rendering them faithfully is future
 """
 from __future__ import annotations
 
-from dos_re.memory import EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_PLANE_STRIDE
 from pre2.bridge.render_state import read_renderer_state, retarget_page
 from pre2.recovered.render_frame import render_frame
 

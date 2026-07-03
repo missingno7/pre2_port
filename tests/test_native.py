@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.gaps import Pre2HybridGap
 from pre2.native.loop import MAIN_LOOP_SPINE, native_object_spawn_step, spine_coverage
 from pre2.native.player import native_player_step
 from pre2.native.state import DATA_SEG, NativeGameState
@@ -67,7 +67,7 @@ def test_native_combat_pass_idle_no_op():
     from pre2.native.loop import native_combat_pass
 
     ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
-    state = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    state = native_cold_boot(str(ROOT / "assets"), level=0)
     base = DATA_SEG << 4
     before = bytes(state.data[base + 0x4F0A:base + 0x5732])   # player + object/effect pools
     native_combat_pass(state)
@@ -86,7 +86,7 @@ def test_native_foreground_targets_display_page(monkeypatch):
     import pre2.native.render as R
 
     ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
-    st = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    st = native_cold_boot(str(ROOT / "assets"), level=0)
     base = DATA_SEG << 4
     disp = st.data[base + 0x2DD6] | (st.data[base + 0x2DD7] << 8)
     fg = R.read_foreground_state(st)
@@ -107,7 +107,7 @@ def test_native_light_palette_fade():
     from pre2.native.render import native_apply_palette_fade, native_load_level_palette, _LIGHT_DARK_PAL
 
     ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
-    st = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    st = native_cold_boot(str(ROOT / "assets"), level=0)
     dos = DOSMachine(str(ROOT / "assets"))
     native_load_level_palette(st, dos)
     base = DATA_SEG << 4
@@ -130,18 +130,58 @@ def test_native_light_palette_fade():
     assert st.data[base + 0x6C01] == 0 and st.data[base + 0x6C02] == 0   # [asm 67C8] flags cleared on completion
 
 
+def test_native_flash_slot_captured_and_re_applied():
+    # [asm 2757/28BA] The one-frame OPAQUE flash (hit/death white silhouette): id bit14 = [+5]&0x40 is READ by 26FA
+    # to pick the opaque blit, then CLEARED in the same pass — so it is gone by the commit boundary native_render
+    # reads. native_object_render_state captures the flashing slots (pre-clear) into state.flash_slots; native_render
+    # re-applies bit14 for the draw and RESTORES the record (so the carried-forward state stays == the VM's). Guards
+    # both halves — without them a dying/hit enemy renders as its normal colours instead of the white flash.
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.loop import native_object_render_state
+    from pre2.native.render import native_load_level_palette, native_render
+
+    from pre2.recovered.object_render import (Camera, MODE_NORMAL, MODE_OPAQUE, Sprite, SpriteAttr,
+                                              plan_sprite_command)
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    st = native_cold_boot(str(ROOT / "assets"), level=0)
+    base = DATA_SEG << 4
+    dos = DOSMachine(str(ROOT / "assets")); native_load_level_palette(st, dos)
+    disp = st.data[base + 0x2DD6] | (st.data[base + 0x2DD7] << 8)
+    slot = 0x4F1C                                                   # set up an active render slot with the flash flag
+    st.data[base + slot + 4] = 0x02; st.data[base + slot + 5] = 0x40  # id = 0x4002 (base 0x02, bit14 flash set)
+    st.data[base + slot + 0x11] = 5                                 # life
+
+    native_object_render_state(st)                                 # the 26FA record-mutation half
+    assert st.flash_slots and slot in st.flash_slots              # captured pre-clear (id bit14 was set)
+
+    # native_render re-applies the flash for the draw, then RESTORES the record + clears the one-shot capture — so
+    # the carried-forward state stays == the VM's cleared record (a left-set flag would desync the next frame).
+    record_before = bytes(st.data[base + slot:base + slot + 0x12])
+    native_render(st, dos, disp, game_root=str(ROOT / "assets"), force_gameplay=True)
+    assert st.flash_slots is None                                 # one-shot handoff, cleared
+    assert bytes(st.data[base + slot:base + slot + 0x12]) == record_before   # record restored byte-for-byte
+
+    # The flag's EFFECT (pure): with bit14 set the blit is the OPAQUE white silhouette; without it, the normal draw.
+    attr = SpriteAttr(width=16, height=16, x_off=0, y_off=0, src_seg=0, src_off=0)
+    cam = Camera(cam_x=0, cam_y=0, fine_scroll=0, row_factor=0, dest_page=0, row_stride=0x50, global_shift=1, frame=0)
+    flash_cmd = plan_sprite_command(Sprite(x=100, y=100, sprite_id=0x4002, flags=0x40, life=5), attr, cam)
+    normal_cmd = plan_sprite_command(Sprite(x=100, y=100, sprite_id=0x0002, flags=0x00, life=5), attr, cam)
+    assert int(flash_cmd.mode) == MODE_OPAQUE and int(normal_cmd.mode) == MODE_NORMAL
+
+
 def test_native_cave_teleport_enters_cave():
     # [asm 52FE/5326] The position-trigger scan raises Pre2CaveTeleport on a table match; driving the
     # native_cave_teleport generator plays the WHOLE transition: the 30C6 fade-out yields, the hidden camera pan
     # (1 unit/step via the real scroll primitives), the destination snap + disarm, the 53D7 mini-pass, the 3054
     # reveal yields, and the frame remainder. Runs over a real cold-booted LEVEL1 state so the pan + mini-pass
     # execute against real level structures.
-    from pre2.checkpoints.common import Pre2CaveTeleport
+    from pre2.gaps import Pre2CaveTeleport
     from pre2.native.cold_boot import native_cold_boot
     from pre2.native.loop import native_cave_teleport, native_trigger_scan
 
     ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
-    st = native_cold_boot(str(ROOT / "assets"), str(ROOT / "artifacts" / "pre2_boot_image.zz"), level=0)
+    st = native_cold_boot(str(ROOT / "assets"), level=0)
     base = DATA_SEG << 4
     ww = lambda o, v: st.data.__setitem__(slice(base + o, base + o + 2), bytes((v & 0xFF, (v >> 8) & 0xFF)))  # noqa: E731
     ww(0x4F1C, 0x7E << 4); ww(0x4F1E, 0x2E << 4)              # player pixel pos -> tile (col 0x7E, row 0x2E) = 0x2E7E
@@ -221,12 +261,63 @@ def test_native_object_spawn_step_noop_when_inactive():
     assert bytes(st.data) == before
 
 
-def test_native_object_spawn_step_fails_loud_on_boss_death():
-    # Mode-9, boss already seeded ([0xA517]!=-1) with health 0 -> the 6C0D death finale is unrecovered -> the
-    # VM-less core fail-louds (never a silent ASM fallback).
+def test_native_object_spawn_step_handles_boss_death():
+    # Mode-9, boss dead ([0xA519]==0): the 6C0D victory-glyph finale is a pure page-blit render seam (no DGROUP
+    # gameplay writes), so the VM-less core runs the per-frame head and returns cleanly — NOT a fail-loud gap.
+    # (Recovered 2026-07-03; the killing-hit death-burst 6B76 -> boss_hit_burst is verified byte-exact.)
     st = _state({0x91FE: 0xFF, 0x2D8A: 9, 0xA517: 0, 0xA518: 0, 0xA519: 0, 0xA51A: 0})
-    with pytest.raises(Pre2HybridGap):
-        native_object_spawn_step(st)
+    native_object_spawn_step(st)   # no raise — the boss-death finale is handled
+
+
+def test_native_attract_interrupt():
+    # 8E98 menu-idle ATTRACT: _native_attract sets demo-playback mode [0x2879]=1, loads the demo's level, and
+    # yields gameplay frames; a pending key [0x2874] makes DC1 (0DD6) set [0x6BE5], ending the demo — so it resets
+    # [0x2879]=0 and returns (the caller re-shows the menu). Verified in play: idle->attract->key->back to menu.
+    from types import GeneratorType
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.front_end import _native_attract
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    ASSETS = str(ROOT / "assets")
+    st = native_cold_boot(ASSETS, level=0)
+    st.data[(0x1A0F << 4) + 0x83E] = 0                    # the demo's level (1)
+    gen = _native_attract(st, DOSMachine(ASSETS), ASSETS)
+    assert isinstance(gen, GeneratorType)
+    assert next(gen) is not None                           # the first frame is the title (still live-input mode)
+    assert st.data[(0x1A0F << 4) + 0x2879] == 0
+    seen_gameplay = False
+    n = 0
+    for _ in gen:                                          # title -> carte -> gameplay demo ([0x2879]=1)
+        n += 1
+        if st.data[(0x1A0F << 4) + 0x2879] == 1:           # the gameplay demo is running
+            seen_gameplay = True
+            st.data[(0x1A0F << 4) + 0x2874] = 0x39         # press a key -> DC1 sets [0x6BE5] -> demo ends
+        elif seen_gameplay:
+            break                                          # ended -> [0x2879] back to 0 (the menu)
+        if n > 4000:
+            break
+    assert seen_gameplay                                   # the attract reached the gameplay demo
+    assert st.data[(0x1A0F << 4) + 0x2879] == 0            # the key press ended it -> back to live input
+
+
+def test_native_level_warp():
+    # 4C74 level-end warp table [0x2cf6]: [0x6be6]==1 is the normal +1 end; >1 warps a main level to its BONUS
+    # level [0x2cf6+level] (no +1), and a bonus level (>=0xA) back to its source main level +1. Verified byte-exact
+    # vs the ASM 4C69 dispatch; was previously a fail-loud gap (LEVELC/LEVELD... reached via a warp exit).
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.level_state import native_level_end
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    ASSETS = str(ROOT / "assets")
+
+    def next_level(level, mode):
+        st = native_cold_boot(ASSETS, level=level)
+        st.data[(0x1A0F << 4) + 0x6BE6] = mode
+        native_level_end(st, game_root=ASSETS)
+        return st.data[(0x1A0F << 4) + 0x2D8A]
+
+    assert next_level(2, 1) == 3          # normal end: +1
+    assert next_level(2, 2) == 0x0B       # warp: L3 -> bonus LEVELC
+    assert next_level(0x0B, 2) == 3       # warp back: bonus LEVELC (src 2) -> L4
 
 
 def test_native_player_step_fails_loud_on_pause():
@@ -267,7 +358,7 @@ def test_native_level_state_raises_respawn_transition():
     # per-frame dispatcher SIGNALS it (Pre2RespawnTransition) rather than running it blocking in-loop — running it
     # blocking made the runner render only the end state (instant respawn, no animation). native_frame_step drives
     # it, rendering each frame. (Regression guard for "you respawn immediately, before the death animation plays".)
-    from pre2.checkpoints.common import Pre2RespawnTransition
+    from pre2.gaps import Pre2RespawnTransition
     from pre2.native.loop import native_level_state
     st = _state({0x6BE4: 1, 0x6BE5: 0, 0x6BE6: 0})
     with pytest.raises(Pre2RespawnTransition):
@@ -321,3 +412,99 @@ def test_native_input_drives_key_table():
     assert st.rb(KEY_TABLE + SCAN_LEFT) == 0
     apply_input(st, right=False, fire=False)          # release
     assert st.rb(KEY_TABLE + SCAN_RIGHT) == 0 and st.rb(KEY_TABLE + SCAN_FIRE) == 0
+
+
+def test_native_level_end_preserves_persistent_player_state():
+    # [asm 0137 or ax,ax / je 0163] main's 0x141-0155 level-start reset block (lives [0x27D8]=2, BONUS-letters
+    # mask [0x6CA7]=0, utensils [0x6CA8]=0, ...) runs ONLY on a FRESH game start (ax!=0). The between-levels flow
+    # enters main via 4F65 (`call 5237; xor ax,ax; stc; ret`), so ax=0 and the block is SKIPPED — that persistent
+    # state carries into the next level. native_level_end must preserve it (user: collected BONUS letters were
+    # resetting each level; lives were too). Guards the persistence across the level advance.
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.level_state import native_level_end
+    ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+    st = native_cold_boot(str(ROOT / "assets"), level=0)
+    base = DATA_SEG << 4
+    st.data[base + 0x6CA7] = 0x1F                       # all five BONUS letters collected
+    st.data[base + 0x27D8] = 5                          # 5 lives
+    st.data[base + 0x6CA8] = 0x07                       # some collected utensils
+    native_level_end(st, game_root=str(ROOT / "assets"))
+    assert st.data[base + 0x2D8A] == 1                  # advanced to level 1
+    assert st.data[base + 0x6CA7] == 0x1F               # BONUS letters PERSIST across the level
+    assert st.data[base + 0x27D8] == 5                  # lives PERSIST
+    assert st.data[base + 0x6CA8] == 0x07               # utensils PERSIST
+
+
+def test_native_vga_matches_workbench_dos():
+    # pre2.native.vga is the standalone's display adapter; the WORKBENCH DOSMachine exposes the identical
+    # surface. Pin them together so the two can never drift (constants, DAC expansion, default palette,
+    # and the 3C8/3C9 write protocol).
+    from dos_re import memory as _m
+    from dos_re.dos import DOSMachine, _dac8 as _dac8_vm
+    from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE, NativeVGA, _dac8
+
+    assert EGA_APERTURE == _m.EGA_APERTURE and EGA_PLANE_STRIDE == _m.EGA_PLANE_STRIDE
+    assert all(_dac8(v) == _dac8_vm(v) for v in range(64))
+    vm = DOSMachine(".")
+    nv = NativeVGA()
+    assert nv.vga_palette == vm.vga_palette                    # same power-on DAC
+    for dos in (vm, nv):                                       # same 3C8/3C9 protocol result
+        dos._track_vga_dac_ports(0x3C8, 5, 8)
+        for v in (0x3F, 0x20, 0x01, 0x00, 0x10, 0x3F):
+            dos._track_vga_dac_ports(0x3C9, v, 8)
+    assert nv.vga_palette[5:7] == vm.vga_palette[5:7]
+
+
+def test_level_end_tally_vs_curtain_dispatch():
+    # [asm 4C69] tally ONLY for: normal end on a main level, or a warp OUT of a bonus level (reverse lookup ->
+    # the 4CBA normal path). Warp INTO a bonus level (4C8F) + a bonus level's own end (4CC1) = the 30C6 curtain.
+    from pre2.native.level_state import level_end_takes_tally
+    assert level_end_takes_tally(mode=1, level=3)            # normal end, main level -> TALLY (4CCB)
+    assert not level_end_takes_tally(mode=2, level=3)        # warp INTO the bonus level -> curtain (4C8F)
+    assert not level_end_takes_tally(mode=1, level=0xC)      # bonus level's own end -> curtain (4CC1)
+    assert level_end_takes_tally(mode=2, level=0xC)          # warp OUT of the bonus level -> TALLY (4C7E->4CBA)
+
+
+def test_native_gameover_scene_state_golden():
+    # [asm 9B23/9CC0] The GAME OVER scene state driver (setup + tick), proven byte-exact vs the ASM by a
+    # 60-frame lockstep on snapshot 151024 (0 mismatches, incl. the letters' bounce, the bird orbits + sort +
+    # near-side handoff, and the 39DF RNG state). This golden pins the transcription over the deterministic
+    # boot-constants state (120 ticks of the slot region + the scroll byte).
+    import hashlib
+
+    from pre2.native.boot_data import build_boot_memory
+    from pre2.native.gameover_scene import native_gameover_setup, native_gameover_tick
+
+    base = DATA_SEG << 4
+    st = NativeGameState(build_boot_memory())
+    native_gameover_setup(st)
+    assert st.data[base + 0x4F20] != 0xFF                        # the letters spawned (slot 0x4F1C occupied)
+    h = hashlib.sha1()
+    for f in range(120):
+        st.data[base + 0x6BD5] = f & 0xFF
+        st.data[base + 0x6BD6] = 0
+        native_gameover_tick(st)
+        h.update(st.data[base + 0x4F0A:base + 0x5732])
+        h.update(bytes([st.data[base + 0x6BC4]]))
+    assert st.data[base + 0x6BC4] == 120                         # the scroll advanced 1px/tick (cap 0xB9 @185)
+    assert h.hexdigest() == "2f2c3f77e6e043c4a90f44d583d671b672c9a178"
+
+
+def test_object_anim_scale7_zoom_shake():
+    # [asm 68AA-68B1] zoom level 7 ([0x6BE2]==7): identical to any other non-zero scale (the 0xA801 region
+    # remap, ASM-verified on snapshot 143131) PLUS the screen-shake arm — AnimResult.shake=True, which the
+    # object walker turns into [0x6BEA]=9 (consumed by the recovered apply_camera_shake). Was a fail-loud
+    # ObjectScaleUnsupported ("zoom+shake not witnessed") that a standalone player hit in the wild.
+    from pre2.recovered.object_update import advance_animation
+
+    words = {0x100: 0x0010,                                   # the script frame at ptr 0x100
+             0xA801: 0x0100, 0xA803: 0x0200, 0xA805: 0x0042}  # one remap entry [0x100..0x200] -> 0x42
+    rd = lambda o: words.get(o, 0)                            # noqa: E731
+    r6 = advance_animation(0x100, rd, 0x0000, 0, 6)           # scale 6: remap, NO shake
+    r7 = advance_animation(0x100, rd, 0x0000, 0, 7)           # scale 7: SAME remap + shake
+    assert r6.shake is False and r7.shake is True
+    assert r7.sprite_id == r6.sprite_id and r7.script_ptr == r6.script_ptr   # identical remap outcome
+    assert r7.sprite_id == 0x42 + 0x35                        # frame 0x148 in [lo,hi] -> remapped + 0x35
+    assert r7.script_ptr == 0x100                             # the remap FREEZES the script (no advance)
+    r0 = advance_animation(0x100, rd, 0x0000, 0, 0)           # scale 0: plain advance, no shake
+    assert r0.shake is False and r0.script_ptr == 0x102

@@ -12,7 +12,7 @@ from dataclasses import replace as _replace
 from pre2.bridge import frame as _frame
 from pre2.bridge import object_render as _obj
 from pre2.bridge import palette as _pal
-from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge.hud_chrome import load_hud_chrome
 from pre2.recovered.animation import AnimStep
 from pre2.recovered.hud import effective_bonus_mask
@@ -191,7 +191,38 @@ def read_renderer_state(mem, dos=None, *, game_root=None, frame_pre_inc: bool = 
         object_sprites=obj_sprites,
         object_attrs=obj_attrs,
         object_src_banks=obj_banks,
+        boss_glyph_tiles=_boss_glyph_tiles(mem),
     )
+
+
+def _boss_glyph_tiles(mem) -> bytes | None:
+    """[asm 6C0D inputs] The mode-9 FINAL-BOSS glyph tile indices (level 9 only): the current glyph id —
+    ``2`` once the boss is dead ([0xA519]==0, asm 6B16), else the glyph byte the script interpreter just
+    consumed (``[[0xA517]-1]``, asm 6BD3 advances past it before the 6C0D call) — then the 6-wide x 7-tall
+    index grid from the LEVEL segment at ``[glyph*6 + 0x14]``: the inner loop consumes 6 bytes and 6C97 adds
+    0xFA, so the row stride is 0x100 — the glyph is a 6x7 WINDOW OF THE LEVEL TILEMAP itself."""
+    base = _DS << 4
+    d = mem.data
+    if d[base + 0x2D8A] != 9:                                     # the mode-9 last-boss level only
+        return None
+    if d[base + 0xA519] | (d[base + 0xA51A] << 8):                # boss alive: the interpreter's LATCHED glyph
+        glyph = getattr(mem, "boss_glyph", None)                  # native (NativeGameState.boss_glyph)
+        if glyph is None:
+            glyph = getattr(mem, "pre2_boss_glyph", None)         # hybrid (latched on the VM mem by the hook)
+        if glyph is None:
+            ptr = d[base + 0xA517] | (d[base + 0xA518] << 8)      # fallback: the post-inc cursor ([asm 6BD3]);
+            glyph = d[base + ((ptr - 1) & 0xFFFF)]                #   unreliable mid-script — skip on an opcode
+            if glyph >= 0x80:
+                return None
+    else:
+        glyph = 2                                                 # [asm 6B16] the defeated/victory glyph
+    es = (d[base + 0x2DDA] | (d[base + 0x2DDB] << 8)) << 4        # the level segment
+    tbl = glyph * 6 + 0x14                                        # [asm 6C16-6C1C]
+    out = bytearray(42)
+    for row in range(7):                                          # [asm 6C97] 6 consumed + 0xFA = stride 0x100
+        src = es + tbl + row * 0x100
+        out[row * 6:row * 6 + 6] = d[src:src + 6]
+    return bytes(out)
 
 
 def read_hud_state(mem) -> HudState:

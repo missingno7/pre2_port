@@ -22,7 +22,7 @@ from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge.firefly_sim import read_firefly_sim_state, write_firefly_sim_state
 from pre2.recovered.firefly_sim import render_step_into, step_fireflies
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x54AB)
 _EXIT = (0x1030, 0x55FB)

@@ -13,7 +13,7 @@ Layout (see ``docs/pre2/symbol_ledger.md``):
 """
 from __future__ import annotations
 
-from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
 from pre2.recovered.sprite_decode import (
     LOCAL_CODE_MAX,

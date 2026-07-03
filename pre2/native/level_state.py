@@ -7,7 +7,7 @@ the level to its checkpoint and continues the gameplay loop. The death (5063) / 
 """
 from __future__ import annotations
 
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.gaps import Pre2HybridGap
 from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
@@ -109,6 +109,17 @@ def native_4f6c(state):
     # [asm 5030-5033] ax=0; clc; ret — no level change, the gameplay loop continues
 
 
+def level_end_takes_tally(mode: int, level: int) -> bool:
+    """[asm 4C69] Whether this level-end runs the TALLY flow (4CCB exit-anim/BRAVO/carte) or the cave-style
+    CURTAIN (``call 30C6`` + ``jmp 4F65`` — no tally, no carte).
+
+    The dispatch: a normal end (``mode==1``) on a MAIN level (<0xA) falls into 4CCB = TALLY; a normal end on a
+    BONUS level (>=0xA, 4CBA/4CC1) closes the curtain and reloads. A warp (``mode>1``) FROM a main level (4C8F)
+    jumps INTO its bonus level curtain-style; a warp FROM a bonus level (4C7E reverse lookup) re-enters the 4CBA
+    normal path = TALLY. So: tally iff ``(mode==1) == (level<0xA)``."""
+    return (mode == 1) == (level < 0xA)
+
+
 def native_level_end(state, *, game_root: str) -> None:
     """[asm 4C69 [0x6be6]==1 -> 4cba -> 4F65 -> main 0x12f] The LEVEL-END transition: advance to the next level.
 
@@ -119,11 +130,31 @@ def native_level_end(state, *, game_root: str) -> None:
     leaves the exit-anim / fade to the renderer / flow driver: increment the level, ``native_level_init`` the new
     one (load + 5237 + player-init + camera, all individually byte-exact), then apply the 0x12f flag writes.
 
-    Only the [0x6be6]==1 normal end (``[0x2d8a]`` < 0xA, ``+1``) is recovered; the level >= 0xA warp table
-    (4c74/4cba) and the [0x6be6]>1 warp entry fail loud."""
+    The next level is the 4C74 table lookup: [0x6be6]==1 normal end -> ``+1``; [0x6be6]>1 WARP -> a main level
+    (<0xA) jumps to its BONUS level ``[0x2cf6+level]`` (no +1, the ASM jmp 4f65 skips 4cba), and a bonus level
+    (>=0xA) reverse-looks-up its source main level in ``[0x2cf6]`` then advances ``+1`` (jmp 4cba -> 4cc4)."""
     d = state.data
     level = d[_DS + 0x2D8A]
-    if level >= 0xA:
-        raise Pre2HybridGap("native level-end: level >= 0xA warp table (4c74/4cba) not recovered")
-    d[_DS + 0x2D8A] = (level + 1) & 0xFF                          # [asm 4cc4] next level (normal +1)
+    if d[_DS + 0x6BE6] > 1:                                       # [asm 4C74] a WARP (not the normal +1 end)
+        if level < 0xA:                                          # a main level -> its bonus level [0x2cf6+level]
+            d[_DS + 0x2D8A] = d[_DS + 0x2CF6 + level]            # [asm 4c8f-4c90] (jmp 4f65: NO +1)
+        else:                                                    # a bonus level -> the source main level, then +1
+            src = next((i for i in range(0x1A) if d[_DS + 0x2CF6 + i] == level), None)  # [asm 4c7e-4c85]
+            if src is None:
+                raise Pre2HybridGap(f"native level-warp: bonus level {level:#x} absent from the [0x2cf6] table")
+            d[_DS + 0x2D8A] = (src + 1) & 0xFF                   # [asm 4c89 index -> 4cba -> 4cc4 +1]
+    else:                                                        # [asm 4cba/4cc4] the normal end -> +1
+        d[_DS + 0x2D8A] = (level + 1) & 0xFF
+    # [asm 0137 or ax,ax / je 0163] main's 0x141-0155 level-start block (lives [0x27D8]=2, BONUS-letters mask
+    # [0x6CA7]=0, utensils mask [0x6CA8]=0, damage [0x7B19]/[0x7B18]) runs ONLY when ax!=0 — a FRESH game start.
+    # The between-levels path enters via 4F65 (`call 5237; xor ax,ax; stc; ret`), so ax=0 and the block is SKIPPED:
+    # that persistent state carries into the next level (user: collected BONUS letters were resetting each level).
+    # native_level_start runs the block unconditionally, so preserve those five offsets across the load.
+    native_51df(state)                                           # [asm 4F62] cleanup: clear [0x6c9e] ITEM_TOTAL +
+    #                                                              the object-backup scratch [0x6c12..+0x71], BEFORE
+    #                                                              the re-init/load — the between-levels 4F5E path
+    #                                                              runs `inc [0x2d8a]; call 51df; call 5237`.
+    keep = {o: d[_DS + o] for o in (0x27D8, 0x6CA7, 0x6CA8, 0x7B19, 0x7B18)}
     native_level_start(state, game_root=game_root)               # [asm 0x13e..0155] load + re-init + level-start flags
+    for o, v in keep.items():                                    # restore the persistent player state the VM keeps
+        d[_DS + o] = v

@@ -8,7 +8,7 @@ is the symmetric transcription (no witness yet — ASM_MATCHED).
 """
 from __future__ import annotations
 
-from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.bridge import frame as _F
 from pre2.recovered.frame_renderer import RowFlags, calc_scroll_source, draw_tile_column
 

@@ -11,7 +11,7 @@ produces the state, ``native_render`` produces the pixels. See native/loop.py fo
 """
 from __future__ import annotations
 
-from dos_re.dos import _dac8
+from pre2.native.vga import _dac8
 
 from pre2.bridge.foreground_tiles import read_foreground_state
 from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
@@ -167,6 +167,23 @@ def native_render(state, dos, display_page: int, *, game_root: str,
             pf = read_particles(state)                             # [4b8e] one-shot point particles (live)
         particle_capture = pf if pf.particles else None
     fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
-    gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx,
-                                    force_gameplay=force_gameplay)
+    # Re-apply the one-frame OPAQUE flash flag (id bit14 = [+5]&0x40) on the slots native_object_render_state
+    # captured before 26FA cleared it, so the hit/death flash draws as the VM's solid-white silhouette. The
+    # renderer state is a SNAPSHOT (capture_game_visual_state reads it synchronously), so restore state.data right
+    # after — leaving the flag set would desync the next frame's carried-forward state from the VM's cleared record.
+    flash = getattr(state, "flash_slots", None)
+    state.flash_slots = None                                       # one-shot, like particle_capture
+    saved = None
+    if flash:
+        d = state.data
+        saved = [(off, d[_DS + off + 5]) for off in flash]
+        for off in flash:
+            d[_DS + off + 5] |= 0x40
+    try:
+        gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx,
+                                        force_gameplay=force_gameplay)
+    finally:
+        if saved is not None:
+            for off, v in saved:
+                state.data[_DS + off + 5] = v
     return render_game_visual_state(gvs)

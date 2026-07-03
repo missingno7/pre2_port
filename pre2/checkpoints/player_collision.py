@@ -19,7 +19,7 @@ from dos_re.hooks import registry
 from pre2.bridge.object_interaction import redraw_tiles   # shared 3B77 direct tile re-blit (also the bonus redraw)
 from pre2.recovered.player_collision import collision
 
-from .common import Pre2HybridGap, report
+from pre2.gaps import Pre2HybridGap, report
 
 _ENTRY = (0x1030, 0x5A96)   # the collision routine entry (call target from 5A41)
 _EXIT = (0x1030, 0x5B80)    # ret

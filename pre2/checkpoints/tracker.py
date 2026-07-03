@@ -18,7 +18,7 @@ from dos_re.hooks import registry
 from pre2.bridge import audio as _audio
 from pre2.recovered.tracker import NUM_VOICES, tracker_tick
 
-from .common import report
+from pre2.gaps import report
 
 # GOG build: the per-tick sequencer is at 227C (volume-slide loop, then 22A1 tick
 # countdown -> row advance / note-proc 2311); near RET at 230F.

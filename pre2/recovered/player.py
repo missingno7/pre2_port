@@ -45,7 +45,8 @@ FSM_WORD_FIELDS = frozenset(
     {0x4F0A, 0x4F0C, 0x4F0E, 0x4F20, 0x4F22, 0x4F25, 0x4F28, 0x4F2A, 0x6BBE, 0x6BEB}
     | {s + d for s in range(ATTACK_SPAWN_LIST, ATTACK_SPAWN_LIST + 4 * 0x12, 0x12)  # projectile slots:
        for d in (0, 2, 4, 6, 0xC, 0xE)}                                            # words (the +8 field is a byte)
-    | set(range(TRAIL_RING_LO, 0x4FC2, 2))                                         # trail/dust ring slots
+    | set(range(TRAIL_RING_LO, 0x4FC4, 2))    # trail/dust ring slots, incl. the TOP slot's +4 id word (0x4FC2):
+    #   5E11/5E41 write [ring+4]=0x35 as a WORD (mov word ptr) — a byte write leaves [+5] stale (was 0x4FC2-exclusive)
 )
 
 SCROLL_REQUEST = "__scroll"  # sentinel key in the writes dict: the idle look-around camera-pan request the

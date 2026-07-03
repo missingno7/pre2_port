@@ -22,7 +22,7 @@ import os
 import numpy as np
 
 from render_frame import DEFAULT_VGA_PALETTE
-from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
 WIDTH, HEIGHT = 320, 200
 _PLANAR_ROW_BYTES = 40   # 320 px / 8 px-per-byte, EGA/VGA 16-colour planar (mode 0Dh)
@@ -467,8 +467,27 @@ def front_end_scene_to_rgb(scene) -> np.ndarray:
     if scene.mode == 0x13:                                                        # MODE_LINEAR
         pal = np.array(scene.palette, dtype=np.uint8)
         return pal[np.frombuffer(scene.linear, dtype=np.uint8).reshape(HEIGHT, WIDTH)]
+    if scene.mode == 0x12:                                                        # MODE_CREATORS (640x480 12h)
+        return _creators_rgb_from_planes(scene.planes, scene.palette)
     return render_planar_rgb_from_planes(scene.planes, scene.page, scene.palette,   # MODE_PLANAR
                                          scene.pel, scene.active_width, scene.wrap)
+
+
+def _creators_rgb_from_planes(planes, palette) -> np.ndarray:
+    """Deplanarize the 640x480 mode-12h CREATORS screen (25F6): four bit-planes (80 bytes/row, the top 415 rows
+    blitted; the rest black), MSB-first colour index through the 16-grey palette. Returns (480, 640, 3) RGB."""
+    W, H, ROWBYTES = 640, 480, 80
+    pal = np.array(palette, dtype=np.uint8)
+    plane_bytes = H * ROWBYTES                                                     # 38400
+    color = np.zeros((H, ROWBYTES, 8), dtype=np.uint8)
+    for p in range(4):
+        buf = np.frombuffer(planes[p], dtype=np.uint8)
+        if buf.size < plane_bytes:                                                # pad the unblitted tail (black)
+            buf = np.concatenate([buf, np.zeros(plane_bytes - buf.size, dtype=np.uint8)])
+        bits = np.unpackbits(buf[:plane_bytes].reshape(H, ROWBYTES)[..., None], axis=2)  # (H, ROWBYTES, 8) MSB
+        color |= bits << p
+    idx = color.reshape(H, W)
+    return pal[idx]
 
 
 def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: int = 0,

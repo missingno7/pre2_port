@@ -1,4 +1,9 @@
-"""Shared scaffolding for the per-subsystem checkpoint adapters.
+"""Shared scaffolding for the per-subsystem checkpoint adapters (+ the gap/transition exceptions).
+
+Lives OUTSIDE ``pre2/checkpoints`` because the NATIVE (VM-less) layer raises/catches these too, and any
+``pre2.checkpoints.*`` import executes the package __init__ — which eagerly imports every hook module (the
+"import to register" hybrid surface) and thereby the whole VM. This module stays pure (no cpu/mem/dos_re
+imports) so the standalone import closure stays VM-free.
 
 A *checkpoint* is a thin contact point between the original PRE2 ASM and a
 recovered, VM-independent module — a replacement adapter (hybrid runtime) and/or
@@ -59,6 +64,16 @@ class Pre2GameOverTransition(Pre2HybridGap):
     with a zero score and re-enters main at 0x12f to reload level 1 — a game restart driven outside the
     single-frame loop. ``native_level_state`` raises this; the runtime/flow driver drives ``native_5063`` as a
     generator (rendering the bounce) then reloads level 1 (native_level_init) and the gameplay loop continues.
+    Subclasses Pre2HybridGap so existing ``except Pre2HybridGap`` sites still treat it as "not a plain per-frame
+    step" — catch it FIRST where the transition is actually driven."""
+
+
+class Pre2GameComplete(Pre2HybridGap):
+    """Signal (not a gap): the per-frame gameplay step reached GAME-COMPLETE — the player fell out of the final
+    level 0xE ([0x2d8a]==0xE), so the fall handler armed [0x6be5]=0xFF ([asm 5B18-5B1F]) and 4C69 dispatches to
+    the ending routine 5034: load THEEND.SQZ, deplanarize/fade it in (919F), wait for fire (0BBE), fade out
+    (9286), then carry -> main's 0x12f which returns to the front-end (attract/title). ``native_level_state``
+    raises this; the runtime/flow driver drives ``native_the_end`` (the scene) then re-enters the front-end.
     Subclasses Pre2HybridGap so existing ``except Pre2HybridGap`` sites still treat it as "not a plain per-frame
     step" — catch it FIRST where the transition is actually driven."""
 

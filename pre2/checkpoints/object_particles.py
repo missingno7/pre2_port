@@ -16,7 +16,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.recovered.object_particles import project_particles
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x8922)
 _EXIT = (0x1030, 0x899D)   # the ret

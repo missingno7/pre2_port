@@ -16,7 +16,7 @@ from dos_re.hooks import registry
 from pre2.bridge import sprites as _spr
 from pre2.recovered.sprite_decode import PIXEL_BASE
 
-from .common import _BUMP_PTR, _DATA_SEG, report
+from pre2.gaps import _BUMP_PTR, _DATA_SEG, report
 
 # GOG build: code old+0x1F, ds offsets old+4 (data seg 1A0F via common).
 _SPR_LOCAL_ENTRY = (0x1030, 0x4316)

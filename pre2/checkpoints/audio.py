@@ -18,7 +18,7 @@ from dos_re.hooks import registry
 from pre2.bridge import audio as _audio
 from pre2.recovered.mixer import BLOCK_LEN, CHANNEL_OFF, mix_channel
 
-from .common import report
+from pre2.gaps import report
 
 # GOG build: the per-channel mixer is at 218F (entry) / 227B (near RET).
 _MIX_ENTRY = (0x1030, 0x218F)

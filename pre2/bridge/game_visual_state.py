@@ -9,8 +9,13 @@ scroll state (see ``docs/pre2/camera_fidelity_bug.md``).
 The fix is to capture at the **frame-commit boundary**: ``1030:6772`` (the palette-fade entry — the
 LAST op in the per-frame main loop, AFTER the page flip). There the CRTC ``ega_display_start`` is the
 just-committed frame and the scroll/camera state has not yet advanced (the next frame's update has not
-run), so ``render_frame(state)@display_start == display_start`` (verified Δ≤5, the blink-phase residual,
-on driven gameplay). Capturing here gives a snapshot whose state matches the displayed page exactly.
+run), so ``render_frame(state)@display_start == display_start`` (byte-exact on driven gameplay — the
+gorilla demo is pixel-perfect for 150 frames). Capturing here gives a snapshot whose state matches the
+displayed page exactly. NB: the boundary is AFTER 26FA already bumped the frame counter ``[0x6BD5]``,
+so this capture reads the object camera with ``frame_pre_inc=False`` — reading it "pre-inc" (the default)
+double-counts and shifts the blink phase ``(frame & 3)`` by one, silently corrupting every BLINKING
+sprite (hit-flash / spawn-invincibility flicker). That was the old "Δ≤5 blink residual" (harmless on
+light frames, 660+ px in a busy fight); it is fixed below.
 
 RULE: never mix the state for the page being BUILT with the page being DISPLAYED. The committed page is
 ``ega_display_start`` AT THE BOUNDARY; ``RendererState.dest_page`` is overridden to it so every leaf
@@ -20,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from dos_re.memory import EGA_PLANE_STRIDE
+from pre2.native.vga import EGA_PLANE_STRIDE
 from pre2.bridge.render_state import read_renderer_state, retarget_page
 from pre2.bridge.scene_state import derive_scene_kind
 from pre2.recovered.faithful_visual import SceneKind, render_visual
@@ -55,7 +60,13 @@ def capture_game_visual_state(mem, dos, display_page: int, *, game_root, effects
     iris = None
     rs = None
     if kind in (SceneKind.GAMEPLAY, SceneKind.IRIS):
-        rs = retarget_page(read_renderer_state(mem, dos, game_root=game_root),
+        # frame_pre_inc=False: this is the COMMIT boundary (1030:6772), which is AFTER 26FA already bumped the
+        # frame counter [0x6BD5] (the value the engine drew with). The default True adds ANOTHER +1, which shifts
+        # the blink phase (frame & 3) by one and silently corrupts every BLINKING sprite — the hit-flash / spawn
+        # invincibility flicker draws when the VM erased it and vice-versa. That is the "blink-phase residual"
+        # (Δ≤5 on light-combat frames, but 660+ px in a busy fight). The object_render checkpoint's hybrid path
+        # (26FA post-inc) reads with False for exactly this reason; the commit-boundary capture must match.
+        rs = retarget_page(read_renderer_state(mem, dos, game_root=game_root, frame_pre_inc=False),
                            page)                               # target the DISPLAYED page, not [0x2DD8]
         if kind == SceneKind.IRIS:
             from pre2.bridge import transition as _tr

@@ -33,65 +33,16 @@ from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.level_state import native_4f6c
 from pre2.native.player import RENDER_OFFSETS
 from pre2.recovered.input_decode import _KBD_SOURCES
-from pre2.checkpoints.common import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition
+from pre2.gaps import Pre2CaveTeleport, Pre2HybridGap, Pre2RespawnTransition
 import play
 
-DS = 0x1A0F
-DS_BASE = (DS << 4) & 0xFFFFF
-FRAME_TOP = 0x021A          # main-loop top: save the native seed here
-DECODE = 0x0DC1             # DC1: capture the keyboard flags the VM sampled
-GAP_SITE = 0x0270           # the loop-back (jmp 0x214): native_gameplay_frame now runs the WHOLE loop 021A..026D.
-#                             The render calls (3668/35A1/3A27/4B8E/26FA/3721/6772) are the renderer's job and are
-#                             not run here; their render-state DGROUP writes are excluded below so this stays a
-#                             gameplay-state cmp. Death/level-change frames (4C69 carry -> 0x12f) never reach 0x0270.
-KBD = tuple(sorted({o for srcs in _KBD_SOURCES.values() for o in srcs}))   # the 21 keyboard flags DC1 reads
-# async audio/ISR scratch (PIT/SB) + render state the gameplay step doesn't own:
-#  - 454E player-sprite bg-save slot (RENDER_OFFSETS)
-#  - 8922 object_particles (a render island skipped here) builds the effect draw-list: the render slots
-#    [0x52E8..0x5450) (20 x stride 0x12) + the effect-sprite source list [0x8F1D..0x9107) (bounce animation).
-_RENDER_DRAWLIST = set(range(0x52E8, 0x5450)) | set(range(0x8F1D, 0x9107))
-# more render state the gameplay step doesn't own (the renderer's job, run by native_render):
-#  - the page-flip buffer segs [0x2dd6]/[0x2dd8] (front/back VRAM page, swapped each frame)
-#  - 3668's redraw counters [0x6bd4] + [0x6bc3] (the 0x66->0x68 dither rotation) + the ISR timer tick [0x27ee]
-_PAGE_FLIP = {0x2DD6, 0x2DD7, 0x2DD8, 0x2DD9}
-_RENDER_COUNTERS = {0x27EE, 0x27EF, 0x6BD4, 0x6BC3}
-# 35A1 (dirty-grid redraw) + 3A27 (scroll-copy) own the smooth HORIZONTAL-scroll render state (5643/camera_follow
-# does only the vertical): the displayed scroll-X counter [0x2de0], the scroll-copy SOURCE pointer [0x2dba/bb]
-# (calc_scroll_source; render_frame's `scroll_src` ring-buffer offset — the renderer 3A27/348D owns it, the
-# gameplay step's camera-follow only writes it as a by-product), and the dirty-grid / background-pointer block
-# [0x2dee..0x2df8) (incl. [0x2df6] bg ptr) — render, run by native_render, not the gameplay step.
-_SCROLL_RENDER = {0x2DBA, 0x2DBB, 0x2DE0, 0x2DE1} | set(range(0x2DEE, 0x2DF8))
-# each object slot's +5 byte holds render page/visibility flags (bits 0x20|0x40) that 26FA (object_render) writes
-# -> mask just those two bits so the gameplay low bits still verify (slots: base 0x4F0A, stride 0x12).
-_SLOT5_PAGE = {0x4F0A + i * 0x12 + 5 for i in range(0x75)}
-# each rendered sprite's +0x11 byte is the object_render attr/animation countdown (the recovered 0x1FFF attr):
-# 60FE (particles) seeds it, then 26FA (object_render) decrements it each frame as it draws — render-owned
-# (native_render decrements it), so the gameplay step leaves it for the renderer (base 0x4F0A, stride 0x12).
-_SLOT_ATTR = {0x4F0A + i * 0x12 + 0x11 for i in range(0x75)}
-# 1C65 (the vsync/frame-sync wait inside 44FB) maintains the page-flip-pending counter [0x6be7] — timing/waiting
-# machinery the native port replaces with its heartbeat (lifecycle Phase 10), never gameplay state.
-_TIMING = {0x6BE7}
-# 4624's player-sprite render slot [0x6CA0..0x6CA2): a sibling of 454E's bg-save slot [0x6CA2..0x6CA6] — the
-# saved sprite position the renderer compares + writes (1030:460C cmp [0x6CA0] / 4624 mov [0x6CA0],dx). The
-# gameplay step never writes it (native_gameplay_frame leaves it at the seed; native_render owns it), so it is
-# render state, not gameplay. (Surfaced by the game-tick verifier at gorilla tick 585 as a 2-byte stale.)
-_PLAYER_REDRAW = {0x6CA0, 0x6CA1}
-# [0x6BBD] is the third combat_interaction REDRAW_DIRTY flag (with [0x2DF4]/[0x2DE0], already excluded above):
-# set when a consumed tile needs redraw, then read + cleared by the render (3668/animation). native_render owns
-# the clear, so the gameplay step leaves it set -> render-dirty signal, not gameplay state. (The consumed tile's
-# actual map/score change is verified elsewhere.) Surfaced by the game-tick verifier at gorilla tick 611.
-_REDRAW_DIRTY = {0x6BBD}
-# the SFX / sound-engine working block. play_sfx (0282) writes the descriptor [0x1004-0x1007] (already above);
-# the sound engine then owns [0x1035..0x1220): the 11 PC-speaker note structs [0x1035..0x10A5] AND the digital
-# SoundBlaster channel/mix + DMA-block state [0x10A5..0x1218] the SB ISR churns every frame while a sound plays
-# (observed extent over a full level demo; the block size is fixed by the game's SB driver). This is AUDIO, not
-# gameplay: the VM-less core has no SB (its audio is a separate native system), so it never writes this region.
-# It MUST be excluded or a demo replayed WITH the SB (as recorded) diverges here every tick even though the
-# gameplay is byte-identical — the trap that made a desynced tick-demo look like it "passed".
-_SFX_ENGINE = set(range(0x1035, 0x1220))
-_EXCL = (set((0x1004, 0x1005, 0x1006, 0x1007)) | _SFX_ENGINE | set(range(0x27F0, 0x2800))
-         | set(range(0x2820, 0x2880)) | set(range(0xAB0, 0xE00)) | set(RENDER_OFFSETS) | _RENDER_DRAWLIST
-         | _PAGE_FLIP | _RENDER_COUNTERS | _SLOT_ATTR | _SCROLL_RENDER | _TIMING | _PLAYER_REDRAW | _REDRAW_DIRTY)
+# The seam sites + the gameplay-vs-render DGROUP ownership map moved VERBATIM to pre2/native/seams.py
+# (the native layer needs them — game_tick_demo's digest — and native must not import the probes, which pull
+# the VM at top level). Re-exported here so the probe surface is unchanged (see pre2-oracle re-export rule).
+from pre2.native.seams import (DS, DS_BASE, FRAME_TOP, DECODE, KEY_SAMPLE, GAP_SITE, KBD,        # noqa: E402,F401
+                               _EXCL, _SLOT5_PAGE, _RENDER_DRAWLIST, _PAGE_FLIP, _RENDER_COUNTERS,
+                               _SCROLL_RENDER, _SLOT_ATTR, _TIMING, _PLAYER_REDRAW, _REDRAW_DIRTY,
+                               _SFX_ENGINE)
 
 
 def _run(demo, lim, totals):

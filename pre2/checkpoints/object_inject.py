@@ -21,7 +21,7 @@ from dos_re.hooks import registry
 from pre2.recovered.object_inject import (OBJ_BASE, OBJ_STRIDE, ProjectResult, find_free_object_slot,
                                           project_entity, second_pass_tick)
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x7F26)
 _EXIT = (0x1030, 0x7F6B)       # the single ret (both the success `clc;ret` and the off-screen/no-slot `jb`)

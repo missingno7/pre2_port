@@ -22,7 +22,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.recovered.animation import advance_animation
 
-from .common import report
+from pre2.gaps import report
 
 _DS = 0x1A0F
 _ENTRY = (0x1030, 0x367D)

@@ -143,9 +143,20 @@ class NativeAudio:
         self._emit = emit
         self._game_root = game_root
         self._song = None     # last song order-signature emitted (fire once per change)
+        self._req_file = None  # last song_request .TRK loaded (gate the per-frame boss re-request)
 
     def poll(self, state) -> None:
         """Emit the audio commands the native frame just produced. Call once per displayed frame."""
+        # --- a recovered routine requested a song by 02CC INDEX (the 7585 boss-music seam): load its .TRK
+        #     order table once per change (the request repeats every boss frame, exactly like the ASM re-calling
+        #     02CC; the fingerprint below then emits StartSong once) ---
+        req = getattr(state, "song_request", None)
+        if req is not None:
+            state.song_request = None
+            name = _SONG_INDEX_TO_FILE.get(req)
+            if name is not None and name != self._req_file:
+                self._req_file = name
+                native_load_song(state, name, self._game_root)
         # --- music: the recovered loader wrote the order table; emit StartSong once it changes ---
         fp = song_load_fingerprint(state)                       # uses state.data (NativeGameState)
         if fp != self._song:

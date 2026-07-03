@@ -15,7 +15,7 @@ from collections import Counter
 
 from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
 from pre2.bridge.object_tick import LiveWalkerMem
-from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2GameOverTransition, Pre2HybridGap,
+from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
                                      Pre2LevelEndTransition, Pre2RespawnTransition)
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
@@ -110,14 +110,25 @@ def native_object_spawn_step(state) -> None:
 
     (object_tick + the 2nd pass run via their own bridges; they move onto NativeGameState as those adapters do.)
     """
+    from pre2.recovered.object_spawn import GLYPH_LATCH, SONG_REQUEST
+
+    def _apply(writes):
+        song = writes.pop(SONG_REQUEST, None)             # [asm 7585: 7599-759C] boss-music load (02CC idx 0xD)
+        if song is not None:
+            state.song_request = song                     # consumed by NativeAudio.poll (file-free frame)
+        glyph = writes.pop(GLYPH_LATCH, None)             # [asm 6BD3/6BD7] the mode-9 boss glyph for the renderer
+        if glyph is not None:
+            state.boss_glyph = glyph
+        apply_ds(state, writes)
+
     rb, rw = readers(state)
     try:
         if rb(0x91FE) != 0xFF:                # [asm 6822/6827] camera active -> 70D7
-            apply_ds(state, camera_engine(rb, rw, tile_reader(state)))
+            _apply(camera_engine(rb, rw, tile_reader(state)))
         if rb(0x2D8A) == 5 and (rb(0x8166) & 0xFE) == 0 and rw(0xA326) != 3:   # [asm 682C-6841] level-6 tree boss
-            apply_ds(state, tick_level6_boss(rb, rw))         # 6D34 (fails loud on the phase-3 death finale)
+            _apply(tick_level6_boss(rb, rw))              # 6D34 (fails loud on the phase-3 death finale)
         if rb(0x2D8A) == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
-            apply_ds(state, tick_mode9_boss(rb, rw))
+            _apply(tick_mode9_boss(rb, rw))
     except Pre2SpawnGap as exc:
         raise Pre2HybridGap(f"native object-spawn: {exc}") from exc
 
@@ -363,13 +374,12 @@ def native_level_state(state) -> None:
         runtime/flow driver, rendering each frame) — running it blocking here would teleport the player to the
         checkpoint with no animation. The boss hit set [0x6be4]=2 (8295/65b3); the player step counts it 2->1->0;
       * [0x6be4]!=0 (i.e. ==2) -> idle this frame (4C69 dispatches nothing while the respawn counter is winding);
-      * [0x6be5]==1 death (5063) / ==0xff game-over (5034) / [0x6be6] level-end (4F65) -> the carry paths that
-        return to main's level change at 0x12f — not yet recovered, so fail loud (the death/game-over demos)."""
+      * [0x6be5]==1 death -> game-over restart (5063) / ==0xff GAME-COMPLETE -> THE END (5034) / [0x6be6]
+        level-end (4F65) -> the carry paths that return to main's level change at 0x12f."""
     rb, _ = readers(state)
-    if rb(0x6BE6) == 1:
-        raise Pre2LevelEndTransition()                            # [asm 4cba] level-end -> next level (a transition)
-    if rb(0x6BE6) != 0:
-        raise Pre2HybridGap("native level-state: level-warp ([0x6be6]>1 -> 4c74 warp table) not recovered")
+    if rb(0x6BE6) != 0:                                           # ==1 normal level-end, >1 the 4C74 warp — both
+        raise Pre2LevelEndTransition()                            # [asm 4cba/4c74] a transition; native_level_end
+        #                                                          reads [0x6be6] + the [0x2cf6] table to pick the level
     if rb(0x6BE4) == 1:
         raise Pre2RespawnTransition()                              # [asm 4f6c] respawn — a multi-frame transition
     if rb(0x6BE4) != 0:
@@ -377,7 +387,7 @@ def native_level_state(state) -> None:
     if rb(0x6BE5) == 1:
         raise Pre2GameOverTransition()                            # [asm 5063] death -> game-over restart (level 1)
     if rb(0x6BE5) == 0xFF:
-        raise Pre2HybridGap("native level-state: game-over (5034, carry -> 0x12f) not recovered")
+        raise Pre2GameComplete()                                  # [asm 5034] THE END (level 0xE cleared)
 
 
 def native_respawn_gate(state) -> None:
@@ -545,11 +555,18 @@ def native_object_render_state(state) -> None:
     read the camera with frame_pre_inc=False. Composes the SAME recovered leaves the object_render checkpoint
     verifies (plan_sprite -> drawn, plan_record_update, write_record)."""
     cam = _obj_render.read_camera(state, frame_pre_inc=False)
+    flash: list[int] = []
     for off, spr in _obj_render.read_active_list(state):
         if spr.sprite_id == 0xFFFF:                                 # [asm 2713] empty slot
             continue
+        # [asm 2757/28BA] the OPAQUE/flash flag (id bit14 = 0x4000) is READ here to pick the solid-white silhouette,
+        # then plan_record_update CLEARS it (& 0xBF) — a one-frame flash. Capture the slot so native_render can
+        # re-apply it (the fresh render at the commit boundary sees the already-cleared record otherwise).
+        if spr.sprite_id & 0x4000:
+            flash.append(off)
         draw = plan_sprite(spr, _obj_render.read_attr(state, spr.sprite_id), cam)   # the draw/visibility decision
         _obj_render.write_record(state, off, plan_record_update(spr, draw is not None))  # [asm 2732/2742/28B6]
+    state.flash_slots = flash or None
 
 
 def native_death_bounce_509d(state):
@@ -573,7 +590,8 @@ def native_death_bounce_509d(state):
         return v - 0x10000 if v & 0x8000 else v
 
     rb, rw = readers(state)
-    # [asm 50a6-50b7] play_sfx(7) (an audio command, no DGROUP) + the death pose
+    from pre2.native.audio import native_play_sfx
+    native_play_sfx(state, 7)                                        # [asm 50a6-50a9] the death SCREAM (play_sfx 7)
     _wb(state, 0x4F2D, 0)                                            # [asm 50ac] clear the player death-state byte
     _ww(state, 0x4F20, 0x21)                                        # [asm 50b1] death anim frame
     _ww(state, 0x4F2A, 0x0F)                                        # [asm 50b7] Yvel = +15 (the upward kick)

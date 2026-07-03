@@ -14,7 +14,7 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from pre2.bridge.input_decode import apply_ds, readers
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.gaps import Pre2HybridGap
 from pre2.recovered.input_decode import decode_input, Pre2InputGap
 
 

@@ -25,7 +25,7 @@ from pre2.bridge import sprites as _spr
 from pre2.recovered.sprite_classify import FIRST_PARTIAL_ID, classify_sprites
 from pre2.recovered.sprite_decode import SLOT_BYTES
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x4232)
 _EXIT = (0x1030, 0x42AE)

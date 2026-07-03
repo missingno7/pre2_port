@@ -21,7 +21,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
 from pre2.runtime import load_pre2_snapshot
-from pre2.checkpoints.common import Pre2HybridGap
+from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG, NativeGameState
 from pre2.native.player import native_player_step, RENDER_OFFSETS
 import play

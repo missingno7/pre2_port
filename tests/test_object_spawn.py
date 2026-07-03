@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_hit_burst, boss_pre_interp,
+from pre2.recovered.object_spawn import (EFFECT_ROW_STRIDE, SCROLL_PHASE, boss_death_burst_94f3, boss_hit_burst,
+                                         camera_state6_finale, boss_pre_interp,
                                          boss_script_interp, camera_boundary_collision, camera_engine,
                                          camera_offset_lookup, camera_script_interp, camera_state_machine,
                                          camera_target_bounce, hurt_effect, inc_scroll_phase, init_effect_row,
+                                         player_death,
                                          player_cursor_dist, scan_camera_targets, spawn_boss_bolt_1ca,
                                          spawn_boss_bolt_1cb, tick_level6_boss, tick_mode9_boss, tick_mode9_spawn,
                                          tick_scroll_cursor)
@@ -22,6 +24,7 @@ _LO = 0x56A2
 
 
 def _golden_case(name, call):
+    from pre2.recovered.object_spawn import SONG_REQUEST
     cases = json.loads((Path(__file__).parent / "fixtures" / "object_spawn" / f"{name}.json").read_text())
     assert cases, f"no fixture cases for {name}"
     for case in cases:
@@ -30,6 +33,9 @@ def _golden_case(name, call):
         tile_d = {int(k): v for k, v in case.get("tile", {}).items()}
         golden = {int(k): tuple(v) for k, v in case["writes"].items()}
         writes = call(lambda o: rb_d[o & 0xFFFF], lambda o: rw_d[o & 0xFFFF], lambda o: tile_d[o & 0xFFFF])
+        from pre2.recovered.object_spawn import GLYPH_LATCH
+        writes.pop(SONG_REQUEST, None)   # contract metadata, not DGROUP writes (the goldens capture DGROUP only;
+        writes.pop(GLYPH_LATCH, None)    # the sentinels are pinned by their own unit tests)
         assert writes == golden
 
 
@@ -112,11 +118,15 @@ def test_boss_script_interp():
     def call(state):
         rb = lambda o: state.get(o & 0xFFFF, 0) & 0xFF
         return boss_script_interp(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
-    assert call({0xA517: 0x00, 0xA518: 0x05, 0x500: 0x41}) == {0xA517: (0x501, 2)}   # cursor 0x500 -> glyph
+    from pre2.recovered.object_spawn import GLYPH_LATCH
+    w1 = call({0xA517: 0x00, 0xA518: 0x05, 0x500: 0x41})                 # cursor 0x500 -> glyph
+    assert w1.pop(GLYPH_LATCH) == 0x41                                   # [asm 6BD7] the glyph handed to 6C0D
+    assert w1 == {0xA517: (0x501, 2)}
     st = {0xA517: 0x00, 0xA518: 0x05, 0x500: 0xFE, 0x501: 0x41, 0xA515: 3,           # 0xFE (spawn 0x1CB) then glyph
           0x50AC: 0xFF, 0x50AD: 0xFF, 0x2CEC: 1, 0x2CED: 2, 0x2CEE: 3, 0x2CEF: 4}
     w2 = call(st)
     assert w2[0x50AC] == (0x1CB, 2) and w2[0xA517] == (0x501, 2)         # spawned 0x1CB, then advanced past 0xFE
+    assert w2[GLYPH_LATCH] == 0x41
 
 
 def test_boss_pre_interp():
@@ -204,6 +214,40 @@ def test_camera_state_machine_simple_states():
     assert call(5, 0, timer=0x20) == {0xA3F7: (0, 2), 0x91FE: (1, 1)}     # state 5 dwell elapsed: back to state 1
 
 
+def test_boss_death_finales():
+    # 94F3 boss-death diamond burst + the camera state-6 (gorilla) finale. Verified byte-exact vs the live ASM
+    # by synthetic invoke (0 diff on 94F3/7491/7041); this guards the composition + that they no longer fail loud.
+    d = {0x5648: 0x00, 0x5649: 0x01, 0x564A: 0x80, 0x2CEC: 0x11, 0x2CED: 0x22, 0x2CEE: 0x33, 0x2CEF: 0x44}
+    for k in range(0x20):                                     # free the 0x50A8 effect pool
+        d[0x50A8 + k * 0x12 + 4] = 0xFF; d[0x50A8 + k * 0x12 + 5] = 0xFF
+    rb = lambda o: d.get(o & 0xFFFF, 0) & 0xFF                # noqa: E731
+    rw = lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)        # noqa: E731
+
+    burst = boss_death_burst_94f3(rb, rw)
+    assert burst[0x2CEC] != (0x11, 1)                         # the rng advanced (rolled 4 sprite ids)
+    assert sum(1 for k in range(0x20) if burst.get(0x50A8 + k * 0x12 + 4, (0xFFFF, 2))[0] != 0xFFFF) == 4
+
+    fin = camera_state6_finale(rb, rw)
+    assert fin[0x91FE] == (0xFF, 1)                           # camera state machine disabled
+    for off in (0x564C, 0x565E, 0x5670, 0x5682, 0x5694):
+        assert fin[off] == (0xFFFF, 2)                        # the 5 boss target records cleared
+    spawned = sum(1 for k in range(0x20) if fin.get(0x50A8 + k * 0x12 + 4, (0xFFFF, 2))[0] != 0xFFFF)
+    assert spawned == 17                                      # 4 bursts x 4 sprites + 1 final = 17
+
+
+def test_player_death_65b3():
+    # 65B3 player death: byte-exact vs the ASM across its three branches (verified synthetically against the live
+    # 65B3 from the gorilla-death snapshot 004821). Arms the 4C69 death/respawn selectors; the crush chain
+    # (824D -> 65B3) used to raise Pre2SpawnGap here (the gorilla-fight death gap).
+    def call(be4, lives):
+        d = {0x6BE4: be4, 0x27D8: lives, 0x27D6: 0xFF, 0x6BE5: 0}
+        rb = lambda o: d.get(o & 0xFFFF, 0) & 0xFF                # noqa: E731
+        return player_death(rb, lambda o: rb(o) | (rb(o + 1) << 8))
+    assert call(0, 2) == {0x27D8: (1, 1), 0x27D6: (0, 1), 0x6BE4: (2, 1)}   # a life remains -> death + respawn
+    assert call(0, 0) == {0x6BE5: (1, 1)}                                    # no lives left -> game over
+    assert call(2, 2) == {}                                                  # already dispatching a death -> no-op
+
+
 def test_camera_offset_lookup():
     # 94DC: scan the [0xA6ED] stride-6 table for (dx, ax) -> value. Shadow 0-div / 1124 gorilla calls.
     tbl = {0xA6ED: 0x10, 0xA6EF: 0x20, 0xA6F1: 0x1234,    # entry 0: key (0x10, 0x20) -> 0x1234
@@ -223,4 +267,16 @@ def test_tick_level6_boss_byte_exact():
     golden = {int(k): tuple(v) for k, v in case["writes"].items()}
     rb = lambda o: rb_d[o & 0xFFFF]                       # noqa: E731 (KeyError if a regression reads new bytes)
     rw = lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)    # noqa: E731
-    assert tick_level6_boss(rb, rw) == golden
+    writes = tick_level6_boss(rb, rw)
+    from pre2.recovered.object_spawn import BOSS_SONG_INDEX, SONG_REQUEST
+    assert writes.pop(SONG_REQUEST) == BOSS_SONG_INDEX    # the live boss bar re-requests MONSTER (7585 cx>0)
+    assert writes == golden
+
+
+def test_init_effect_row_boss_song():
+    # [asm 7585: 7597 jcxz / 7599-759C] a NON-EMPTY boss health-bar row loads song 0xD (MONSTER.TRK) via 02CC —
+    # returned as the SONG_REQUEST sentinel (popped by the adapters: native -> state.song_request; hybrid ->
+    # a tail-call into the real 02CC). cx=0 (jcxz) skips the load.
+    from pre2.recovered.object_spawn import BOSS_SONG_INDEX, SONG_REQUEST, init_effect_row
+    assert SONG_REQUEST not in init_effect_row(0)
+    assert init_effect_row(3)[SONG_REQUEST] == BOSS_SONG_INDEX == 0xD

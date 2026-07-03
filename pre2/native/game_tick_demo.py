@@ -23,15 +23,15 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from pre2.checkpoints.common import (Pre2CaveTeleport, Pre2GameOverTransition, Pre2HybridGap,
+from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
                                      Pre2LevelEndTransition, Pre2RespawnTransition)
 from pre2.native.level_init import native_level_init
 from pre2.native.level_state import native_4f6c, native_5063, native_level_end
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.state import NativeGameState
 # Reuse the forward oracle's tick seams + the gameplay/render boundary (single source of truth):
-from pre2.probes.probe_native_frame import DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, _SLOT5_PAGE
-from pre2.probes.probe_native_forward import _FWD_EXCL
+from pre2.native.seams import (DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, KEY_SAMPLE,
+                               _FWD_EXCL, _SLOT5_PAGE, _SLOT_BASE, _SLOT_STRIDE)
 
 DS = 0x1A0F
 
@@ -48,6 +48,14 @@ def gameplay_digest(dgroup: bytes | bytearray) -> str:
     for o in _SLOT5_PAGE:
         if o < 0x10000:
             buf[o] &= 0x9F
+    # An EMPTY render slot ([+4:6]==0xFFFF) keeps STALE projected X/Y (fields 0-3) — render residue the gameplay
+    # tick never reads (native's projection doesn't refresh a freed slot, so its old x/y drifts vs the VM's). The
+    # forward-oracle byte compare excludes exactly this (both-empty slots, all but the player 0x4F1C); the digest
+    # must use the SAME boundary or it flags a non-divergence. Zero fields 0-3 of THIS dgroup's empty slots — when
+    # both runs have the slot empty their zeroed x/y match; a real occupancy change still shows in the id [+4].
+    for b in range(_SLOT_BASE, 0x5732, _SLOT_STRIDE):
+        if b != 0x4F1C and dgroup[b + 4] == 0xFF and dgroup[b + 5] == 0xFF:
+            buf[b] = buf[b + 1] = buf[b + 2] = buf[b + 3] = 0
     return hashlib.sha1(buf).hexdigest()
 
 
@@ -133,7 +141,11 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
             if ip == FRAME_TOP and rec["seed"] is None:
                 rec["seed"] = bytes(mem.data)                      # native bootstrap (first gameplay frame)
                 out.seed = rec["seed"]
-            elif ip == DECODE and rec["seed"] is not None:
+            elif ip in (DECODE, KEY_SAMPLE) and rec["seed"] is not None:
+                # Capture the sampled keys at DC1's ENTRY (0DC1) as a base — always reached, and in the HYBRID
+                # oracle DC1 is a replaced hook (0F0A never executes) so the hook's read IS at 0DC1 — then OVERWRITE
+                # at 0F0A when the PURE-ASM path reaches it (AFTER the [0x28xx] reads, so a late INT 09 key is
+                # included). Pure ASM: 0F0A wins (correct). Hybrid: only 0DC1 (correct). See KEY_SAMPLE.
                 rec["keys"] = bytes(mem.data[DS_BASE + o] for o in KBD)
                 rec["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)  # the fidget timer
             elif ip == GAP_SITE and rec["keys"] is not None:
@@ -195,6 +207,12 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
             # tick compare ends here (native reproduced the whole run up to the death), exactly like LEVEL-END.
             return i, (f"GAME-OVER at tick {i}: native played the death-bounce + reset to level 1 (5063); the "
                        f"restart is main's 0x12f front-end flow (a scene, no gameplay counterpart)")
+        except Pre2GameComplete:
+            # The player cleared the final level 0xE -> THE END (5034). That is a front-end scene (THEEND.SQZ +
+            # the fade/wait), not a gameplay tick, so the tick compare ends here — native reproduced the whole run
+            # up to the game's completion.
+            return i, (f"GAME-COMPLETE at tick {i}: native reached THE END (level 0xE cleared, 5034); the ending "
+                       f"screen is main's 0x12f front-end flow (a scene, no gameplay counterpart)")
         except Pre2LevelEndTransition:
             before = state.data[DS_BASE + 0x2D8A]
             try:

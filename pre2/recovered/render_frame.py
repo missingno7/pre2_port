@@ -101,6 +101,11 @@ class RendererState:
     # captures them here and render_frame restores them into the framebuffer before drawing — making
     # the background a real recovered render from a CLEAN framebuffer (not ASM-populated VRAM).
     asset_planes: tuple = ()   # 4x bytes of plane[ASSET_LO:0x10000], or () to use planes as-is
+    # --- the mode-9 FINAL-BOSS glyph (6C0D): 6x7 level-tile indices (row-major), or None off level 9.
+    #     The boss IMAGE is composed of level tiles blitted into the staging page each frame — without it the
+    #     final boss is INVISIBLE in the recovered render (caught by the pixel oracle on the user's boss demo:
+    #     ~2900px at rows 0..111, cols 192..287 every frame). ---
+    boss_glyph_tiles: bytes | None = None
     # --- moving-sprite pass (26FA); object_camera None => skip it ---
     object_camera: object = None     # object_render.Camera (frame counter post-incremented)
     object_sprites: tuple = ()       # the active-sprite list (object_render.Sprite records)
@@ -164,6 +169,12 @@ def render_frame(state: RendererState, planes, dac=None, rebuild=False):
             s.blit_type, s.mask_region,
         )
 
+    # 3b) the mode-9 FINAL-BOSS glyph — 6C0D (the boss image, 6x7 level tiles latched into the staging
+    #     page at byte 0x18; runs every 6822 tick on level 9, alive AND defeated). Drawn into the ring
+    #     BEFORE the scroll copy, exactly as the ASM stages it.
+    if s.boss_glyph_tiles is not None:
+        draw_boss_glyph(planes, s.boss_glyph_tiles)
+
     # 4) scroll copy — 3A27 (blit the ring buffer to the visible page)
     scroll_copy(
         planes, s.scroll_src, s.dest_page, s.col_ring, s.fine_scroll,
@@ -205,3 +216,27 @@ class _TileMapView:
         self.tiles = s.tiles
         self.tile_flags = s.type_tbl   # draw_grid ORs this into [0x2DF2]
         self.tile_type = s.blit_type   # draw_grid dispatches the blit on this
+
+
+_GLYPH_PAGE = 0x3F40        # [asm 6C0D] the fixed staging page the boss glyph is blitted into
+_GLYPH_XBYTE = 0x18         # [asm 6C10] byte offset within the row -> x = 192 px
+
+
+def draw_boss_glyph(planes, tiles: bytes) -> None:
+    """[asm 6C0D..6CA6] The mode-9 final-boss glyph blit: a 6-wide x 7-tall grid of LEVEL TILES (16x16),
+    each a write-mode-1 latched copy of 16 rows x 2 bytes from the plane-resident tile cache
+    (``0x5E80 + idx*32`` — the same cache the background draws from) into the staging page at
+    ``0x3F40 + 0x18``. ``tiles`` = the 42 index bytes, row-major (the bridge reads them from the level
+    segment at ``[glyph*6 + 0x14]`` with the ASM's 0xFA row stride)."""
+    for row in range(7):                                     # [asm 6C9F] ch=7 tile rows
+        for col in range(6):                                 # [asm 6C93] cl=6 tile columns
+            src = ASSET_LO + (tiles[row * 6 + col] << 5)     # [asm 6C2F-6C3C] idx*32 + 0x5E80
+            dst = _GLYPH_PAGE + _GLYPH_XBYTE + row * 16 * 0x28 + col * 2   # [asm 6C40/6C9B] strides
+            for p in range(4):                               # write mode 1: all four planes latched
+                pl = planes[p]
+                s0, d0 = src, dst
+                for _ in range(16):                          # [asm 6C3E..6C8B] 16 rows x 2 bytes
+                    pl[d0] = pl[s0]
+                    pl[d0 + 1] = pl[s0 + 1]
+                    s0 += 2
+                    d0 += 0x28

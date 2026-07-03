@@ -21,7 +21,7 @@ from pre2.bridge.foreground_tiles import read_foreground_state
 from pre2.bridge.sprites import plane_views
 from pre2.recovered.foreground_tiles import render_foreground_tiles
 
-from .common import report
+from pre2.gaps import report
 
 _ENTRY = (0x1030, 0x3732)
 _EXIT = (0x1030, 0x37F6)
