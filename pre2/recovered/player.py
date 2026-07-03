@@ -72,6 +72,11 @@ def _s16(v: int) -> int:
     return v - 0x10000 if v & 0x8000 else v
 
 
+def _s8(v: int) -> int:
+    v &= 0xFF
+    return v - 0x100 if v & 0x80 else v
+
+
 def player_x_integrate(x: int, xvel: int, cam_left: int) -> int:
     """Recover the player horizontal kinematics ``1030:5A0F..5A33``.
 
@@ -228,6 +233,74 @@ def player_advance_anim(anim_ptr: int, facing: int, read_word) -> tuple:
     return frame, new_ptr, bcf
 
 
+ANIM_FRAME = 0x4F20          # player animation frame word
+GLIDER_GATE = 0x6BC5         # [asm 484E] nonzero => glider/flying mode active
+GLIDER_TILT = 0x7B1A         # tilt/pitch state (0..6, neutral = 3)
+GLIDER_TILT_TABLE = 0x7B1B   # 7 words: the tilt-table wing anims (indexed by tilt)
+GLIDER_ANIM_TABLE = 0x7B29   # {frame_key: word, wing_anim: word, xoff: s8, yoff: s8} stride 6, cx==0 terminated
+
+
+def player_flying_484e(rb, rw):
+    """[asm 1030:484E] The glider / flying-mode per-frame update — active only while the flying gate ``[0x6BC5]``
+    is set (the glider pickup arms it). Two parts:
+
+    * compute the flight-animation frame ``[0x4F20]`` (only when ``[0x6BC7]!=0``) from ``|Xvel|`` (``[0x4F22]``:
+      >0x40 / 0x21..0x40 / <=0x20 -> base 0x30/0x31/0x32) OR, when the tilt ``[0x7B1A]`` is below neutral (<3), a
+      banked frame ``0x33-tilt``; the facing bit (0x8000) is preserved;
+    * auto-return the tilt toward neutral (3) by ±1 when there is no up/down input (``[0x27EA]|[0x27EB]==0``),
+      then scan the ``0x7B29`` anim table (stride 6, ``cx==0`` = end) for the entry whose key matches the frame
+      ``[0x4F20]&0x1FFF`` and place the glider WING sprite as render slot 0: ``[0x4F0A]``=playerX+xoff,
+      ``[0x4F0C]``=playerY+yoff, ``[0x4F0E]``=the wing anim (a >=0x79 wing anim indexes the tilt table; facing
+      left ORs 0x8000 into it and negates the X offset; ``[0x6BC8]>0x18`` with a low byte <0x79 bumps it by 1).
+
+    Returns the ``{offset: (value, width)}`` write contract. Empty (a no-op) when ``[0x6BC5]==0``. The gameplay
+    writes are ``[0x4F20]`` (anim) + ``[0x7B1A]`` (tilt); the wing slot ``[0x4F0A/0C/0E]`` is a render record."""
+    if rb(GLIDER_GATE) == 0:                                        # [484E] not flying
+        return {}
+    out: dict = {}
+    frame = rw(ANIM_FRAME)
+    if rb(0x6BC7) != 0:                                            # [485D] recompute the flight frame
+        f = frame & 0x8000                                         # [485F] keep the facing bit
+        ax = abs(_s16(rw(0x4F22)))                                 # [4868-486F] |Xvel|
+        dx = 0x30                                                  # [4865]
+        if ax <= 0x40:                                            # [4871-487C]
+            dx += 1
+            if ax <= 0x20:
+                dx += 1
+        tilt = rb(GLIDER_TILT)                                     # [487D]
+        if tilt < 3:                                              # [4880-4886] banked below neutral
+            dx = (0x33 - tilt) & 0xFF
+        frame = (f | dx) & 0xFFFF                                 # [4888]
+        out[ANIM_FRAME] = (frame, 2)
+    dl = (frame >> 8) & 0xFF                                      # [4892] facing/high byte
+    key = frame & 0x1FFF                                          # [4894] and ah,0x1f
+    tilt = rb(GLIDER_TILT)
+    if (rb(0x27EA) | rb(0x27EB)) == 0:                            # [4897-489F] no up/down -> auto-return the tilt
+        if tilt != 3:                                            # [48A3-48AC] step toward neutral
+            tilt = (tilt + (1 if tilt < 3 else -1)) & 0xFF        # [48AE] writes [0x7B1A] IN MEMORY, so the
+            out[GLIDER_TILT] = (tilt, 1)                          #   tilt-table lookup below sees this new value
+    si = GLIDER_ANIM_TABLE                                        # [488C]
+    while True:
+        cx = rw(si)                                              # [48B2]
+        if cx == 0:                                             # [48B4] end of table
+            return out
+        if key == cx:                                           # [48B6] matched frame
+            xoff = _s8(rb(si + 4))                               # [48BA-48BE]
+            wing = rw(si + 2)                                   # [48C0]
+            if wing >= 0x79:                                    # [48C3] -> the tilt table (indexed by the
+                wing = rw((tilt * 2 + GLIDER_TILT_TABLE) & 0xFFFF)   # [48C8-48D0] auto-returned tilt, not entry)
+            if dl & 0x80:                                        # [48D4-48DB] facing left
+                wing = (wing | 0x8000) & 0xFFFF
+                xoff = -xoff
+            if rb(0x6BC8) > 0x18 and (wing & 0xFF) < 0x79:       # [48DD-48E8]
+                wing = (wing + 1) & 0xFFFF
+            out[0x4F0E] = (wing, 2)                              # [48E9] the wing anim
+            out[0x4F0A] = ((rw(0x4F1C) + xoff) & 0xFFFF, 2)      # [48EC-48F1] wing X
+            out[0x4F0C] = ((rw(0x4F1E) + _s8(rb(si + 5))) & 0xFFFF, 2)   # [48F4-48FC] wing Y
+            return out
+        si = (si + 6) & 0xFFFF                                   # [4901]
+
+
 def player_state_run(rb, rw) -> dict:
     """Recover the ``anim_id==1`` "run" FSM handler ``1030:5EC4`` (the normal-play main path).
 
@@ -243,11 +316,25 @@ def player_state_run(rb, rw) -> dict:
 
     ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
     out = {}
+    # [asm 5ECE-5EF8] the FLYING-state block: while gliding ([0x6BC5]) at speed (|Xvel|>=0x40), count the flying
+    # timer [0x6BC8] up (saturating), dropping ONE trail sprite (5E18 = the ungated 5E11 emit) when it hits 0x17.
+    if rb(GLIDER_GATE) != 0 and abs(_s16(rw(0x4F22))) >= 0x40:                           # [5ED8-5EE2]
+        bc8 = rb(0x6BC8)
+        bc8 = 0xFF if bc8 == 0xFF else (bc8 + 1) & 0xFF                                  # [5EE4-5EE9] sat_inc
+        out[0x6BC8] = bc8
+        if bc8 == 0x17:                                                                  # [5EEE-5EF5] -> 5E18 trail
+            emit = player_emit_trail(rw(0x4F1C), rw(0x4F1E), 0, rw(0x6BBE))              # blink 0 = ungated emit
+            if emit is not None:
+                out.update(emit[0])
+                out[0x6BBE] = emit[1]
     out[0x6BD3] = _sat_inc_byte(rb(0x6BD3))                                              # [5EF9-5EFE]
     xvel = player_accel(rw(0x4F22), rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, RUN_ACCEL_LIMIT)  # [5F03-5F06]
     xvel = player_friction_dir(xvel, rw(0x6BF6))                                         # [5F09]
     out[0x4F22] = xvel
-    state, ptr = player_set_anim(1, 2, rb(0x4F27), rw(0x4F28), rw)                       # [5F0C] set_anim_b
+    # [5F0C] set_anim_b: the seq index is the dispatch `bx` (anim_id*2), which the flying gate (5960) bumped by
+    # 0x40 — so gliding plays the FLYING run sequence (0x42) instead of the ground-run one (0x02).
+    seq = 0x42 if rb(GLIDER_GATE) != 0 else 2
+    state, ptr = player_set_anim(1, seq, rb(0x4F27), rw(0x4F28), rw)
     out[0x4F27] = state
     frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)                # [5F0F]
     out[0x4F28] = new_ptr
@@ -281,20 +368,22 @@ def player_charge_6bce(v: int) -> int:
     return (v + 2) & 0xFF if v <= 0x30 else v
 
 
-def player_state_anim5(rb, rw) -> dict:
-    """Recover the ``anim_id==5`` FSM handler ``1030:5E96`` (main path, gate ``[0x6BD0]==0``).
-
-    A clean composition (entry ``al==5``, ``bx==0x0A`` preserved into ``set_anim_b``)::
+def player_state_anim5(rb, rw, anim_id: int = 5) -> dict:
+    """Recover the ``5E96`` FSM handler — the NORMAL ``anim_id==5`` state AND the FLYING dispatch's catch-all
+    (``cs:[0x7D6F]`` sends anim_id 0/3/4/6/7 here). The dispatch enters with ``al=anim_id`` and ``bx=anim_id*2``
+    (bumped by ``0x40`` under the flying gate), and both flow straight into ``set_anim_b`` — so the sequence is
+    ``anim_id*2 (+0x40 gliding)``, not a hardcoded 5/0x0A::
 
         [0x6BC8]=0 ; [0x6BE1]=4                      # 5EA0/5EA5
-        ptr = set_anim_b(anim=5, seq=0x0A)           # 5EAA player_set_anim ([0x4F27]/[0x4F28])
+        ptr = set_anim_b(anim=anim_id, seq=bx)       # 5EAA player_set_anim ([0x4F27]/[0x4F28])
         advance_anim(ptr)                            # 5EAD player_advance_anim ([0x4F20]/[0x4F28]/[0x6BCF])
         [0x4F22] = friction_sym([0x4F22])            # 5EB0 player_friction_sym
         [0x6BCE] = charge_6bce([0x6BCE])             # 5EB3 -> 5EB7
 
     ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
     out = {0x6BC8: 0, 0x6BE1: 4}
-    state, ptr = player_set_anim(5, 0x0A, rb(0x4F27), rw(0x4F28), rw)                     # [5EAA]
+    seq = (anim_id * 2 + (0x40 if rb(GLIDER_GATE) != 0 else 0)) & 0xFF                    # [dispatch bx]
+    state, ptr = player_set_anim(anim_id, seq, rb(0x4F27), rw(0x4F28), rw)                # [5EAA]
     out[0x4F27] = state
     frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)                 # [5EAD]
     out[0x4F28] = new_ptr
@@ -536,7 +625,7 @@ def player_fsm_flying_dispatch(anim_id: int, rb, rw) -> tuple:
         return _flying_jump(rb, rw), []                      # [5F13]
     if anim_id == 8:
         return {}, []                                          # [454C] ret
-    return player_state_anim5(rb, rw), []                      # [5E96] idx 0/3/4/5/6/7
+    return player_state_anim5(rb, rw, anim_id), []             # [5E96] idx 0/3/4/5/6/7 (dispatched anim_id + bx+0x40)
 
 
 def player_state_anim8(rb, rw) -> dict:

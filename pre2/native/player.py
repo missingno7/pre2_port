@@ -21,7 +21,7 @@ from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.input_decode import Pre2InputGap, decode_input
 from pre2.recovered.object_inject import find_free_object_slot
-from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, player_fsm_step,
+from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, player_flying_484e, player_fsm_step,
                                    player_tick_timers, player_x_integrate, player_y_integrate)
 from pre2.recovered.player_collision import collision
 from pre2.recovered.player_interaction import player_interaction_tick
@@ -88,8 +88,9 @@ def native_player_step(state) -> None:
     for o, v in map_w.items():
         state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF] = v & 0xFF
 
-    if rb(_MOMENTUM_GATE) != 0:                                         # [asm 5A44 -> 484E]
-        raise Pre2HybridGap("native player: active momentum (484E) not recovered")
+    if rb(_MOMENTUM_GATE) != 0:                                         # [asm 5A44 -> 484E] the glider/flying update
+        for a, (v, wd) in player_flying_484e(rb, rw).items():          # anim [0x4F20] + tilt [0x7B1A] + wing slot
+            _w(state, a, v, wd)
 
     timers = {a: rb(a) for a in TIMER_BYTES}                           # [asm 5A47-5A8B]
     timers[TIMER_WORD] = rw(TIMER_WORD)
