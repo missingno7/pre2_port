@@ -38,6 +38,31 @@ _POLL_BACKEDGE = {
     0x44E4: (0x44E1, False),   # je  0x44E1 — 44CD loopB: loop while CLEAR
 }
 
+# --- The 1C6F PIT frame-limiter wait (the game's ~23Hz gate: spin until 3 PIT ticks since the last frame) ---
+# 1c6f mov ax,[0x27EE] / 1c72 sub ax,cs:[0x1D67] / 1c77 jns 1c7b / (1c79 neg ax) / 1c7b cmp ax,3 /
+# 1c7e jb 1c6f  — 5 instructions per iteration (6 when the delta is negative). The condition source
+# [DS:0x27EE] is written ONLY by the PIT ISR, and IRQs are delivered exclusively at sub_batch boundaries
+# (`_pump`) — so WITHIN a segment the delta is CONSTANT and every iteration is register/flag/memory-identical
+# (ax + flags are recomputed from the same values each pass). While |delta| < 3 the loop cannot exit inside
+# the segment: bulk-skip whole iterations to the step budget, exactly like the retrace polls. This wait — not
+# the retrace — is where a hook-collapsed frame's surplus budget burns (~84% of all interpreted instructions
+# in --safe-hooks gameplay), so collapsing it is the difference between slide-show and fluent recording.
+_PIT_NODES = frozenset({0x1C6F, 0x1C72, 0x1C77, 0x1C79, 0x1C7B, 0x1C7E})
+_PIT_TOP = 0x1C6F
+_PIT_BACKEDGE = 0x1C7E          # jb 0x1c6f — taken while |[0x27EE] - cs:[0x1D67]| < 3
+_FF_NODES = frozenset(ALL_NODES) | _PIT_NODES
+
+
+def _pit_wait_delta(cpu):
+    """The 1C6F loop's live condition: signed [DS:0x27EE] - cs:[0x1D67] (constant within a segment)."""
+    d = cpu.mem.data
+    ds_base = (0x1A0F << 4)
+    cs_base = (_CS << 4)
+    cur = d[ds_base + 0x27EE] | (d[ds_base + 0x27EF] << 8)
+    ref = d[cs_base + 0x1D67] | (d[cs_base + 0x1D68] << 8)
+    v = (cur - ref) & 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
 
 def make_sample(det_speed, base, active_fraction):
     """Return ``sample(ic)`` reproducing ``dos._vga_status``'s SET test at ``instruction_count == ic`` under
@@ -94,7 +119,7 @@ def _fast_forward_wait(rt, sample, steps_left):
     prev_ip = None
     while steps_left > 0:
         s = cpu.s
-        if s.cs != _CS or s.ip not in ALL_NODES:
+        if s.cs != _CS or s.ip not in _FF_NODES:
             return steps_left                       # executed the `ret` (or otherwise left the loop)
         be = _POLL_BACKEDGE.get(prev_ip)
         if be is not None and s.ip == be[0]:        # arrived at a loop-top via its back-edge -> bulk-skip
@@ -108,6 +133,20 @@ def _fast_forward_wait(rt, sample, steps_left):
                 steps_left -= 3 * k                 # ... costing 3 steps each, same as interpreting them
                 prev_ip = s.ip                      # still at the loop-top `in`
                 continue                            # re-check budget / membership before stepping
+        if prev_ip == _PIT_BACKEDGE and s.ip == _PIT_TOP:   # 1C6F PIT wait: arrived at the top via jb 1c6f
+            delta = _pit_wait_delta(cpu)
+            if -3 < delta < 3:                      # loop condition holds; [0x27EE] is ISR-written and IRQs
+                #                                     only land at segment boundaries -> it CANNOT exit inside
+                #                                     this segment: skip whole identical iterations to budget.
+                length = 6 if delta < 0 else 5      # mov/sub/jns/(neg)/cmp/jb — sign fixed within the segment
+                k = 0
+                while length * (k + 1) <= steps_left:
+                    k += 1
+                if k:
+                    cpu.instruction_count += length * k   # ip/regs/flags identical each pass (ax + flags are
+                    steps_left -= length * k              # recomputed from the same operands every iteration)
+                    prev_ip = s.ip                        # still at the loop-top `mov ax,[0x27EE]`
+                    continue
         prev_ip = s.ip
         cpu.step()
         steps_left -= 1
@@ -129,7 +168,7 @@ def advance_frame_fast(rt, *, chunk_steps, sub_batch, clock, pic, sound_blaster,
         steps_left = n                              # STEP budget (cpu.step units), matching _pump_and_step
         while steps_left > 0:
             s = cpu.s
-            if s.cs == _CS and s.ip in ALL_NODES:
+            if s.cs == _CS and s.ip in _FF_NODES:
                 steps_left = _fast_forward_wait(rt, sample, steps_left)
             else:
                 cpu.step()

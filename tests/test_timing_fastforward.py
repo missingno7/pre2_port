@@ -91,3 +91,92 @@ def test_fast_forward_reaches_ret_within_a_full_frame():
         for ic0 in range(0, det_speed, 137):
             ic, ip, _ = _fast_advance(entry, sample, ic0, det_speed)   # 1s of emulated time
             assert ip not in ALL_NODES, f"entry={entry:#06x} ic0={ic0} did not exit (ip={ip:#06x})"
+
+
+# --- The 1C6F PIT frame-limiter wait (the ~23Hz gate: spin until |[0x27EE] - cs:[0x1D67]| >= 3) -----------
+# Same proof shape as the retrace loops: a mock interpreting the exact 1C6F CFG (mov/sub/jns/[neg]/cmp/jb,
+# 5 instructions per iteration, 6 when the delta is negative) must land at the IDENTICAL (instruction_count,
+# ip, leftover budget) as the bulk-skip. The condition memory ([0x27EE]) is ISR-written and IRQs land only at
+# segment boundaries, so within one _fast_forward_wait call the delta is constant — exactly what the mock
+# models. (Whole-VM byte-equivalence — 0 memory diff, identical ic, 200-300 frames, pure + safe modes — is
+# proven against the real interpreter by the same-session probe runs and the verify_fast_retrace probe.)
+
+_PIT_CFG = {
+    0x1C6F: ("mov", 0x1C72),          # mov ax,[0x27EE]
+    0x1C72: ("sub", 0x1C77),          # sub ax,cs:[0x1D67]
+    0x1C77: ("jns", 0x1C7B, 0x1C79),  # jns 1c7b (taken when delta >= 0)
+    0x1C79: ("neg", 0x1C7B),          # neg ax
+    0x1C7B: ("cmp", 0x1C7E),          # cmp ax,3
+    0x1C7E: ("jb", 0x1C6F, 0x1C80),   # jb 1c6f (taken while |delta| < 3); 1c80 = outside the node set
+}
+
+
+class _MockPitCPU:
+    """Interprets the 1C6F CFG over a tiny memory image (the two condition words)."""
+
+    def __init__(self, ip, delta, ic=0):
+        self.s = SimpleNamespace(cs=_CS, ip=ip, ax=0)
+        self.instruction_count = ic
+        data = bytearray(0x110000)
+        ref = 0x4000
+        cur = (ref + delta) & 0xFFFF
+        data[(0x1A0F << 4) + 0x27EE:(0x1A0F << 4) + 0x27F0] = cur.to_bytes(2, "little")
+        data[(_CS << 4) + 0x1D67:(_CS << 4) + 0x1D69] = ref.to_bytes(2, "little")
+        self.mem = SimpleNamespace(data=data)
+
+    def step(self):
+        node = _PIT_CFG[self.s.ip]
+        kind = node[0]
+        d = self.mem.data
+        if kind == "mov":
+            self.s.ax = d[(0x1A0F << 4) + 0x27EE] | (d[(0x1A0F << 4) + 0x27EF] << 8)
+            nxt = node[1]
+        elif kind == "sub":
+            ref = d[(_CS << 4) + 0x1D67] | (d[(_CS << 4) + 0x1D68] << 8)
+            self.s.ax = (self.s.ax - ref) & 0xFFFF
+            nxt = node[1]
+        elif kind == "jns":
+            nxt = node[2] if self.s.ax & 0x8000 else node[1]
+        elif kind == "neg":
+            self.s.ax = (-self.s.ax) & 0xFFFF
+            nxt = node[1]
+        elif kind == "cmp":
+            nxt = node[1]
+        else:                                     # jb: loop while ax (=|delta|) < 3
+            nxt = node[1] if self.s.ax < 3 else node[2]
+        self.instruction_count += 1
+        self.s.ip = nxt
+
+
+def _pit_ref(delta, ic0, budget):
+    from pre2.bridge.timing_fastforward import _FF_NODES
+    cpu = _MockPitCPU(0x1C6F, delta, ic0)
+    steps = budget
+    while steps > 0 and cpu.s.cs == _CS and cpu.s.ip in _FF_NODES:
+        cpu.step()
+        steps -= 1
+    return cpu.instruction_count, cpu.s.ip, steps, cpu.s.ax
+
+
+def _pit_fast(delta, ic0, budget):
+    cpu = _MockPitCPU(0x1C6F, delta, ic0)
+    rt = SimpleNamespace(cpu=cpu)
+    sample = make_sample(6428 * 70, 0.0, 0.06)     # retrace sampler; unused by the PIT branch
+    left = _fast_forward_wait(rt, sample, budget)
+    return cpu.instruction_count, cpu.s.ip, left, cpu.s.ax
+
+
+def test_pit_wait_fast_forward_equals_naive_stepping():
+    checked = 0
+    for delta in (-2, -1, 0, 1, 2):                # loop-forever deltas (constant within a segment)
+        for budget in (1, 2, 4, 5, 6, 7, 11, 12, 29, 300, 2000, 30000):
+            for ic0 in (0, 3, 1234):
+                assert _pit_fast(delta, ic0, budget) == _pit_ref(delta, ic0, budget), \
+                    f"divergence delta={delta} budget={budget} ic0={ic0}"
+                checked += 1
+    for delta in (3, -3, 7, 100, -32768):          # exit-immediately deltas: no skip, plain interpretation
+        for budget in (1, 5, 6, 20):
+            assert _pit_fast(delta, 0, budget) == _pit_ref(delta, 0, budget), \
+                f"divergence delta={delta} budget={budget}"
+            checked += 1
+    assert checked > 190
