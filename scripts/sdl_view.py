@@ -517,14 +517,12 @@ def _planar_to_rgb(get_plane, display_start: int, palette, wrap: int, pel_pan: i
         color |= bits << plane
     win = color.reshape(HEIGHT, ncols * 8)[:, pel:pel + aw]                     # (200, aw) active pixels
     if aw < WIDTH:
-        # The CRTC fetches only aw/8 byte-columns (H Display End); the pel-pan then shifts the display
-        # left by `pel`, so the last `pel` active pixels — which would need the NEXT, un-fetched byte
-        # (the column scrolling in) — fall in the overscan/border, OFF the active area, not on-screen.
-        # Dropping them keeps the carte's incoming column hidden in the border so its fine scroll stays
-        # fluent (without 312px clipping, that column pops in at the right edge — the reported glitch).
-        cw = aw - pel
+        # The H-Display-End clips the active area to a FIXED aw pixels (columns aw..319 = the overscan border),
+        # and the pel-pan scrolls the fetched content UNDER that fixed boundary. Earlier this dropped the last
+        # `pel` pixels (cw = aw - pel), which moved the map/border boundary itself back and forth with pel — the
+        # carte's right edge STUTTERED. The boundary must stay put at aw-1; the content just scrolls beneath it.
         idx = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-        idx[:, :cw] = win[:, :cw]
+        idx[:, :aw] = win                                                      # fixed boundary at aw-1; aw..319 border
     else:
         idx = win
     return pal[idx]
