@@ -570,6 +570,8 @@ def main(argv=None) -> int:
         state = native_cold_boot(gr, level=args.from_level)
         dos = NativeVGA()
         native_load_level_palette(state, dos)
+        from pre2.native.audio import native_load_song, native_level_song_name
+        native_load_song(state, native_level_song_name(state), gr)  # start the level music (the front-end normally does this at 01B7)
         reveal_level(state, dos)                                    # 3054 center-out curtain into the level
         gameplay_loop(state, dos)
         pygame.quit()
@@ -593,6 +595,8 @@ def main(argv=None) -> int:
         init_keyboard_input(state)
         dos = NativeVGA()
         native_load_level_palette(state, dos)
+        from pre2.native.audio import native_load_song, native_level_song_name
+        native_load_song(state, native_level_song_name(state), gr)  # start the level music (the front-end normally does this at 01B7)
         reveal_level(state, dos)                                    # 3054 center-out curtain into the level
         gameplay_loop(state, dos)
         pygame.quit()

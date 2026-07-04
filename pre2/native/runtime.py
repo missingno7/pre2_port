@@ -159,6 +159,15 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
         ap = rw(0x4F28)                                              # [asm 638B] step the player walk animation
         fr, nptr, bcf = player_advance_anim(ap, d[_DS + 0x4F25], rw)
         ww(0x4F20, fr); ww(0x4F28, nptr); wb(0x6BCF, bcf)
+        # [asm 51F0] the pot-FLAME animation — the ASM calls 51F0 each pot-phase frame (slide-in/throw/count-up),
+        # BEFORE 26FA bumps [0x6BD5]: every 4th frame ([0x6BD5]&3==0) it advances the flame sprite id [0x4F56]
+        # (masked to the base id, so its collectible flag drops) through 0x68..0x6D and wraps. Guard on the flame
+        # id range so it fires only while the pot is on screen (the 316F clear leaves [0x4F56]=0xFFFF during the
+        # player walk-in). Without this the flame was frozen (user: "the pot should be animated and it isn't").
+        if (d[_DS + 0x6BD5] & 3) == 0:
+            fid = rw(0x4F56) & 0x1FFF
+            if 0x68 <= fid < 0x6E:
+                ww(0x4F56, 0x68 if fid + 1 >= 0x6E else fid + 1)
         _ww_ctr()                                                   # advance the free-running frame counter
         native_sync_render_state(state)                            # cheap; maintains the tile-ring indices
         #                                                            [0x2DE8]/[0x2DEA] the VM's render cluster updates
