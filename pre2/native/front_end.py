@@ -531,8 +531,10 @@ def _native_carte(state, dos, game_root: str):
     while True:
         planes = build_carte_page(master, scroll_x)            # [asm 9613] reveal the map up to scroll_x
         ds, pel = carte_display(scroll_x)                      # [asm 97A8-style] CRTC display start + pel pan
+        # [asm CRTC r01 -> 312px] the carte narrows the H-display to 312 (39 chars) while it pel-pans, hiding the
+        # right 8 columns where the not-yet-revealed / wrap seam would otherwise show. Match it so no artifact leaks.
         yield FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
-                            page=ds, pel=pel, wrap=0x1FFF)
+                            page=ds, pel=pel, wrap=0x1FFF, active_width=312)
         apply_ds(state, decode_input(rb, rw))
         fire = (rb(0x27E8) | rb(0x2832)) != 0
         # confirm on a fresh fire press OR when the scroll-in reaches the end (auto-advance) — either way the
