@@ -218,6 +218,43 @@ def _dup_double_buffer(d) -> None:
     d[_DS + 0x9203:_DS + 0x9203 + 0x10A5] = d[_DS + 0x815E:_DS + 0x815E + 0x10A5]
 
 
+def _build_trigger_bank(d) -> None:
+    """[asm 41CA] SAVE the pristine proximity-scenery map blocks into the ``[0x2875]`` bank. For each live
+    ``[0x83F3]`` entry (15 x stride 0xA, ``[+0]`` != 0xFFFF): the block spans from ``[+0] - [+8]*0x100`` (the
+    trigger top minus the countdown rows — everything the collapse will ever shift) over ``[+3]+[+8]`` rows x
+    ``[+2]`` columns of the level map (``ds=[0x2DDA]``). Bank record: ``{word map_off, byte rows, byte width,
+    tiles row-major}``, 0xFFFF-terminated; the entry's ``[+6]`` gets the bank offset of the LAST saved row (the
+    reveal cursor 5427 walks backward by width per fire). Consumers: the 5427 map-mod reveal source and the
+    52D2 restore (respawn / level-start un-collapse). Note the 4065 dup runs BEFORE this, so the [0x9203]
+    backup keeps the pre-41CA ``[+6]`` (0xFFFF) — 5237's 5251 restore puts 0xFFFF back each respawn, exactly
+    as observed in the L0xD snapshots."""
+    bank = (d[_DS + 0x2875] | (d[_DS + 0x2876] << 8)) << 4           # [asm 41ca] es = [0x2875]
+    mapb = (d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)) << 4           # [asm 41fc] ds = [0x2DDA]
+    di = 0                                                           # [asm 41ce]
+    d[bank] = 0xFF; d[bank + 1] = 0xFF                               # [asm 41d0] empty-bank terminator
+    for k in range(0xF):                                             # [asm 41d5/41d8] 15 entries
+        bx = 0x83F3 + k * 0xA
+        src = d[_DS + bx] | (d[_DS + bx + 1] << 8)
+        if src == 0xFFFF:                                            # [asm 41db] dead entry
+            continue
+        count = d[_DS + bx + 8]                                      # [asm 41e8] ah=[bx+8]
+        si = (src - (count << 8)) & 0xFFFF                           # [asm 41ed] si -= count*0x100
+        rows = (d[_DS + bx + 3] + count) & 0xFF                      # [asm 41ef/41f2] dl = height + count
+        width = d[_DS + bx + 2]                                      # [asm 41f5] dh
+        d[bank + di] = si & 0xFF; d[bank + di + 1] = si >> 8         # [asm 4200] es:[di] = map offset
+        d[bank + di + 2] = rows; d[bank + di + 3] = width            # [asm 4203] es:[di+2] = dx (dl,dh)
+        di += 4                                                      # [asm 4207]
+        for _r in range(rows):                                       # [asm 420a-421d]
+            for c in range(width):                                   # movsb x width (one map row)
+                d[bank + di] = d[mapb + ((si + c) & 0xFFFF)]
+                di += 1
+            si = (si + 0x100) & 0xFFFF                               # [asm 4215/4217] next map row
+        cursor = (di - width) & 0xFFFF                               # [asm 4224] the LAST saved row's offset
+        d[_DS + bx + 6] = cursor & 0xFF                              # [asm 4228] [bx+6] = the reveal cursor
+        d[_DS + bx + 7] = cursor >> 8
+        d[bank + di] = 0xFF; d[bank + di + 1] = 0xFF                 # [asm 422b] terminator after this entry
+
+
 def native_level_load_objects(state) -> None:
     """The DGROUP-only object/effect-table setup that runs after the property copy [asm 4059..409d]:
     the two sprite-bank rebases + the double-buffer dup. (42af tile tables, 3ead level-data patch, 40bd
@@ -229,6 +266,7 @@ def native_level_load_objects(state) -> None:
     _self_patch_secret_tiles(d)      # 3ead: hide the secret/bonus tiles + count into [0x2a74]
     _assign_random_decor(d)          # 40bd
     _dup_double_buffer(d)            # 4065
+    _build_trigger_bank(d)           # 41ca: save the pristine scenery blocks -> [0x2875] (52D2/5427 read them)
     _count_decor(d)                  # 4073..40bb
 
 
@@ -393,14 +431,12 @@ def native_level_load(state, level: int, *, game_root: str) -> None:
       * ``native_level_load_classify``— the tile/sprite type tables (``4232``, byte-exact over the full cache).
 
     All verified byte-exact vs the ASM against a clean-VRAM 3ed6 witness (LOCAL 173/173, SHARED 83/83, classify +
-    42af 0 diff). The ``3ead`` secret-tile self-patch IS recovered and live (``_self_patch_secret_tiles`` in
-    ``native_level_load_objects``). Still TODO: the ``41ca`` proximity-scenery sprite PRE-BUILD (the per-frame
-    proximity SCAN + map-mod at 53F6 are already live in ``loop.native_proximity_trigger``; 41ca only pre-builds
-    the reveal-source sprites into the ``[0x2875]`` bump segment and seeds the ``[0x83F3][+6]`` pointers — its
-    exact ``[+6]``/``[0x2875]`` indexing needs a live L0xD load+fire trace to recover byte-exact, ambiguous from
-    static snapshots), and the ``0x9dc0`` parallax-background blit (its source over-reads past the level data into
-    the next bump allocation, a memory-layout coupling — not just the level file). Tracked in
-    [[pre2-level-init-island]]."""
+    42af 0 diff). The ``3ead`` secret-tile self-patch and the ``41ca`` proximity-scenery bank build are both
+    recovered and live (``_self_patch_secret_tiles`` / ``_build_trigger_bank`` in ``native_level_load_objects``;
+    the [+6]=0xFFFF-at-gameplay mystery resolved: the 4065 dup precedes 41ca, so 5237's 5251 backup-restore
+    reverts [+6] at level start and every respawn). Still TODO: the ``0x9dc0`` parallax-background blit (its
+    source over-reads past the level data into the next bump allocation, a memory-layout coupling — not just the
+    level file). Tracked in [[pre2-level-init-island]]."""
     native_level_load_dgroup(state, level, game_root=game_root)
     # [asm 3f8d] the parallax blit runs HERE — right after the LEVEL<n> load, BEFORE UNION/BACK0. LEVEL<n>.SQZ
     # decodes LARGER than its reserved paragraphs ([0x2875] bump), so the blit's 4-plane over-read past the reserve

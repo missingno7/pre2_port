@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pre2.native.camera_scroll import (SCROLL_DONE_FLAG, _h_follow, _sar16, _v_follow, _wb_cs,
                                         apply_camera_pan)
+from pre2.gaps import Pre2HybridGap
 from pre2.native.level_load import native_level_load, native_player_init
 from pre2.native.state import DATA_SEG
 from pre2.recovered.prng import rng_lcg
@@ -48,12 +49,42 @@ def native_3af2(state) -> None:
     d[_DS + 0x2DE0] = 0xAA; d[_DS + 0x2DE1] = 0x55                  # [asm 3b65] [0x2de0]=0x55aa
 
 
+def native_52d2(state) -> None:
+    """[asm 52D2, called from 5237 @5292] Restore the pristine PROXIMITY-SCENERY map blocks: walk the 41CA-built
+    save bank at ``[0x2875]:0`` (``{word dest_map_off, byte rows, byte width, width*rows tiles}``, 0xFFFF-
+    terminated) and copy each saved block back over the level map (``es=[0x2DDA]``, one row per 0x100 stride).
+    This un-collapses every fired earthquake/breakable-scenery trigger on respawn AND at level start.
+
+    NOT render: ``[0x2DDA]`` is the COLLISION map. This was misclassified as a sprite blit and skipped — the
+    only state the gameplay tick mutates outside DGROUP, so the tick digest never saw it. Witness: demo
+    210723 (L0xD) — die on collapsed scenery, respawn, walk back: the VM restored the 74 collapsed bytes at
+    the respawn (tick 653) while native kept them, and the stale tile stopped the player as a phantom wall
+    at tick 788 (the reported "camera inaccuracy")."""
+    d = state.data
+    bank = (d[_DS + 0x2875] | (d[_DS + 0x2876] << 8)) << 4           # [asm 52d8] ds = [0x2875]
+    mapb = (d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)) << 4           # [asm 52d4] es = [0x2DDA]
+    si = 0                                                           # [asm 52dc]
+    for _ in range(0x10):                                            # bank holds at most 15 entries (41CA cx=0xf)
+        dest = d[bank + si] | (d[bank + si + 1] << 8)                # [asm 52de] di = [si]
+        if dest == 0xFFFF:                                           # [asm 52e0] terminator
+            return
+        rows = d[bank + si + 2]                                      # [asm 52e5] al
+        width = d[bank + si + 3]                                     #            ah
+        si += 4                                                      # [asm 52e8]
+        for _r in range(rows):                                       # [asm 52eb-52f7]
+            for k in range(width):                                   # rep movsb (one map row)
+                d[mapb + ((dest + k) & 0xFFFF)] = d[bank + ((si + k) & 0xFFFF)]
+            si += width
+            dest = (dest + 0x100) & 0xFFFF                           # [asm 52f1] next map row
+    raise Pre2HybridGap("52D2 scenery-restore: no 0xFFFF terminator within 15 entries — "
+                        "the [0x2875] trigger bank was not built (41CA) or is corrupt")
+
+
 def native_5237(state) -> None:
     """[asm 5237] The level / respawn RE-INIT (level-init @01d8, respawn ``4F6C`` @4fbf): zero the timer block,
     restore the pristine double-buffer from its backup, re-init the object pool + player (``native_player_init``),
-    seed the decor-RNG table, and reset the energy / boss / scroll-script state. The two render sub-calls — ``0ba0``
-    (VGA palette via int 10h) and ``52d2`` (sprite blit into the ``[0x2dda]`` segment) — touch no DGROUP and are
-    the renderer's job, so they are not run here."""
+    restore the pristine proximity-scenery map blocks (``native_52d2``), seed the decor-RNG table, and reset the
+    energy / boss / scroll-script state. The ``0ba0`` sub-call (VGA palette via int 10h) is render and skipped."""
     d = state.data
 
     def rb(o: int) -> int:
@@ -84,7 +115,7 @@ def native_5237(state) -> None:
     wb(0x2CEC, a); wb(0x2CED, b); wb(0x2CEE, c); ww(0x2CEF, dd)      # write the advanced RNG state back
     for i in range(0x50):                                           # [asm 5287] [0x6ea9..] = 0x55aa x 0x50
         ww(0x6EA9 + i * 2, 0x55AA)
-    # [asm 5292] 52d2 sprite-graphics blit into the [0x2dda] level seg — render, skipped (no DGROUP)
+    native_52d2(state)                                               # [asm 5292] restore the pristine scenery map blocks
     d[_DS + 0x7DE6:_DS + 0x7DE6 + 0x78] = b"\xFF" * 0x78             # [asm 5295]
     d[_DS + 0x7DAF:_DS + 0x7DAF + 0x37] = b"\xFF" * 0x37             # [asm 52a0]
     wb(0x27D6, 3)                                                    # [asm 52a8] energy / hearts
