@@ -453,8 +453,9 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     yield scene(page.planes, 0, 0)                               # frame 0 = the seeded page
     while True:
         cam = map_camera_update(cam, bounce=bounce, sine_table=sine)   # [asm 9AE0] scroll left 4/frame + row sine-bounce
-        ds, _ = map_pan(cam.x, cam.row)                          # [asm 97A8] display-start from the CURRENT x
-        pel = cam.prev_x & 7                                    # the pel-pan LAGS one frame (= prev_x & 7)
+        ds, pel = map_pan(cam.x, cam.row)                        # [asm 97A8/97F2] display-start AND pel from the
+        #   SAME (current) x = [0xB19D]&7 — they MUST be consistent. (An earlier build took pel from prev_x, which
+        #   mismatched ds's byte-column and made the whole screen jump +/-8 px each frame — the "shaking".)
         page_draw, page_clear = map_page_flip(ds, prev_page)     # [asm 97CA] page_draw=ds, page_clear=prev
         # VISUAL APPROXIMATION (not byte-exact — see [[pre2-front-end-flow]]): the VM double-buffers the text across
         # the two ring pages, which combined with the vertical sine-bounce we don't yet reproduce exactly, so the
