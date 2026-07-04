@@ -17,13 +17,13 @@ THE BOOT STATE is pure constants (pre2/native/boot_data.py, generated once by pr
 the VM's only remaining, workbench-side role). No PRE2.EXE and no boot image at runtime: copy the package +
 the game data anywhere and run.
 
-STATUS: the front-end drives OLDIES + the two title screens + the "press 1/2" menu + the mode-select world-map +
-the CARTE map scroll-in VM-less, then hands off to GAMEPLAY: the level-load is verified byte-exact vs the pure-ASM
-oracle's gameplay-entry seed (every core gameplay table identical), the secret/bonus tiles are hidden (3ead),
-lives/tally are set, the parallax sky is drawn (BACK0.SQZ -> the 0x7E80 base), and PRESENTA/menu/level music plays,
-so selecting a difficulty shows the carte (map scroll-in with the player's 'you are here' marker) and loads Level 1
-with the correct backdrop and no state divergence. Remaining gaps: SFX (native skips play_sfx's [0x1004] writes) and
-the 88D7 combat pass (can't hurt enemies). ``--from-level`` boots a level directly for testing.
+STATUS: plays the full flow VM-less — OLDIES + the two title screens + attract animation + the "press 1/2" menu +
+password entry + the mode-select world-map + the CARTE scroll-in, then GAMEPLAY: the whole per-frame loop (player
+FSM/movement/collision, the object + second passes, terrain/effects, the 88D7 combat pass, and the 4C69 level
+state machine — death / respawn / checkpoint / level-end tally / game-over / game-complete), with digital SFX and
+per-level music, level transitions, and the LEVELG snow/wind. Verified byte-exact vs the pure-ASM oracle tick by
+tick. ``--from-level`` boots a level directly for testing. Known residuals are small and fail loud (a few rare
+edge-case paths, e.g. the game-over-via-respawn tail; the level-end count-up *cutscene* animation is deferred).
 When the runner reaches an unrecovered gap it prints it and holds the last frame.
 """
 from __future__ import annotations

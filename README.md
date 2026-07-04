@@ -1,120 +1,110 @@
-# Prehistorik 2 DOS_RE Source-Port Workbench
+# Prehistorik 2 — recovered VM-less source port
 
-A faithful **recovered source port** of **Prehistorik 2**, grown from the original
-`PRE2.EXE` under a custom real-mode VM. The reusable `dos_re` VM is the execution
-**oracle**; all game-specific recovery lives under `pre2/`. Recovered code moves
-gradually upward into clean, VM-independent source-like modules — not a loose
-remake, and not a permanent forest of low-level hooks.
+A faithful, **VM-less** source port of **Prehistorik 2**, reconstructed from the original
+`PRE2.EXE` one verified island at a time. The game now runs as clean, standalone Python: the
+custom `dos_re` real-mode VM is kept **only as an offline oracle** for byte-exact verification —
+it is not started when you play, and no `PRE2.EXE` or boot image is executed at runtime.
 
-## Current state — recovery phase
+## Current state — the native game plays
 
-The bootstrap phase is done. The VM **runs PRE2 gameplay correctly**, and
-recovered native code is now part of the normal runtime:
+`scripts/play_native.py` is the product: it **cold-boots the whole game with no emulator**, from
+the initialized data segment (`pre2/native/boot_data.py`, no EXE needed) plus the GOG `*.SQZ`
+assets, and drives the recovered flow end to end —
 
-- **The hybrid runtime is the default.** `pre2.runtime.create_pre2_runtime()`
-  installs native **replacement** hooks that run *in place of* the original ASM.
-  As coverage grows the game runs faster and more of it is clean source.
-- **Gameplay rendering is recovered, verified source running live.** Byte-for-byte vs
-  the ASM and replacing it in the hybrid runtime: **SQZ asset decode** (LZSS / LZW /
-  Huffman+RLE; `pre2/codecs/sqz.py`), **sprite-sheet demux**, **sprite/object classify**,
-  the **sprite blit**, the **moving-sprite / object-list draw pass** (`26FA`), the
-  **frame renderer** (tile-row / grid redraw / scroll-copy / page-flip), the **HUD**, the
-  end-level **iris**, **fireflies / particles / foreground-tile z-order**, and the digital
-  **audio mixer + tracker**. The faithful renderer (`--video faithful`) composes these SAME
-  recovered leaves into a clean framebuffer — it never reads the VM VRAM.
-- **Non-gameplay scenes are grounded hook-first too.** Live-grounded: **game-over** (`9C87`),
-  **tally** (`51A3`), **OLDIES** glyph (`0C3E`), the menu/map **scroll** (`scroll_blit` /
-  `scroll_shift`), **text** (`draw_string`); and the title/intro **13h image** is
-  codec-decoded + composited (`render_title_image`, faithful path wired). The only remaining
-  faithful-renderer gaps are the two **0Dh scrolling-scene compositions** (mode-select menu,
-  map/carte), blocked on a history-dependent buffer (see
-  [`docs/pre2/faithful_visual_layer.md`](docs/pre2/faithful_visual_layer.md)). The
-  code-generated island list is
-  [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md).
-- **Still ASM — the *state-ownership* track, not rendering.** Gameplay UPDATE (player/object
-  movement, physics, collision, AI, and the object-list state machine that produces what the
-  recovered renderer draws) is still interpreted ASM; recovering those controllers is the
-  next phase. The rendering/audio output is recovered; the state that drives it is not yet.
-- **No silent fallbacks.** If the hybrid runtime reaches behaviour we have not
-  recovered, it **fails loud** with a precise gap report (`Pre2HybridGap`) instead
-  of secretly running the original ASM. Running the original ASM is allowed, but
-  only in an explicit, mode-controlled way (oracle / verify modes).
+> OLDIES credits → TITUS / PREHISTORIK-2 title screens → menu → world-map (carte) → gameplay →
+> level-end tally → next level → … → endings → game-over → restart.
 
-See [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md) for
-the north-star architecture and [`docs/pre2/run_status.md`](docs/pre2/run_status.md)
-for the running log.
+Everything the frame touches is recovered source, verified byte-for-byte against the ASM:
 
-## Execution modes
+- **Rendering** — SQZ asset decode (LZSS/LZW/Huffman+RLE), sprite/tile demux + classify, the sprite
+  blit, the moving-sprite/object-list draw (`26FA`), the frame renderer (tile-row / grid redraw /
+  scroll-copy / page-flip), HUD, level-end iris, fireflies / particles / foreground-tile z-order,
+  parallax, and the LEVELG falling snow. A faithful renderer composes these leaves into the
+  framebuffer — it never reads VM VRAM.
+- **Gameplay** — the whole per-frame loop: player FSM + movement + collision, the object/entity
+  state machine, the second pass, terrain/moving-platform entities, the effects passes, the combat
+  pass (`88D7`), and the level state machine (death / respawn / checkpoint / level-end / game-over /
+  game-complete).
+- **Audio** — digital SFX playback and per-level ProTracker music, from the recovered banks.
+- **Front-end** — intro, both title screens, the attract animation, the difficulty menu, password
+  entry, the world-map/carte scroll-in, transitions and DAC fades.
 
-| Mode | What runs | Use |
-|---|---|---|
-| **oracle / original** | pure original ASM (replacements removed) | reference & observation; capturing oracles |
-| **hybrid (default)** | recovered native replacements run directly, no per-step verification | normal play, recording demos/snapshots |
-| **verify** | ASM runs as oracle and each recovered result is diffed against it at contract boundaries | offline proof against recorded demos/snapshots |
+Verification is byte-exact and continuous: a recorded demo is replayed through the VM oracle and
+the native core **tick by tick**, and the full DGROUP image is compared — native reproduces the VM
+exactly (render/async offsets excluded). See [`docs/pre2/recovery_lifecycle.md`](docs/pre2/recovery_lifecycle.md).
 
-- `play.py --view` → hybrid runtime (the active runtime).
-- `play.py --view --verify-hooks` → verify mode (lockstep contract check vs ASM).
-- `create_pre2_runtime(..., native_replacements=False)` → pure oracle/ASM mode.
+**Known residuals** (honest, small): a few rare edge-case paths still fail loud rather than run
+(e.g. the game-over-via-respawn tail, a blocked cave-pan); the level-end tally shows the exact
+score/percent but not yet the animated count-up *cutscene*; and the state-view cleanup (below) is
+an in-progress sweep. None block a normal playthrough.
 
-## The game executable — bring your own legal copy
+## Two runners: the product and the workbench
 
-This is a reverse-engineering / source-port **workbench**, not a redistribution of
-the game. It operates on the original `PRE2.EXE` and the Prehistorik 2 data files,
-which are **not** included in this repository — you must supply them from a copy of
-the game **you legally own**.
+| | Runner | VM? | For |
+|---|---|---|---|
+| **Native** (product) | `scripts/play_native.py` | none | playing / shipping the recovered game |
+| **Hybrid + verify** (workbench) | `scripts/play.py` | yes (oracle) | recovering & proving new behaviour against the ASM |
 
-- This project targets the **GOG.com DRM-free release** of Prehistorik 2. Buy it
-  there (or use another copy you legally own) and copy `PRE2.EXE` plus the game data
-  files into [`assets/`](assets/).
-- Addresses, offsets, and the recovered logic in this tree are all derived against
-  that GOG `PRE2.EXE`; a different build will have a different memory layout and the
-  hooks will not line up.
-- Do not commit the game binary or assets. They stay local to your checkout.
+The workbench is where an island is prepared and proven; the **same** recovered functions then run
+in the native core with the hooks gone. Hybrid never silently falls back to ASM — an unrecovered
+path **fails loud** (`Pre2HybridGap`). See
+[`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md).
 
 ## Run
 
 ```bash
-python scripts/play.py --inventory                       # inspect original files
-python scripts/play.py --view                            # live viewer, hybrid runtime + OPL3 audio
-python scripts/play.py --view --verify-hooks             # play with the lockstep ASM oracle check
-python scripts/play.py --steps 1000000 --save-snapshot   # headless snapshot for study
-python scripts/render_frame.py artifacts/<snapshot> --out frame.png
+# the native game — no emulator, cold boot from the first screen
+python scripts/play_native.py                       # full boot: OLDIES → titles → menu → play
+python scripts/play_native.py --from-level 0        # debug: drop straight into LEVEL1
+python scripts/play_native.py --snapshot <dir>      # resume a saved gameplay state (VM-less)
+
+# ship it — standalone folder + optional PyInstaller exe (no VM, no EXE)
+python scripts/deploy_native.py                     # build + smoke-test dist/pre2native/
+python scripts/deploy_native.py --exe               # + PyInstaller (needs `pip install pyinstaller`)
+
+# the workbench — hybrid runtime + the ASM oracle
+python scripts/play.py --view                       # live viewer, recovered hooks over the VM
+python scripts/play.py --view --verify-hooks        # lockstep contract check vs the ASM
+python scripts/play.py --view --record-demo run1    # record a regression demo
+python scripts/play.py --play-demo artifacts/demo_run1_<ts> --verify-hooks   # prove no drift
 ```
 
-In the viewer: `F10` saves a screenshot, `F11` toggles input-demo recording, `F12`
-saves a VM snapshot. Live `--view` self-paces to PRE2's native tempo via the emulated
-PIT/VGA-retrace (no tempo knob); `--speed N` only affects deterministic record/replay.
-`--fast-adlib` reaches graphics fastest but mutes music.
+Controls (native): `SPACE` = advance / fire+jump, arrows or numpad = move, `ESC` = quit.
 
-Demos are the regression substrate — a start snapshot plus VM-visible input on a
-deterministic per-frame clock, replayable headlessly and through the verify mode:
+## Bring your own legal copy
 
-```bash
-python scripts/play.py --view --record-demo run1
-python scripts/play.py --play-demo artifacts/demo_run1_<ts> --verify-hooks   # prove no drift vs ASM
-```
+This is a source-port **workbench**, not a redistribution. It needs the original Prehistorik 2 data
+files, which are **not** in this repository — supply them from a copy you legally own.
+
+- Target the **GOG.com DRM-free release**. Copy the game's `*.SQZ` / `*.TRK` data into
+  [`assets/`](assets/), or point `--game-root` at your GOG install folder.
+- All addresses and recovered logic are derived against that GOG build; another build has a
+  different memory layout and will not line up.
+- The workbench (`play.py`, verification) also needs the GOG `PRE2.EXE` in `assets/`; the native
+  game (`play_native.py`) does **not**.
+- Never commit the game binary or data — they stay local to your checkout.
 
 ## Architecture in one breath
 
 ```text
-original PRE2.EXE
-  -> dos_re VM (oracle)
-  -> thin replacement adapters / checkpoints (pre2/checkpoints/, one module per subsystem)
-  -> memory views / dataclass bridge (pre2/bridge/: sprites, frame, ...)
-  -> recovered VM-independent logic (pre2/codecs/, pre2/recovered/)
-  -> semantic state comparison -> source-port systems
+game data (*.SQZ / *.TRK)  +  boot constants (pre2/native/boot_data.py)
+  → recovered logic          (pre2/codecs/, pre2/recovered/)  — pure, VM-independent source
+  → state-view + bridge      (pre2/bridge/)                   — human-named views ⇄ DGROUP layout
+  → native runtime           (pre2/native/)                   — NativeGameState + the frame driver
+  → faithful renderer + audio → the standalone game (scripts/play_native.py)
+
+  dos_re/  — the real-mode VM, kept ONLY as the verification oracle (never shipped, never at runtime)
 ```
 
-Each recovered function self-describes via `@oracle_link(...)` (`pre2/islands.py`),
-auto-discovered into the generated [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md)
-(a test fails if it drifts from the code). Adapters under `pre2/checkpoints/` stay
-thin — read VM state through the bridge, call the recovered function, write the
-contract back; renderer/game logic and raw segment:offsets do not live there.
+Gameplay logic reads **human-named fields** (`player.x`, `slot.sprite`), never raw offsets — the DOS
+memory layout is quarantined in one view layer (`pre2/bridge/dgroup_view.py`); see
+[`docs/pre2/state_view_layer.md`](docs/pre2/state_view_layer.md). Each recovered function
+self-describes via `@oracle_link(...)` (`pre2/islands.py`), auto-discovered into the generated
+[`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md) (a test fails if it drifts from
+the code — the manifest is the source of truth for what is recovered).
 
-`dos_re/` must stay game-independent: anything that knows Prehistorik 2 filenames,
-addresses, or formats belongs under `pre2/`. The packed executable and VM remain
-the oracle until a piece of behaviour has been observed, recovered, and verified.
-Methodology lives in [`AGENTS.md`](AGENTS.md), [`ARCHITECTURE.md`](ARCHITECTURE.md),
-[`dos_re/AI_PORTING_CHARTER.md`](dos_re/AI_PORTING_CHARTER.md), and the
-[`docs/`](docs/) tree; the original-address ledger is
+`dos_re/` stays game-agnostic: anything that knows Prehistorik 2 filenames, addresses, or formats
+lives under `pre2/`. Methodology and posture: [`docs/`](docs/),
+[`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md),
+[`AGENTS.md`](AGENTS.md), [`ARCHITECTURE.md`](ARCHITECTURE.md); the original-address ledger is
 [`docs/pre2/symbol_ledger.md`](docs/pre2/symbol_ledger.md).

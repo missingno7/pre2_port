@@ -34,25 +34,27 @@ boundary is proven. A faster wrong replacement is a regression.
 **Do not write high-level gameplay because it "looks right". Write high-level
 logic only when it can be tied back to original ASM behaviour and verified.**
 
-## Where the project is now (recovery phase)
+## Where the project is now
 
-Bootstrap is done. The VM **runs PRE2 gameplay**, and recovered native code is now
-part of the normal **hybrid** runtime. The first recovered-native island — **SQZ
-asset decompression** (`pre2/codecs/sqz.py`) — is complete and verified
-byte-for-byte against the ASM (LZSS, LZW, Huffman+RLE "other"); the hybrid runtime
-cold-boots into gameplay decoding every asset natively.
+The **VM-less native game plays**. `scripts/play_native.py` cold-boots the whole game with no emulator
+(front-end → all levels → tally → endings → game-over) from boot constants + the GOG assets. The recovered
+set spans the whole runtime — asset codecs, the full render pipeline, the entire gameplay update (player/
+object/collision/second-pass/terrain/effects/combat/level-state), digital SFX, and music (~100+ islands;
+`docs/pre2/recovered_islands.md` is the source of truth). The `dos_re` VM is kept **only as an offline
+oracle**; `scripts/deploy_native.py` ships a standalone build with no VM/EXE.
 
-The work is now recovering more **verified, bounded, hot kernels** and moving them
-upward into clean source-like modules. Good next targets: LZW/SQZ variants (done),
-**sprite/tile decode, masked blits, tilemap/background draw**, then gameplay systems
-(player/object/level update). Each island is clean VM-independent logic behind a
-thin adapter, verified before it is trusted.
+Remaining work is a mix of: the state-view cleanup sweep (offsets out of gameplay logic — see
+`docs/pre2/state_view_layer.md`), a few rare fail-loud gameplay edge cases, deferred cosmetic cutscene
+animation, and a fully recovered `AudioSystem` (the emulated SB/DMA is still the audio oracle). Each new
+island is clean VM-independent logic behind a thin adapter, verified byte-exact before it is trusted, then
+lifted into the native core.
 
-### Three execution modes (no silent fallbacks)
+### Execution modes (no silent fallbacks)
 
+- **native (product)** — recovered source only, NO VM (`play_native.py`); the standalone game.
 - **oracle / original** — pure original ASM (`create_pre2_runtime(..., native_replacements=False)`); reference and observation.
-- **hybrid (default)** — recovered native replacements run directly, no per-step verification; the active runtime (`play.py --view`).
-- **verify** — ASM oracle vs recovered logic, diffed at contract boundaries (`play.py --verify-hooks`); for offline proof against demos/snapshots.
+- **hybrid (workbench)** — recovered native replacements over the VM, no per-step verification (`play.py --view`); prepare/record new islands vs the live ASM.
+- **verify** — ASM oracle vs recovered logic, diffed at contract boundaries (`play.py --verify-hooks`); offline proof against demos/snapshots.
 
 The original ASM runs **only** in oracle/verify modes. In hybrid mode, unrecovered
 behaviour **fails loud** (`Pre2HybridGap`) — never a silent fallback to ASM.

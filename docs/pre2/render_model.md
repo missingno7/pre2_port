@@ -1,5 +1,10 @@
 # The render model — semantic render intent (the foundation under the faithful renderer)
 
+> **DESIGN SNAPSHOT (mid-development, ~2026-06).** Captured the render-intent model while the faithful renderer
+> was being built; some "partial / TODO" notes below (palette, transitions) are since resolved — the faithful
+> renderer is complete and draws the native game. Read as design rationale, not current status; for what is
+> recovered see [`renderer_status.md`](renderer_status.md), [`recovered_islands.md`](recovered_islands.md).
+
 **The question:** *are we still too close to the old machine, or have we recovered enough
 semantic render intent?*
 

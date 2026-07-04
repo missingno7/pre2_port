@@ -1,5 +1,10 @@
 # Player FSM + input island (`1030:~5890..5A95`)
 
+> **Status: RECOVERED + LIVE.** The whole per-frame player update (input → FSM state → kinematics + collision)
+> runs in the native VM-less game. The "remaining to collapse / staged" sections below are archived recovery
+> notes. Current truth: [`recovered_islands.md`](recovered_islands.md),
+> [`recovery_lifecycle.md`](recovery_lifecycle.md).
+
 The per-gameplay-frame **player update** — input → FSM state → kinematics. Staged recovery (one leaf at a
 time, shadow-before-live). The player is NOT in the object lists; it has its own struct + FSM.
 

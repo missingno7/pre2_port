@@ -8,15 +8,17 @@ The guiding direction: **the VM should become an oracle/test harness, not the
 engine.** Higher (ASM-bound) layers may depend on lower (cleaner) layers; lower
 layers must never depend back up on the VM/CPU/segment world.
 
-> **Current state (recovery phase).** Bootstrap is done: the `dos_re` VM runs
-> **PRE2 gameplay**, and recovered native code is now part of the normal runtime.
-> The first recovered island — **SQZ asset decompression** — exists as clean
-> VM-independent logic (`pre2/codecs/sqz.py`, the *pure* layer) behind a thin
-> *replacement adapter* (`pre2/replacements.py`, the *hook_boundary* layer), with
-> contract-level verification. The hybrid runtime is the default. The higher
-> layers below are now partly real, partly target shape; new code should land in
-> the layer it belongs to. The companion north-star doc is
-> [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md).
+> **Current state — the VM-less native game plays.** `scripts/play_native.py` cold-boots the
+> whole game with **no emulator** — front-end (OLDIES/titles/menu/carte) → all levels → tally →
+> endings → game-over — from boot constants + the GOG assets. The recovered set spans the whole
+> runtime: the asset codecs, the full render pipeline, the entire gameplay update (player/object/
+> collision/second-pass/terrain/effects/combat/level-state), digital SFX, and music (~100+ islands;
+> [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md) is the source of truth). The
+> `dos_re` VM is now kept **only as an offline oracle** for byte-exact verification, and
+> `scripts/deploy_native.py` ships a standalone build with no VM/EXE. The **hybrid** runtime
+> (`play.py`) is the workbench where a new island is prepared and proven before the same recovered
+> code runs native. North-star: [`docs/pre2/recovery_architecture.md`](docs/pre2/recovery_architecture.md);
+> the state-access seam: [`docs/pre2/state_view_layer.md`](docs/pre2/state_view_layer.md).
 
 ## Execution modes
 
@@ -25,8 +27,9 @@ verify modes, never as a silent fallback:
 
 | Mode | What runs | Use |
 |------|-----------|-----|
+| **native (product)** | recovered source only, NO VM (`scripts/play_native.py`) | the standalone game; shipping |
 | **oracle / original** | pure original ASM (`native_replacements=False`) | reference, observation, capturing oracles |
-| **hybrid (default)** | recovered native replacements, no per-step verification | normal play, demo/snapshot recording |
+| **hybrid (workbench)** | recovered native replacements over the VM, no per-step verification | preparing/recording new islands vs the live ASM |
 | **verify** | ASM oracle + recovered logic, diffed at contract boundaries (`--verify-hooks`) | offline proof against recorded demos/snapshots |
 
 **No silent fallbacks.** If the hybrid runtime reaches unrecovered behaviour it
@@ -54,19 +57,22 @@ mirrors are the real source port.
 
 ```text
 pre2/
-  runtime.py        launch/snapshot wiring; installs the hybrid replacements   [exists]
-  replacements.py   active replacement adapters (thin hooks) + verify wiring    [exists]
-  bootstrap_hooks.py bootstrap-only helpers (LZEXE/AdLib), never gameplay        [exists]
-  codecs/           recovered VM-independent asset codecs (sqz.py: LZSS/LZW/...) [exists]
-  recovered/        recovered VM-independent gameplay logic (player/object/...)  [for next islands]
-  bridge/           memory views: VM memory <-> recovered structs/dataclasses    [for first stateful island]
-  checkpoints/      verification contact points (verifiers/checkpoints)          [grows out of replacements.py]
+  codecs/           recovered VM-independent asset codecs (sqz.py: LZSS/LZW/...) [the pure layer]
+  recovered/        recovered VM-independent gameplay + render logic (~100 fns)  [the pure layer — the game]
+  bridge/           memory views: VM/native memory <-> recovered structs; the    [state-access seam]
+                    state-view layer (dgroup_view.py: human-named views/backends)
+  native/           the VM-LESS runtime: NativeGameState + boot constants +      [the product]
+                    the frame driver (play_native.py runs this)
+  runtime.py        launch/snapshot wiring; installs the hybrid replacements     [workbench]
+  replacements.py   active replacement adapters (thin hooks) + verify wiring     [workbench hook_boundary]
+  checkpoints/      verification contact points (verifiers/checkpoints)          [workbench hook_boundary]
   probes/           temporary observation/diagnostic tools                       [as needed]
 ```
 
-`codecs/` and `recovered/` are the **pure** layer (no `cpu`/`mem`/`dos_re`).
-`bridge/` is the one place VM memory meets recovered dataclasses. `replacements.py`
-and `checkpoints/` are the *hook_boundary* — thin, no game logic.
+`codecs/` and `recovered/` are the **pure** layer (no `cpu`/`mem`/`dos_re`) — the recovered game.
+`bridge/` is where memory meets recovered dataclasses (and holds the state-view layer). `native/` is the
+VM-less runtime that drives them into the standalone game. `replacements.py` + `checkpoints/` are the
+*hook_boundary* — thin, no game logic — used only in the hybrid/verify workbench.
 
 ## Target layers (high = closest to ASM, low = closest to pure source)
 

@@ -1,5 +1,11 @@
 # Enhanced renderer — design (source-cadence presentation)
 
+> **Status: DESIGN + v1 built/wired.** The enhanced *presentation* layer's design; the v1 scroll-interpolation
+> compositor is built and live-wired (a few in-doc status lines are inconsistent about the wiring — the layer
+> IS wired). Enhanced is presentation-only and builds on the faithful native core (see
+> [`recovery_architecture.md`](recovery_architecture.md), [`state_view_layer.md`](state_view_layer.md) for why
+> enhancements attach at this seam, not the state layer).
+
 > The enhanced renderer is a **native presentation layer**, not a second VM renderer and not a re-run of the
 > faithful planar rasterizer per display frame. It consumes recovered game/render state produced at the
 > game's **native update cadence**, keeps the previous/current snapshots, and presents at the **display

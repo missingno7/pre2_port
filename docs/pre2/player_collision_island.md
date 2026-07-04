@@ -1,5 +1,9 @@
 # Player collision / tile-interaction island (`1030:5A96`)
 
+> **Status: RECOVERED + LIVE.** The `5A96` ground/tile collision runs in the native player update. The "still
+> to transcribe / next" sections below are archived recovery notes. Current truth:
+> [`recovered_islands.md`](recovered_islands.md).
+
 The player ground/tile collision, called from the player update at `5A41` (after the Y integrate). Fires once
 per player frame (~2006×/L1). This is a bounded sub-island with a small tile-type handler table — the last big
 ASM piece of `player_update` and the prerequisite for the full `player_update` live collapse.

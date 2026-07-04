@@ -1,5 +1,11 @@
 # Object system island — scope & verification contract (recon, do NOT replace yet)
 
+> **Status: RECOVERED + LIVE (recovery-journey doc).** This recon plan is done — the object/entity system
+> (`684E…`, the walker + per-type handlers) is recovered and runs in the native VM-less game. The "do NOT
+> replace yet" in the title and the "next / shadow-only" notes below are obsolete; they record how the island
+> was lifted. Current truth: [`recovered_islands.md`](recovered_islands.md),
+> [`recovery_lifecycle.md`](recovery_lifecycle.md). Kept for provenance.
+
 The renderer can now *display* the game (clean-framebuffer composition complete — see
 `renderer_status.md`). This island is the next deep root: **who creates the displayed object
 state**. Per the standing plan this document **scopes** the object system — maps its inputs,

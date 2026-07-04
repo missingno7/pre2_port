@@ -1,5 +1,10 @@
 # GOAL: completely finish the renderer island (unattended)
 
+> **HISTORICAL — work plan, done.** Written *during* renderer recovery. The renderer island is complete: the
+> whole gameplay-frame render is recovered + live and composed by the faithful renderer (which draws the native
+> VM-less game). Current status: [`renderer_status.md`](renderer_status.md),
+> [`recovered_islands.md`](recovered_islands.md). Kept for provenance.
+
 Recover every remaining renderer routine into clean, VM-independent source, proven
 byte-exact against the original ASM, **and consolidate it into one coherent, HIGH-LEVEL
 `render_frame(RendererState)` system that runs standalone (no VM stepping) from a captured

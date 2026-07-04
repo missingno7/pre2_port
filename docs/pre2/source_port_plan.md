@@ -8,15 +8,21 @@
 
 ## Phase status
 
-**Bootstrap milestones — done.** Boot the packed `pre2.exe` through the VM; treat
-LZEXE as bootstrap (target-neutral accelerator); collect stable snapshots; trace
-`.sqz`/`.trk` loads; render the VGA/EGA screens. **The VM now runs gameplay.**
+**Bootstrap — done.** Boot the packed `pre2.exe` through the VM; treat LZEXE as bootstrap
+(target-neutral accelerator); collect snapshots; trace `.sqz`/`.trk` loads; render the screens.
 
-**Recovery phase — in progress.** Replace understood routines with verified
-native code, running by default in the **hybrid** runtime, and move recovered code
-upward into clean VM-independent modules. Each island: find the ASM/data boundary,
-define the input/output contract, observe I/O, write clean native logic, verify
-against the ASM, then wire a thin adapter — and only then trust it.
+**Recovery — the native VM-less game plays.** `scripts/play_native.py` cold-boots the whole game with
+**no emulator** (OLDIES → titles → menu → carte → all levels → tally → endings → game-over/restart),
+from boot constants (`pre2/native/boot_data.py`, no EXE) + the GOG assets. The entire per-frame loop is
+recovered source — rendering, the gameplay update (player FSM / movement / collision, the object &
+second passes, terrain/effects, the `88D7` combat pass, the `4C69` level state machine), digital SFX,
+and per-level music. The `dos_re` VM is kept **only as an offline oracle**: a recorded demo is replayed
+through the ASM and the native core tick-by-tick and the DGROUP compared (byte-exact). `scripts/deploy_native.py`
+ships a standalone folder + PyInstaller exe with no VM/EXE. The **hybrid** runtime (`play.py`) remains the
+workbench where a new island is prepared and proven before the same recovered code runs native.
+
+Each island: find the ASM/data boundary, define the input/output contract, observe I/O, write clean native
+logic, verify byte-exact against the ASM, wire the thin adapter — then lift it into the native core.
 
 ### Recovered islands
 
@@ -26,27 +32,20 @@ over time — see `recovery_architecture.md`; hooks are scaffolding, not the fin
 The authoritative island list is **generated from the code** — each recovered function carries its own
 `@oracle_link(boundary, contract, status, merge_target)` metadata (`pre2/islands.py`), auto-discovered into
 [`recovered_islands.md`](recovered_islands.md) (regenerate: `python scripts/gen_island_manifest.py`; a test
-fails on drift). The table below is the human-curated roadmap; the manifest is the source of truth for what
-is recovered.
+fails on drift). **That manifest — ~100+ islands — is the source of truth for what is recovered.** As of this
+writing the recovered set spans the whole runtime: the asset codecs; the full render pipeline (sprite decode /
+classify / blit, the object-list draw `26FA`, the frame renderer, HUD, iris, particles/fireflies/foreground,
+parallax, LEVELG snow); the whole gameplay update (player FSM + movement + collision, the object and second
+passes, terrain/moving-platform entities, the effects passes, the `88D7` combat pass, the `4C69` level state
+machine); digital SFX + per-level music; and the front-end flow (intro/titles/attract/menu/password/carte).
 
-| Island | Module | Merge target | Status |
-|---|---|---|---|
-| SQZ decompression (LZSS/LZW/Huffman+RLE) | `pre2/codecs/sqz.py` + `pre2/checkpoints/sqz.py` | asset loader | **done, verified vs ASM** |
-| sprite/tile decode | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` | sprite/asset pipeline | **done, verified vs ASM** (first stateful island; stood up `pre2/bridge/`) |
-| sprite blit + background restore (`3B88`) | `pre2/recovered/renderer.py` + `pre2/checkpoints/blit.py` | renderer | **done, verified vs ASM** (in-VM lockstep) |
-| SoundBlaster audio (DSP + 8237 DMA + 8259 PIC) | `dos_re/sblaster.py` + `dos_re/pic.py` (generic hw) | DOS machine (not game layer) | **done** — game auto-detects + DMA-streams PCM; user-confirmed |
-| frame renderer — tile-row (348D), grid redraw (35A1), scroll-copy (3A27), page-flip (3054) | `pre2/recovered/frame_renderer.py` + `pre2/bridge/frame.py` (Camera/ScrollState/TileMap) | frame renderer → `update_frame()` | **done, all four verified vs ASM** (in-VM lockstep, 0-div; each composes the verified blit). Compositor `3B40` is a static composition of these, documented but not wired (no demo reaches it → can't verify yet) |
-| moving-sprite / object-list draw (`~3552`) | `pre2/bridge/objects.py` + `pre2/recovered/object_draw.py` (planned) | frame renderer | **next** — renderer island; command-stream verified; composes recovered `blit_sprite` |
-| gameplay systems (player/object/level update) | `pre2/recovered/` (planned) | object system / player update / physics | later; semantic-state verification |
-
-**Still ASM (the current coastline — not recovered):**
-- **classifier `4232`** — the ASM producer of the sprite type table (`[0x4DF4]`) + partial-sprite masks
-  (`[0x2DF4]`) that the recovered blit *consumes*. A pending island (needs a pure fn + `@oracle_link` +
-  manifest entry + verify before it counts as recovered).
-- **moving-sprite / object-list draw loop** (`~3552`) — the next island.
-- **directional-scroll decisions** above the recovered leaves (which way/when to scroll; `3344`/`338E`/…).
-- **level-load orchestration** (decides what to load and sets up the segment pointers; the per-asset codec is recovered).
-- **all gameplay update** — movement, AI, collision, physics, object/player state.
+**Coastline residuals (small, fail-loud, do not block a normal playthrough):**
+- a few rare edge-case gameplay paths still fail loud rather than run (e.g. the game-over-via-respawn tail
+  `506c`, a vertically/horizontally blocked cave-pan);
+- the level-end tally shows the exact score/percent but not yet the animated count-up *cutscene* (`4CCB`);
+- some deferred loader/render decor (parallax detail `0x9dc0`, trigger-sprite/self-patch visuals);
+- SoundBlaster/DMA/PIC emulation (`dos_re`) is the audio **oracle**; a fully recovered `AudioSystem` (below)
+  is the remaining audio lift.
 
 ## Audio recovery (layered)
 
