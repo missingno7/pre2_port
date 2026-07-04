@@ -312,8 +312,9 @@ def player_death(rb, rw):
              "the verified spawn_effect_burst over a read-through overlay so it sees the just-set origin/sprite.",
              "OBSERVED", merge_target="object_spawn")
 def hurt_effect(rb, rw):
-    """[asm 824D] Returns the ``{offset: (value, width)}`` writes. Raises :class:`Pre2SpawnGap` on the
-    (unwitnessed) lives-depleted death path into 65B3."""
+    """[asm 824D] Returns the ``{offset: (value, width)}`` writes. On the lives-depleted death (energy underflow)
+    it composes ``player_death`` (65B3) to arm the 4C69 death/respawn dispatch — which resolves to the recovered
+    game-over; no fail-loud."""
     writes = {}
     cd = (rb(HURT_COOLDOWN) - 1) & 0xFF
     if cd & 0x80:                                        # [asm 8254] dec underflowed -> reload + lose a life
@@ -350,7 +351,7 @@ PLAYER_YVEL = 0x4F2A
              "OBSERVED", merge_target="object_spawn")
 def camera_target_bounce(rb, rw, di):
     """[asm 81F3] ``di`` = the camera-target record offset. Returns the ``{offset: (value, width)}`` writes
-    (8D7B always contributes [0xA330]); raises :class:`Pre2SpawnGap` via 824D on the lives-depleted death."""
+    (8D7B always contributes [0xA330]); the lives-depleted death composes 824D -> ``player_death`` (game-over)."""
     di &= 0xFFFF
     if rw((di + 4) & 0xFFFF) == 0xFFFF:               # [asm 81F3] inactive target
         return {}
@@ -427,8 +428,8 @@ CRUSH_SFX_FLAG = 0x27EA
              "[0xA425] hitbox sees the earlier bounces' [0x4F2A].",
              "OBSERVED", merge_target="object_spawn")
 def camera_boundary_collision(rb, rw):
-    """[asm 81B4] Returns the ``{offset: (value, width)}`` writes; raises :class:`Pre2SpawnGap` via 824D on the
-    lives-depleted death path."""
+    """[asm 81B4] Returns the ``{offset: (value, width)}`` writes; the lives-depleted death composes 824D ->
+    ``player_death`` (the recovered game-over)."""
     if rb(CRUSH_GATE) != 0:                           # [asm 81B4] crush disabled this frame
         return {}
     ov = _Ov(rb, rw)

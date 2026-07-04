@@ -127,10 +127,15 @@ def native_object_spawn_step(state) -> None:
         if rb(0x91FE) != 0xFF:                # [asm 6822/6827] camera active -> 70D7
             _apply(camera_engine(rb, rw, tile_reader(state)))
         if rb(0x2D8A) == 5 and (rb(0x8166) & 0xFE) == 0 and rw(0xA326) != 3:   # [asm 682C-6841] level-6 tree boss
-            _apply(tick_level6_boss(rb, rw))              # 6D34 (fails loud on the phase-3 death finale)
+            _apply(tick_level6_boss(rb, rw))              # 6D34 (incl. the recovered 94F3 death-burst finale)
         if rb(0x2D8A) == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
             _apply(tick_mode9_boss(rb, rw))
     except Pre2SpawnGap as exc:
+        # The boss finales (94F3 death-burst, the camera state-6 boss-reach) and the lives-depleted death
+        # (824D -> player_death -> the 4C69 game-over) are all recovered. The Pre2SpawnGap raises that remain are
+        # DEFENSIVE guards on malformed/non-terminating data (a 94DC camera-offset table miss, a 7534/6B91 script
+        # that never terminates) — states the original ASM would hang/garbage on, so we fail loud rather than
+        # spin. Not expected in a normal playthrough.
         raise Pre2HybridGap(f"native object-spawn: {exc}") from exc
 
 
