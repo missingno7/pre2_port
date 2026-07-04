@@ -342,6 +342,7 @@ class RenderSlot(StructView):
     sprite = _U16(4)       # packed: (id & 0x1FFF) | flag bits
     flags  = _U8(5)        # aliases the high byte of `sprite`
     source = _U16(9)       # back-ref to the source entity slot this was projected from
+    life   = _U8(0x11)     # anim/life counter (decremented; blink-gated) — read by the sprite renderer
 
     @property
     def sprite_id(self) -> int:

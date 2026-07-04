@@ -11,6 +11,7 @@ sprite-data segment ``0x62E8`` and offset ``0x5F48``.
 """
 from __future__ import annotations
 
+from pre2.bridge.dgroup_view import ByteBackend, RenderSlot
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
 from pre2.recovered.object_render import (
@@ -81,12 +82,13 @@ def read_source(mem, seg: int, off: int, length: int) -> bytes:
 
 
 def read_sprite(mem, off: int) -> Sprite:
+    s = RenderSlot(ByteBackend(mem), off)              # the shared stride-0x12 slot, human-named
     return Sprite(
-        x=_rw(mem, DATA_SEG, off + 0),
-        y=_rw(mem, DATA_SEG, off + 2),
-        sprite_id=_rw(mem, DATA_SEG, off + 4),
-        flags=_rb(mem, DATA_SEG, off + 5),
-        life=_rb(mem, DATA_SEG, off + 0x11),
+        x=s.x,
+        y=s.y,
+        sprite_id=s.sprite,
+        flags=s.flags,
+        life=s.life,
     )
 
 
