@@ -85,7 +85,7 @@ MAIN_LOOP_SPINE = [
      "mutation + [0x6bd5] tick) extracted into native_gameplay_frame (native_object_render_state)"),
     (0x3721, "render", "foreground-tile pass -> faithful renderer"),
     (0x54AB, "native", "native_firefly_step (swarm sim + RNG)"),
-    (0x3922, "native", "native_scroll_script (counter inc; scripted camera fails loud)"),
+    (0x3922, "native", "native_scroll_script (counter + [0x6bf6] scroll accumulate; render pan = renderer TODO)"),
     (0x4C69, "native", "native_level_state (idle no-op; death/respawn/level-end armed fails loud)"),
     (0x45AF, "render", "45AF respawn-animation draw -> faithful renderer"),
     (0x44FB, "render", "4509+1C65 render/timing helper"),
@@ -356,14 +356,18 @@ def native_firefly_step(state) -> None:
 
 
 def native_scroll_script(state) -> None:
-    """[asm 0256: 3922] Advance the scripted-scroll frame counter [0x2dbe]. A level with an active script (the
-    per-level table at [0x2dbc], its first word != -1, on a 4-frame tick) or a nonzero accumulated scroll
-    [0x6bf6] (the scripted camera + its VRAM scroll) is unrecovered -> fail loud. A no-script level is a
-    byte-exact counter inc."""
+    """[asm 0256: 3922] The scripted-camera-scroll STATE update. Advances the frame counter [0x2dbe] and, for a
+    level with an active script (only LEVELG / index 0x0F, a hidden auto-scroll bonus stage), ramps the vertical
+    scroll amount [0x6bf6] through the per-level table at [0x2dbc]. Verified byte-exact vs the ASM 3922 state half
+    (pre2/recovered/scroll_script.py). A no-script level is just the counter inc.
+
+    The scroll-application half (3922:396A.. — the VGA raster smooth-scroll that pans the display by [0x6bf6]/2
+    rows) is the faithful renderer's job; [0x6bf6] is the pan amount it consumes. Tracking it here keeps the
+    gameplay state byte-exact; the visual pan for LEVELG is a renderer-integration follow-up."""
+    from pre2.recovered.scroll_script import scroll_script_state
     rb, rw = readers(state)
-    _ww(state, 0x2DBE, (rw(0x2DBE) + 1) & 0xFFFF)
-    if rw(0x6BF6) != 0 or ((rb(0x6BD5) & 3) == 0 and rw(rw(0x2DBC)) != 0xFFFF):
-        raise Pre2HybridGap("native scroll-script (3922) active — scripted camera not recovered")
+    for off, val in scroll_script_state(rb, rw).items():
+        _ww(state, off, val)
 
 
 def native_level_state(state) -> None:

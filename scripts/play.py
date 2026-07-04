@@ -210,6 +210,7 @@ def _pygame_scan_map(pygame) -> dict[int, tuple[int, int]]:
         "left": (0x4B, 0), "right": (0x4D, 0),
         "left ctrl": (0x1D, 0), "right ctrl": (0x1D, 0),
         "left alt": (0x38, 0), "right alt": (0x38, 0),
+        "f1": (0x3B, 0), "f2": (0x3C, 0),   # the debug F1 kill-self / F2 abort keys (were not passed to the VM)
     }
     for i, ch in enumerate("1234567890"):
         names[ch] = (0x02 + i, ord(ch))

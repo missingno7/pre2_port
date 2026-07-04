@@ -150,10 +150,19 @@ def native_level_end(state, *, game_root: str) -> None:
     # The between-levels path enters via 4F65 (`call 5237; xor ax,ax; stc; ret`), so ax=0 and the block is SKIPPED:
     # that persistent state carries into the next level (user: collected BONUS letters were resetting each level).
     # native_level_start runs the block unconditionally, so preserve those five offsets across the load.
-    native_51df(state)                                           # [asm 4F62] cleanup: clear [0x6c9e] ITEM_TOTAL +
-    #                                                              the object-backup scratch [0x6c12..+0x71], BEFORE
-    #                                                              the re-init/load — the between-levels 4F5E path
-    #                                                              runs `inc [0x2d8a]; call 51df; call 5237`.
+    # [asm 4F62] cleanup — clear [0x6c9e] ITEM_TOTAL + the object-backup scratch [0x6c12..+0x71] — runs ONLY on the
+    # TALLY path (4ccb -> 4F5E `inc; call 51df; call 5237`). The BONUS/WARP path (4cba/4cc1/4cc4 -> `jmp 4F65`)
+    # jumps PAST 4F62, so it SKIPS the cleanup and CARRIES the collected-food count into the bonus level (verified:
+    # the LEVEL7->LEVELG warp preserves [0x6c9e]=0xc/[0x6c12]/[0x6c5b] unchanged). Gate it on the same tally split.
+    if level_end_takes_tally(d[_DS + 0x6BE6], level):
+        native_51df(state)
+    else:
+        # The bonus/warp path also skips the multi-frame exit-anim/reveal whose object_render erase FREES the
+        # player's own sprite record [0x4F0A..0x4F1B] to 0xFFFF (the 3ED6 loader clears from 0x4F1C, NOT this
+        # slot). It's render-only garbage while the sprite is suppressed ([0x4F0E]==0xFFFF at level entry), so
+        # native collapses that erase to its end state here — matching the VM's LEVELG entry.
+        for o in range(0x4F0A, 0x4F1C):
+            d[_DS + o] = 0xFF
     keep = {o: d[_DS + o] for o in (0x27D8, 0x6CA7, 0x6CA8, 0x7B19, 0x7B18)}
     native_level_start(state, game_root=game_root)               # [asm 0x13e..0155] load + re-init + level-start flags
     for o, v in keep.items():                                    # restore the persistent player state the VM keeps
