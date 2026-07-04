@@ -115,6 +115,21 @@ scripts/         play_native (product), play (hybrid/verify workshop)
 Import direction: `native → bridge → recovered → codecs`; `dgroup_view.py` is a leaf (imports nothing
 of ours), so both recovered logic and the VM adapters may use it without a cycle.
 
+## The plan, in four points
+
+1. **The native runtime does not need to stop being byte-backed to be a real VM-less Python game.**
+   Byte-backed ≠ VM-backed: a `bytearray` + an offset map is pure Python data — no CPU emulation, no
+   segment translation, no `dos_re`. The release already ships no VM, no EXE, no boot image.
+2. **The milestone that matters is that gameplay logic stops knowing raw offsets** — that is the whole
+   cleanliness win, and it is independent of the storage representation underneath.
+3. **The byte-backed adapter is a legitimate release citizen, because it is none of the three things the
+   architecture forbids** — it is not the DOS EXE, not a VM, and not a silent ASM fallback. It is just the
+   internal state representation that preserves faithful behavior *and* verification (the two are literally
+   the same bytes, which is why verification stays a `memcmp`). Its shippability rests on `dgroup_view.py`
+   staying **pure** (no `dos_re`/probe/checkpoint imports) — which it is.
+4. **Optional enhancements are not enabled by the state-view layer directly.** They belong to the semantic
+   render-intent / enhanced-renderer boundary (below).
+
 ## Function of the "bridge" — and what is optional
 
 "Bridge" (`pre2/bridge/`) is everything that connects the pure recovered core to a concrete world:
