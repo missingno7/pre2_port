@@ -25,6 +25,7 @@ during pause/scripted pose).
 """
 from __future__ import annotations
 
+from pre2.bridge.dgroup_view import RenderSlot, WidthContractBackend
 from pre2.islands import oracle_link
 
 SRC_LIST = 0x8F1D
@@ -73,7 +74,7 @@ def project_particles(rb, rw):
     cam_y = rw(CAM_Y)
     no_anim = (rb(FREEZE_FLAG) & 1) != 0
 
-    writes: dict[int, tuple[int, int]] = {}
+    be = WidthContractBackend(rb, rw)   # accumulates the {offset: (value, width)} contract
     di = DST_SLOTS
     bx = DST_COUNT
     filled_all = False
@@ -100,26 +101,25 @@ def project_particles(rb, rw):
         if _s16(sy) > WIN_Y:
             continue
 
-        # [asm 8955] on-screen: copy raw X into the render slot
-        writes[di] = (rw(si), 2)
+        slot = RenderSlot(be, di)
+        slot.x = rw(si)                              # [asm 8955] on-screen: copy raw X into the render slot
 
         # [asm 8959..8974] bounce animation -> ax (added to Y)
         ax = 0
         if not no_anim:
             al = rb(si + 6)
             ax = (_s8(al) + 1) & 0xFFFF  # cbw ; inc ax
-            writes[si + 6] = (ax & 0xFF, 1)
+            be.wb(si + 6, ax)
             if _s8(ax & 0xFF) >= 4:  # cmp al,4 ; jl skips
                 ax = (-ax + 1) & 0xFFFF  # neg ax ; inc ax
-                writes[si + 6] = (ax & 0xFF, 1)
+                be.wb(si + 6, ax)
 
         # [asm 8974] new Y written back to the source AND into the slot
         new_y = (ax + rw(si + 2)) & 0xFFFF
-        writes[si + 2] = (new_y, 2)
-        writes[di + 2] = (new_y, 2)
-        # [asm 897D] sprite id + back-reference
-        writes[di + 4] = (rw(si + 4), 2)
-        writes[di + 9] = (si, 2)
+        be.ww(si + 2, new_y)
+        slot.y = new_y
+        slot.sprite = rw(si + 4)                     # [asm 897D] sprite id ...
+        slot.source = si                             # ... + back-reference to the source entry
 
         di += DST_STRIDE
         bx -= 1
@@ -130,8 +130,8 @@ def project_particles(rb, rw):
     # [asm 8992] clear the unused tail slots
     if not filled_all:
         while bx > 0:
-            writes[di + 4] = (0xFFFF, 2)
+            RenderSlot(be, di).sprite = 0xFFFF
             di += DST_STRIDE
             bx -= 1
 
-    return writes
+    return be.writes

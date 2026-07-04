@@ -74,6 +74,32 @@ class OverlayBackend:
         self.wb((off + 1) & 0xFFFF, v >> 8)
 
 
+class WidthContractBackend:
+    """A write-only contract accumulator emitting ``{offset: (value, width)}`` — the width-tracking contract
+    convention some islands use (vs :class:`OverlayBackend`'s byte-level ``{offset: value}``). Reads delegate to
+    the island's own ``rb``/``rw`` closures (which may be word-granular, not byte-composed) and do NOT see the
+    accumulated writes — for projection passes that read only original memory and emit a fresh write set."""
+
+    __slots__ = ("_rb", "_rw", "writes")
+
+    def __init__(self, base_rb, base_rw):
+        self._rb = base_rb
+        self._rw = base_rw
+        self.writes: dict[int, tuple[int, int]] = {}
+
+    def rb(self, off: int) -> int:
+        return self._rb(off & 0xFFFF)
+
+    def rw(self, off: int) -> int:
+        return self._rw(off & 0xFFFF)
+
+    def wb(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = (v & 0xFF, 1)
+
+    def ww(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = (v & 0xFFFF, 2)
+
+
 # ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
 
 class _U16:
