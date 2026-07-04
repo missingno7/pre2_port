@@ -393,9 +393,14 @@ def native_level_load(state, level: int, *, game_root: str) -> None:
       * ``native_level_load_classify``— the tile/sprite type tables (``4232``, byte-exact over the full cache).
 
     All verified byte-exact vs the ASM against a clean-VRAM 3ed6 witness (LOCAL 173/173, SHARED 83/83, classify +
-    42af 0 diff). Still TODO: the ``3ead`` self-patch + ``41ca`` trigger-sprite build, and the ``0x9dc0``
-    parallax-background blit (its source over-reads past the level data into the next bump allocation, a
-    memory-layout coupling — not just the level file). Tracked in [[pre2-level-init-island]]."""
+    42af 0 diff). The ``3ead`` secret-tile self-patch IS recovered and live (``_self_patch_secret_tiles`` in
+    ``native_level_load_objects``). Still TODO: the ``41ca`` proximity-scenery sprite PRE-BUILD (the per-frame
+    proximity SCAN + map-mod at 53F6 are already live in ``loop.native_proximity_trigger``; 41ca only pre-builds
+    the reveal-source sprites into the ``[0x2875]`` bump segment and seeds the ``[0x83F3][+6]`` pointers — its
+    exact ``[+6]``/``[0x2875]`` indexing needs a live L0xD load+fire trace to recover byte-exact, ambiguous from
+    static snapshots), and the ``0x9dc0`` parallax-background blit (its source over-reads past the level data into
+    the next bump allocation, a memory-layout coupling — not just the level file). Tracked in
+    [[pre2-level-init-island]]."""
     native_level_load_dgroup(state, level, game_root=game_root)
     # [asm 3f8d] the parallax blit runs HERE — right after the LEVEL<n> load, BEFORE UNION/BACK0. LEVEL<n>.SQZ
     # decodes LARGER than its reserved paragraphs ([0x2875] bump), so the blit's 4-plane over-read past the reserve
