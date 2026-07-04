@@ -139,9 +139,20 @@ def native_level_end(state, *, game_root: str) -> None:
         if level < 0xA:                                          # a main level -> its bonus level [0x2cf6+level]
             d[_DS + 0x2D8A] = d[_DS + 0x2CF6 + level]            # [asm 4c8f-4c90] (jmp 4f65: NO +1)
         else:                                                    # a bonus level -> the source main level, then +1
-            src = next((i for i in range(0x1A) if d[_DS + 0x2CF6 + i] == level), None)  # [asm 4c7e-4c85]
+            # [asm 4c7e-4c85] reverse-lookup: scan [0x2cf6] for the entry whose value == this bonus level. The
+            # table only maps the FIVE table-warp bonuses (0x00/0x0A/0x0B/0x0C/0x0E, reached by a `[0x6be6]=0xff`
+            # id-0x137 tile on a main level); those always resolve here. The OTHER bonuses (0x0D/0x0F=LEVELG/0x10)
+            # are NOT in the table and never reach this branch: they exit via the id-0x117 end-of-level tile
+            # (8859->882A) which REMAPS [0x2d8a] (LEVELG 0x0F->6) and sets [0x6be6]=1, so they take the normal-end
+            # path above (recovered in player_interaction.loop2_handler num==0xE2 — that is LEVELG's real exit).
+            # If one ever did land here the ORIGINAL scans off the end of the 10-entry table into garbage and jumps
+            # to a non-existent level (0x0F -> level 0x94) — i.e. the real game crashes too. Fail loud rather than
+            # reproduce that crash.
+            src = next((i for i in range(0xA) if d[_DS + 0x2CF6 + i] == level), None)   # [asm 4c7e-4c85]
             if src is None:
-                raise Pre2HybridGap(f"native level-warp: bonus level {level:#x} absent from the [0x2cf6] table")
+                raise Pre2HybridGap(f"native level-warp: bonus level {level:#x} not a [0x2cf6] table-warp bonus "
+                                    f"(the original scans past the table into garbage here — an unreachable state; "
+                                    f"LEVELG/0x0D/0x10 exit via the id-0x117 end-of-level remap, not this warp)")
             d[_DS + 0x2D8A] = (src + 1) & 0xFF                   # [asm 4c89 index -> 4cba -> 4cc4 +1]
     else:                                                        # [asm 4cba/4cc4] the normal end -> +1
         d[_DS + 0x2D8A] = (level + 1) & 0xFF
