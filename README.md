@@ -87,9 +87,18 @@ Everything the frame touches is recovered source, verified against the ASM:
 - **Front-end** — intro, titles, attract animation, difficulty menu, password entry, the carte scroll-in,
   transitions and DAC fades.
 
-**Known residuals** (small, honest): a few rare edge-case paths still fail loud rather than run (e.g. the
-game-over-via-respawn tail); the level-end tally shows the exact score/percent but not yet the animated
-count-up *cutscene*; and the state-view cleanup is an in-progress sweep. None block a normal playthrough.
+### Known issues
+
+Small and honest — **none block a normal cold-boot → credits playthrough:**
+
+- **A few rare edge-case paths still fail loud** (`Pre2HybridGap`) rather than run: an exotic bonus-level
+  table-warp variant, and two defensive camera-pan guards on cave transitions. The normal path never
+  reaches them; failing loud is deliberate (an unrecovered path is never silently faked).
+- **Some cosmetic level dressing is deferred:** a couple of self-patching scenery tiles, trigger-marker
+  sprites, and one parallax-background loader don't draw yet. Gameplay state is correct — only the
+  decoration is absent.
+- **The state-view refactor is an in-progress internal sweep** (moving raw memory offsets out of the
+  recovered logic into a named view layer). No gameplay or visual effect.
 
 ## Two runtimes: the product and the workbench
 

@@ -62,6 +62,13 @@ or copy everything in this folder INTO the GOG game folder and just:
 
 Controls: arrows = move, Space = fire/OK, Enter/E = start, ESC = quit.
 Options: --fps N (default 24), --scale N (window scale), --from-level N (skip the front-end).
+
+Known issues (none block a normal playthrough)
+-----------------------------------------------
+* A few rare edge-case paths stop with a "Pre2HybridGap" message instead of running (an exotic
+  bonus-level warp; two cave-transition camera guards) — the normal path never hits them.
+* Some cosmetic level decoration is not drawn yet (a few self-patching tiles, trigger markers, one
+  parallax background). Gameplay is unaffected.
 """
 
 LAUNCHER = '''\
