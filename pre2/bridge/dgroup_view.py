@@ -298,3 +298,26 @@ class SwarmView(DgroupView):
     cam_col = _S16(0x2DE4)
     cam_row = _S16(0x2DE6)
     page    = _U16(0x2DD8)
+
+
+# ---- the shared render/object slot (stride 0x12) ------------------------------------------------------------
+
+class RenderSlot(StructView):
+    """One on-screen entity record — the stride-0x12 slot the renderer + ride-collision read. It is the
+    projection target of terrain-entities (0x5570), the object-render array, and the second pass; the same
+    layout, so one view serves them all. ``sprite`` [+4] is a PACKED word: low 0x1FFF = sprite id, high bits =
+    flags (0x2000 collectible, 0x4000 opaque flash); the ``flags`` byte aliases its high byte. A slot whose
+    ``sprite`` is 0xFFFF is the dead/terminator entry."""
+
+    __slots__ = ()
+
+    x      = _U16(0)
+    y      = _U16(2)
+    sprite = _U16(4)       # packed: (id & 0x1FFF) | flag bits
+    flags  = _U8(5)        # aliases the high byte of `sprite`
+    source = _U16(9)       # back-ref to the source entity slot this was projected from
+
+    @property
+    def sprite_id(self) -> int:
+        """The bare sprite index (``sprite`` with the flag bits masked off)."""
+        return self._backend.rw(self._base + 4) & 0x1FFF

@@ -18,7 +18,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
-from pre2.bridge.dgroup_view import OverlayBackend
+from pre2.bridge.dgroup_view import OverlayBackend, RenderSlot
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
 
@@ -230,26 +230,27 @@ def tick_terrain_entities(rw, rb, read_tile):
         else:
             _move_default(ov, si)
 
+        dst = RenderSlot(ov, di)                             # the render slot this entity projects into
         sx = (ov.rw(si & 0xFFFF) - ((ov.rw(CAM_X) << 4) & 0xFFFF)) & 0xFFFF      # [asm 4A8B] screen X
         if not (_s16(sx) >= 0x160 or _s16(sx) <= -0x20):     # [asm 4A9D-4AA6] on-screen X
-            ov.ww(di & 0xFFFF, ov.rw(si & 0xFFFF))           # [asm 4AA8] [di]=worldX (even if Y off)
+            dst.x = ov.rw(si & 0xFFFF)                       # [asm 4AA8] worldX (even if Y off)
             sy = (ov.rw((si + 2) & 0xFFFF) - ((ov.rw(CAM_Y) << 4) & 0xFFFF)) & 0xFFFF   # [asm 4AAA]
             if not (_s16(sy) >= 0xD0 or _s16(sy) <= -0x20):  # [asm 4ABD-4AC6] on-screen Y
-                ov.ww((di + 2) & 0xFFFF, ov.rw((si + 2) & 0xFFFF))    # [asm 4AC8]
-                ov.ww((di + 4) & 0xFFFF, ov.rw((si + 4) & 0xFFFF))    # [asm 4ACB]
-                ov.ww((di + 9) & 0xFFFF, si)                 # [asm 4AD1]
+                dst.y = ov.rw((si + 2) & 0xFFFF)             # [asm 4AC8]
+                dst.sprite = ov.rw((si + 4) & 0xFFFF)        # [asm 4ACB]
+                dst.source = si                              # [asm 4AD1] back-ref to the source slot
                 collided = False
                 if _s16(ov.rw(PLAT_VEL)) > -0x10:            # [asm 4AD4] jle skips the collision
                     ov.wb((si + 6) & 0xFFFF, ov.rb((si + 6) & 0xFFFF) | 0x40)   # [asm 4ADB]
                     collided = _collision_4b05(ov, di)       # [asm 4ADF]
                 if not collided:                             # [asm 4AE2 jb skips this]
                     ov.wb((si + 6) & 0xFFFF, ov.rb((si + 6) & 0xFFFF) & 0xBF)   # [asm 4AE4]
-                    ov.ww((di + 2) & 0xFFFF, (ov.rw((di + 2) & 0xFFFF) - 2) & 0xFFFF)  # [asm 4AE8]
+                    dst.y = (dst.y - 2) & 0xFFFF             # [asm 4AE8] nudge up 2px
                 di = (di + RENDER_STRIDE) & 0xFFFF           # [asm 4AEC]
                 budget = (budget - 1) & 0xFFFF
         si = (si + SRC_STRIDE) & 0xFFFF
     while budget != 0:                                       # [asm 4AF9] terminate the remaining render slots
-        ov.ww((di + 4) & 0xFFFF, 0xFFFF)
+        RenderSlot(ov, di).sprite = 0xFFFF                   # dead marker
         di = (di + RENDER_STRIDE) & 0xFFFF
         budget = (budget - 1) & 0xFFFF
     return ov.writes
