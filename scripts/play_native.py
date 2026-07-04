@@ -368,7 +368,9 @@ def main(argv=None) -> int:
                     return
         native_load_song(state, "BOULA.TRK", gr)                   # [asm 5063: 02CC ax=0x11] the game-over song
         for planes, page in native_gameover_scene(state, dos, gr):  # [asm 9B23] the scene (fire/timeout exits)
-            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
+            # each scene frame is one 44FB present = 3 retraces (the ASM busy-waits 3 vsyncs), so it displays at
+            # _FRONT_END_FPS/3 (~23Hz), NOT the per-retrace front-end rate — else the whole scene runs 3x too fast.
+            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS / 3,
                     "PRE2 VM-less — GAME OVER")
             pump(); drive_input(state)
             if native_audio is not None:

@@ -163,10 +163,11 @@ def native_gameover_tick(state) -> None:
 
 
 def native_gameover_scene(state, dos, game_root: str):
-    """[asm 9B23..9C86] Drive the whole GAME OVER scene, yielding one ``(planes, page)`` per frame (70Hz —
-    the loop is retrace-paced by 990D). Runs setup, then tick+render until the fire key or the [0x27F0]
-    timeout (0x276 frames), then the 9286 DAC fade-out (yielded over the frozen last frame). The caller
-    presents each frame and drives the key table (DC1 sources) between yields.
+    """[asm 9B23..9C86] Drive the whole GAME OVER scene, yielding one ``(planes, page)`` per SCENE ITERATION
+    (~23Hz — each 44FB present busy-waits 3 retraces, so the loop runs 0x276/3 iterations before the [0x27F0]
+    timeout). Runs setup, then tick+render until the fire key or the timeout, then the 9286 DAC fade-out
+    (yielded over the frozen last frame). The caller presents each frame at _FRONT_END_FPS/3 and drives the key
+    table (DC1 sources) between yields.
 
     [asm 9B2C] demo playback ([0x2879]!=0) skips the scene entirely."""
     from pre2.bridge.gameover_scene import build_gameover_scene
@@ -181,9 +182,16 @@ def native_gameover_scene(state, dos, game_root: str):
     d[_DS + 0x6BD5] = 0; d[_DS + 0x6BD6] = 0                       # deterministic anim phase for the cry cycle
     rb, rw = readers(state)
     last = None
-    for frame in range(_TIMEOUT):                                  # [9C74] the 0x276-frame timeout
+    # [9C74] The idle timeout is [0x27F0] >= 0x276, and [0x27F0] is bumped by the 70Hz TIMER ISR — but each scene
+    # iteration does one 44FB present that busy-waits ~3 retraces (9C6B 44FB + 9C71 990D), so the timer fires ~3x
+    # per iteration ([0x27F0] += 3). The scene runs 0x276/3 = 0xD2 (210) ITERATIONS, each advancing the animation
+    # once and DISPLAYING for 3 retraces (~23Hz, not 70Hz). Looping the full 0x276 ran the cry/letters/birds anim
+    # 3x too fast (user: "game-over scene faster than it should be"). The caller presents at _FRONT_END_FPS/3 so
+    # the ~9s wall-clock duration is preserved.
+    for frame in range(_TIMEOUT // 3):                            # [9C74] 0x276/3 presents (timer +3 per iteration)
         native_gameover_tick(state)                                # [9C62] 9CC0
         _ww(d, 0x6BD5, (_rd(d, 0x6BD5) + 1) & 0xFFFF)              # the frame counter the cry cycle reads
+        _ww(d, 0x27F0, (_rd(d, 0x27F0) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
         planes, _status = build_gameover_scene(state, dos, game_root=game_root, page=0)  # [9C65/9C68] 9C87+26FA
         last = planes
         yield planes, 0                                            # [9C6B] 44FB present
