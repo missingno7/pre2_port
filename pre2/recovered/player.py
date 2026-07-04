@@ -896,6 +896,38 @@ def player_dispatch_handler(anim_id: int, rb, rw) -> tuple:
     return handler(rb, rw), []
 
 
+#: DGROUP fields the F1 debug-kill path touches.
+LIVES = 0x27D8               # [asm 65BA/65C1] remaining player lives
+_RESPAWN_SCRATCH = 0x27D6    # [asm 65C5] cleared on a life loss (checkpoint/anim scratch)
+DEATH_TIMER = 0x6BE4         # [asm 65CA/5875] the respawn timer 4C69 dispatches on ([0x6BE4]==1 -> 4F6C)
+GAMEOVER_FLAG = 0x6BE5       # [asm 65D0] set at 0 lives -> 4C69 dispatches the game-over restart (5063)
+
+
+def player_f1_suicide(rb) -> dict:
+    """Recover the F1 debug 'kill-self' branch ``1030:5872-5879`` (call 65AF -> 65B3/65D0, then 5875 dec).
+
+    The player update (5850) takes this branch when the respawn timer is idle ([0x6BE4]==0) AND the F1 key is
+    held ([0x282F] != 0 — [0x282F] is the keyboard-held flag for scancode 0x3B=F1, the routine's ONLY reader).
+    65B3: with more than one life, spend a life ([0x27D8]--), clear the respawn scratch ([0x27D6]=0) and arm the
+    respawn timer ([0x6BE4]=2); at the last life instead raise the game-over flag ([0x6BE5]=1). Then 5875 always
+    decrements [0x6BE4] once more (so the life-loss case lands on the =1 the level-state machine 4C69 routes to
+    the respawn 4F6C; the game-over case wraps 0->0xFF, harmlessly, as [0x6BE5] takes over). The caller then
+    ``jmp 5A8C`` — the frame's remaining player update (input/FSM/integrate/collision/timers) is skipped.
+
+    Pure: reads via ``rb`` (byte reader); returns the DGROUP byte writes. Byte-exact to the ASM's read-after-write
+    ordering (the 5875 dec observes 65B3's just-written timer)."""
+    writes: dict[int, int] = {}
+    if rb(LIVES) == 0:                       # [asm 65BA/65BF -> 65D0]
+        writes[GAMEOVER_FLAG] = 1
+        timer = rb(DEATH_TIMER)              # 65D0 leaves [0x6BE4] untouched (==0 here)
+    else:                                    # [asm 65C1-65CA]
+        writes[LIVES] = (rb(LIVES) - 1) & 0xFF
+        writes[_RESPAWN_SCRATCH] = 0
+        timer = 2
+    writes[DEATH_TIMER] = (timer - 1) & 0xFF  # [asm 5875] dec after the call (reads 65B3's write)
+    return writes
+
+
 def player_tick_timers(timers: dict) -> dict:
     """Recover the player-update timer tail ``1030:5A47..5A87``.
 

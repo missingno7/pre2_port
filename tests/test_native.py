@@ -320,20 +320,34 @@ def test_native_level_warp():
     assert next_level(0x0B, 2) == 3       # warp back: bonus LEVELC (src 2) -> L4
 
 
-def test_native_player_step_fails_loud_on_pause():
-    # The pause spin ([0x2830]!=0) isn't a gameplay-state path -> the native player step fail-louds rather than
-    # silently skipping the update. (Dormant in normal play.)
-    st = _state({0x2830: 1})
-    with pytest.raises(Pre2HybridGap):
-        native_player_step(st)
+def test_native_player_step_f2_abort():
+    # The F2 debug abort branch (587C-588F): [0x2830] is the keyboard-held flag for scancode 0x3C=F2; when held
+    # it raises the game-over flag [0x6BE5]=1 (4C69 then dispatches the game-over restart) and skips the rest of
+    # the frame. Byte-exact to the ASM (only [0x6BE5] changes; see the VM shadow verification).
+    st = _state({0x2830: 1, 0x27D8: 3})
+    native_player_step(st)
+    assert st.data[_BASE + 0x6BE5] == 1
+    assert st.data[_BASE + 0x27D8] == 3        # lives untouched (abort, not a life loss)
 
 
-def test_native_player_step_fails_loud_on_death():
-    # The death/respawn branch (65AF, when [0x6BE4]==0 and the death flag [0x282F]!=0) is unrecovered for the
-    # native step -> fail loud, never a silent ASM fallback.
-    st = _state({0x6BE4: 0, 0x282F: 1})
-    with pytest.raises(Pre2HybridGap):
-        native_player_step(st)
+def test_native_player_step_f1_suicide():
+    # The F1 debug kill-self branch (5872-5879 -> 65AF/65B3): [0x282F] is the keyboard-held flag for scancode
+    # 0x3B=F1, and when it's held with the respawn timer idle ([0x6BE4]==0) the frame spends a life and arms the
+    # respawn timer, skipping the rest of the update. Byte-exact to the ASM (see the VM shadow verification).
+    st = _state({0x6BE4: 0, 0x282F: 1, 0x27D8: 3, 0x27D6: 9})   # F1 held, 3 lives
+    native_player_step(st)
+    assert st.data[_BASE + 0x27D8] == 2                          # [65C1] a life spent
+    assert st.data[_BASE + 0x27D6] == 0                          # [65C5] respawn scratch cleared
+    assert st.data[_BASE + 0x6BE4] == 1                          # [65CA]=2 then [5875] dec -> the =1 4C69 respawns on
+    assert st.data[_BASE + 0x6BE5] == 0                          # not game over (lives remained)
+
+
+def test_native_player_step_f1_suicide_game_over():
+    # F1 at the last life: no life to spend -> set the game-over flag [0x6BE5]=1 (4C69 then dispatches 5063).
+    st = _state({0x6BE4: 0, 0x282F: 1, 0x27D8: 0})              # F1 held, 0 lives
+    native_player_step(st)
+    assert st.data[_BASE + 0x6BE5] == 1                          # [65D0] game over
+    assert st.data[_BASE + 0x6BE4] == 0xFF                       # [5875] dec of the untouched 0 (harmless wrap)
 
 
 def test_native_load_level_palette():

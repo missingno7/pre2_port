@@ -314,28 +314,40 @@ _ZERO_SINE = bytes(0x100)          # the password/mode-select map does not bounc
 
 _PW_CHAR_TABLE = 0xB068     # DS:[0xB068 + scancode] = the ASCII char for a make code [asm 99DD]
 _PW_SCAN_LATCH = 0x2874     # the last-typed scancode the runner writes from a hex keydown [asm 99BE]
-_PW_CODE = 0xB1B9           # the accumulated 16-bit code
+_PW_CODE = 0xB1B9           # the accumulated 16-bit code (the current 4-hex group)
+_PW_HIST = (0xB1B3, 0xB1B5, 0xB1B7)   # [asm 9A2E-9A36] the rolling history of the 3 PRIOR groups (cheat buffer)
 _PW_ECHO = 0xB170           # the 4-char on-screen code buffer ("[[[[" when empty)
 _PW_CURSOR = 0xB1A8         # echo cursor / entered-char count (0..4)
+_PW_STATE = 0xB1AA          # [asm 9AAA/9A94] 0 = accepting input, 1 = wrong-code feedback pause
+_PW_WRONG_TIMER = 0xB1B0    # [asm 9AB4] frames elapsed in the wrong-code pause
+_PW_WRONG_FRAMES = 0x8C     # [asm 9AB8] the pause length before the buffer clears + input resumes
 
 
 def _password_init(state) -> None:
-    """Reset the ENTER-CODE input on entry (empty '[[[[' buffer, no chars, no stale scancode)."""
+    """Reset the ENTER-CODE screen on entry: empty '[[[[' buffer, no chars/scancode, AND clear the rolling
+    cheat-group history + the wrong-code state so a fresh session starts clean."""
     d = state.data
     d[_DS + _PW_SCAN_LATCH] = 0
     d[_DS + _PW_ECHO:_DS + _PW_ECHO + 4] = b"[[[["            # [asm 9ACB] the empty-slot placeholders (0x5B)
-    d[_DS + _PW_CURSOR] = 0; d[_DS + _PW_CURSOR + 1] = 0
-    d[_DS + _PW_CODE] = 0; d[_DS + _PW_CODE + 1] = 0
+    for off in (_PW_CURSOR, _PW_CODE, _PW_WRONG_TIMER, *_PW_HIST):
+        d[_DS + off] = 0; d[_DS + off + 1] = 0
+    d[_DS + _PW_STATE] = 0
 
 
 def _password_step(state):
-    """[asm 9985/99AA-9ADF] One frame of the ENTER-CODE accumulation. The runner writes the last-typed hex
-    scancode into ``[0x2874]``; this maps it to a hex char via the scancode->ASCII table ``[0xB068]``, shifts the
-    nibble into the 16-bit code ``[0xB1B9]``, echoes the char into the on-screen buffer ``[0xB170]``, and on the
-    4th char validates via the recovered validator (``932F`` == :func:`validate_code`). On a match it commits
-    ``[0x2D8A]``=level + ``[0xB197]``=expert, then resets the buffer for the next attempt. Returns the matched
-    ``(level, expert)`` or ``None``."""
-    from pre2.recovered.password import DEFAULT_SEED, validate_code
+    """[asm 9985/99AA-9ADF] One frame of the ENTER-CODE state machine. The runner writes the last-typed hex
+    scancode into ``[0x2874]``; this maps it to a hex char (``[0xB068]``), shifts the nibble into the current
+    16-bit group ``[0xB1B9]``, and echoes it into ``[0xB170]``. On each completed 4-hex group it checks, in order:
+
+      1. the ``DEAD C0DE F00D <level>`` LEVEL-WARP CHEAT — [asm 9A27-9A64] hash the three PRIOR groups
+         (``[0xB1B3/B5/B7]``); on the magic hash the current group is the target level number (``-1`` = the
+         ``[0x2D8A]`` index, ``+0x0A`` = expert);
+      2. the normal per-level password (``932F`` == :func:`validate_code`).
+
+    A match commits ``[0x2D8A]``/``[0xB197]`` and returns ``(level, expert)``. A miss SHIFTS the group into the
+    history (``[0xB1B5]->[0xB1B3]`` etc. — so the cheat sequence can accumulate) and enters a ``0x8C``-frame
+    wrong-code pause (``[0xB1AA]``=1) before the echo clears and input resumes. Returns ``None`` otherwise."""
+    from pre2.recovered.password import DEFAULT_SEED, is_cheat_sequence, validate_code, warp_index_to_level
     rb, rw = readers(state)
 
     def wb(o, v):
@@ -344,6 +356,13 @@ def _password_step(state):
     def ww(o, v):
         state.data[_DS + (o & 0xFFFF)] = v & 0xFF
         state.data[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+
+    if rb(_PW_STATE) == 1:                                   # [asm 99AA/9AB4] the wrong-code feedback pause
+        ww(_PW_WRONG_TIMER, (rw(_PW_WRONG_TIMER) + 1) & 0xFFFF)
+        if rw(_PW_WRONG_TIMER) >= _PW_WRONG_FRAMES:          # [asm 9AC0] pause elapsed -> clear echo, accept again
+            state.data[_DS + _PW_ECHO:_DS + _PW_ECHO + 4] = b"[[[["   # [asm 9AC8]
+            wb(_PW_STATE, 0); ww(_PW_CURSOR, 0)              # [asm 9AD4/9AD9]
+        return None                                         # input ignored while the wrong code is shown
 
     scan = rb(_PW_SCAN_LATCH)                                # [asm 99BE] the pending make code
     if not scan or (scan & 0x80):                           # [asm 99C2] none / a break code -> nothing
@@ -361,16 +380,32 @@ def _password_step(state):
     ww(_PW_CURSOR, (cur + 1) & 0xFFFF)                      # [asm 9A19]
     if (cur + 1) < 4:                                       # [asm 9A1F] need 4 chars before validating
         return None
-    code = rw(_PW_CODE)                                     # 4 chars entered -> validate [asm 9A6E-9A7F]
+
+    ww(_PW_WRONG_TIMER, 0)                                  # [asm 9A28] reset the wrong-code timer for this group
+    di, si, bp = rw(_PW_HIST[0]), rw(_PW_HIST[1]), rw(_PW_HIST[2])   # [asm 9A2E-9A36] the three prior groups
+    code = rw(_PW_CODE)
     seed = rw(0xA333) or DEFAULT_SEED                       # [asm 932F] the BIOS seed (0 on the GOG build -> 0x20)
     rot = state.data[(0x1030 << 4) + 5]                     # cs:[5] rotate count (== 3 on this build)
-    m = validate_code(code, seed, rot)
-    _password_init(state)                                  # [asm 9AC8-9AD9] clear the buffer for the next attempt
-    if m is not None:                                      # [asm 9A9B-9AAA] a level matched
+
+    m = None
+    if is_cheat_sequence(di, si, bp):                       # [asm 9A53-9A62] DEAD C0DE F00D held in the history
+        idx = (code - 1) & 0xFFFF                           # [asm 9A64-9A68] the current group is the level number
+        if idx <= 0x13:                                    # [asm 9A69] a valid warp target
+            m = warp_index_to_level(idx)                    # [asm 9A9B-9AAA] -> ([0x2D8A], expert)
+    if m is None:                                           # [asm 9A6E-9A7F] else the normal per-level codes
+        m = validate_code(code, seed, rot)
+
+    if m is not None:                                      # [asm 9A9B-9AAA] a level matched -> commit + advance
         level, expert = m
         wb(0x2D8A, level)                                  # [asm 9AA6] the selected level
         wb(0xB197, 1 if expert else 0)                     # [asm 9AAA] beginner / expert
-    return m
+        return m
+
+    ww(_PW_HIST[0], si)                                    # [asm 9A81-9A94] miss -> shift this group into the
+    ww(_PW_HIST[1], bp)                                    #   history ([0xB1B5]->[0xB1B3], [0xB1B7]->[0xB1B5],
+    ww(_PW_HIST[2], code)                                  #   [0xB1B9]->[0xB1B7]) so a cheat sequence can build
+    wb(_PW_STATE, 1)                                       # [asm 9A94] -> the wrong-code feedback pause
+    return None
 
 
 def _native_menu_map(state, dos, game_root: str, kind: str):

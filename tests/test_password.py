@@ -117,12 +117,44 @@ def test_password_step_accepts_valid_code_and_selects_level():
     assert _pw_enter(st, "A905") == (0, True) and st.data[_DS + 0x2D8A] == 0 and st.data[_DS + 0xB197] == 1
 
 
-def test_password_step_rejects_and_resets():
+def _pw_drain_pause(st):
+    """Tick past the 0x8C-frame wrong-code feedback pause (input ignored) until the screen accepts again."""
+    from pre2.native.front_end import _PW_WRONG_FRAMES
+    for _ in range(_PW_WRONG_FRAMES + 2):
+        if st.data[_DS + 0xB1AA] == 0:
+            break
+        _password_step(st)
+
+
+def test_password_step_rejects_then_pauses_then_resets():
     st = _pw_state()
     st.data[_DS + 0x2D8A] = 7
     assert _pw_enter(st, "1111") is None
     assert st.data[_DS + 0x2D8A] == 7                       # a bad code selects nothing
+    assert bytes(st.data[_DS + 0xB170:_DS + 0xB174]) == b"1111"   # [asm 9A81] the wrong code is SHOWN...
+    assert st.data[_DS + 0xB1AA] == 1                       # ...during the wrong-code pause ([0xB1AA]==1)
+    _pw_drain_pause(st)                                     # [asm 9AB4-9AD9] after 0x8C frames it clears
     assert bytes(st.data[_DS + 0xB170:_DS + 0xB174]) == b"[[[["   # buffer reset for a retry
+    assert st.data[_DS + 0xB1AA] == 0
+
+
+def test_password_step_dead_code_food_level_warp_cheat():
+    # [asm 9A27-9A64] the DEAD C0DE F00D <level> level-warp cheat: type the magic sequence then the target level.
+    def type_seq(seq):
+        st = _pw_state()
+        st.data[_DS + 0x2D8A] = 0xFF
+        for ch in seq:
+            st.data[_DS + 0x2874] = _SCAN[ch]
+            m = _password_step(st)
+            if m is not None:
+                return m, st.data[_DS + 0x2D8A], st.data[_DS + 0xB197]
+            _pw_drain_pause(st)                            # each missed group -> pause -> shift into history
+        return None, st.data[_DS + 0x2D8A], st.data[_DS + 0xB197]
+
+    assert type_seq("DEADC0DEF00D0002") == ((1, False), 1, 0)    # level 2 beginner ([0x2D8A]=1)
+    assert type_seq("DEADC0DEF00D000C") == ((1, True), 1, 1)     # level 2 expert (0x0C = 2 + 0x0A)
+    assert type_seq("DEADC0DEF00D0001") == ((0, False), 0, 0)    # level 1 beginner
+    assert type_seq("DEADCC0DEF00D0002")[0] is None              # a typo in the magic sequence -> no warp
 
 
 def test_password_step_validates_only_on_fourth_char_and_ignores_non_hex():

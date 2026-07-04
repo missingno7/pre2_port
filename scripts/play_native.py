@@ -121,7 +121,7 @@ def main(argv=None) -> int:
     pygame.init()
     view = {"screen": pygame.display.set_mode((320 * args.scale, 200 * args.scale), pygame.RESIZABLE)}
     clock = pygame.time.Clock()
-    ref = {"running": True, "last": None, "last_scan": 0}
+    ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False}
     # ENTER-CODE (password screen): host hex key -> DOS make code. The game maps the DOS make code to a hex char
     # via its own [0xB068] table, so we must feed the make code of the PHYSICAL key position — like the original,
     # which reads raw scancodes. Key by SDL physical scancode (ev.scancode), NOT the keysym (ev.key): the keysym is
@@ -229,7 +229,14 @@ def main(argv=None) -> int:
             held.add(0x02)
         if k[pygame.K_2]:
             held.add(0x03)
-        for sc in set(DemoInput.STD) | held:
+        # The Ctrl+Alt+<letter> Easter-egg combos: Left-Ctrl (0x1D) + Left-Alt (0x38) + W (0x11, the 247B
+        # dev-credits combo) / E (0x12, the 25C7 game-over creators-photo combo). Without these the combos are
+        # only reachable from a recorded demo's raw scancodes, never from a live keyboard.
+        for key, sc in ((pygame.K_LCTRL, 0x1D), (pygame.K_LALT, 0x38), (pygame.K_w, 0x11), (pygame.K_e, 0x12),
+                        (pygame.K_F1, 0x3B), (pygame.K_F2, 0x3C)):   # F1 = lose a life, F2 = abort->game over
+            if k[key]:
+                held.add(sc)
+        for sc in set(DemoInput.STD) | held | {0x1D, 0x38, 0x11, 0x12, 0x3B, 0x3C}:
             set_key(state, sc, sc in held)
         # ENTER-CODE: drive the [0x2874] scancode latch DC1's 99BE reads from the hex key typed THIS frame (0 if
         # none). A per-frame latch (not a persistent queue) is deliberate: the '1'/'2' the player presses to REACH
@@ -345,9 +352,20 @@ def main(argv=None) -> int:
         native_gameover_scene (setup+tick byte-exact vs the ASM, 60-frame lockstep) + native_menu_flow (the
         same generator the cold boot runs from the menu on)."""
         from pre2.native.audio import native_load_song
-        from pre2.native.front_end import native_menu_flow
+        from pre2.native.front_end import native_creators_screen, native_menu_flow
         from pre2.native.gameover_scene import native_gameover_scene
+        from pre2.native.player import ecombo_confirmed
         print("  GAME OVER -> the 9B23 scene -> menu -> carte -> restart")
+        pump(); drive_input(state)                                  # refresh the key flags at the game-over moment
+        if ecombo_confirmed(state):                                # [asm 506C: call 25C7] Ctrl+Alt+E held at game-over
+            print("  Ctrl+Alt+E -> the creators photo (25C7 -> 25F6)")
+            for scene in native_creators_screen(state, gr):        # the same mode-12h HOLLY DAY photo as THE END
+                present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — creators")
+                pump(); drive_input(state)
+                if native_audio is not None:
+                    native_audio.poll(state)
+                if not ref["running"]:
+                    return
         native_load_song(state, "BOULA.TRK", gr)                   # [asm 5063: 02CC ax=0x11] the game-over song
         for planes, page in native_gameover_scene(state, dos, gr):  # [asm 9B23] the scene (fire/timeout exits)
             present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
@@ -423,13 +441,40 @@ def main(argv=None) -> int:
                 break
         native_load_level_palette(state, dos)                      # [asm 0ba0] restore the level palette; resume
 
+    def _p_edge():
+        """A rising edge on the P key (scancode 0x19). pump() must have run this frame first."""
+        p = pygame.key.get_pressed()[pygame.K_p]
+        edge = p and not ref["p_prev"]
+        ref["p_prev"] = p
+        return edge
+
+    def pause_check(state):
+        """[asm 6294] The P-key PAUSE: press P to freeze, press P again to resume. 6294 is a pure busy-wait on the
+        P-held flag [0x280D] with NO gameplay-state writes, so native excludes it from the frame model and it lives
+        here as a presentation freeze — hold the last frame + keep the music alive (interrupts stay live during the
+        original's spin, so music kept playing) until the next P edge."""
+        if not _p_edge():
+            return
+        pygame.display.set_caption("PRE2 VM-less gameplay — PAUSED (P resumes)")
+        while ref["running"]:
+            pump()
+            if ref["last"] is not None:
+                present(ref["last"], _FRONT_END_FPS)
+            else:
+                clock.tick(_FRONT_END_FPS)
+            if native_audio is not None:
+                native_audio.poll(state)                           # music continues while frozen (as in the original)
+            if _p_edge():
+                break
+
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
-        print("Gameplay — SPACE = fire/jump, arrows/numpad = move, ESC = quit. (VM-less native gameplay)")
+        print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
         while ref["running"]:
             pump()
+            pause_check(state)                                     # [asm 6294] P freezes here until P resumes
             drive_input(state)
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
             try:

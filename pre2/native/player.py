@@ -21,16 +21,18 @@ from pre2.gaps import Pre2CheatCredits, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.input_decode import Pre2InputGap, decode_input
 from pre2.recovered.object_inject import find_free_object_slot
-from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, player_flying_484e, player_fsm_step,
-                                   player_tick_timers, player_x_integrate, player_y_integrate)
+from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, player_f1_suicide, player_flying_484e,
+                                   player_fsm_step, player_tick_timers, player_x_integrate, player_y_integrate)
 from pre2.recovered.player_collision import collision
 from pre2.recovered.player_interaction import player_interaction_tick
 
 _PX, _PY = 0x4F1C, 0x4F1E
 _XVEL, _YVEL, _CAM_LEFT = 0x4F22, 0x4F2A, 0x8164
 _RENDER_SUPPRESS = 0x4F0E       # [asm 585E] =0xFFFF: hide the player sprite until the FSM/handlers place it
-_DEATH_TIMER, _DEATH_FLAG = 0x6BE4, 0x282F
-_PAUSE_FLAG = 0x2830
+_DEATH_TIMER = 0x6BE4           # [asm 5864] respawn timer; idle (==0) except mid death/respawn
+_F1_KEY = 0x282F                # [asm 586B] keyboard-held flag for scancode 0x3B = F1 (the debug kill-self key)
+_F2_KEY = 0x2830                # [asm 587C] keyboard-held flag for scancode 0x3C = F2 (the debug abort->game-over key)
+_GAMEOVER_FLAG = 0x6BE5         # [asm 5883] set -> 4C69 dispatches the game-over restart (5063)
 _MOMENTUM_GATE = 0x6BC5         # 484E dormant when 0
 _MAP_SEG_PTR = 0x2DDA
 
@@ -51,18 +53,32 @@ def _keycombo_active(rb) -> bool:
     return rb(0x2811) != 0 and rb(0x282C) != 0 and rb(0x2805) != 0
 
 
-def _cheat_combo_confirmed(rb) -> bool:
-    """The full 247B trigger: the three combo keys held (Ctrl 0x1D / Alt 0x38 / scancode 0x11) AND NO OTHER key
-    pressed — [asm 2488-24A7] scans every scancode flag [0x27F4+sc] for sc in 1..0x7E, skipping the three combo
-    scancodes, and aborts if any other is down. Exactly matches, else the routine is a no-op."""
-    if not _keycombo_active(rb):
+def _combo_confirmed(rb, third_sc: int) -> bool:
+    """A Ctrl+Alt+<key> Easter-egg combo: Left-Ctrl (0x1D) + Left-Alt (0x38) + a third scancode held AND NO OTHER
+    key pressed — the shared [asm 2488-24A7 / 25D9-25F2] shape: scan every scancode flag [0x27F4+sc] for sc in
+    1..0x7E, skipping the three combo scancodes, and abort if any other is down. ``third_sc``: 0x11 (W/Z, the 247B
+    dev-credits combo) or 0x12 (E, the 25C7 game-over creators-photo combo). The third-key DGROUP flag is at
+    [0x27F4 + third_sc]. Returns True only on an exact match, else the routine is a no-op."""
+    if rb(0x2811) == 0 or rb(0x282C) == 0 or rb(0x27F4 + third_sc) == 0:   # Ctrl & Alt & third key all held
         return False
     for sc in range(1, 0x7F):
-        if sc in (0x11, 0x1D, 0x38):
+        if sc in (0x1D, 0x38, third_sc):
             continue
         if rb(0x27F4 + sc) != 0:
             return False
     return True
+
+
+def _cheat_combo_confirmed(rb) -> bool:
+    """The full 247B trigger: Ctrl+Alt+W/Z (scancode 0x11) with no other key -> the dev-credits screen (2505)."""
+    return _combo_confirmed(rb, 0x11)
+
+
+def ecombo_confirmed(state) -> bool:
+    """The 25C7 game-over trigger: Ctrl+Alt+E (scancode 0x12) with no other key -> the creators photo (25F6).
+    Checked at the top of the game-over routine (506c), so the flow driver tests it as the GAME OVER scene begins."""
+    rb, _rw = readers(state)
+    return _combo_confirmed(rb, 0x12)
 
 
 def native_player_step(state) -> None:
@@ -70,14 +86,18 @@ def native_player_step(state) -> None:
     rb, rw = readers(state)
     _w(state, _RENDER_SUPPRESS, 0xFFFF, 2)                              # [asm 585E]
 
-    if rb(_DEATH_TIMER) == 0 and rb(_DEATH_FLAG) != 0:                  # [asm 5864-5879]
-        raise Pre2HybridGap("native player: death/respawn path (65AF) not recovered")
-    if rb(_PAUSE_FLAG) != 0:                                            # [asm 587C-588F]
-        raise Pre2HybridGap("native player: pause spin ([0x2830]) not handled")
+    if rb(_DEATH_TIMER) == 0 and rb(_F1_KEY) != 0:                      # [asm 5864-5879] F1 debug kill-self
+        for a, v in player_f1_suicide(rb).items():                     #   65AF/65B3: spend a life (or game-over)
+            _w(state, a, v, 1)                                         #   + arm the respawn timer 4C69 dispatches
+        return                                                         #   [asm 5879] jmp 5A8C — skip the rest
+    if rb(_F2_KEY) != 0:                                                # [asm 587C-588F] F2 debug abort -> game over
+        _w(state, _GAMEOVER_FLAG, 1, 1)                                 #   [asm 5883] set [0x6BE5]=1 (4C69 -> 5063)
+        return                                                          #   [asm 588F] jmp 5A8C — skip the rest
     if _keycombo_active(rb) and _cheat_combo_confirmed(rb):             # [asm 5892 -> 247B] the dev-credits combo
         raise Pre2CheatCredits()                                        #   Ctrl+Alt+W(/Z), no other key -> 2505
 
-    # [asm 5897/58A1] 454E render bg-save + 6294 vblank spin -> not gameplay state, skipped.
+    # [asm 5897/58A1] 454E render bg-save + 6294 P-pause busy-wait ([0x280D]) -> no gameplay-state writes,
+    # skipped here; the pause freeze is a presentation concern driven by play_native's gameplay loop.
     try:
         apply_ds(state, decode_input(rb, rw))                          # [asm 58A4] DC1 input decode
     except Pre2InputGap as exc:

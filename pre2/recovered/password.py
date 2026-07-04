@@ -17,7 +17,8 @@ Index → level/difficulty: index 0 == level 1 beginner and index 10 == level 1 
 from __future__ import annotations
 
 __all__ = ["PASSWORD_XOR", "DEFAULT_SEED", "DEFAULT_ROT", "LEVELS_PER_MODE",
-           "bios_seed", "level_code", "password", "password_table", "validate_code"]
+           "bios_seed", "level_code", "password", "password_table", "validate_code",
+           "password_cheat_hash", "is_cheat_sequence", "warp_index_to_level"]
 
 PASSWORD_XOR = 0x55A3     # [asm 939C xor ax,0x55a3]
 DEFAULT_SEED = 0x20       # [asm 9390] the zeroed-BIOS fallback -> the seed on the GOG build under the VM/DOSBox
@@ -85,6 +86,46 @@ def validate_code(entered: int, seed: int = DEFAULT_SEED, rot: int = DEFAULT_ROT
             expert = index >= LEVELS_PER_MODE              # [asm 9A9D] cmp dl,0xa; jb
             return (index - LEVELS_PER_MODE if expert else index), expert   # [asm 9AA2/9AA6] [0x2D8A]=dl
     return None
+
+
+#: [asm 9A53/9A58/9A5E] the level-warp cheat hash — the values ``password_cheat_hash`` must return for the three
+#: prior 4-hex groups to be the magic "DEAD C0DE F00D" sequence. Stored as a HASH (not the literals) so the code
+#: DEAD/C0DE/F00D can't be found by scanning the binary for constants.
+_CHEAT_HASH = (0x36C8, 0x8BD1, 0x8E71)
+
+
+def _rol(v: int, c: int, bits: int) -> int:
+    c %= bits; m = (1 << bits) - 1; v &= m
+    return ((v << c) | (v >> (bits - c))) & m if c else v
+
+
+def password_cheat_hash(di: int, si: int, bp: int) -> tuple[int, int, int]:
+    """[asm 9A3A-9A52] The obfuscated hash of the three prior ENTER-CODE groups (di=[0xB1B3], si=[0xB1B5],
+    bp=[0xB1B7]). Returns ``(ax, bx, dx)``; the sequence is the level-warp cheat iff it equals ``_CHEAT_HASH``
+    (which ``DEAD C0DE F00D`` produces — VERIFIED)."""
+    ax = _rol(di, 2, 16)                                   # [asm 9A3C-9A3E] rol ax,1 x2
+    ax = ((ax & 0xFF) * ((ax >> 8) & 0xFF)) & 0xFFFF       # [asm 9A40] mul ah -> AX = AL*AH
+    ax = (ax ^ si) & 0xFFFF                                # [asm 9A42] xor ax, si
+    prod = (ax * bp) & 0xFFFFFFFF                          # [asm 9A44] mul bp -> DX:AX
+    ax = prod & 0xFFFF; dx = (prod >> 16) & 0xFFFF
+    bx = (ax + si) & 0xFFFF                                # [asm 9A46-9A48] bx=ax; add bx,si
+    bx = _rol(bx, 15, 16)                                  # [asm 9A4A] ror bx,1
+    bl = _rol(bx & 0xFF, 1, 8) ^ ((bx >> 8) & 0xFF)        # [asm 9A4C-9A4E] rol bl,1; xor bl,bh
+    bx = (((bx >> 8) & 0xFF) << 8) | (bl & 0xFF)
+    bx = (bx ^ bp) & 0xFFFF                                # [asm 9A50] xor bx, bp
+    return ax, bx, dx
+
+
+def is_cheat_sequence(di: int, si: int, bp: int) -> bool:
+    """True iff the three prior groups are the ``DEAD C0DE F00D`` level-warp cheat [asm 9A53-9A62]."""
+    return password_cheat_hash(di, si, bp) == _CHEAT_HASH
+
+
+def warp_index_to_level(index: int) -> tuple[int, bool]:
+    """[asm 9A9B-9AAA] Map a warp index (level-number-minus-1, or a matched 0..0x12 loop index) to the game's
+    ``([0x2D8A], expert)``: indices >= ``LEVELS_PER_MODE`` are expert (``[0x2D8A]`` = index - 10)."""
+    expert = index >= LEVELS_PER_MODE
+    return (index - LEVELS_PER_MODE if expert else index), expert
 
 
 def password_table(seed: int = DEFAULT_SEED, rot: int = DEFAULT_ROT) -> list[tuple[int, str, str]]:

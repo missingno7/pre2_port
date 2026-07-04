@@ -29,13 +29,15 @@ import play
 
 
 def main() -> int:
-    # ORACLE MODE: default PURE ASM (native_replacements=False) — record from the ORIGINAL PRE2.EXE so a pass
-    # proves native == the original binary. `--hybrid` records from the hybrid VM instead (native's own recovered
-    # logic); use it for demos RECORDED in the hybrid (play.py default), which desync in pure ASM because the
-    # gameplay hooks change the instruction-per-tick count that the demo's present-frame clock depends on — a
-    # faithful pure-ASM oracle needs a demo recorded with `play.py --no-replacements`.
-    hybrid = "--hybrid" in sys.argv
-    argv = [a for a in sys.argv if a != "--hybrid"]
+    # ORACLE MODE: the tick timeline must be recorded with the SAME replacement mode the demo was recorded in,
+    # else the instruction-per-tick count (which the demo's present-frame clock rides on) desyncs and the
+    # playthrough diverges — the recording then TRUNCATES the moment the desynced player dies/gets stuck (that
+    # produced the short/stale tick files that made a later `--play-demo` stop before the interesting event).
+    # So AUTO-SELECT from the demo's manifest ``command_tail``: play.py default = HYBRID; ``--no-replacements`` =
+    # PURE ASM. ``--hybrid`` / ``--pure`` force it.
+    force_hybrid = "--hybrid" in sys.argv
+    force_pure = "--pure" in sys.argv or "--no-replacements" in sys.argv
+    argv = [a for a in sys.argv if a not in ("--hybrid", "--pure", "--no-replacements")]
     demo = argv[1] if len(argv) > 1 else "artifacts/demo_pre2_full_gorilla_20260628_203423"
     max_ticks = int(argv[2]) if len(argv) > 2 else 100_000
     tick_file = ROOT / demo / "game_tick_demo.bin"
@@ -49,13 +51,14 @@ def main() -> int:
         meta = pb.manifest.get("metadata", {})
         chunk = int(meta.get("chunk_steps", 2142))          # the demo's OWN clock (old demos use 625/240 —
         hz = int(meta.get("present_hz", 70))                # hardcoding 2142 corrupts their trajectory)
-        # ORACLE = PURE ASM (native_replacements=False): record the tick timeline from the ORIGINAL PRE2.EXE with
-        # NO recovered hooks, so verifying native against it proves native == the original binary (not just == the
-        # hybrid, which runs the same recovered logic native does — a weaker, near-tautological check). The tick
-        # timeline is keyed to GAME TICKS (captured at DECODE/GAP_SITE), so the pure-ASM vs hybrid instruction-count
-        # clock difference (only the gameplay hooks' savings; the interpreted retrace-waits are identical here) does
-        # not change WHAT the game samples/computes per tick — it stays a faithful pure-ASM playthrough.
-        print(f"  oracle = {'HYBRID VM (recovered hooks)' if hybrid else 'PURE ASM (original PRE2.EXE)'}")
+        tail = str(meta.get("command_tail", ""))            # the flags the demo was recorded with
+        recorded_pure = "--no-replacements" in tail or "--norepl" in tail
+        auto = not (force_hybrid or force_pure)
+        hybrid = force_hybrid or (not force_pure and not recorded_pure)   # match how the demo was recorded
+        # Recording HYBRID proves native == the hybrid VM (same recovered logic native runs); recording PURE ASM
+        # proves native == the original PRE2.EXE (a stronger check, valid only for a --no-replacements demo).
+        print(f"  oracle = {'HYBRID VM (recovered hooks)' if hybrid else 'PURE ASM (original PRE2.EXE)'}"
+              f"{f' [auto from command_tail={tail!r}]' if auto else ''}")
         rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
                                 game_root=str(ROOT / "assets"), native_replacements=hybrid)
         cpu = rt.cpu
