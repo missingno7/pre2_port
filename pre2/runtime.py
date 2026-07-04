@@ -22,13 +22,29 @@ def _install_bootstrap_helpers(rt: Runtime) -> None:
     install_lzexe_0069_accelerator(rt.cpu, name_prefix="pre2")
 
 
+def _apply_replacements(rt, native_replacements: bool | str) -> None:
+    """Resolve the replacement mode and install/uninstall accordingly.
+
+    ``True`` / ``"hybrid"`` -> every hook (the hybrid runtime); ``"safe"`` -> only the render/audio-owned
+    :data:`pre2.checkpoints.SAFE_ORACLE_HOOKS` (original ASM game logic, collapsed draw/mixer sinks);
+    ``False`` / ``"pure"`` -> no hooks (the pure ASM oracle)."""
+    if native_replacements in (False, "pure"):
+        uninstall_pre2_replacements(rt)  # dos_re auto-installs the registry; undo it
+    elif native_replacements in (True, "hybrid"):
+        install_pre2_replacements(rt)
+    elif native_replacements == "safe":
+        install_pre2_replacements(rt, mode="safe")
+    else:
+        raise ValueError(f"unknown native_replacements mode {native_replacements!r} (hybrid|safe|pure)")
+
+
 def create_pre2_runtime(
     exe_path: str | Path,
     *,
     game_root: str | Path | None = None,
     command_tail: bytes | str = b"",
     fast_adlib: bool = False,
-    native_replacements: bool = True,
+    native_replacements: bool | str = True,
 ) -> Runtime:
     rt = create_dos_runtime(
         resolve_pre2_exe_path(exe_path),
@@ -38,10 +54,7 @@ def create_pre2_runtime(
     _install_bootstrap_helpers(rt)
     if fast_adlib:
         install_fast_adlib_service(rt)
-    if native_replacements:
-        install_pre2_replacements(rt)
-    else:
-        uninstall_pre2_replacements(rt)  # dos_re auto-installs the registry; undo it
+    _apply_replacements(rt, native_replacements)
     return rt
 
 
@@ -51,7 +64,7 @@ def load_pre2_snapshot(
     *,
     game_root: str | Path | None = None,
     fast_adlib: bool = False,
-    native_replacements: bool = True,
+    native_replacements: bool | str = True,
 ) -> Runtime:
     rt = load_dos_snapshot(
         resolve_pre2_exe_path(exe_path),
@@ -61,10 +74,7 @@ def load_pre2_snapshot(
     _install_bootstrap_helpers(rt)
     if fast_adlib:
         install_fast_adlib_service(rt)
-    if native_replacements:
-        install_pre2_replacements(rt)
-    else:
-        uninstall_pre2_replacements(rt)  # dos_re auto-installs the registry; undo it
+    _apply_replacements(rt, native_replacements)
     return rt
 
 

@@ -186,7 +186,7 @@ def _make_runtime(args: argparse.Namespace, *, fast_adlib: bool | None = None):
     # layout (code offsets + data segment). On a build they weren't derived against
     # (e.g. a different release), they fire on the wrong instructions and corrupt
     # execution — run the pure VM oracle instead with --no-replacements.
-    native = not bool(getattr(args, "no_replacements", False))
+    native = _replacements_mode(args)
     if args.snapshot:
         if is_dosbox_savestate(args.snapshot):
             # A DOSBox-X .sav: load its memory + CPU state (runs pure ASM — the
@@ -225,12 +225,48 @@ def _pygame_scan_map(pygame) -> dict[int, tuple[int, int]]:
     return out
 
 
+def _replacements_mode(args: argparse.Namespace) -> str:
+    """The execution mode: ``pure`` (--no-replacements, original ASM oracle), ``safe`` (--safe-hooks,
+    original ASM game logic + only the render/audio-owned SAFE_ORACLE_HOOKS collapsed — the fluent
+    demo-recording oracle), or ``hybrid`` (default, every recovered hook)."""
+    if getattr(args, "no_replacements", False):
+        if getattr(args, "safe_hooks", False):
+            raise SystemExit("--no-replacements and --safe-hooks are mutually exclusive")
+        return "pure"
+    return "safe" if getattr(args, "safe_hooks", False) else "hybrid"
+
+
+def _hook_set_fingerprint(mode: str) -> str:
+    """A stable fingerprint of the EXACT hook set the mode installs — the set CONTENTS are a reproducibility
+    knob, not just the mode name: a demo recorded under one safe-set composition does not replay under
+    another (found the hard way: a session recorded from a stale play.py process while SAFE_ORACLE_HOOKS
+    grew 16->20 hooks replayed self-consistently but was NOT the recorded playthrough)."""
+    import hashlib
+    from dos_re.hooks import registry
+    from pre2.checkpoints import SAFE_ORACLE_HOOKS
+    if mode == "pure":
+        names: list[str] = []
+    elif mode == "safe":
+        names = sorted(SAFE_ORACLE_HOOKS)
+    else:
+        names = sorted(repl.name for repl in registry.replacements.values())
+    return f"{len(names)}:{hashlib.sha1(','.join(names).encode()).hexdigest()[:12]}"
+
+
 def _demo_metadata(args: argparse.Namespace, *, fast_adlib: bool) -> dict[str, object]:
     """Reproducibility knobs a replay must match to stay deterministic."""
     return {
         "game": "pre2",
         "exe": str(Path(args.exe).name),
         "command_tail": args.dos_args,
+        # The EXECUTION MODE is a reproducibility knob: hooks execute fewer VM instructions than the ASM
+        # they replace, so the instruction-count clock (and with it the whole trajectory) is mode-dependent.
+        # A demo replays bit-identically ONLY in the mode it was recorded in. (This used to be missing —
+        # verify_native_tick_demo then guessed the oracle from command_tail, which never contains play.py
+        # flags, and silently picked HYBRID for pure-ASM recordings.)
+        "replacements": _replacements_mode(args),
+        # The exact hook-set composition (count + sha1 of the sorted names) — replay warns on mismatch.
+        "hook_set": _hook_set_fingerprint(_replacements_mode(args)),
         "chunk_steps": int(args.chunk_steps),
         "present_hz": int(args.present_hz),
         "retrace_pulse": float(args.retrace_pulse),
@@ -315,10 +351,14 @@ def _advance_frame_deterministic(rt, args, *, chunk_steps, sub_batch, clock, pic
     The fast path (``pre2.bridge.timing_fastforward.advance_frame_fast``) is a recovered timing hook: it
     collapses the long runs of identical 9900/990D/44CD retrace polls in closed form but is BYTE-EQUIVALENT
     to the interpreted ``_advance_demo_frame`` on the deterministic clock (it mirrors the same sub_batch IRQ
-    cadence and reproduces every register/flag/memory/port side effect). It is disabled — falling back to the
-    pure interpreted ASM loops — under ``--no-replacements`` (pure oracle) or ``--no-fast-retrace-waits`` (so
-    the original ASM timing path stays available for comparison)."""
-    use_fast = getattr(args, "fast_retrace_waits", True) and not getattr(args, "no_replacements", False)
+    cadence and reproduces every register/flag/memory/port side effect). Default (auto): on with the hybrid
+    runtime, off under ``--no-replacements`` (the pure oracle keeps the original interpreted timing path).
+    EXPLICIT ``--fast-retrace-waits`` enables it even under ``--no-replacements``: it touches no game logic
+    (only collapses provably-identical poll iterations; the poll sites are original ASM, present in the pure
+    runtime) and the trajectory stays byte-equivalent — only the wall clock improves (the spin dominates a
+    pure-ASM frame). ``--no-fast-retrace-waits`` forces the interpreted loops in any mode."""
+    fast = getattr(args, "fast_retrace_waits", None)
+    use_fast = (not getattr(args, "no_replacements", False)) if fast is None else bool(fast)
     if use_fast:
         from pre2.bridge.timing_fastforward import advance_frame_fast
         advance_frame_fast(rt, chunk_steps=chunk_steps, sub_batch=sub_batch, clock=clock, pic=pic,
@@ -517,7 +557,22 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
         rec = InputDemoRecorder(root=Path(args.demo_dir), name=name, metadata=_demo_metadata(args, fast_adlib=fast_adlib))
         out = rec.start(rt, boundary=frame)
         demo["rec"] = rec
-        print(f"recording demo -> {out}")
+        mode = _replacements_mode(args)
+        print(f"recording demo [{mode.upper()}, chunk_steps={args.chunk_steps}] -> {out}")
+        if mode != "hybrid" and int(args.chunk_steps) < 20000:
+            # Measured on L0xD (heavy scene): under the hybrid-calibrated default budget (--speed 150k =>
+            # chunk 2142) the original-ASM game logic only completes a main-loop tick every ~18 present-
+            # frames — it sees itself lagging and engages its own lag compensation. Still fully DETERMINISTIC
+            # (replays bit-identically in the same mode), but NOT original pacing. From chunk ~40000 the game
+            # reaches its natural ~1 tick per ~3 retrace frames (~23Hz) and the compensation disengages.
+            # Recommend 150000: the surplus budget is retrace+PIT spin the fast-forward collapses for free
+            # (byte-equivalent; --safe-hooks@150k measured 82fps wall), and the extra headroom keeps heavy
+            # scenes at original pacing too. (Under pure ASM the spin IS interpreted unless
+            # --fast-retrace-waits is passed, so bigger budgets cost real wall-clock there.)
+            print(f"  WARNING: {mode.upper()} recording with a hybrid-sized step budget — the game will "
+                  f"internally lag/frame-skip (deterministic, but not original pacing).\n"
+                  f"  For original pacing record with:  --{'no-replacements' if mode == 'pure' else 'safe-hooks'} "
+                  f"--chunk-steps 150000")
 
     def stop_recording() -> None:
         rec = demo["rec"]
@@ -927,9 +982,30 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
     fast_adlib = bool(meta.get("fast_adlib", getattr(args, "fast_adlib", False)))
     exe = Path(args.exe)
     game_root = Path(args.game_root)
-    # Execution mode is the SAME axis as the live viewer: --no-replacements => pure ASM oracle, else hybrid.
-    # (Previously omitted here, so --play-demo silently ran hybrid regardless of --no-replacements.)
-    native = not bool(getattr(args, "no_replacements", False))
+    # Execution mode is the SAME axis as the live viewer: pure (--no-replacements) / safe (--safe-hooks) /
+    # hybrid. The mode is a reproducibility knob (hooks execute fewer VM instructions than the ASM they
+    # replace, so the whole trajectory is mode-dependent) — a demo replays bit-identically ONLY in its
+    # recorded mode. Demos that carry `replacements` replay in THAT mode (metadata wins over the CLI, like
+    # chunk_steps); older demos fall back to the CLI flag with a warning.
+    if "replacements" in meta:
+        rec_mode = str(meta["replacements"])
+        if rec_mode != _replacements_mode(args):
+            print(f"replaying in the demo's recorded mode: {rec_mode.upper()} "
+                  f"(metadata overrides the CLI — the trajectory is mode-dependent)")
+        args.no_replacements = rec_mode == "pure"
+        args.safe_hooks = rec_mode == "safe"
+        # The hook-set COMPOSITION is a reproducibility knob too (the safe set grows as hooks are proven);
+        # a demo recorded under a different composition replays self-consistently but is NOT the recorded
+        # playthrough. Warn loud — the only fix is re-recording under the current set.
+        if "hook_set" in meta and meta["hook_set"] != _hook_set_fingerprint(rec_mode):
+            print(f"WARNING: this demo was recorded under a DIFFERENT {rec_mode} hook set "
+                  f"(recorded {meta['hook_set']}, current {_hook_set_fingerprint(rec_mode)}) — the replay "
+                  f"will be deterministic but will NOT reproduce the recorded playthrough. Re-record it.")
+    else:
+        print(f"WARNING: this demo predates the `replacements` metadata key — replaying in the CLI-selected "
+              f"{_replacements_mode(args).upper()} mode; if that is not the mode it was recorded in, the "
+              f"replay WILL desync.")
+    native = _replacements_mode(args)
     return load_pre2_snapshot(exe, playback.snapshot_path(), game_root=game_root,
                               fast_adlib=fast_adlib, native_replacements=native)
 
@@ -991,16 +1067,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
     p.add_argument("--no-replacements", action="store_true", help="run the pure VM oracle with NO recovered/hybrid hooks (their fixed code/data offsets are bound to one build's layout; use this on a build they weren't derived against)")
+    p.add_argument("--safe-hooks", action="store_true", help="ORACLE mode for fluent demo recording: original ASM game logic with ONLY pre2.checkpoints.SAFE_ORACLE_HOOKS installed — the render/audio-owned hooks (frame/blit/text/palette/mixer: their write-set cannot touch the gameplay state a recording certifies) plus the input-closed asset-decode tier (sqz/sprite-decode: proven byte-identical to the ASM over the entire asset set by pre2/probes/verify_sqz_all_assets.py — removes the interpreted level-load stalls). The draw/mixer/decode instruction sinks collapse (playable wall-clock, no in-game lag compensation) while every gameplay-owned byte still comes from original ASM. Mutually exclusive with --no-replacements")
     p.add_argument("--verify-hooks", action="store_true", help="run the original ASM as the oracle and diff each recovered-native result against it; prints divergences immediately plus a compact periodic per-hook summary")
     p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
     p.add_argument("--full-verify", action="store_true", help="foolproof variant of --verify-hooks: diff the WHOLE machine state (all memory + return cs:ip:sp) after each recovered routine vs the ASM, so nothing can leak outside a hand-picked contract. ~10x slower; for offline snapshot/demo audits, not live play")
     p.add_argument("--trace-hooks", action="store_true", help="run the LIVE hybrid runtime (hooks replacing ASM, NOT the oracle) and show which recovered hooks fire — a live coverage view in the title bar + a periodic/final per-hook tally. Hooks absent = that screen is still pure ASM")
-    p.add_argument("--fast-retrace-waits", action=argparse.BooleanOptionalAction, default=True, help="recovered timing primitive (deterministic paths: headless replay, in-view demo replay, verify/oracle): collapse the classified VGA retrace busy-waits (9900/990D/44CD) in closed form, byte-equivalent to the interpreted stepper (~6-15x faster on wait-heavy scenes). On by default with the hybrid runtime; --no-fast-retrace-waits forces the pure interpreted ASM loops (and it is off under --no-replacements). Does NOT affect live --view wall-clock pacing")
+    p.add_argument("--fast-retrace-waits", action=argparse.BooleanOptionalAction, default=None, help="recovered timing primitive (deterministic paths: headless replay, in-view demo replay, verify/oracle): collapse the classified VGA retrace busy-waits (9900/990D/44CD) in closed form, byte-equivalent to the interpreted stepper (~6-15x faster on wait-heavy scenes). Default auto: on with the hybrid runtime, off under --no-replacements. Pass --fast-retrace-waits EXPLICITLY to enable it under --no-replacements too (byte-equivalent — only wall-clock speed changes); --no-fast-retrace-waits forces the interpreted ASM loops in any mode. Does NOT affect live --view wall-clock pacing")
     args = p.parse_args(argv)
 
     # VM steps per frame: explicit override, else derived so that
     # chunk * present_hz == --speed steps/sec (the real-time tempo throttle).
     # A demo replay overrides this from the manifest in _make_replay_runtime.
+    # --safe-hooks defaults HIGHER: original-ASM game logic needs ~40k steps/frame to reach its natural
+    # ~23Hz pace (the --speed 150k default is calibrated for the fully-hooked hybrid), and with the
+    # wait fast-forward the surplus is collapsed for free — so default to 150000 steps/frame (measured
+    # 82fps wall on L2) and keep original pacing with headroom. --chunk-steps / --speed still override.
+    if args.chunk_steps is None and getattr(args, "safe_hooks", False) and args.speed == 150_000:
+        args.chunk_steps = 150_000
     args.chunk_steps = args.chunk_steps or max(1, args.speed // max(1, args.present_hz))
 
     exe = Path(args.exe)

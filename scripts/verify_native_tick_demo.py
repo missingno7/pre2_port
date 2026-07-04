@@ -33,11 +33,12 @@ def main() -> int:
     # else the instruction-per-tick count (which the demo's present-frame clock rides on) desyncs and the
     # playthrough diverges — the recording then TRUNCATES the moment the desynced player dies/gets stuck (that
     # produced the short/stale tick files that made a later `--play-demo` stop before the interesting event).
-    # So AUTO-SELECT from the demo's manifest ``command_tail``: play.py default = HYBRID; ``--no-replacements`` =
-    # PURE ASM. ``--hybrid`` / ``--pure`` force it.
+    # AUTO-SELECT from the demo's `replacements` metadata (pure|safe|hybrid); ``--hybrid`` / ``--pure`` /
+    # ``--safe`` force it (needed for old demos without the key).
     force_hybrid = "--hybrid" in sys.argv
     force_pure = "--pure" in sys.argv or "--no-replacements" in sys.argv
-    argv = [a for a in sys.argv if a not in ("--hybrid", "--pure", "--no-replacements")]
+    force_safe = "--safe" in sys.argv or "--safe-hooks" in sys.argv
+    argv = [a for a in sys.argv if a not in ("--hybrid", "--pure", "--no-replacements", "--safe", "--safe-hooks")]
     demo = argv[1] if len(argv) > 1 else "artifacts/demo_pre2_full_gorilla_20260628_203423"
     max_ticks = int(argv[2]) if len(argv) > 2 else 100_000
     tick_file = ROOT / demo / "game_tick_demo.bin"
@@ -51,16 +52,27 @@ def main() -> int:
         meta = pb.manifest.get("metadata", {})
         chunk = int(meta.get("chunk_steps", 2142))          # the demo's OWN clock (old demos use 625/240 —
         hz = int(meta.get("present_hz", 70))                # hardcoding 2142 corrupts their trajectory)
-        tail = str(meta.get("command_tail", ""))            # the flags the demo was recorded with
-        recorded_pure = "--no-replacements" in tail or "--norepl" in tail
-        auto = not (force_hybrid or force_pure)
-        hybrid = force_hybrid or (not force_pure and not recorded_pure)   # match how the demo was recorded
-        # Recording HYBRID proves native == the hybrid VM (same recovered logic native runs); recording PURE ASM
-        # proves native == the original PRE2.EXE (a stronger check, valid only for a --no-replacements demo).
-        print(f"  oracle = {'HYBRID VM (recovered hooks)' if hybrid else 'PURE ASM (original PRE2.EXE)'}"
-              f"{f' [auto from command_tail={tail!r}]' if auto else ''}")
+        # The recorded execution mode: prefer the explicit `replacements` metadata key (stamped by play.py's
+        # recorder). Old demos lack it — fall back to sniffing command_tail, which never actually contains
+        # play.py flags (it is the DOS program's own tail), i.e. old pure-ASM demos auto-select WRONG; force
+        # with --pure / --safe / --hybrid for those.
+        if "replacements" in meta:
+            recorded_mode = str(meta["replacements"])
+            tail = f"replacements={recorded_mode}"
+        else:
+            tail = str(meta.get("command_tail", ""))
+            recorded_mode = "pure" if ("--no-replacements" in tail or "--norepl" in tail) else "hybrid"
+        auto = not (force_hybrid or force_pure or force_safe)
+        mode = ("hybrid" if force_hybrid else "pure" if force_pure else "safe" if force_safe
+                else recorded_mode)                                  # match how the demo was recorded
+        # Recording HYBRID proves native == the hybrid VM (same recovered logic native runs); PURE ASM proves
+        # native == the original PRE2.EXE; SAFE proves native == original GAME LOGIC (only render/audio-owned
+        # hooks were live, and those cannot write gameplay-owned state — pre2.checkpoints.SAFE_ORACLE_HOOKS).
+        label = {"hybrid": "HYBRID VM (recovered hooks)", "pure": "PURE ASM (original PRE2.EXE)",
+                 "safe": "SAFE HOOKS (original game logic, render/audio hooks only)"}[mode]
+        print(f"  oracle = {label}{f' [auto from {tail!r}]' if auto else ''}")
         rt = load_pre2_snapshot(str(ROOT / "assets/pre2.exe"), pb.snapshot_path(),
-                                game_root=str(ROOT / "assets"), native_replacements=hybrid)
+                                game_root=str(ROOT / "assets"), native_replacements=mode)
         cpu = rt.cpu
         cpu.trace_enabled = False
         det = lambda: cpu.instruction_count / (chunk * hz)
@@ -74,12 +86,20 @@ def main() -> int:
         tick = {"next": 0.0}
         frame = [0]
 
+        # Drive with the recovered wait fast-forward, NOT the interpreted stepper: byte-equivalent (proven by
+        # tests/test_timing_fastforward.py + the fast-vs-interpreted whole-memory probes), and mandatory at
+        # the safe-recording chunk budget (150k steps/frame is ~95% retrace/PIT spin — interpreting it made
+        # this recorder grind for ~15 min on a 2-minute demo; the fast path collapses it ~30x).
+        from pre2.bridge.timing_fastforward import advance_frame_fast
+
         def advance() -> bool:                   # drive the VM one present-frame with the demo's input (SB on)
             if pb.finished(frame[0]):
                 return False
             pb.apply_to_runtime(frame[0], rt, deliver=lambda r, sc: deliver_scancode(r, sc, max_steps=2_000_000))
-            play._advance_demo_frame(rt, chunk_steps=chunk, sub_batch=2000, clock=det, pic=rt.dos.pic,
-                                     sound_blaster=sb, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick)
+            advance_frame_fast(rt, chunk_steps=chunk, sub_batch=2000, clock=det, pic=rt.dos.pic,
+                               sound_blaster=sb, timer_irq=True, input_irq_steps=2_000_000, tick_state=tick,
+                               det_speed=chunk * hz, active_fraction=rt.dos.vga_retrace_active_fraction,
+                               base=0.0)
             if sb.pcm_out:
                 sb.pcm_out.clear()
             frame[0] += 1

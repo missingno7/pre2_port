@@ -39,14 +39,82 @@ __all__ = [
 ]
 
 
-def install_pre2_replacements(rt) -> int:
-    """Install the native replacement hooks (the hybrid runtime). Returns count.
+# The SAFE-ORACLE hook subset: hooks whose write-set is entirely RENDER/AUDIO-owned state (VRAM planes, the
+# DAC, and DGROUP offsets the gameplay digest already EXCLUDES — the same ownership boundary pre2/native/
+# seams.py draws). Property: a bug in one of these CANNOT corrupt the gameplay state a recorded demo
+# certifies — the game LOGIC trajectory is produced by original ASM only. That makes `--safe-hooks` a
+# fluent-yet-trustworthy ORACLE mode for recording demos: the render/mixer instruction sinks collapse
+# (playable wall-clock) while every gameplay-owned byte still comes from PRE2.EXE.
+#   Deliberately EXCLUDED (each writes gameplay-owned state the game recomputes per frame): object_render
+#   (26FA [0x6BD5]++, gameplay-gated at 51F0/5427), particles_draw (4B8E advances+kills the [0x7DE6] particle
+#   list), bg_anim_advance (anim phase tables), firefly_sim (consumes the gameplay rng [0x2CEC]),
+#   camera_shake_apply ([0x6BF8]), and every logic hook (player_*, object_*, input_decode, second_pass_*,
+#   terrain, interaction, bosses).
+_RENDER_AUDIO_OWNED = frozenset({
+    "frame_tile_row", "frame_grid", "frame_scroll_copy", "frame_panel_copy",   # frame renderer -> VRAM
+    "sprite_blit",                                                             # 3B88 blit leaf -> VRAM + di
+    "foreground_tiles",                                                        # z-order redraw -> VRAM
+    "palette_fade",                                                            # DAC only
+    "draw_string", "oldies_glyph", "gameover_scroll", "tally_panel",           # scene/text draws -> VRAM
+    "iris_transition",                                                         # VRAM + iris scratch (excluded)
+    "scroll_blit", "scroll_shift",                                             # menu/present scroll -> VRAM
+    "audio_mix_channel", "audio_tracker_tick",                                 # mixer/tracker (audio-owned)
+})
+# The ASSET-DECODE tier: justified by a DIFFERENT argument than write-set ownership. Their output (level
+# maps, sprite banks) IS gameplay-read, so a bug here COULD corrupt the trajectory — but their input domain
+# is CLOSED: a finite set of .SQZ files, and the decode is a pure function of the file. Recovered==ASM is
+# proven over the ENTIRE real domain, offline: pre2/probes/verify_sqz_all_assets.py sweeps every asset
+# through the original 107B and memcmps against unpack_sqz (37/40 byte-identical; the 3 non-matches are
+# outside the hook's domain or probe-context artifacts with independent real-context proof: PRE2.SQZ is the
+# packed game EXE the bootstrap decodes, never 107B; SPRITES.SQZ hit the loader's out-of-memory halt `jmp $`
+# in the synthetic mid-game context — its real boot-context load is byte-verified by the SHARED-bank 83/83
+# witness; PRESENT.SQZ's real boot decode is proven by the pixel-exact recovered title screens). The sprite
+# demux pair carries the LOCAL 173/173 + SHARED 83/83 witnesses plus the finish-game demo native==pure-ASM
+# equality across every level load. Collapsing these removes the multi-second interpreted level-load stalls.
+_ASSET_DECODE_INPUT_CLOSED = frozenset({
+    "sqz_decompress",                                                          # 107B loader+codec (all formats)
+    "sprite_decode_local", "sprite_decode_shared",                             # planar sprite/tile demux
+})
+# The OBJECT-RENDER tier: 26FA, the moving-sprite draw pass. The wall-clock decider — with the render/audio
+# tier live and the waits collapsed, its interpreted body (the per-sprite planar blit loops, 2700..2DFF) is
+# ~75% of ALL remaining interpreted instructions in gameplay (profiled on snapshot_pre2_20260623_192040).
+# Its gameplay-visible writes are narrow and individually proven: the [0x6BD5] frame counter (a single
+# lockstep-verified `inc word`; gameplay gates 51F0/5427 read it) and the digest-EXCLUDED render-record pool
+# (slot life/flag mutation — allocation-order effects proven non-cascading into gameplay on the full gorilla
+# + finish-game demos, see _PROJ_PTR in pre2/native/seams.py). Verify-enabled (object_render register_verify)
+# so any drift is diffable against the ASM at its RET.
+_OBJECT_RENDER_VERIFIED = frozenset({"object_render"})
+SAFE_ORACLE_HOOKS = _RENDER_AUDIO_OWNED | _ASSET_DECODE_INPUT_CLOSED | _OBJECT_RENDER_VERIFIED
+
+
+def install_pre2_replacements(rt, *, mode: str = "hybrid") -> int:
+    """Install the native replacement hooks. Returns the installed count.
+
+    ``mode="hybrid"`` (default): every ``@registry.replace`` hook — the full hybrid runtime.
+    ``mode="safe"``: only :data:`SAFE_ORACLE_HOOKS` — original ASM game logic with the render/audio
+    instruction sinks collapsed (the fluent demo-recording oracle). A safe-set name missing from the
+    registry fails loud so the list cannot drift.
 
     Note ``dos_re.create_runtime`` already auto-installs every ``@registry.replace``
     hook; this additionally wires the asset resolver the hooks need.
     """
     rt.cpu.pre2_dos = rt.dos
     registry.install(rt.cpu)
+    if mode == "safe":
+        known = {repl.name for repl in registry.replacements.values()}
+        missing = SAFE_ORACLE_HOOKS - known
+        if missing:
+            raise ValueError(f"SAFE_ORACLE_HOOKS drift — not in the registry: {sorted(missing)}")
+        n = 0
+        for key, repl in registry.replacements.items():
+            if repl.name in SAFE_ORACLE_HOOKS:
+                n += 1
+            else:                                       # gameplay-owned hook: fall back to original ASM
+                rt.cpu.replacement_hooks.pop(key, None)
+                rt.cpu.hook_names.pop(key, None)
+        return n
+    if mode != "hybrid":
+        raise ValueError(f"unknown replacement mode {mode!r} (hybrid|safe)")
     return len(registry.replacements)
 
 
