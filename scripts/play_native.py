@@ -306,7 +306,7 @@ def main(argv=None) -> int:
             reveal_level(state, dos)                               # 3054 center-out curtain into the new level
             return
 
-        print("  level complete -> IRIS close -> TALLY -> carte (the 4CCB walk/throw count-up is deferred)")
+        print("  level complete -> IRIS close -> exit-anim (walk-in + food-throw score count-up + walk-off) -> carte")
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
         for planes, page in native_iris_close(state, dos, disp, game_root=gr):   # 316F circle-close on the player
             present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
