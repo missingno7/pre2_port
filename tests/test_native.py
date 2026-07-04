@@ -98,12 +98,15 @@ def test_native_foreground_targets_display_page(monkeypatch):
 
 
 def test_native_light_palette_fade():
-    # [asm 6772] The light-pickup DAC fade: native classifies 6772 as 'render' (the gameplay frame skips it), so
-    # native_apply_palette_fade reproduces the per-frame ramp on dos.vga_palette. A "lights off" pickup sets
-    # [0x6C01]=1/[0x6C03]=0/[0x6C04]=1; the palette must ramp colours 0..15 from the level palette toward the dark
-    # 0xACB7 palette and then clear the flags. Guards the direction + completion (was: native kept the static pal).
+    # [asm 6772] The light-pickup DAC fade, SPLIT along the state/render seam: the tick-owned half
+    # (loop.native_light_fade_step: [0x6C03]++ + the fade-complete flag clear, [asm 0267]) advances per game
+    # tick; native_apply_palette_fade only READS that state and reproduces the ramp on dos.vga_palette
+    # (idempotent per render call — the fade advances per game TICK like the VM, not at --fps rate). A
+    # "lights off" pickup sets [0x6C01]=1/[0x6C03]=0/[0x6C04]=1; the palette must ramp colours 0..15 from the
+    # level palette toward the dark 0xACB7 palette and the STATE half must clear the flags on completion.
     from dos_re.dos import DOSMachine, _dac8
     from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.loop import native_light_fade_step
     from pre2.native.render import native_apply_palette_fade, native_load_level_palette, _LIGHT_DARK_PAL
 
     ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
@@ -116,18 +119,30 @@ def test_native_light_palette_fade():
             _dac8(st.data[base + _LIGHT_DARK_PAL + 11]))            # colour 3 of the 0xACB7 dark palette
     assert bright != dark
 
-    # no active fade + lights on -> the static level palette stands (no-op)
+    # no active fade + lights on -> both halves are no-ops
+    native_light_fade_step(st)
     native_apply_palette_fade(st, dos)
     assert tuple(dos.vga_palette[3]) == bright
+    assert st.data[base + 0x6C03] == 0                              # the step did not advance
 
-    # the light-OFF pickup (id 0xea): fade toward the dark palette
+    # the light-OFF pickup (id 0xea): fade toward the dark palette, one STATE step per game tick
     st.data[base + 0x6C01] = 1; st.data[base + 0x6C02] = 0; st.data[base + 0x6C03] = 0; st.data[base + 0x6C04] = 1
     steps = 0
     while (st.data[base + 0x6C01] | st.data[base + 0x6C02]) and steps < 300:
-        native_apply_palette_fade(st, dos); steps += 1
+        native_light_fade_step(st)                                  # tick-owned: [0x6C03]++ / flag clear
+        native_apply_palette_fade(st, dos)                          # render: DAC ramp from the current step
+        steps += 1
     assert 0 < steps < 300                                          # it converged
     assert tuple(dos.vga_palette[3]) == dark                        # ended at the dark target
     assert st.data[base + 0x6C01] == 0 and st.data[base + 0x6C02] == 0   # [asm 67C8] flags cleared on completion
+
+    # the render half is IDEMPOTENT (a second render call in the same tick must not advance the fade)
+    st.data[base + 0x6C01] = 1; st.data[base + 0x6C02] = 0; st.data[base + 0x6C03] = 0
+    native_light_fade_step(st)
+    step_after_tick = st.data[base + 0x6C03]
+    native_apply_palette_fade(st, dos)
+    native_apply_palette_fade(st, dos)
+    assert st.data[base + 0x6C03] == step_after_tick
 
 
 def test_native_flash_slot_captured_and_re_applied():

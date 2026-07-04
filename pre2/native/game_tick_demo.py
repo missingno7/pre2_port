@@ -30,6 +30,7 @@ from pre2.native.level_state import native_4f6c, native_5063, native_level_end
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.state import NativeGameState
 # Reuse the forward oracle's tick seams + the gameplay/render boundary (single source of truth):
+from pre2.recovered.input_decode import _KBD_SOURCES
 from pre2.native.seams import (DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, KEY_SAMPLE,
                                _FWD_EXCL, _SLOT5_PAGE, _SLOT_BASE, _SLOT_STRIDE)
 
@@ -142,13 +143,27 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
             if ip == FRAME_TOP and rec["seed"] is None:
                 rec["seed"] = bytes(mem.data)                      # native bootstrap (first gameplay frame)
                 out.seed = rec["seed"]
-            elif ip in (DECODE, KEY_SAMPLE) and rec["seed"] is not None:
+            elif ip == DECODE and rec["seed"] is not None:
                 # Capture the sampled keys at DC1's ENTRY (0DC1) as a base — always reached, and in the HYBRID
-                # oracle DC1 is a replaced hook (0F0A never executes) so the hook's read IS at 0DC1 — then OVERWRITE
-                # at 0F0A when the PURE-ASM path reaches it (AFTER the [0x28xx] reads, so a late INT 09 key is
-                # included). Pure ASM: 0F0A wins (correct). Hybrid: only 0DC1 (correct). See KEY_SAMPLE.
+                # oracle DC1 is a replaced hook (a single atomic step, so its cell reads cannot race an INT 09)
+                # whose read IS at 0DC1. The ASM path overwrites this at KEY_SAMPLE below.
                 rec["keys"] = bytes(mem.data[DS_BASE + o] for o in KBD)
                 rec["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)  # the fidget timer
+            elif ip == KEY_SAMPLE and rec["seed"] is not None:
+                # [asm 0F0A] the ASM (pure/safe) path: DC1's flag ORs [asm 0EA4..0F06] just ran, so the six
+                # computed flags [0x27E8..ED] are exactly what THIS tick consumed. Capturing the raw [0x28xx]
+                # cells here instead races INT 09: a key make/break delivered between a cell's OR-read and this
+                # sample point changes the cell AFTER its value was consumed (observed: a mid-window RELEASE
+                # made the VM move with [0x27EA]=0xFF while the captured cell — hence native's re-decode — said
+                # 0; safe demo 230900 tick 1858). So SYNTHESIZE the cell image from the consumed flags (first
+                # source cell of each flag = the flag value): KBD is exactly the union of the six flags' source
+                # cells, so the whole recorded input influence flows through these ORs and the synthesis is
+                # faithful by construction — the same capture-at-the-consumption-point rule as FIDGET_READ.
+                cells = dict.fromkeys(KBD, 0)
+                for flag_off, srcs in _KBD_SOURCES.items():
+                    cells[srcs[0]] = mem.data[DS_BASE + flag_off]
+                rec["keys"] = bytes(cells[o] for o in KBD)
+                rec["idle"] = mem.data[DS_BASE + 0x27F0] | (mem.data[DS_BASE + 0x27F1] << 8)
             elif ip == FIDGET_READ and rec["keys"] is not None:
                 # [asm 5DCC] the idle-fidget selector reads [0x27F0] HERE, not at DECODE — and the free-running
                 # timer advances within the frame (PIT-driven, not VM-less-reproducible), so the value the fidget

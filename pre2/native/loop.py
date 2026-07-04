@@ -553,12 +553,46 @@ def _frame_tail_after_trigger(state) -> None:
     native_scroll_script(state)                                     # [asm 0256] 3922
     native_level_state(state)                                       # [asm 0259] 4C69 (carry -> level change @ 0x12f)
     native_respawn_gate(state)                                      # [asm 0261] 45AF
-    # [asm 0264] 44FB (4509 + 1C65) render/timing helper; [asm 0267] 6772 render commit — the renderer's job.
+    # [asm 0264] 44FB (4509 + 1C65) render/timing helper; [asm 0267] 6772 — the light-fade pass. Its DAC ramp
+    # is the renderer's job (native_apply_palette_fade), but its STATE half is tick-owned and runs here.
     # The 44FB 3-retrace WAIT is where the 70Hz timer fires 3× -> advance the [0x27F0] idle counter (fidget anim).
     native_idle_timer_tick(state)                                   # [asm 0264: 44FB wait -> 17C0 timer]
+    native_light_fade_step(state)                                   # [asm 0267: 6772 state] [0x6C03]++ / flag clear
     native_special_event(state)                                     # [asm 026A] 67D7
     native_camera_shake(state)                                      # [asm 026D] 4C30
     # [asm 0270] jmp 0214 — loop back
+
+
+def native_light_fade_step(state) -> None:
+    """[asm 6772 STATE half, called at 0267 each main-loop tick] The light-fade (dark-cave lamp) progress:
+    while a fade is active ([0x6C01]=to-dark | [0x6C02]=to-level-palette, set by the light pickups in
+    player_interaction 876C/8790) the ASM increments the step [0x6C03] ([asm 677B]) and, when every one of the
+    0x30 DAC channels is within one step of its target ([asm 67C8-67D1], anim count == 0), clears both flags —
+    fade complete. The DAC ramp itself is render (native_apply_palette_fade reads the step WITHOUT mutating).
+    Inactive fade -> byte-exact no-op. Splitting the pass this way keeps the tick-owned bytes ([0x6C01/02/03])
+    in the gameplay frame — found by the safe-hooks demo 230900 (tick 382: the VM counted [0x6C03] 1,2,4...
+    while state-only native stayed 0), and it also fixes the native fade PACING (it advanced per RENDER call,
+    i.e. --fps-dependent, instead of per game tick)."""
+    d = state.data
+    base = DATA_SEG << 4
+    if d[base + 0x6C01] == 0 and d[base + 0x6C02] == 0:              # [asm 6771/6775 je 67D6] no active fade
+        return
+    step = (d[base + 0x6C03] + 1) & 0xFF                             # [asm 677B] inc byte [0x6C03]
+    d[base + 0x6C03] = step
+    level = d[base + 0x2D8A]
+    lvl_pal = d[base + 0x2D00 + level * 2] | (d[base + 0x2D00 + level * 2 + 1] << 8)   # [asm 677F-6787]
+    s_off, b_off = lvl_pal, 0xACB7                                   # [asm 6787/6791] src=level, dst=dark
+    if d[base + 0x6C02]:                                             # [asm 6799-67A0] fading BACK -> swap
+        s_off, b_off = b_off, s_off
+    anim = 0
+    for k in range(0x30):                                            # [asm 67A2-67C6] 16 colours x RGB
+        s = d[base + ((s_off + k) & 0xFFFF)]
+        b = d[base + ((b_off + k) & 0xFFFF)]
+        if abs(s - b) > step:                                        # [asm 67B3 ja] still ramping
+            anim += 1
+    if anim == 0:                                                    # [asm 67C8-67D1] complete -> clear flags
+        d[base + 0x6C01] = 0
+        d[base + 0x6C02] = 0
 
 
 def native_object_render_state(state) -> None:

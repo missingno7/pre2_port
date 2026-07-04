@@ -134,5 +134,13 @@ _PROJ_PTR = {0xA32E, 0xA32F}
 _XITION_RENDER = ({0x2DDA, 0x2DDB, 0x2DDC, 0x2DDD} | set(range(0x2DF8, 0x4DF8)) | set(range(0x2DC0, 0x2DD4))
                   | set(range(0x6A88, 0x6A88 + 0x41 * 2)) | set(range(0x6B14, 0x6B14 + 0x41 * 2))
                   | set(range(0x6CA9, 0x6EA9)) | set(range(0xB19D, 0xB1A5)))
+# The raw INT-09 keyboard cells the six DC1 flags OR together (KBD — the injected-input plumbing). The tick
+# recorder captures the CONSUMED flag values at KEY_SAMPLE and synthesizes a flag-equivalent cell image
+# (first source cell = flag value), because capturing the raw cells races a mid-window INT 09 against the
+# flag reads (safe demo 230900 tick 1858: a release landed between a cell's OR-read and 0F0A). The synthesized
+# image reproduces the flags exactly but not WHICH sibling cell held the key — input plumbing, same ownership
+# class as the demo-RLE buffer, so exclude the cells themselves from the digest (the CONSUMED flags [0x27E8..
+# ED] remain fully checked).
+_KBD_CELLS = set(KBD)
 _FWD_EXCL = (set(_EXCL) | _DEMO_RLE | _RENDER_SLOTS | _HUD | _SCROLL_Y | _BLIT_SCRATCH | _PROJ_PTR
-             | _XITION_RENDER)
+             | _XITION_RENDER | _KBD_CELLS)
