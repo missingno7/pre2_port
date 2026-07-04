@@ -144,6 +144,17 @@ This is what lets the project move fast toward readable high-level code without
 losing verifiability — the dataclasses are simultaneously the recovered source's
 data model *and* the verification surface.
 
+The **concrete realization** of "memory view / adapter" is the state-view layer in
+`pre2/bridge/dgroup_view.py`: a human-named view API (`s.wind`, `slot.x`,
+`entry.threshold`) over swappable **backends** — a byte-backed one (the live image;
+verification stays a `memcmp`), a read-through **overlay** one (contract-returning
+islands), and a width-tracking write-contract one. The recovered logic is written once
+against the view and is agnostic to which backend is behind it — *one implementation,
+many adapters*, made concrete. See [`state_view_layer.md`](state_view_layer.md) for the
+full design, the shared `RenderSlot` layout, the "offsets out of logic, not out of the
+release" scope decision, and why enhancements attach at the render-model seam rather than
+here.
+
 ## Verification compares contracts, not accidental ASM shape
 
 We want **exact behaviour**, but not permanent dependence on every tiny accidental
