@@ -374,24 +374,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     import pygame
     import numpy as np
     from time import perf_counter, sleep
-    from sdl_view import (SoundBlasterAudio, render_planar_rgb, render_planar_rgb_from_planes,
-                          render_text_rgb, render_vga_rgb)
-    from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
-    from pre2.bridge.live_render import compose_curtain_planes, compose_vfade_planes, render_visual_planes
-    from pre2.bridge.particles import read_particles
-    from pre2.bridge.foreground_tiles import read_foreground_state
-    from pre2.bridge.gameplay_effects import apply_gameplay_effects, capture_gameplay_effects
-    from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset, _object_overlay
-    from pre2.bridge.render_state import read_renderer_state, retarget_page
-    from pre2.bridge.tally_scene import build_tally_scene
-    from pre2.bridge.oldies_scene import build_oldies_scene
-    from pre2.bridge.tally_panel import read_tally_panel
-    from pre2.bridge.image_scene import identify_image, render_image_scene
-    from pre2.bridge.scene_state import derive_scene_kind
-    from pre2.bridge import present as _present_bridge
-    from pre2.bridge import text as _text_bridge
-    from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
-    from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
+    from sdl_view import SoundBlasterAudio, render_planar_rgb, render_text_rgb, render_vga_rgb
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
     from dos_re.dos import ConsoleInputWouldBlock
     from dos_re.runtime import enable_sound_blaster
