@@ -1,23 +1,83 @@
 """Byte-backed *typed views* over the DGROUP image — the optional layout bridge.
 
 This is the adapter that binds human-named gameplay fields to their original DOS memory offsets. Recovered
-logic operates on a *view* (``view.wind``, ``view.flakes[i]``, ``view.script.threshold``) and never sees an
-offset; this module is the ONLY place the DGROUP layout for its island is written down. It is byte-backed —
-the view reads and writes straight through to the 1 MB image (``NativeGameState.data`` or a VM ``mem.data``),
-so byte-exact verification stays a plain memcmp of that image against the ASM oracle. It is the *optional*
-half of the split: a release could swap in a field-backed adapter (plain Python attributes, no offsets)
-behind the same view API without touching a line of the recovered logic.
+logic operates on a *view* (``view.wind``, ``view.slots[i].x``, ``view.script.threshold``) and never sees an
+offset; this module is the ONLY place the DGROUP layout for its island is written down.
 
-Pilot scope: the scripted-scroll / LEVELG-snow island (1030:3922). Other islands migrate onto the same
-descriptors (`_U8`/`_U16`/`_U16Array`) one at a time.
+A view holds a **backend** (the ports-and-adapters seam) and its fields address the backend in DGROUP OFFSETS:
+
+* :class:`ByteBackend` — reads/writes straight through the 1 MB image (``NativeGameState.data`` or a VM
+  ``mem.data``). Byte-exact verification stays a plain memcmp of that image against the ASM oracle.
+* :class:`OverlayBackend` — a read-through overlay: reads fall through to a base reader, writes ACCUMULATE a
+  ``{offset: value}`` contract WITHOUT mutating the base. This is the backend for the contract-returning
+  islands (the whole-routine transforms that return a write set, e.g. terrain-entities / player-interaction).
+
+Because both backends share one interface, the SAME view (and the same recovered logic) runs over either — and
+a release could add a third, field-backed backend (plain Python attributes, no offsets) behind the same view
+API with no change to the logic. That is what makes the offset map the *optional* half of the split.
 """
 from __future__ import annotations
 
 DGROUP_BASE = 0x1A0F << 4       # DS<<4 — the game data segment's linear base in the 1 MB image
 
 
+# ---- backends -----------------------------------------------------------------------------------------------
+
+class ByteBackend:
+    """Reads/writes go straight to the 1 MB image at ``DGROUP_BASE + offset``."""
+
+    __slots__ = ("data",)
+
+    def __init__(self, source):
+        self.data = source.data if hasattr(source, "data") else source
+
+    def rb(self, off: int) -> int:
+        return self.data[DGROUP_BASE + (off & 0xFFFF)]
+
+    def wb(self, off: int, v: int) -> None:
+        self.data[DGROUP_BASE + (off & 0xFFFF)] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        a = DGROUP_BASE + (off & 0xFFFF)
+        return self.data[a] | (self.data[a + 1] << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        a = DGROUP_BASE + (off & 0xFFFF)
+        self.data[a] = v & 0xFF
+        self.data[a + 1] = (v >> 8) & 0xFF
+
+
+class OverlayBackend:
+    """Read-through overlay: reads fall through to ``base_rb(offset)`` unless already written; writes accumulate
+    the ``writes`` contract (``{offset: byte}``) and never touch the base. A contract-returning island runs its
+    whole-routine transform over one of these and returns ``overlay.writes`` as its write set — so the pass stays
+    a pure function of its inputs (the base is untouched), exactly like the hand-written ``_Ov`` it replaces."""
+
+    __slots__ = ("_base_rb", "writes")
+
+    def __init__(self, base_rb):
+        self._base_rb = base_rb          # base_rb(offset) -> the ORIGINAL DS byte at a DGROUP offset
+        self.writes: dict[int, int] = {}
+
+    def rb(self, off: int) -> int:
+        o = off & 0xFFFF
+        return self.writes[o] if o in self.writes else self._base_rb(o)
+
+    def wb(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v)
+        self.wb((off + 1) & 0xFFFF, v >> 8)
+
+
+# ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
+
 class _U16:
-    """A little-endian 16-bit field at a fixed DGROUP offset."""
+    """A little-endian 16-bit field."""
 
     def __init__(self, off: int):
         self.off = off
@@ -25,19 +85,14 @@ class _U16:
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        a = o._base + self.off
-        d = o._data
-        return d[a] | (d[a + 1] << 8)
+        return o._backend.rw(o._base + self.off)
 
     def __set__(self, o, v: int):
-        a = o._base + self.off
-        d = o._data
-        d[a] = v & 0xFF
-        d[a + 1] = (v >> 8) & 0xFF
+        o._backend.ww(o._base + self.off, v)
 
 
 class _U8:
-    """An 8-bit field at a fixed DGROUP offset."""
+    """An 8-bit field."""
 
     def __init__(self, off: int):
         self.off = off
@@ -45,14 +100,14 @@ class _U8:
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        return o._data[o._base + self.off]
+        return o._backend.rb(o._base + self.off)
 
     def __set__(self, o, v: int):
-        o._data[o._base + self.off] = v & 0xFF
+        o._backend.wb(o._base + self.off, v)
 
 
 class _S16:
-    """A little-endian *signed* 16-bit field at a fixed offset (returns a Python int in -0x8000..0x7FFF)."""
+    """A little-endian *signed* 16-bit field (returns -0x8000..0x7FFF)."""
 
     def __init__(self, off: int):
         self.off = off
@@ -60,16 +115,27 @@ class _S16:
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        a = o._base + self.off
-        d = o._data
-        v = d[a] | (d[a + 1] << 8)
+        v = o._backend.rw(o._base + self.off)
         return v - 0x10000 if v & 0x8000 else v
 
     def __set__(self, o, v: int):
-        a = o._base + self.off
-        d = o._data
-        d[a] = v & 0xFF
-        d[a + 1] = (v >> 8) & 0xFF
+        o._backend.ww(o._base + self.off, v)
+
+
+class _S8:
+    """An 8-bit *signed* field (returns -0x80..0x7F)."""
+
+    def __init__(self, off: int):
+        self.off = off
+
+    def __get__(self, o, owner=None):
+        if o is None:
+            return self
+        v = o._backend.rb(o._base + self.off)
+        return v - 0x100 if v & 0x80 else v
+
+    def __set__(self, o, v: int):
+        o._backend.wb(o._base + self.off, v)
 
 
 class _U16Array:
@@ -82,53 +148,25 @@ class _U16Array:
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        return _U16ArrayView(o._data, o._base + self.off, self.length)
+        return _U16ArrayView(o._backend, o._base + self.off, self.length)
 
 
 class _U16ArrayView:
-    __slots__ = ("_data", "_base", "length")
+    __slots__ = ("_backend", "_base", "length")
 
-    def __init__(self, data, base: int, length: int):
-        self._data = data
+    def __init__(self, backend, base: int, length: int):
+        self._backend = backend
         self._base = base
         self.length = length
 
     def __getitem__(self, i: int) -> int:
-        a = self._base + i * 2
-        d = self._data
-        return d[a] | (d[a + 1] << 8)
+        return self._backend.rw(self._base + i * 2)
 
     def __setitem__(self, i: int, v: int) -> None:
-        a = self._base + i * 2
-        d = self._data
-        d[a] = v & 0xFF
-        d[a + 1] = (v >> 8) & 0xFF
+        self._backend.ww(self._base + i * 2, v)
 
     def __len__(self) -> int:
         return self.length
-
-
-class DgroupView:
-    """Base for a byte-backed struct view. Bind it to a ``NativeGameState`` (or any object exposing ``.data``,
-    e.g. a VM ``mem``, so the same view verifies against the oracle) or a raw 1 MB ``bytearray``."""
-
-    __slots__ = ("_data", "_base")
-
-    def __init__(self, state):
-        self._data = state.data if hasattr(state, "data") else state
-        self._base = DGROUP_BASE
-
-
-class StructView:
-    """A view over ONE fixed-layout struct at an absolute linear base. Field descriptors (``_U8``/``_U16``/
-    ``_S16`` with offsets RELATIVE to the struct) resolve against this base — so the same descriptors serve
-    both whole-DGROUP views and array-of-structs elements."""
-
-    __slots__ = ("_data", "_base")
-
-    def __init__(self, data, base: int):
-        self._data = data
-        self._base = base
 
 
 class StructArray:
@@ -144,14 +182,14 @@ class StructArray:
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        return _StructArrayView(o._data, o._base + self.off, self.stride, self.length, self.struct_cls)
+        return _StructArrayView(o._backend, o._base + self.off, self.stride, self.length, self.struct_cls)
 
 
 class _StructArrayView:
-    __slots__ = ("_data", "_base", "_stride", "length", "_cls")
+    __slots__ = ("_backend", "_base", "_stride", "length", "_cls")
 
-    def __init__(self, data, base: int, stride: int, length: int, cls):
-        self._data = data
+    def __init__(self, backend, base: int, stride: int, length: int, cls):
+        self._backend = backend
         self._base = base
         self._stride = stride
         self.length = length
@@ -160,53 +198,56 @@ class _StructArrayView:
     def __getitem__(self, i: int):
         if i < 0:
             i += self.length
-        return self._cls(self._data, self._base + i * self._stride)
+        return self._cls(self._backend, self._base + i * self._stride)
 
     def __len__(self) -> int:
         return self.length
 
     def __iter__(self):
         for i in range(self.length):
-            yield self._cls(self._data, self._base + i * self._stride)
+            yield self._cls(self._backend, self._base + i * self._stride)
 
 
-class _ScriptEntry:
-    """A read-only cursor over one 6-byte scripted-scroll entry ``{threshold, delta, clamp, next_threshold}``.
-    Snapshots its base at construction, so it keeps reading the ORIGINAL entry even after the view advances
-    ``script_ptr`` (matches the ASM, which loads ``bx`` once at 3930)."""
+# ---- view bases ---------------------------------------------------------------------------------------------
 
-    __slots__ = ("_data", "_base")
+class StructView:
+    """A view over ONE fixed-layout struct at a DGROUP ``base`` offset; its field descriptors add their own
+    (relative) offset to ``base``. Bind it to a backend + base — arrays hand it both."""
 
-    def __init__(self, data, entry_base: int):
-        self._data = data
-        self._base = entry_base
+    __slots__ = ("_backend", "_base")
 
-    def _w(self, o: int) -> int:
-        a = self._base + o
-        return self._data[a] | (self._data[a + 1] << 8)
+    def __init__(self, backend, base: int = 0):
+        self._backend = backend
+        self._base = base
 
-    @property
-    def threshold(self) -> int:
-        return self._w(0)
 
-    @property
-    def delta(self) -> int:
-        return self._w(2)
+class DgroupView(StructView):
+    """A whole-DGROUP view (base 0, so field offsets ARE DGROUP offsets). Construct from a backend, or directly
+    from a ``NativeGameState`` / VM ``mem`` / raw ``bytearray`` (wrapped in a :class:`ByteBackend`)."""
 
-    @property
-    def clamp(self) -> int:
-        return self._w(4)
+    __slots__ = ()
 
-    @property
-    def next_threshold(self) -> int:
-        return self._w(6)
+    def __init__(self, source):
+        backend = source if isinstance(source, (ByteBackend, OverlayBackend)) else ByteBackend(source)
+        super().__init__(backend, 0)
 
+
+class _ScriptEntry(StructView):
+    """A read-only cursor over one 6-byte scripted-scroll entry. Snapshots its base at construction, so it keeps
+    reading the ORIGINAL entry even after the view advances ``script_ptr`` (matches the ASM ``bx`` loaded once)."""
+
+    __slots__ = ()
+
+    threshold      = _U16(0)
+    delta          = _U16(2)
+    clamp          = _U16(4)
+    next_threshold = _U16(6)
+
+
+# ---- island layouts (the offsets live here, nowhere else) ---------------------------------------------------
 
 class ScrollScriptView(DgroupView):
-    """The scripted-camera-scroll / LEVELG-snow state (1030:3922) as human-named fields.
-
-    Layout bridge for ``pre2.recovered.scroll_script`` — the one place this island's DGROUP offsets live.
-    """
+    """The scripted-camera-scroll / LEVELG-snow state (1030:3922) as human-named fields."""
 
     __slots__ = ()
 
@@ -226,10 +267,10 @@ class ScrollScriptView(DgroupView):
     @property
     def script(self) -> _ScriptEntry:
         """The current 6-byte script entry (read at ``script_ptr``)."""
-        return _ScriptEntry(self._data, self._base + self.script_ptr)
+        return _ScriptEntry(self._backend, self.script_ptr)
 
 
-# ---- array-of-structs pilot: the firefly swarm (1030:54AB, the 0x6EA9 slot array) ---------------------------
+# ---- array-of-structs: the firefly swarm (1030:54AB, the 0x6EA9 slot array) ---------------------------------
 
 _DEAD_SLOT = 0x55AA         # a slot whose first word is this sentinel is dead
 
@@ -245,8 +286,7 @@ class FireflySlot(StructView):
 
     @property
     def alive(self) -> bool:
-        a = self._base
-        return (self._data[a] | (self._data[a + 1] << 8)) != _DEAD_SLOT
+        return self._backend.rw(self._base) != _DEAD_SLOT
 
 
 class SwarmView(DgroupView):

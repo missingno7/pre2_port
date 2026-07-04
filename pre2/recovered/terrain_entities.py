@@ -18,6 +18,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
+from pre2.bridge.dgroup_view import OverlayBackend
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
 
@@ -57,28 +58,14 @@ def _s8(v):
 _DIR8 = {0: (0, -1), 1: (1, -1), 2: (1, 0), 3: (1, 1), 4: (0, 1), 5: (-1, 1), 6: (-1, 0), 7: (-1, -1)}
 
 
-class _Ov:
-    """Read-through overlay on DS memory; accumulates byte-level writes (the contract)."""
-    __slots__ = ("_rb", "tile", "w")
+class _Ov(OverlayBackend):
+    """The terrain pass's read-through overlay — the shared ``OverlayBackend`` (rb/rw/wb/ww + the ``writes``
+    contract) plus the level-map ``tile`` reader this island also needs."""
+    __slots__ = ("tile",)
 
     def __init__(self, rb, read_tile):
-        self._rb = rb
+        super().__init__(rb)
         self.tile = read_tile
-        self.w: dict[int, int] = {}
-
-    def rb(self, o):
-        o &= 0xFFFF
-        return self.w[o] if o in self.w else self._rb(o)
-
-    def rw(self, o):
-        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
-
-    def wb(self, o, v):
-        self.w[o & 0xFFFF] = v & 0xFF
-
-    def ww(self, o, v):
-        self.wb(o, v)
-        self.wb((o + 1) & 0xFFFF, (v >> 8) & 0xFF)
 
 
 def _move_type8(ov, b):
@@ -265,4 +252,4 @@ def tick_terrain_entities(rw, rb, read_tile):
         ov.ww((di + 4) & 0xFFFF, 0xFFFF)
         di = (di + RENDER_STRIDE) & 0xFFFF
         budget = (budget - 1) & 0xFFFF
-    return ov.w
+    return ov.writes
