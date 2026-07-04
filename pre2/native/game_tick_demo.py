@@ -201,6 +201,11 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
             try:
                 for _ in native_4f6c(state):
                     pass
+            except Pre2GameOverTransition:
+                # a real death during the respawn -> the shared 506c game-over tail (native_4f6c applied the reset,
+                # same as native_5063). Same terminal as the [0x6be5]==1 path: the restart is front-end flow.
+                return i, (f"GAME-OVER at tick {i}: real death during respawn (4F6C -> 506c); native played the "
+                           f"death-bounce + reset to level 1; the restart is main's front-end flow")
             except Exception as e:                                  # noqa: BLE001
                 return i, f"tick {i}: respawn tail raised {type(e).__name__}: {str(e)[:80]}"
         except Pre2GameOverTransition:

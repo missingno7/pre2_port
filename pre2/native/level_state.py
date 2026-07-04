@@ -7,7 +7,7 @@ the level to its checkpoint and continues the gameplay loop. The death (5063) / 
 """
 from __future__ import annotations
 
-from pre2.gaps import Pre2HybridGap
+from pre2.gaps import Pre2GameOverTransition, Pre2HybridGap
 from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
@@ -41,6 +41,21 @@ def native_5063(state):
         d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
 
     yield from native_death_bounce_509d(state)                     # [asm 5069] 509d death-bounce (60 frames)
+    _game_over_reset(state)                                         # [asm 506c tail]
+
+
+def _game_over_reset(state) -> None:
+    """[asm 506c tail] The game-over DGROUP reset shared by ``native_5063`` (the ``[0x6be5]==1`` game-over) and
+    the ``native_4f6c`` real-death branch — ``5063`` restores ``[0x2875]`` then does the bounce and FALLS INTO
+    ``506c``, and ``4f6c``'s real-death path ``jmp``s to the same ``506c``. The reset: the ``9b23`` camera reset,
+    the death pose, restart-at-level-1, a zero score, and the ``51df`` cleanup. (The bounce + the ``9b23/25c7``
+    game-over presentation + music are the flow driver's; this is the gameplay contract only.)"""
+    d = state.data
+
+    def ww(o, v):
+        d[_DS + (o & 0xFFFF)] = v & 0xFF
+        d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+
     ww(0x2DE4, 0); ww(0x2DE6, 0); ww(0x6BF8, 0); d[_DS + 0x6BC4] = 0   # [asm 9b35-9b3e] camera reset (9b23)
     ww(0x4F20, 0x0D)                                                # [asm 5078] the death pose
     d[_DS + 0x2D8A] = 0                                             # [asm 507e] restart at level 1
@@ -75,7 +90,12 @@ def native_4f6c(state):
 
     yield from native_death_bounce_509d(state)                      # [asm 4f6c] 509d death-bounce (per-frame)
     if rb(0x2879) != 0 or rb(0x6BE5) != 0:                          # [asm 4f6f-4f80] a real death is pending
-        raise Pre2HybridGap("native respawn 4F6C: the pending-death tail (506c, game-over) is not recovered")
+        # [asm 4f76/4f80 jmp 506c] the bounce is done; this is the SAME game-over tail as native_5063 (5063 falls
+        # into 506c). Apply the shared reset, then hand off to the flow driver's game-over (scene + restart) —
+        # exactly the [0x6be5]==1 path. (native_frame_step's respawn handler lets this propagate; play_native's
+        # game_over_restart runs the 9b23 scene + level-1 restart.)
+        _game_over_reset(state)
+        raise Pre2GameOverTransition()
 
     # [asm 4f91-4fa6] snapshot the 0x46 effect-sprite source values [0x8f1d]+4 (stride 7) -> [0x6c12] (stride 2)
     si, di = 0x8F1D, 0x6C12

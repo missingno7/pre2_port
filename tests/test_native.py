@@ -522,3 +522,39 @@ def test_object_anim_scale7_zoom_shake():
     assert r7.script_ptr == 0x100                             # the remap FREEZES the script (no advance)
     r0 = advance_animation(0x100, rd, 0x0000, 0, 0)           # scale 0: plain advance, no shake
     assert r0.shake is False and r0.script_ptr == 0x102
+
+
+def test_respawn_real_death_becomes_game_over(monkeypatch):
+    # [asm 4F6C -> 506c] A real death during a respawn (last life: [0x2879] set after the death-bounce) must NOT
+    # fail loud — it is the SAME game-over tail as native_5063 (5063 falls into 506c). native_4f6c should apply
+    # the shared reset (restart at level 1, score 0, death pose, camera reset) and raise Pre2GameOverTransition
+    # so the flow driver shows the game-over scene + restart. Was a Pre2HybridGap a standalone player could hit.
+    import pre2.native.level_state as ls
+    from pre2.gaps import Pre2GameOverTransition
+
+    monkeypatch.setattr(ls, "native_death_bounce_509d", lambda st: iter(()))   # isolate the branch (skip bounce)
+    d = bytearray(0x100000)
+    d[_BASE + 0x2879] = 1                                        # [asm 4f6f] a real death is pending
+    d[_BASE + 0x2D8A] = 6                                        # was on level 7 (index 6)
+    d[_BASE + 0x6C0E] = 0x34; d[_BASE + 0x6C10] = 0x12             # non-zero score
+    st = NativeGameState(d)
+    with pytest.raises(Pre2GameOverTransition):
+        for _ in ls.native_4f6c(st):
+            pass
+    assert d[_BASE + 0x2D8A] == 0                                # restart at level 1
+    assert d[_BASE + 0x6C0E] == 0 and d[_BASE + 0x6C10] == 0 and d[_BASE + 0x6C0C] == 0   # score zeroed
+    assert d[_BASE + 0x4F20] == 0x0D                             # death pose
+    assert d[_BASE + 0x2DE4] == 0 and d[_BASE + 0x2DE6] == 0        # camera reset
+
+
+def test_game_over_reset_matches_5063_tail(monkeypatch):
+    # The 4F6C real-death branch and native_5063 must produce the IDENTICAL reset (they share the 506c tail).
+    import pre2.native.level_state as ls
+    monkeypatch.setattr(ls, "native_death_bounce_509d", lambda st: iter(()))
+    a = bytearray(0x100000); b = bytearray(0x100000)
+    for d in (a, b):
+        d[_BASE + 0x2D8A] = 9; d[_BASE + 0x6C0E] = 0xAB; d[_BASE + 0x4F20] = 0x77
+    ls._game_over_reset(NativeGameState(a))                   # the 4F6C branch's reset
+    for _ in ls.native_5063(NativeGameState(b)):              # 5063 = bounce (stubbed) + the same tail
+        pass
+    assert a == b                                             # byte-identical DGROUP contract
