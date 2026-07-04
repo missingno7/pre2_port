@@ -21,7 +21,13 @@ original DOS game
 
 - **Full source-code reconstruction.** Clean, readable high-level code resembling the original
   (almost certainly C) source — not a remake, not an editor-runtime. Hooks are scaffolding;
-  reconstructed structs + recovered functions are the product.
+  reconstructed structs + recovered functions are the product. *Concretely:* gameplay logic reaches
+  state through a human-named **view layer** (`s.wind`, `slot.x`), with the original DGROUP offsets
+  confined to one layout module — see [`state_view_layer.md`](state_view_layer.md). The runtime state
+  stays a byte-image *internally* (the faithful representation and the verification surface are the same
+  bytes); **byte-backed ≠ VM-backed** — it is pure Python data, no EXE and no emulator. "Offsets out of
+  the *logic*" is the milestone; removing the offset map from the *release binary* is explicitly a
+  non-goal (it is not the EXE, not a VM, and not a silent fallback).
 - **Cold-start, standalone.** The finished product boots from the **game data files alone** —
   intro → title → menu → world map → level → gameplay → death/respawn → game-over → menu — exactly
   like the original, with **no EXE and no snapshot** at runtime. (Snapshots/demos are recovery

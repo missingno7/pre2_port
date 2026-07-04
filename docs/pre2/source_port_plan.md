@@ -79,6 +79,12 @@ verification rising from bytes → state → PCM:
 - Dataclasses reconstruct the original C-like structs; the bridge layer reads them
   from VM memory and (when replacing) writes them back. Verification rises from
   byte/buffer diffs to semantic state contracts over time.
+- **Gameplay logic speaks human-named fields, not raw offsets.** The DGROUP layout is
+  quarantined in one view layer (`pre2/bridge/dgroup_view.py`) with swappable backends
+  (byte / overlay / write-contract); the recovered logic is agnostic to which is behind it.
+  The byte-backed representation is a legitimate release citizen — it is not the EXE, not a
+  VM, and not a fallback — and keeps behaviour + verification the *same bytes*. Full design +
+  scope in [`state_view_layer.md`](state_view_layer.md).
 
 ## Reference
 
