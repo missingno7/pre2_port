@@ -363,16 +363,17 @@ def native_scroll_script(state) -> None:
     (pre2/recovered/scroll_script.py). A no-script level is just the counter inc.
 
     The render half (3922:396A.. — the LEVELG falling snow) is reproduced too: it OR-plots white pixels onto the
-    draw page AND advances the flake array [0x6ca9] + the shared gameplay rng [0x2cec], so running it here keeps
-    BOTH byte-exact. The plotted pixels are stashed on ``state.snow_plots`` for the faithful renderer to overlay;
-    they are ``(page_relative_byte_offset, bit_mask)`` pairs (empty when the wind [0x6bf6] is zero)."""
-    from pre2.recovered.scroll_script import scroll_script_state, scroll_script_snow
-    rb, rw = readers(state)
-    for off, val in scroll_script_state(rb, rw).items():
-        _ww(state, off, val)
-    wb = lambda o, v: _wb(state, o, v)
-    ww = lambda o, v: _ww(state, o, v)
-    state.snow_plots = scroll_script_snow(rb, rw, wb, ww)
+    draw page AND advances the flake array + the shared gameplay rng, so running it here keeps BOTH byte-exact.
+    The plotted pixels are stashed on ``state.snow_plots`` for the faithful renderer to overlay; they are
+    ``(page_relative_byte_offset, bit_mask)`` pairs (empty when the wind is zero).
+
+    State access goes through a human-named ``ScrollScriptView`` (the byte-backed layout bridge) — the logic is
+    offset-free; the view is the one place this island's DGROUP offsets live."""
+    from pre2.bridge.dgroup_view import ScrollScriptView
+    from pre2.recovered.scroll_script import scroll_script_snow, scroll_script_state
+    view = ScrollScriptView(state)
+    scroll_script_state(view)
+    state.snow_plots = scroll_script_snow(view)
 
 
 def native_level_state(state) -> None:
