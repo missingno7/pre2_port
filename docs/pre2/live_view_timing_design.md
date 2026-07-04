@@ -195,7 +195,8 @@ on). Diagnostics printed at exit: parks, total slept, % of wall yielded, avg/max
 - **Pacing preserved:** retrace-frame rate park-vs-spin drift **+0.8 %** (noise) at equal poll granularity.
   (A naïve comparison showed a spurious +21 % — an artifact of counting wait-exits at different batch sizes,
   not a real speed change.)
-- `--video vm` and `--video faithful` both run with parking on (no crash, no `FaithfulVisualGap`).
+- the viewer runs with parking on (no crash). *(As-built note; the `--video faithful` viewer path was removed
+  in 2026-07 — the workbench viewer is VM-framebuffer only now.)*
 
 **Where the live idle actually is** (`pre2/probes/measure_live_waits.py`):
 
@@ -234,7 +235,7 @@ it fell >0.25 s behind), so there is no drift and no catch-up.
   gameplay also does ~48 % real work, so the wait is the only part that can be yielded). `unsafe_skipped=0`.
 - **Pacing exact:** PIT-wait completion rate park-vs-spin drift **+0.0 %** (identical) — the timer-IRQ
   schedule is wall-clock-driven and untouched by parking, so the loop exits at the same instant either way.
-- `--video vm` and `--video faithful` gameplay both run with PIT parking on (no crash).
+- the viewer gameplay runs with PIT parking on (no crash). *(`--video faithful` removed 2026-07.)*
 
 **Combined result.** Menu/carte: retrace park (~60–76 % yielded). Gameplay: PIT park (~26–45 % yielded). Game
 timing unchanged in both (drift ≤ +3 %, PIT = 0 %). Deterministic suite unchanged (287). `--no-live-cheap-waits`

@@ -18,13 +18,9 @@ Execution mode (no silent fallbacks):
                                    whole-machine-state diff).
   * ``--trace-hooks``              hybrid runtime + a live tally of which recovered hooks fire.
 
-Video backend (how frames are DISPLAYED; independent of the execution mode):
-  * ``--video vm`` (default)       the emulated VM/VGA framebuffer.
-  * ``--video faithful``           the recovered FaithfulVisual backend (render_frame / render_visual +
-                                   scene leaves from explicit state + assets); NEVER reads the VM
-                                   framebuffer, fails LOUD on an unrecovered scene.
-  * ``--video enhanced``           modern presentation layer on top of the faithful backend (projects the
-                                   faithful frame; never the VM framebuffer); currently a passthrough baseline.
+The viewer displays the emulated VM/VGA framebuffer. (The recovered renderer is the *native* game's
+job — ``scripts/play_native.py`` — not the hybrid workbench: the ``--video faithful``/``enhanced``
+backends were retired with the hybrid faithful/enhanced experiment.)
 
 PRE2 uses BIOS text, linear VGA, and a 320x200 16-colour planar path; the viewer renders those
 and plays the digital audio (MOD music + PCM SFX) via the emulated Sound Blaster DMA path (PRE2
@@ -394,13 +390,6 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     from pre2.bridge.scene_state import derive_scene_kind
     from pre2.bridge import present as _present_bridge
     from pre2.bridge import text as _text_bridge
-    from pre2.recovered.gameover_background import render_gameover_background
-    from pre2.recovered.carte import build_carte_page
-    from pre2.recovered.menu_scene import MenuScenePage
-    from pre2.recovered.scene_compositor import RecoveredBackground
-    from pre2.recovered.faithful_visual import FaithfulVisualGap, SceneKind
-    from pre2.bridge.faithful_session import FaithfulSession, BLANK_NO_PRESENT
-    from pre2.enhanced.renderer import EnhancedRenderer
     from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
     from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
     from dos_re.cpu import HaltExecution, UnsupportedInstruction, IF
@@ -583,80 +572,33 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 rec.record_dos_key(boundary=frame, scancode=sc, text=text, value=value)
 
     last_rgb = [None]  # most recent rendered frame, for F10 screenshots
-    faithful_info = [""]  # title-bar note for the live faithful renderer (gameplay only)
-    # Video backend: 'vm' | 'faithful' | 'enhanced'. 'enhanced' BUILDS ON the faithful backend (it projects
-    # the faithful frame through the modern pipeline), so it needs the FaithfulSession too.
-    enhanced_mode = getattr(args, "video", "vm") == "enhanced"
-    faithful = getattr(args, "video", "vm") in ("faithful", "enhanced")
-    faithful_verify = getattr(args, "video_verify", False)   # --video-verify diagnostic
-
-    session = FaithfulSession(rt, args, verify=faithful_verify) if faithful else None
-    if session is not None:
-        session.install_hooks()
-    # The enhanced renderer is a presentation layer ON TOP of the faithful session: it is handed the composed
-    # faithful frame + the session's grounded source snapshots (never mem/dos) and projects it through the
-    # modern RGB/RGBA object-aware compositor. The session captures a source snapshot per gameplay commit.
-    enhanced = None
-    if enhanced_mode:
-        enhanced = EnhancedRenderer(session, interpolate=not getattr(args, "enhanced_no_interpolation", False))
-        session.enhanced_capture = True
-        session.enh_clock = perf_counter
-        # Threaded present: run the heavy ~17ms extraction on a worker thread (like audio) so the main thread's
-        # VM stepping + compose + present never block on it. LIVE only -- demo record/replay stay synchronous
-        # (single-threaded, deterministic); async_extract is toggled with `realtime` in the loop below.
-        if not replaying:
-            session.start_async_extraction()
-            session.async_extract = False   # enabled once we confirm we're running live (realtime) below
-            # The enhanced pipeline churns many short-lived numpy arrays per frame; those are freed by
-            # refcounting, so the CYCLIC collector mostly scans them for nothing -> periodic GC-pause hitches
-            # ("occasional slowdowns"). Freeze the long-lived VM+assets out of GC scanning and collect far less
-            # often. Timing-only (does not change any computed pixel), so demo determinism is unaffected.
-            import gc
-            gc.collect()
-            gc.freeze()
-            gc.set_threshold(50_000, 500, 500)
+    faithful_info = [""]  # title-bar status note
 
     def render_current():
-        # Faithful backend: FaithfulSession composes the frame from recovered leaves (never the VM
-        # framebuffer). VM backend: de-planarize / de-VGA the actual VM video memory. play.py owns only the
-        # backend selection + presentation; all faithful capture state/hooks/scene logic lives in the session.
-        if faithful:
-            # session.frame() reads NO VM framebuffer -> no 1 MB mem copy per display frame (it was pure GC
-            # churn: ~present_hz x 1 MB/s -> periodic GC-pause hitches). The VM backend below still needs it.
-            rgb = session.frame()
-            faithful_info[0] = session.faithful_info
-            if rgb is BLANK_NO_PRESENT:     # display blanked -> keep the previous frame (do NOT present)
-                return
-            if rgb is None:                 # unknown video mode -> present black
-                screen.fill((0, 0, 0))
-                pygame.display.flip()
-                return
-            if enhanced is not None:        # project the faithful frame through the modern pipeline
-                rgb = enhanced.present(perf_counter(), rgb)
-                faithful_info[0] = f"{faithful_info[0]} | {enhanced.status()}"
-        else:
-            mem = bytes(rt.program.memory.data)   # VM backend de-planarizes raw VRAM -> needs the copy
-            faithful_info[0] = ""
-            mode = rt.dos.video_mode & 0x7F
-            if not rt.program.memory.ega_display_enabled:
-                faithful_info[0] = "display blanked (palette load)"
-                return                      # blanked -> keep the previous frame (matches the original)
-            if mode in (0, 1, 2, 3, 7):
-                rgb = render_text_rgb(mem, rt.dos.video_mode & 0xFF, rt.dos.video_page)
-            elif mode in (0x13, 0x19):
-                rgb = render_vga_rgb(mem, rt.dos.vga_palette)
-            elif rt.program.memory.ega_planar:
-                mem_o = rt.program.memory
-                if mem_o.ega_pan_active:
-                    ds, pel = mem_o.ega_pan_display_start, mem_o.ega_pan_pel
-                else:
-                    ds, pel = mem_o.ega_display_start, 0
-                active_w = (mem_o.ega_h_display_end + 1) * 8   # CRTC active width (carte = 312, else 320)
-                rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette, pel, active_w)
+        # Display the VM's own video memory: de-planarize / de-VGA the actual framebuffer. (The recovered
+        # renderer is the native game's job — play_native — not this workbench viewer.)
+        mem = bytes(rt.program.memory.data)
+        faithful_info[0] = ""
+        mode = rt.dos.video_mode & 0x7F
+        if not rt.program.memory.ega_display_enabled:
+            faithful_info[0] = "display blanked (palette load)"
+            return                      # blanked -> keep the previous frame (matches the original)
+        if mode in (0, 1, 2, 3, 7):
+            rgb = render_text_rgb(mem, rt.dos.video_mode & 0xFF, rt.dos.video_page)
+        elif mode in (0x13, 0x19):
+            rgb = render_vga_rgb(mem, rt.dos.vga_palette)
+        elif rt.program.memory.ega_planar:
+            mem_o = rt.program.memory
+            if mem_o.ega_pan_active:
+                ds, pel = mem_o.ega_pan_display_start, mem_o.ega_pan_pel
             else:
-                screen.fill((0, 0, 0))
-                pygame.display.flip()
-                return
+                ds, pel = mem_o.ega_display_start, 0
+            active_w = (mem_o.ega_h_display_end + 1) * 8   # CRTC active width (carte = 312, else 320)
+            rgb = render_planar_rgb(mem, ds, rt.dos.vga_palette, pel, active_w)
+        else:
+            screen.fill((0, 0, 0))
+            pygame.display.flip()
+            return
         last_rgb[0] = rgb
         if _FRAME_HASH:   # extraction-equivalence harness: deterministic per-frame RGB hash (demo replay)
             import hashlib as _fhh
@@ -736,10 +678,6 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
                 sim_deadline = now0          # restart demo pacing from now
                 last_render = 0.0            # force a render on the first demo frame
                 prev_realtime = realtime
-                # Async extraction only while LIVE; a recording (realtime False) uses the synchronous path so
-                # the demo stays deterministic (the worker thread idles, fed no snapshots).
-                if enhanced is not None and session._extract_thread is not None:
-                    session.async_extract = realtime
             rt.dos.time_source = perf_counter if realtime else det_now
             pic = rt.dos.pic
             try:
@@ -885,8 +823,6 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     finally:
         if not replaying:
             stop_recording()
-        if enhanced is not None:
-            session.stop_async_extraction()
         if sb_audio is not None:
             sb_audio.close()
         if getattr(rt, "_verify_summary", None) is not None:
@@ -1062,18 +998,6 @@ def main(argv: list[str] | None = None) -> int:
                         "(the recovered mixer's output); 'enhanced' = modern float mixer playing "
                         "the standard .TRK songs + SFX driven by the recovered audio commands; 'off'")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
-    p.add_argument("--video", choices=["vm", "faithful", "enhanced"], default="vm",
-                   help="VIDEO BACKEND (a separate axis from the execution mode). "
-                        "'vm' (default): display the emulated VM/VGA framebuffer (the original video backend; "
-                        "still runs the hybrid native replacements unless --no-replacements). "
-                        "'faithful': display the recovered FaithfulVisual backend (render_frame / render_visual "
-                        "+ scene leaves, from explicit state + assets); consumes grounded recovered source, "
-                        "NEVER reads the VM framebuffer, fails LOUD on an unrecovered scene. "
-                        "'enhanced': modern presentation layer ON TOP of the faithful backend (projects the "
-                        "faithful frame; never reads the VM framebuffer); currently a passthrough baseline. "
-                        "Execution mode is the other axis: hybrid (default) / --no-replacements / --verify-hooks.")
-    p.add_argument("--video-verify", action="store_true", help="(with `--video faithful`) each gameplay frame, diff the recovered frame vs the VM's own page over the viewport and show the divergence in the title bar (surfaces any gameplay-state error; small residuals are the live moving-sprite blink-phase)")
-    p.add_argument("--enhanced-no-interpolation", action="store_true", help="(with `--video enhanced`) disable object interpolation -> enhanced presents the faithful frame at each source commit (a faithful-equivalent baseline; useful to A/B the interpolation)")
     p.add_argument("--speed", type=int, default=150_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Default 150k ~= PRE2's native rate: its per-frame game work is only ~1.3-1.9k instr (measure_frame_work.py), so ~132k (p90 work x 70Hz) fills one retrace frame with minimal spin; higher values just inflate idle retrace spin (a 450k frame is ~99% spin) and overrun the host interpreter (~270k instr/s) so the demo loop falls behind real time and drops to the 4Hz render fallback. Live --view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")

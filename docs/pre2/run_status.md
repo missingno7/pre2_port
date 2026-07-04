@@ -59,7 +59,9 @@ primitive** — `pre2/bridge/timing_fastforward.advance_frame_fast`, the default
 - **Rendering — recovered + live-grounded:** SQZ asset decode; sprite/object decode + classify + blit;
   the object-list draw pass (`26FA`); frame renderer (tile-row / grid / scroll / page-flip); HUD; iris;
   fireflies / particles / foreground-tile z-order; digital audio mixer + tracker. The faithful renderer
-  (`--video faithful`) composes these recovered leaves into a clean framebuffer — it **never reads the VM VRAM**.
+  composes these recovered leaves into a clean framebuffer — it **never reads the VM VRAM** — and is now the
+  **native** game's renderer (`scripts/play_native.py`). (The hybrid `--video faithful/enhanced` viewer paths
+  were removed in 2026-07; the workbench viewer shows only the raw VM framebuffer.)
 - **Scenes — grounded hook-first:** game-over (`9C87`), tally (`51A3`), OLDIES (`0C3E`), menu/map scroll
   (`scroll_blit` / `scroll_shift`), text (`draw_string`), and the title/intro 13h image (recovered +
   faithful path wired).

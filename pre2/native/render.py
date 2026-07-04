@@ -146,8 +146,8 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     the particle list). Without this the standalone runner drew only the core frame + fireflies, so the front-tile
     layer was missing. Returns ``(planes, page)`` — four EGA plane buffers + the committed page.
 
-    Mirrors the faithful renderer's commit-boundary capture (bridge/faithful_session.py), but sourced from
-    native game state instead of the VM. Raises FaithfulVisualGap for non-gameplay scenes (no silent fallback)."""
+    Composes the frame from the recovered render leaves at the commit boundary, sourced from native game state
+    (never a VM). Raises FaithfulVisualGap for non-gameplay scenes (no silent fallback)."""
     native_apply_palette_fade(state, dos)                          # [asm 6772] the light-pickup DAC fade (skipped
     #                                                                by the gameplay frame as 'render'); no-op idle
     if foreground_capture is None:

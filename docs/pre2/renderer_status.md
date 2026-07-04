@@ -85,9 +85,10 @@ faithful-visual scene gaps remain.** See bug-table #3 and `faithful_visual_layer
 The gameplay renderer is no longer only an offline/snapshot/test island. `pre2/bridge/live_render.py`
 `render_gameplay_planes(mem, dos, game_root)` reads an explicit `RendererState` from live VM memory
 each frame and renders the visible frame into a CLEAN framebuffer via `render_frame(rebuild=True)`,
-deplanarized by `sdl_view.render_planar_rgb_from_planes`. The viewer flag **`--video faithful`** displays
-that recovered output instead of ASM-populated VRAM (the VM still runs as oracle/state-producer);
-**`--video-verify`** shows the per-frame divergence vs the VM page in the title bar. The faithful path
+deplanarized by `sdl_view.render_planar_rgb_from_planes`. This recovered renderer is now the **native** game's
+renderer (`scripts/play_native.py`). *(Historical: it was originally exercised in the hybrid viewer via the
+`--video faithful` flag, with `--video-verify` diffing the recovered frame vs the VM page; those viewer flags
+were removed in 2026-07 once the native game became the renderer's home.)* The faithful path
 **never reads the VM framebuffer**: recovered scenes (gameplay, iris, game-over, tally, OLDIES, 13h images)
 render from recovered source; an unrecovered scene (the menu/map 0Dh compositions) raises a **LOUD
 `FaithfulVisualGap`** (a diagnostic frame), NOT a silent ASM-VRAM fallback. (The earlier "fall back to the

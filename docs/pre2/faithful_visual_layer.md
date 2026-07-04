@@ -1,5 +1,13 @@
 # Faithful visual layer — consolidation plan (audit + target architecture)
 
+> **HISTORICAL framing note (2026-07).** This doc predates the native game and talks about the faithful
+> renderer as the hybrid **`--video faithful`** viewer backend. That viewer path has since been **removed**: the
+> faithful renderer is now the **native** game's renderer (`scripts/play_native.py` → `pre2/native/render.py`
+> over the recovered leaves), and the consolidation this doc proposed has largely landed there (transitions /
+> scenes / fades are part of the native flow). Read the recovered-leaf audit + target architecture below as
+> still-valid design; substitute "the native renderer" for "`--video faithful`". Current status:
+> [`recovered_islands.md`](recovered_islands.md), [`renderer_status.md`](renderer_status.md).
+
 The faithful renderer composes a *gameplay frame* well, but the recovered visual logic is still
 spread across recovered leaves, bridge readers, checkpoints, probes, and a separate semantic model —
 and transitions / scene changes are **not yet part of the live faithful flow** (observed: the

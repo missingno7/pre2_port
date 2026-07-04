@@ -181,15 +181,15 @@ output, collision query, player/object update, frame/tick, major game-state).
 
 ## Runtime modes — and the migration to a VM-less faithful core
 
-The three `--video` paths are a **migration vehicle**, not three permanent renderers.
-`--video vm` is the legacy/oracle framebuffer (original ASM for reference). `--video
-faithful` today is a recovered visual backend *inside* the hybrid runtime, but it should
-gradually **stop being "just a renderer" and become the VM-less faithful source-port
-core** — the real standalone game (`NativeGameState → recovered gameplay systems →
-recovered render/audio state → faithful renderer/audio`). `--video enhanced` is an
-optional modern presentation/audio layer built **on top of** that faithful core. The
-endgame is a complete recovered native PRE2 with the VM kept only as an oracle — **not
-"VM with a nicer renderer".** The recovery loop drives this: try to move a behaviour
+The `--video faithful` / `--video enhanced` viewer paths were a **migration vehicle** — a way to run the
+recovered renderer *inside* the hybrid runtime — and, having served that purpose, were **removed** (2026-07).
+The faithful renderer is now the **VM-less native source-port core**: the real standalone game
+(`NativeGameState → recovered gameplay systems → recovered render/audio state → faithful renderer/audio`) is
+`scripts/play_native.py`. The hybrid workbench (`play.py`) now displays only the raw VM framebuffer (the
+oracle). A future modern presentation/enhancement layer is built **on top of** the native faithful core (the
+`pre2/enhanced/` technique modules are kept as reference; see
+[`enhanced_renderer_design.md`](enhanced_renderer_design.md)). The endgame — a complete recovered native PRE2
+with the VM kept only as an oracle, **not "VM with a nicer renderer"** — is reached. The recovery loop drives this: try to move a behaviour
 native → discover the missing state/timing/render-intent → drop to the ASM boundary →
 recover the smallest leaf → verify → compose into an island → replace in hybrid → **lift
 the island into the faithful native core** → repeat until the VM is no longer required at

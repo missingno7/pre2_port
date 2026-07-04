@@ -1,18 +1,17 @@
 # Enhanced renderer — design (source-cadence presentation)
 
-> **Status: BUILT + LIVE-WIRED on HYBRID — experimental, to be re-homed.** `--video enhanced` is wired into the
-> **hybrid** live viewer (`play.py` over `FaithfulSession`, `pre2/enhanced/`): per-object sprite interpolation
-> between ~25 fps source frames, plus transition (iris/curtain/vfade) and native-background projection;
-> HUD/menu/CARTE/scenes stay faithful passthrough.
->
-> **Direction (2026-07).** Enhanced-on-hybrid is a **remnant of earlier experiments** — it presents on top of
-> the VM/oracle path, which is the runtime being retired. It will be **retired with the hybrid runtime**; the
-> intended home is an **enhancement layer over the native VM-less core** (`play_native`). The reusable pieces —
-> smooth transitions, object/camera interpolation, the truecolor projection ideas — migrate there; the parts
-> that only make sense over the VM session do not. Enhanced is presentation-only either way (see
-> [`recovery_architecture.md`](recovery_architecture.md), [`state_view_layer.md`](state_view_layer.md) for why
-> enhancements attach at the render-intent seam, not the state layer). Treat the design below as substrate-
-> agnostic rationale; ignore its hybrid-viewer wiring specifics when re-homing to native.
+> **Status: RETIRED from hybrid — the modules are a reference library.** The live wiring (`--video enhanced`,
+> `pre2/enhanced/renderer.py`, `pre2/bridge/faithful_session.py`) has been **removed** (2026-07): the hybrid
+> faithful/enhanced *render* experiment is gone, since the recovered renderer's real home is the **native**
+> game (`play_native`), not the VM workbench (which now shows only the raw VM framebuffer). The technique
+> modules in `pre2/enhanced/` remain — compositor, extract, frame_state, transitions, transition_controller,
+> native_background, sprite_cache, present — as reference for a **future enhancement layer over the native
+> core**; they are kept import-valid by their tests but run at no game time. The design below is
+> substrate-agnostic rationale; ignore its hybrid-viewer wiring specifics when re-homing to native. Enhanced is
+> presentation-only (see [`recovery_architecture.md`](recovery_architecture.md),
+> [`state_view_layer.md`](state_view_layer.md) for why enhancements attach at the render-intent seam, not the
+> state layer). (Note: the enhanced *audio* mixer, `--audio enhanced`, is unrelated and stays — the raw VM audio
+> sounds bad.)
 
 > The enhanced renderer is a **native presentation layer**, not a second VM renderer and not a re-run of the
 > faithful planar rasterizer per display frame. It consumes recovered game/render state produced at the
