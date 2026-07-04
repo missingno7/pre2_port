@@ -9,13 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
+from pre2.bridge.dgroup_view import SwarmView
 from pre2.recovered.fireflies import Firefly
-
-_DATA_SEG = 0x1A0F
-_ARRAY = 0x6EA9
-_END = 0x6F49          # cmp si,0x6f49 ; jae  -> 20 slots of 8 bytes
-_STRIDE = 8
-_DEAD = 0x55AA         # cmp ax,0x55aa ; je  -> dead slot
 
 
 @dataclass
@@ -29,30 +24,17 @@ class FireflyState:
                                   # The faithful draw ignores it.
 
 
-def _r16(mem, off: int) -> int:
-    base = (_DATA_SEG << 4) + off
-    return mem.data[base] | (mem.data[base + 1] << 8)
-
-
-def _s16(v: int) -> int:
-    return v - 0x10000 if v & 0x8000 else v
-
-
 def read_fireflies(mem) -> FireflyState:
+    """Read the live firefly slots + camera/page for the faithful renderer, via the human-named ``SwarmView``
+    (the byte-backed layout bridge — the one place the 0x6EA9 array's stride/fields live). The physical slot
+    index (0..19) is kept parallel for the enhanced renderer's per-firefly drift interpolation; the faithful
+    draw ignores it."""
+    view = SwarmView(mem)
     slots: List[Firefly] = []
     slot_idx: List[int] = []
-    for i, off in enumerate(range(_ARRAY, _END, _STRIDE)):
-        x = _r16(mem, off)
-        if x == _DEAD:
+    for i, slot in enumerate(view.slots):
+        if not slot.alive:
             continue
-        y = _r16(mem, off + 2)
-        timer = mem.data[(_DATA_SEG << 4) + off + 6]
-        slots.append((_s16(x), _s16(y), timer))
+        slots.append((slot.x, slot.y, slot.timer))
         slot_idx.append(i)
-    return FireflyState(
-        slots=slots,
-        cam_col=_s16(_r16(mem, 0x2DE4)),
-        cam_row=_s16(_r16(mem, 0x2DE6)),
-        page=_r16(mem, 0x2DD8),
-        slot_idx=slot_idx,
-    )
+    return FireflyState(slots=slots, cam_col=view.cam_col, cam_row=view.cam_row, page=view.page, slot_idx=slot_idx)
