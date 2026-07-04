@@ -85,7 +85,8 @@ MAIN_LOOP_SPINE = [
      "mutation + [0x6bd5] tick) extracted into native_gameplay_frame (native_object_render_state)"),
     (0x3721, "render", "foreground-tile pass -> faithful renderer"),
     (0x54AB, "native", "native_firefly_step (swarm sim + RNG)"),
-    (0x3922, "native", "native_scroll_script (counter + [0x6bf6] scroll accumulate; render pan = renderer TODO)"),
+    (0x3922, "native", "native_scroll_script (counter + [0x6bf6] wind accumulate + LEVELG snow: flake array/rng "
+                       "state + white-pixel plot list for the renderer)"),
     (0x4C69, "native", "native_level_state (idle no-op; death/respawn/level-end armed fails loud)"),
     (0x45AF, "render", "45AF respawn-animation draw -> faithful renderer"),
     (0x44FB, "render", "4509+1C65 render/timing helper"),
@@ -361,13 +362,17 @@ def native_scroll_script(state) -> None:
     scroll amount [0x6bf6] through the per-level table at [0x2dbc]. Verified byte-exact vs the ASM 3922 state half
     (pre2/recovered/scroll_script.py). A no-script level is just the counter inc.
 
-    The scroll-application half (3922:396A.. — the VGA raster smooth-scroll that pans the display by [0x6bf6]/2
-    rows) is the faithful renderer's job; [0x6bf6] is the pan amount it consumes. Tracking it here keeps the
-    gameplay state byte-exact; the visual pan for LEVELG is a renderer-integration follow-up."""
-    from pre2.recovered.scroll_script import scroll_script_state
+    The render half (3922:396A.. — the LEVELG falling snow) is reproduced too: it OR-plots white pixels onto the
+    draw page AND advances the flake array [0x6ca9] + the shared gameplay rng [0x2cec], so running it here keeps
+    BOTH byte-exact. The plotted pixels are stashed on ``state.snow_plots`` for the faithful renderer to overlay;
+    they are ``(page_relative_byte_offset, bit_mask)`` pairs (empty when the wind [0x6bf6] is zero)."""
+    from pre2.recovered.scroll_script import scroll_script_state, scroll_script_snow
     rb, rw = readers(state)
     for off, val in scroll_script_state(rb, rw).items():
         _ww(state, off, val)
+    wb = lambda o, v: _wb(state, o, v)
+    ww = lambda o, v: _ww(state, o, v)
+    state.snow_plots = scroll_script_snow(rb, rw, wb, ww)
 
 
 def native_level_state(state) -> None:

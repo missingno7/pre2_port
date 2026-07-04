@@ -25,23 +25,29 @@ from pre2.bridge.particles import ParticleFrame
 from pre2.recovered.fireflies import draw_fireflies
 from pre2.recovered.foreground_tiles import render_foreground_tiles
 from pre2.recovered.particles import draw_particles
+from pre2.recovered.scroll_script import draw_snow
 
 
 @dataclass(frozen=True)
 class GameplayEffects:
-    """The three effect-overlay states captured for one displayed frame (any may be ``None``)."""
+    """The four effect-overlay states captured for one displayed frame (any may be ``None``)."""
     particles: Optional[ParticleFrame] = None       # snapshotted at 4B8E entry (pre-kill)
     foreground: Optional[ForegroundState] = None    # snapshotted at the 3732 pass entry
     fireflies: Optional[FireflyState] = None         # read at the 6772 commit (slots persist)
+    snow: Optional[list] = None                      # LEVELG falling snow (scroll_script_snow plot list)
 
 
 def capture_gameplay_effects(mem, *, particle_frame=None, foreground_frame=None) -> GameplayEffects:
     """Bundle the stashed particle/foreground captures with the fireflies (read live at the commit)."""
     ff = read_fireflies(mem)
+    # The LEVELG snow pixels are computed by native_scroll_script (the 3922 render half) and stashed on the
+    # state; empty/absent on every other level (wind [0x6bf6] == 0).
+    snow = getattr(mem, "snow_plots", None)
     return GameplayEffects(
         particles=particle_frame,
         foreground=foreground_frame,
         fireflies=ff if ff.slots else None,
+        snow=snow if snow else None,
     )
 
 
@@ -57,3 +63,5 @@ def apply_gameplay_effects(planes, page: int, fx: Optional[GameplayEffects]) -> 
     if fx.fireflies is not None:
         f = fx.fireflies
         draw_fireflies(planes, f.slots, f.cam_col, f.cam_row, page)
+    if fx.snow is not None:
+        draw_snow(planes, fx.snow, page)

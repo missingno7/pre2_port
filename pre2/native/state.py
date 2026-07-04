@@ -19,7 +19,8 @@ class NativeGameState:
     """The recovered game's memory image. Exposes ``.data`` (the 1 MB address space) so the existing bridges
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
-    __slots__ = ("data", "sfx_queue", "particle_capture", "flash_slots", "song_request", "boss_glyph")
+    __slots__ = ("data", "sfx_queue", "particle_capture", "flash_slots", "song_request", "boss_glyph",
+                 "snow_plots")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -48,6 +49,10 @@ class NativeGameState:
         #: the mode-9 final-boss glyph id the script interpreter selected this tick ([asm 6BD3] -> the 6C0D
         #: render). The renderer (bridge _boss_glyph_tiles) reads it to draw the boss image; None off level 9.
         self.boss_glyph: int | None = None
+        #: the LEVELG falling-snow pixels for this frame — a list of (page-relative byte offset, bit mask) the
+        #: 3922 render half (native_scroll_script -> scroll_script_snow) plots white into the frame. Empty/None on
+        #: every other level (wind [0x6bf6] == 0). native_render's effect pass (draw_snow) overlays them.
+        self.snow_plots: list | None = None
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
