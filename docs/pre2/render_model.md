@@ -1,9 +1,15 @@
 # The render model — semantic render intent (the foundation under the faithful renderer)
 
-> **DESIGN SNAPSHOT (mid-development, ~2026-06).** Captured the render-intent model while the faithful renderer
-> was being built; some "partial / TODO" notes below (palette, transitions) are since resolved — the faithful
-> renderer is complete and draws the native game. Read as design rationale, not current status; for what is
-> recovered see [`renderer_status.md`](renderer_status.md), [`recovered_islands.md`](recovered_islands.md).
+> **DESIGN SNAPSHOT — render-intent model (mid-2026, partially superseded).** This tracks the *semantic render
+> model* (`GameFrameSnapshot`) beneath the enhanced renderer — a different thing from the faithful renderer
+> (which is complete and draws the game). Since it was written the model has advanced: palette **is** recovered
+> (`PaletteState`), the tile enumeration + snapshot assembler (`plan_tiles` / `build_frame_snapshot`) are done,
+> and the iris transition **is** emitted as `TransitionCmd(IRIS)` (`render_snapshot._transition`) — the
+> per-cell statuses in the tables below that still say "partial / contract only / always NONE" are stale where
+> noted inline. The enhanced renderer was ultimately built via a *parallel extract route*
+> (`pre2/enhanced/extract.py`, see [`enhanced_renderer_design.md`](enhanced_renderer_design.md)), so the "only
+> after the model is complete is enhanced safe to build" gate at the very end is superseded. Read this as design
+> rationale; the live model is `pre2/recovered/render_model.py` + `render_snapshot.py`.
 
 **The question:** *are we still too close to the old machine, or have we recovered enough
 semantic render intent?*
@@ -45,12 +51,12 @@ need) — exactly the foundation the enhanced renderer requires.
 | Draw order | **have** | active-list order (`plan_frame`) |
 | Clipping/culling decisions | **have (sprites)** | in `plan_sprite` (window + edge clips) |
 | Animation state | **partial** | `life` + frame counter drive blink/mode; frame = the id (caller-selected) |
-| Palette state | **partial** | `FadeStep(a,b,amount)`; applied straight to DAC, no frame-level `PaletteState` |
-| Transition/fade state | **machine-level** | iris/fade recovered as pixel/DAC ops, **not** `TransitionCmd` |
+| Palette state | **have** (since recovered) | `render_model.PaletteState` + `bridge.palette.read_palette_state` (see "Palette state machine — RECOVERED" below) |
+| Transition/fade state | **iris: have; fade: in palette** | `render_snapshot._transition` emits `TransitionCmd(IRIS)`; fades carried by `PaletteState`; other transitions (curtain) pending |
 | HUD state | **partial** | id `0x135` special-cased in `plan_sprite` (no model); score/lives = text island |
 | Tile/background state | **machine-level** | tilemap+camera are inputs, but background is **blitted via the scroll ring**; no `TileDraw` |
-| Render commands (Sprite/Tile/Palette/Transition) | **Sprite only** | `SpriteDrawCmd` done; `TileDrawCmd`/`PaletteState`/`TransitionCmd` are contracts only |
-| GameFrameSnapshot | **contract only** | defined; assembled for sprites/camera; tiles/transition pending |
+| Render commands (Sprite/Tile/Palette/Transition) | **Sprite/Tile/Palette + iris-Transition** | all emitted by `build_frame_snapshot`; only non-iris transitions (curtain) still pending |
+| GameFrameSnapshot | **assembled** | `build_frame_snapshot(RendererState)` → camera + ordered sprites + tiles + palette + iris-transition |
 | Hidden VM/CRTC/planar deps isolated | **no** | `RendererState` mixes semantic (camera, tiles) with machine (`col_ring`, `scroll_src`, `dest_page`, `row_ring`, `dirty`) |
 
 ## The honest gaps (why we are still too close to the machine)
@@ -154,8 +160,9 @@ The fade *math* is byte-exact (`fade_palette`, test_transition); the state read 
 
 ### Still to recover (the rest of the renderer's persistent state)
 
-* **Transition state** — the iris (`[0x2DD0]` radius, `[0x2DC6]/[0x2DC8]` centre) as a
-  `TransitionCmd(IRIS, …)`; recovered as pixels (`build_scaled_columns`), not yet as state.
+* **Transition state** — the iris (`[0x2DD0]` radius, `[0x2DC6]/[0x2DC8]` centre) is now emitted as
+  `TransitionCmd(IRIS, centre, radius)` (`render_snapshot._transition`). Remaining: the non-iris transitions
+  (curtain / wipe) as commands.
 * **Screen flash** — the brief palette override on pickup/hit (likely a fast select+restore).
 * **Camera state machine** — shake / recentre / lock, beyond the static `CameraState`.
 * **Animated-tile phase** — the `[0x6BC2]` animation-frame counter (drives `anim_xlat`).
@@ -170,9 +177,9 @@ The fade *math* is byte-exact (`fade_palette`, test_transition); the state read 
    the **type-aware composite** (0=opaque, 1=base, ≥2=masked) in a flat rasteriser verified
    pixel-exact vs the page, (c) the sub-tile *horizontal* scroll into the camera (only vertical
    `fine_scroll` folded so far). That fully frees the background from the ring.
-2. **Transition as state.** `TransitionCmd(IRIS, centre, radius)` / `(FADE, amount)` emitted
-   per frame (palette is already exposed as `PaletteState`), so the enhanced renderer smooths
-   them on its own clock. Today `build_frame_snapshot` always emits `TransitionKind.NONE`.
+2. **Transition as state.** DONE for the iris: `build_frame_snapshot` emits `TransitionCmd(IRIS, centre,
+   radius)` (`_transition`), and palette fades ride `PaletteState`, so the enhanced renderer smooths them on
+   its own clock. Remaining: the other transitions (curtain / wipe) as commands.
 3. **The capture seam.** Hook the main-loop top (`0214`) to call `build_frame_snapshot` once
    per tick and keep the last two — the interpolation input (see
    `native_renderer_feasibility.md`; the lerp PoC already works on `RendererState`).

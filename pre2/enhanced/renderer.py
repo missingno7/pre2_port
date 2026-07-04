@@ -11,10 +11,11 @@ renderer:
   * When the grounded source state is missing / stale / non-gameplay, or interpolation is disabled, it
     returns the **faithful frame unchanged** (the only allowed fallback) and reports why.
 
-This milestone: gameplay-only object-aware interpolation via :func:`pre2.enhanced.compositor.compose` —
-background + per-sprite RGBA blits at ``base_id``-matched interpolated positions, at the display refresh,
-between ~25 fps source frames. Everything else (HUD strip, menu, CARTE, scenes, transitions) is faithful
-passthrough. No truecolor fade / iris / curtain / smooth-camera yet.
+Wired: gameplay object-aware interpolation via :func:`pre2.enhanced.compositor.compose` — background +
+per-sprite RGBA blits at ``base_id``-matched interpolated positions, at the display refresh, between ~25 fps
+source frames — plus present-time **transitions** (iris / curtain / vertical-fade via
+:class:`~pre2.enhanced.transition_controller.EnhancedTransition`). The HUD strip / menu / CARTE / scenes stay
+faithful passthrough; smooth-camera and truecolor palette fade are not yet projected.
 """
 from __future__ import annotations
 

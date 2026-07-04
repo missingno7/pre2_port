@@ -1,8 +1,9 @@
 # Enhanced renderer — design (source-cadence presentation)
 
-> **Status: DESIGN + v1 built/wired.** The enhanced *presentation* layer's design; the v1 scroll-interpolation
-> compositor is built and live-wired (a few in-doc status lines are inconsistent about the wiring — the layer
-> IS wired). Enhanced is presentation-only and builds on the faithful native core (see
+> **Status: DESIGN + BUILT + LIVE-WIRED.** The enhanced *presentation* layer. `--video enhanced` is wired into
+> the live viewer (`pre2/enhanced/`): per-object sprite interpolation between ~25 fps source frames, plus
+> transition (iris/curtain/vfade) and native-background projection; HUD/menu/CARTE/scenes stay faithful
+> passthrough. Enhanced is presentation-only and builds on the faithful native core (see
 > [`recovery_architecture.md`](recovery_architecture.md), [`state_view_layer.md`](state_view_layer.md) for why
 > enhancements attach at this seam, not the state layer).
 
@@ -108,7 +109,7 @@ rasterizer per display subframe, and falls back to the faithful base for any lay
    interpolated camera delta (grounded in `CameraState`; gameplay scroll + CARTE/menu pans). A viewport
    translation, **not** a cross-fade blend. Honest where the motion is camera-only; sprites still step at the
    source rate (camera-aware, not yet per-object).
-4. **Minimal native sprite-compositing layer** — BUILT + PROVEN (compositor, not yet live-wired). The first
+4. **Minimal native sprite-compositing layer** — BUILT + PROVEN + LIVE-WIRED (see §2b). The first
    real object-aware layer, modern RGB/RGBA: `pre2/enhanced/{frame_state,extract,compositor}.py`. Per source
    frame, `extract_enhanced_frame` renders the background (`object_camera=None`) + the faithful base via the
    verified `render_frame`, and lifts each NORMAL sprite into a **bg-independent RGBA texture** via the
@@ -117,10 +118,13 @@ rasterizer per display subframe, and falls back to the faithful base for any lay
    positions over the cached background — pure RGB/RGBA, no planar. **Proven: `compose(alpha=1) == faithful`
    at 0 px** over spiders/player-death/gameplay/boss (`verify_enhanced_parity.py`); compositor logic tests in
    `tests/test_enhanced_compositor.py`. `OPAQUE`/`ERASE` (flash/blink, bg-dependent blends) are reported as
-   `unsupported` and NOT faked; `is_hud` sprites (boss meter) are composited but not interpolated. HUD strip /
-   menu / transitions stay faithful passthrough. This is **the first native enhanced sprite layer, NOT a full
-   modern renderer**. NEXT: source-snapshot seam (prev/cur in FaithfulSession) + the native-refresh present
-   loop to make the interpolation live.
+   `unsupported` and NOT faked; `is_hud` sprites (boss meter) are composited but not interpolated. This is **the first
+   native enhanced sprite layer, NOT a full modern renderer**. The source-snapshot seam (prev/cur in
+   `FaithfulSession`) + the native-refresh present loop that make it live are **done — see §2b**. Since v1 the
+   enhanced layer has also grown **transition** (iris / curtain / vertical-fade, via
+   `pre2/enhanced/{transition_controller,transitions}.py`, `test_enhanced_transitions.py`) and **native
+   background** projection (`pre2/enhanced/native_background.py`) — so transitions no longer fall back to
+   faithful passthrough. The HUD strip / menu / CARTE / scenes remain faithful passthrough.
 5. (Later) widen coverage; smooth camera policy; etc. — all deferred.
 
 ## 2b. Live wiring (done)
