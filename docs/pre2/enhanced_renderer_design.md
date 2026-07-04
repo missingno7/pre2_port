@@ -1,11 +1,18 @@
 # Enhanced renderer — design (source-cadence presentation)
 
-> **Status: DESIGN + BUILT + LIVE-WIRED.** The enhanced *presentation* layer. `--video enhanced` is wired into
-> the live viewer (`pre2/enhanced/`): per-object sprite interpolation between ~25 fps source frames, plus
-> transition (iris/curtain/vfade) and native-background projection; HUD/menu/CARTE/scenes stay faithful
-> passthrough. Enhanced is presentation-only and builds on the faithful native core (see
+> **Status: BUILT + LIVE-WIRED on HYBRID — experimental, to be re-homed.** `--video enhanced` is wired into the
+> **hybrid** live viewer (`play.py` over `FaithfulSession`, `pre2/enhanced/`): per-object sprite interpolation
+> between ~25 fps source frames, plus transition (iris/curtain/vfade) and native-background projection;
+> HUD/menu/CARTE/scenes stay faithful passthrough.
+>
+> **Direction (2026-07).** Enhanced-on-hybrid is a **remnant of earlier experiments** — it presents on top of
+> the VM/oracle path, which is the runtime being retired. It will be **retired with the hybrid runtime**; the
+> intended home is an **enhancement layer over the native VM-less core** (`play_native`). The reusable pieces —
+> smooth transitions, object/camera interpolation, the truecolor projection ideas — migrate there; the parts
+> that only make sense over the VM session do not. Enhanced is presentation-only either way (see
 > [`recovery_architecture.md`](recovery_architecture.md), [`state_view_layer.md`](state_view_layer.md) for why
-> enhancements attach at this seam, not the state layer).
+> enhancements attach at the render-intent seam, not the state layer). Treat the design below as substrate-
+> agnostic rationale; ignore its hybrid-viewer wiring specifics when re-homing to native.
 
 > The enhanced renderer is a **native presentation layer**, not a second VM renderer and not a re-run of the
 > faithful planar rasterizer per display frame. It consumes recovered game/render state produced at the
