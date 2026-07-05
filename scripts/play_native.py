@@ -634,7 +634,9 @@ def main(argv=None) -> int:
             lvl = ref.get("menu_level", 0)
 
             def adj_level(d):
-                ref["menu_level"] = (lvl + d) % 0x11
+                ref["menu_level"] = (lvl + d) % 0x10       # playable ids 0x00..0x0F (LEVEL1..9, A..G); id 0x10
+                #   is NOT a bootable level — the per-level DGROUP tables end at 0x0F (LEVELH/I.SQZ are the
+                #   ending-credits scenery the finale loads by its own path, not via the level selector)
 
             def go_level():
                 ref["switch_level"] = ref.get("menu_level", 0)
