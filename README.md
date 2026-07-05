@@ -87,6 +87,26 @@ Everything the frame touches is recovered source, verified against the ASM:
 - **Front-end** — intro, titles, attract animation, difficulty menu, password entry, the carte scroll-in,
   transitions and DAC fades.
 
+## Enhancements (optional) — press **F10**
+
+An in-game overlay (mouse or keyboard, openable any time) toggles a layer of modern comforts that sit
+*on top of* the faithful game. They are **pure presentation** — they read game state and write none, so
+the gameplay, demo recordings, and the byte-exact oracle are all untouched. Every enhancement is proven
+pixel-/state-equal to the faithful game at its neutral setting (the `alpha=1` widescreen parity gate), so
+*"enhanced" never means "diverged"* — it's the same game, shown better.
+
+- **Frame interpolation** — the game's fixed ~23 Hz tick is presented at your monitor's refresh
+  (60 / 120 / 144 / 240 / …), object motion lerped between ticks. The tick cadence itself never changes.
+- **Widescreen** — real extra tilemap columns fill a 16:9+ viewport (not a stretch): left / center / right
+  HUD placement, stretch / mirror / black backdrop edges, and a *true-widescreen* mode that draws objects
+  out in the margins. (Levels drawn from off-screen tiles — the gorilla boss — stay 4:3 with a wide HUD.)
+- **Smooth transitions** — the curtain / iris / fade level transitions re-authored present-time, so they're
+  buttery and frame-rate-independent instead of stepped.
+- **Stereo SFX** — effects panned by where on screen they fire (the music was already stereo).
+- **Presentation** — borderless fullscreen (Alt+Enter), integer scaling, a live fps/tps overlay, adjustable
+  overlay scale (DPI-aware), F12 screenshot, and a frame cap / display-rate lock.
+- **Develop tab** (`--debug`) — god mode + jump to any level.
+
 ### Known issues
 
 Small and honest — **none block a normal cold-boot → credits playthrough:**
