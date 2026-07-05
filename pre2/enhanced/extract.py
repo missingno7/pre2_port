@@ -25,7 +25,7 @@ from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache,
                                              native_background_indices)
 from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
-from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, paint_sprite,
+from pre2.recovered.object_render import (LIST_TOP, MODE_ERASE, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
 from pre2.recovered.fireflies import _sar
 from pre2.recovered.particles import advance_particle
@@ -286,14 +286,22 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         cmd = plan_sprite_command(spr, attr, cam)
         if cmd is None:
             continue
-        if int(cmd.mode) not in (MODE_NORMAL, MODE_OPAQUE):   # ERASE: bg-dependent blend, not a texture.
-            # OPAQUE (the one-frame white hit/death flash, id bit14) IS texturable: paint_sprite ORs the
-            # coverage block into all four planes -> covered pixels are index 15 REGARDLESS of background,
-            # so the dual-buffer bake below yields exactly the white silhouette (uncovered pixels disagree
-            # between the two buffers and drop out as transparent). _texture_key includes draw.mode, so
-            # flash cels never collide with their normal variants in the cache.
-            unsupported.append((slot, cmd.base_id, _MODE_NAME.get(int(cmd.mode), hex(int(cmd.mode)))))
+        mode = int(cmd.mode)
+        if mode not in (MODE_NORMAL, MODE_OPAQUE, MODE_ERASE):
+            unsupported.append((slot, cmd.base_id, _MODE_NAME.get(mode, hex(mode))))
             continue
+        # The three real blit modes, all reproduced by the SAME dual-buffer bake (paint_sprite over an all-0 and
+        # an all-1 background; pixels that agree are background-independent and texturable):
+        #   NORMAL — the sprite's own colours.
+        #   OPAQUE (id bit14, the one-frame hit/death flash) — paint_sprite ORs the sprite's mask into all four
+        #     planes, so covered pixels are index 15 (white) regardless of background.
+        #   ERASE (blink-off, 3/4 frames of an invuln/pickup blink) — the SAME silhouette as the flash but ANDed:
+        #     covered pixels become index 0 (black). "Hit-flash but black."
+        # CAVEAT (accepted): unlike the white flash, the black silhouette exposes a sub-byte-shift imprecision in
+        # the position-INDEPENDENT (canonical shift-0) bake — it is a strict SUPERSET of the true erase footprint
+        # (0px over-draw at shift 0, growing to a ~9px black fringe at shift 7 = screen_x & 7). Pure over-draw, so
+        # no holes; the blink reads as a slightly-oversized black silhouette. An exact fix needs a per-shift /
+        # background-dependent erase paint (also handling the player+club dual blink + edge clip); deferred.
         draw = plan_sprite(spr, attr, cam)
         if draw is None:
             continue
