@@ -293,9 +293,11 @@ def main(argv=None) -> int:
             return 0
         return min(_WIDE_MAX, max(0, (round(200 * sw / sh) - 320 + 1) // 2))
 
-    # Levels where widescreen must stay OFF: their scenery is drawn from off-screen tilemap columns that the
-    # wide margins would reveal. LEVEL A (id 0x09) is the gorilla boss — its alternate faces (calm / roaring)
-    # sit in the columns just right of the 320 window and pop into view widescreen.
+    # Levels that must render in the plain 4:3 pipeline. LEVEL A (id 0x09) is the gorilla boss: (a) its alternate
+    # faces (calm / roaring) sit in the tilemap columns just right of the 320 window, so widescreen margins reveal
+    # them; and (b) its fight only plays right faithfully (verified: it works with widescreen OFF). Gameplay on
+    # these levels uses the faithful stream path (see `enhance_ok`); any enhanced compose that still runs at level
+    # start (the curtain reveal) is forced to margin 0 by `_margin_for` so the boss-face tiles never bleed in.
     _WS_EXCLUDE_LEVELS = {0x09}
 
     def _margin_for(state) -> int:
@@ -1171,12 +1173,16 @@ def main(argv=None) -> int:
                 # death-BOUNCE frame — object motion) lerps; a transition frame (cave curtain, death fade +
                 # checkpoint curtain, scene) streams 1:1 and breaks the lerp pair. So the parabolic death arc
                 # smooths out (each of its 60 frames is a lerp tick) while wipes stay faithful.
+                # Some levels ALWAYS render faithfully (no enhanced compose / interpolation / smooth transitions):
+                # LEVEL A (0x09) is the gorilla boss whose fight only plays right in the plain 4:3 pipeline
+                # (widescreen also bleeds its boss-face tiles). Matches the verified-working non-widescreen case.
+                enhance_ok = state.data[DS + 0x2D8A] not in _WS_EXCLUDE_LEVELS
                 _it = iter(native_frame_step_tagged(state, dos, disp, game_root=gr))
                 for planes, page, interp_ok, tx in _it:
                     # A SMOOTH transition run: drain the whole transition (state advances to the destination),
                     # then present it present-time full-width (fade -> black -> curtain). The preceding bounce
                     # frames (interp) were already presented + stashed as the fade base (enh.last_cur).
-                    if _smooth_active() and tx is not None:
+                    if enhance_ok and _smooth_active() and tx is not None:
                         run = [(planes, page, interp_ok, tx)]
                         run.extend(_it)
                         present_smooth_tx_run(state, dos, run)
@@ -1184,7 +1190,7 @@ def main(argv=None) -> int:
                     # Enhanced present path when interpolation OR widescreen is on (widescreen needs the composed
                     # wide frame even unlerped); a transition frame streams faithful 1:1 (smooth off) and breaks
                     # the lerp pair.
-                    if (settings["interpolation"] or settings["widescreen"]) and interp_ok:
+                    if enhance_ok and (settings["interpolation"] or settings["widescreen"]) and interp_ok:
                         present_interpolated(planes, page)
                         pump()
                         if native_audio is not None:
