@@ -582,7 +582,9 @@ def main(argv=None) -> int:
     _tx = {"tex": None, "bg": None}
 
     def _smooth_active() -> bool:
-        return settings["smooth_transitions"] and wide_margin() > 0
+        # Smooth transitions are INDEPENDENT of widescreen: they re-author the curtain/iris/fade present-time
+        # (frame-rate-independent) at whatever width the compose runs (320 when widescreen is off, wide when on).
+        return bool(settings["smooth_transitions"])
 
     def compose_wide_now(state, dos):
         """Compose the CURRENT gameplay state as a widescreen RGB frame (static, alpha=1). Returns

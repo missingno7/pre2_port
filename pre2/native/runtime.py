@@ -273,9 +273,9 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
 
 
 def _emit_sfx(state, idx):
-    from pre2.native.audio import native_play_sfx
+    from pre2.native.audio import native_play_sfx, player_sfx_x
     try:
-        native_play_sfx(state, idx)                               # queue ONE sfx index (native_emit_sfx wants a list)
+        native_play_sfx(state, idx, player_sfx_x(state))          # queue ONE sfx index, panned to the player
     except Exception:                                             # noqa: BLE001 — audio is not gameplay
         pass
 

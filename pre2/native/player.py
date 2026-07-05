@@ -106,8 +106,8 @@ def native_player_step(state) -> None:
     writes, sfx, scroll = player_fsm_step(rb, rw)                       # [asm 58A7] FSM (sfx = jump/land/... sounds)
     for a, v in writes.items():
         _w(state, a, v, 2 if a in FSM_WORD_FIELDS else 1)
-    from pre2.native.audio import native_emit_sfx
-    native_emit_sfx(state, sfx)                                        # emit the FSM's play_sfx commands
+    from pre2.native.audio import native_emit_sfx, player_sfx_x
+    native_emit_sfx(state, sfx, player_sfx_x(state))                   # emit the FSM's play_sfx commands (jump/throw)
     if scroll:                                                         # idle look-around pan (anim13)
         from pre2.bridge.camera_pan import apply_camera_pan
         apply_camera_pan(state, scroll)
@@ -141,8 +141,11 @@ def native_player_interaction(state) -> None:
     ~25 pickups) in place: it applies its own writes mid-pass (loop1's results feed loop2's reads), allocates
     object slots via find_free_object_slot, and emits hit/pickup sfx (hurt=3, die=9, ...) via native_play_sfx.
     Every effect path is recovered byte-exact, so — like the live hook — there is no fail-loud branch to guard."""
-    from pre2.native.audio import native_play_sfx
+    from pre2.native.audio import native_play_sfx, player_sfx_x
     rb, rw = readers(state)
     read_id = lambda slot: rw((0x4FD0 + slot * 0x12 + 4) & 0xFFFF)        # noqa: E731 — object render-id reader
-    player_interaction_tick(rb, rw, lambda w: apply_ds(state, w), lambda dl: native_play_sfx(state, dl),
+    # stomp / hurt / pickups all happen AT the player (jumping on / touching the object), so pan them to the
+    # player's on-screen X — a good stand-in for the co-located enemy/item without threading each object out.
+    psx = player_sfx_x(state)
+    player_interaction_tick(rb, rw, lambda w: apply_ds(state, w), lambda dl: native_play_sfx(state, dl, psx),
                             lambda: find_free_object_slot(read_id))

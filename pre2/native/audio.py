@@ -24,6 +24,20 @@ _ORDER_TABLE = 0xDC7      # [asm 22B3] order table (pattern sequence)
 _SFX_DEV_FLAGS = (0x1D6C, 0x1D6D)   # cs: digital-device-present flags (either == 1 -> the SB/digital path)
 
 
+def sfx_screen_x(state, world_x: int) -> int:
+    """The on-screen X (0..320-ish) of a world-space X for the stereo pan: ``world_x - camera``. The camera
+    pixel X is ``[0x2DE4]`` (tiles) * 16. May land <0 or >320 (off-screen); the poll clamps the pan."""
+    d = state.data
+    cam_px = (d[_DS + 0x2DE4] | (d[_DS + 0x2DE5] << 8)) * 16
+    return world_x - cam_px
+
+
+def player_sfx_x(state) -> int:
+    """The player's on-screen X — the pan for the player's own sounds (jump, throw, hurt, death scream, glider)."""
+    d = state.data
+    return sfx_screen_x(state, d[_DS + 0x4F1C] | (d[_DS + 0x4F1D] << 8))
+
+
 def native_play_sfx(state, dl: int, x: "int | None" = None) -> None:
     """[asm 0282] Emit sound effect ``dl`` the way ``play_sfx`` does — reproduce its device dispatch:
 
