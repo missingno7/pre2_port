@@ -642,9 +642,10 @@ def main(argv=None) -> int:
                 ref["switch_level"] = ref.get("menu_level", 0)
                 menu.open = False
 
+            lvl_name = str(lvl + 1) if lvl < 9 else chr(ord("A") + lvl - 9)   # 0..8 -> 1..9, 9..0xF -> A..G
             tabs.append(("Develop", [
                 {"label": "God mode", "value": onoff("god"), "activate": toggle("god")},
-                {"label": "Level", "value": f"id {lvl:#04x}", "adjust": adj_level, "activate": go_level},
+                {"label": "Level", "value": f"LEVEL{lvl_name}", "adjust": adj_level, "activate": go_level},
                 {"label": "Restart level", "value": "reload current", "activate": lambda: (
                     ref.__setitem__("switch_level", "restart"), setattr(menu, "open", False))},
             ]))
