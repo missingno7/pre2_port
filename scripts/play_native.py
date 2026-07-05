@@ -293,18 +293,30 @@ def main(argv=None) -> int:
             return 0
         return min(_WIDE_MAX, max(0, (round(200 * sw / sh) - 320 + 1) // 2))
 
-    # Levels that must render in the plain 4:3 pipeline. LEVEL A (id 0x09) is the gorilla boss: (a) its alternate
-    # faces (calm / roaring) sit in the tilemap columns just right of the 320 window, so widescreen margins reveal
-    # them; and (b) its fight only plays right faithfully (verified: it works with widescreen OFF). Gameplay on
-    # these levels uses the faithful stream path (see `enhance_ok`); any enhanced compose that still runs at level
-    # start (the curtain reveal) is forced to margin 0 by `_margin_for` so the boss-face tiles never bleed in.
-    _WS_EXCLUDE_LEVELS = {0x09}
+    # Levels whose GAMEPLAY must render in the plain 4:3 pipeline (widescreen would reveal off-screen tilemap
+    # columns / break the fight). LEVEL A (0x09) is the gorilla boss — its alternate faces sit just right of the
+    # 320 window and its fight only plays right faithfully (verified: works with widescreen OFF). LEVEL F (0x0E)
+    # likewise. On these, gameplay uses the faithful stream path (see `enhance_ok`); when Widescreen is on we still
+    # give a WIDE HUD via `_widehud_frame` (black gameplay borders + a stretched HUD — "some widescreen feeling").
+    _WS_EXCLUDE_LEVELS = {0x09, 0x0E}
 
     def _margin_for(state) -> int:
-        """wide_margin(), but forced to 0 on levels that can't be widescreened (LEVEL A boss-face tiles)."""
+        """wide_margin(), but forced to 0 on levels that can't be widescreened (LEVEL A/F boss-face tiles)."""
         if state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
             return 0
         return wide_margin()
+
+    def _widehud_frame(rgb, margin: int):
+        """A 4:3-gameplay-with-WIDE-HUD frame: centre the faithful 320 gameplay in a ``320+2*margin`` frame with
+        BLACK side borders (rows 0..175), and edge-extend the HUD strip (rows 176..199) to the full width. Used
+        for the widescreen-excluded boss levels so they keep a widescreen HUD without a widescreen VIEWPORT."""
+        if margin <= 0:
+            return rgb
+        w = 320 + 2 * margin
+        out = np.zeros((rgb.shape[0], w, 3), np.uint8)
+        out[:VIEWPORT_H, margin:margin + 320] = rgb[:VIEWPORT_H]                       # gameplay centred, black sides
+        out[VIEWPORT_H:] = np.pad(rgb[VIEWPORT_H:], ((0, 0), (margin, margin), (0, 0)), mode="edge")  # HUD widened
+        return out
     # ENTER-CODE (password screen): host hex key -> DOS make code. The game maps the DOS make code to a hex char
     # via its own [0xB068] table, so we must feed the make code of the PHYSICAL key position — like the original,
     # which reads raw scancodes. Key by SDL physical scancode (ev.scancode), NOT the keysym (ev.key): the keysym is
@@ -1038,6 +1050,11 @@ def main(argv=None) -> int:
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
             nonlocal n
             rgb = render_planar_rgb_from_planes(planes, page, dos.vga_palette)
+            # Widescreen-excluded levels (LEVEL A/F boss) render the GAMEPLAY faithfully (4:3, black borders) but
+            # still get a WIDE HUD when Widescreen is on — "some widescreen feeling" without the tile-bleed / boss
+            # issues. Pure post-process on the finished 320 frame, so the fight's render + timing are untouched.
+            if settings["widescreen"] and state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
+                rgb = _widehud_frame(np.asarray(rgb, np.uint8), wide_margin())
             n += 1
             present(rgb, args.fps, None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
 
