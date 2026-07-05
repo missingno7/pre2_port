@@ -9,7 +9,8 @@ Host-presentation layer ONLY — the determinism firewall is structural:
     caller passes ``debug=True`` (the --debug flag) — hidden from the end-user product by default.
 
 Items are data (the pre2_editor pattern): ``{"label": str, "value": str, "activate": fn, "adjust": fn(d)}``
-per tab, supplied by a provider so values re-render live. Keys: F10/M/ESC close, Up/Down select,
+per tab, supplied by a provider so values re-render live. An item with ``"info": True`` is a non-interactive
+text row (small dim font, skipped by selection) — used for disclaimers. Keys: F10/M/ESC close, Up/Down select,
 Left/Right adjust (or switch tab when the item has no ``adjust``), Tab/PgUp/PgDn switch tab,
 Enter/Space activate.
 
@@ -22,6 +23,17 @@ from typing import Any, Callable
 
 Item = dict[str, Any]
 TabsProvider = Callable[[], "list[tuple[str, list[Item]]]"]
+
+
+def _step_selectable(items, current: int, direction: int) -> int:
+    """Next selectable (non-info) item index in ``direction``, wrapping; stays put if none are selectable."""
+    if not items:
+        return 0
+    for step in range(1, len(items) + 1):
+        i = (current + direction * step) % len(items)
+        if not items[i].get("info"):
+            return i
+    return current
 
 _PANEL_BG = (12, 14, 18, 230)          # editor: translucent near-black panel
 _PANEL_BORDER = (180, 180, 180)
@@ -71,9 +83,9 @@ class OverlayMenu:
             self.open = False
             return False
         if event.key in (pg.K_UP, pg.K_w):
-            self.item = (self.item - 1) % max(1, len(items))
+            self.item = _step_selectable(items, self.item, -1)
         elif event.key in (pg.K_DOWN, pg.K_s):
-            self.item = (self.item + 1) % max(1, len(items))
+            self.item = _step_selectable(items, self.item, 1)
         elif event.key in (pg.K_PAGEUP, pg.K_q):
             self.tab = (self.tab - 1) % len(names)
             self.item = 0
@@ -134,11 +146,19 @@ class OverlayMenu:
             screen.blit(surf, surf.get_rect(center=chip.center))
             tab_x += chip.width + 6
 
-        # rows — label/value vertically centred in the row band (matches the selection bar)
+        # rows — label/value vertically centred in the row band (matches the selection bar);
+        # "info" rows are non-interactive text (small dim font, no value, never selected)
+        if items and items[self.item].get("info"):
+            self.item = _step_selectable(items, self.item, 1)
         row_y, row_h = y + 76, 26
         for i, item in enumerate(items):
-            selected = i == self.item
             row = pg.Rect(x + 16, row_y, panel_w - 32, row_h)
+            if item.get("info"):
+                text = small.render(str(item.get("label", "")), True, _HELP)
+                screen.blit(text, text.get_rect(midleft=(x + 26, row.centery)))
+                row_y += row_h
+                continue
+            selected = i == self.item
             if selected:
                 pg.draw.rect(screen, _ROW_SELECTED, row)
             label = (bold if selected else font).render(str(item.get("label", "")), True,

@@ -147,7 +147,7 @@ def main(argv=None) -> int:
     settings_path = Path(gr) / "pre2native_settings.json"
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
                 "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
-                "widescreen": False, "fullscreen": False}
+                "widescreen": False, "fullscreen": False, "true_widescreen": False}
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -656,7 +656,18 @@ def main(argv=None) -> int:
             {"label": "Music", "value": onoff("music"), "activate": toggle("music", _audio_apply_settings)},
             {"label": "Sound effects", "value": onoff("sfx"), "activate": toggle("sfx", _audio_apply_settings)},
         ]
-        tabs = [("View", view_tab), ("Audio", audio_tab)]
+        experimental_tab = [
+            {"label": "True widescreen", "value": onoff("true_widescreen"), "activate": toggle("true_widescreen")},
+            {"label": "", "info": True},
+            {"label": "These options change what the game shows beyond the original,", "info": True},
+            {"label": "so the picture is no longer accurate to the DOS original.", "info": True},
+            {"label": "Game logic stays untouched (recordings/verification unaffected).", "info": True},
+            {"label": "", "info": True},
+            {"label": "True widescreen: draw enemies/objects in the widescreen margins", "info": True},
+            {"label": "instead of them appearing at the original screen edge.", "info": True},
+            {"label": "(Needs Widescreen on. Distant spawns may still pop in.)", "info": True},
+        ]
+        tabs = [("View", view_tab), ("Audio", audio_tab), ("Experimental", experimental_tab)]
         if args.debug:
             lvl = ref.get("menu_level", 0)
 
@@ -758,7 +769,8 @@ def main(argv=None) -> int:
                     state.data[DS + off + 5] |= 0x40
             try:
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
-                                             tex_cache=enh["tex"], effects=fx, margin=wide_margin())
+                                             tex_cache=enh["tex"], effects=fx, margin=wide_margin(),
+                                             wide_cull=settings["true_widescreen"])
             finally:
                 if saved is not None:
                     for off, v in saved:

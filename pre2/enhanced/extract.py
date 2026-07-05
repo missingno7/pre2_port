@@ -25,8 +25,8 @@ from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache,
                                              native_background_indices)
 from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
-from pre2.recovered.object_render import (LIST_TOP, MODE_ERASE, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, paint_sprite,
-                                          plan_sprite, plan_sprite_command)
+from pre2.recovered.object_render import (LIST_TOP, MODE_ERASE, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, _s16,
+                                          paint_sprite, plan_sprite, plan_sprite_command)
 from pre2.recovered.fireflies import _sar
 from pre2.recovered.particles import advance_particle
 from pre2.recovered.render_frame import ASSET_LO, render_frame
@@ -131,6 +131,28 @@ def _indices_window(planes, page, x0, y0, w, h, stride=_STRIDE):
     return color.reshape(h, nbc * 8)[:, sx:sx + w]
 
 
+def _replan_wide(spr, attr, cam, margin):
+    """TRUE-WIDESCREEN re-admission (Experimental): the faithful planner culls a record whose sprite lies
+    outside the original 320px window; when the record exists in the render list but only fails the X-window
+    cull, replan it as if it were on-screen and give back its real placement. READ-ONLY — the game's state
+    (including the render list) is never touched; this only widens the presentation cull, so record/state
+    digests stay byte-exact. The trick: shift the camera by WHOLE TILES (16px, preserving ``screen_x & 7``)
+    to bring the sprite into the faithful window, plan there (mode/blink/flip/Y-cull all evaluated by the
+    UNMODIFIED recovered planner), then shift the resulting placement back. Returns ``(cmd, k_tiles)`` or
+    None (record empty / outside the wide window too / Y-culled)."""
+    if spr.sprite_id == 0xFFFF:
+        return None
+    x_off = attr.width - attr.x_off if (spr.sprite_id & 0x8000) else attr.x_off
+    sx = _s16(spr.x - x_off - cam.cam_x * 16)               # the pre-cull screen X [asm 277A..27B5]
+    if not (-(attr.width + margin) < sx < 320 + margin):    # outside even the WIDE window
+        return None
+    k = (sx - 152) // 16                                    # tile shift landing sx' in [152,167] (mid-window)
+    cmd = plan_sprite_command(spr, attr, replace(cam, cam_x=cam.cam_x + k))
+    if cmd is None:                                          # Y-baseline culled (or empty) even mid-window
+        return None
+    return replace(cmd, screen_x=cmd.screen_x + 16 * k), k
+
+
 def _texture_key(draw, attr):
     """The PALETTE- and POSITION-independent key for a sprite cel: only what changes its pixels -- cel
     identity (src segment + the cel's source offset), the full (unclipped) decoded geometry, flip, and draw
@@ -176,7 +198,8 @@ def _make_sprite_texture(draw, attr, src_bank):
 
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
-                           tex_cache=None, bg_cache=None, margin=0) -> EnhancedFrameState | None:
+                           tex_cache=None, bg_cache=None, margin=0,
+                           wide_cull=False) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -193,9 +216,14 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     tilemap (real level content); every screen-space X (sprites, particles, fireflies, overlay placement) is
     shifted by +margin; the backdrop and HUD strip (no wider source exists) extend by edge-pixel replication.
     The central 320 columns are IDENTICAL to margin=0 (widescreen only ADDS pixels outside the faithful
-    window); entities fully outside the original window pop in at its edge (the game never emits render
-    records for them) — the standard widescreen-mod artifact. margin=0 (the default and the parity path)
-    is byte-identical to the pre-widescreen extractor.
+    window — except the backdrop, which is fit-to-width scaled); entities fully outside the original window
+    pop in at its edge (the game never emits render records for them) — the standard widescreen-mod artifact.
+    margin=0 (the default and the parity path) is byte-identical to the pre-widescreen extractor.
+    ``wide_cull`` (TRUE WIDESCREEN, Experimental) re-admits render records the faithful planner culls at the
+    320px boundary, so entities in the margins draw instead of popping in/out at the faithful edge. Read-only
+    (state digests stay byte-exact) but the PRESENTATION deliberately shows what the original would not.
+    Only records the game's own producers emitted are covered — entities beyond the producers' window still
+    pop in at the wide edge.
     """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
@@ -206,10 +234,11 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     pal_rgb = np.asarray(palette, dtype=np.uint8)
 
     # Backdrop = the FIXED parallax base layer (sky/mountains), de-planarized directly from 0x7E80.
-    # Widescreen: the backdrop is a fixed 320px VRAM image with no wider source -> edge-pixel replication.
+    # Widescreen: the backdrop is a fixed 320px image with no wider source -> FIT TO WIDTH: scale the viewport
+    # portion up to the wide width (nearest-neighbour, preserving aspect) and centre-crop the height overflow.
     backdrop_rgb = _render_backdrop(rs, page, palette)
     if margin:
-        backdrop_rgb = np.pad(backdrop_rgb, ((0, 0), (margin, margin), (0, 0)), mode="edge")
+        backdrop_rgb = _fit_backdrop_width(backdrop_rgb, 320 + 2 * margin)
 
     # Background colour INDICES over a zeroed base: every base-showing pixel is index 0, opaque tile/effect
     # pixels keep their (base-independent) colour. So tile_mask = index!=0 is the TRUE tile coverage
@@ -300,8 +329,15 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         if attr is None:
             continue
         cmd = plan_sprite_command(spr, attr, cam)
+        kshift = 0
         if cmd is None:
-            continue
+            if wide_cull and margin:                        # TRUE WIDESCREEN: re-admit an X-culled record
+                res = _replan_wide(spr, attr, cam, margin)
+                if res is None:
+                    continue
+                cmd, kshift = res
+            else:
+                continue
         mode = int(cmd.mode)
         if mode not in (MODE_NORMAL, MODE_OPAQUE, MODE_ERASE):
             unsupported.append((slot, cmd.base_id, _MODE_NAME.get(mode, hex(mode))))
@@ -318,7 +354,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         # (0px over-draw at shift 0, growing to a ~9px black fringe at shift 7 = screen_x & 7). Pure over-draw, so
         # no holes; the blink reads as a slightly-oversized black silhouette. An exact fix needs a per-shift /
         # background-dependent erase paint (also handling the player+club dual blink + edge clip); deferred.
-        draw = plan_sprite(spr, attr, cam)
+        # For a re-admitted (true-widescreen) record, plan the raster geometry at the SHIFTED camera (the
+        # sprite is mid-window there -> unclipped); the texture key/bake are position-independent.
+        draw = plan_sprite(spr, attr, cam if kshift == 0 else replace(cam, cam_x=cam.cam_x + kshift))
         if draw is None:
             continue
         key = _texture_key(draw, attr)
@@ -379,3 +417,20 @@ def _render_backdrop(rs, page, palette):
         for p in range(4):
             planes[p][ASSET_LO:ASSET_LO + len(rs.asset_planes[p])] = rs.asset_planes[p]
     return render_planar_rgb_from_planes(planes, _BACKDROP_BASE, palette)
+
+
+def _fit_backdrop_width(backdrop, wide_w: int):
+    """Widescreen backdrop: scale the 320-wide image to ``wide_w`` PRESERVING aspect (nearest-neighbour — it's
+    pixel art) and centre-crop the height overflow, so the parallax layer fills the wide frame as one coherent
+    picture instead of edge-pixel smears. Only the gameplay VIEWPORT rows matter (the HUD strip below is
+    overwritten with palette[0] by the caller); the returned image keeps the input's 200-row height."""
+    in_h, in_w = backdrop.shape[:2]
+    s = wide_w / in_w
+    xs = np.minimum((np.arange(wide_w) / s).astype(np.intp), in_w - 1)
+    vp_out = np.minimum(int(round(VIEWPORT_H * s)), in_h)     # scaled viewport height (>= VIEWPORT_H)
+    top = (vp_out - VIEWPORT_H) // 2                          # centre-crop the vertical overflow
+    ys = np.minimum(((np.arange(VIEWPORT_H) + top) / s).astype(np.intp), in_h - 1)
+    out = np.empty((in_h, wide_w, 3), dtype=backdrop.dtype)
+    out[:VIEWPORT_H] = backdrop[ys][:, xs]
+    out[VIEWPORT_H:] = backdrop[VIEWPORT_H:, xs]              # HUD rows: placeholder (caller overwrites)
+    return out

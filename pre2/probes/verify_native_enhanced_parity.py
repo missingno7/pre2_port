@@ -132,9 +132,12 @@ def main() -> int:
     print(f"  full sweep: {60 - fails}/60 ticks pixel-exact vs native_render (worst diff {worst}px)")
     total += fails
 
-    # WIDESCREEN invariant: a wide extract's central 320 columns must be pixel-IDENTICAL to margin=0
-    # (widescreen only ADDS pixels outside the faithful window; margin deliberately not tile-aligned).
-    print("widescreen sweep (margin=54 -> 428px wide), same level, 30 ticks, central-320 crop == margin 0:")
+    # WIDESCREEN invariant: in the wide frame's central 320 columns, every TILE pixel and the HUD strip must
+    # be pixel-IDENTICAL to margin=0, and the sprite set must be structurally identical shifted by +margin
+    # (handle/placement/texture). The BACKDROP is exempt: it is deliberately fit-to-width scaled (crop-height),
+    # so backdrop-showing pixels differ by design. margin deliberately not tile-aligned.
+    print("widescreen sweep (margin=54 -> 428px wide), same level, 30 ticks:")
+    print("  central-320: tile pixels + HUD exact; sprites structurally exact at +54 (backdrop fit-to-width):")
     wfails = wworst = 0
     for t in range(30):
         native_gameplay_frame(state)
@@ -143,13 +146,19 @@ def main() -> int:
         wide = extract_enhanced_frame(state, dos, game_root=GR, with_faithful=False, margin=54)
         if base is None or wide is None:
             continue
+        cb = compose(base, None, 1.0)
         cw = compose(wide, None, 1.0)
         assert cw.shape[1] == 428, cw.shape
-        d = int(np.any(cw[:, 54:374] != compose(base, None, 1.0), axis=2).sum())
+        crop = cw[:, 54:374]
+        d = int((np.any(crop[:VIEW_H] != cb[:VIEW_H], axis=2) & base.tile_mask[:VIEW_H]).sum())
+        d += int(np.any(crop[VIEW_H:] != cb[VIEW_H:], axis=2).sum())        # HUD strip: exact
+        sb = {(i.handle, i.screen_x, i.screen_y, i.rgba.shape) for i in base.sprites}
+        sw = {(i.handle, i.screen_x - 54, i.screen_y, i.rgba.shape) for i in wide.sprites}
+        d += 1000 * len(sb ^ sw)                                            # sprite set: same, shifted +54
         wworst = max(wworst, d)
         if d:
             wfails += 1
-    print(f"  widescreen: {30 - wfails}/30 ticks central-crop exact (worst diff {wworst}px)")
+    print(f"  widescreen: {30 - wfails}/30 ticks exact (worst residual {wworst})")
     total += wfails
 
     print("PASS — the enhanced pipeline is parity-proven over native state" if total == 0
