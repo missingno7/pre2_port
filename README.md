@@ -135,6 +135,9 @@ tick** and compares the full memory image; native reproduces the VM exactly (ren
 
 ## Quickstart
 
+**No Python?** Grab the prebuilt Windows binary from the [latest release](https://github.com/missingno7/pre2_port/releases/latest),
+unzip it into your legal GOG *Prehistorik 2* folder (next to `SPRITES.SQZ`), and run `pre2native.exe`.
+
 ```bash
 # play the recovered game — no emulator, cold boot from the first screen
 python scripts/play_native.py                     # full boot: titles → menu → play
