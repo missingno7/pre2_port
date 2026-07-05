@@ -306,28 +306,32 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
             cache.put(key, tex)
         rgba = cache.colorize(key, tex, palette, pversion)   # apply the current palette (memoised per version)
         rec_off = LIST_TOP - slot * RECORD_BYTES                 # this record's DS offset (top-down list)
+        # MOTION always = the record's own [+0]/[+2] (cmd.world_x/world_y) — the quantity screen_x/screen_y
+        # are derived from, so the interpolation rewind is consistent with the drawn position for EVERY class.
+        # (The earlier attempt to read motion from the owning ENTRY was a scale/space mismatch: entry[+9] and
+        # the projected record[+0] differ, so a moving enemy blitted at screen_x while rewinding by the entry
+        # delta = broken/absent interpolation — the "monster not interpolated" report.) IDENTITY is separate:
+        # take it from the owning object so it survives active-list compaction.
         wx, wy = cmd.world_x, cmd.world_y
         if rec_off == _PLAYER_REC:
             handle = ("player",)                                 # fixed record: [+6] is the Xvel, not a pointer
         elif rec_off == _CLUB_REC:
-            handle = ("club",)                                   # the attack overlay: rigidly player-attached,
-            d = mem.data                                         # so its MOTION is the player's world position
-            wx = d[_DS_BASE + _PLAYER_REC] | (d[_DS_BASE + _PLAYER_REC + 1] << 8)
+            handle = ("club",)                                   # the attack overlay's OWN slot swings by attack
+            d = mem.data                                         # pose (31->35->65px) — that is pose, not motion,
+            wx = d[_DS_BASE + _PLAYER_REC] | (d[_DS_BASE + _PLAYER_REC + 1] << 8)  # so its motion is the player's
             wy = d[_DS_BASE + _PLAYER_REC + 2] | (d[_DS_BASE + _PLAYER_REC + 3] << 8)
         else:
             d = mem.data
             owner = d[_DS_BASE + rec_off + 6] | (d[_DS_BASE + rec_off + 7] << 8)   # [+6] back-pointer (7F26)
             src9 = d[_DS_BASE + rec_off + 9] | (d[_DS_BASE + rec_off + 10] << 8)   # [+9] source back-ref (8922)
-            if _ENTITY_LO <= owner < _ENTITY_HI:                 # a projected entity: true identity + world
-                handle = ("ent", owner)
-                wx = d[_DS_BASE + owner + 9] | (d[_DS_BASE + owner + 10] << 8)     # [entry+9]  world X
-                wy = d[_DS_BASE + owner + 0xB] | (d[_DS_BASE + owner + 0xC] << 8)  # [entry+0xB] world Y
+            if _ENTITY_LO <= owner < _ENTITY_HI:                 # a projected 2nd-pass entity (enemies etc.)
+                handle = ("ent", owner)                          #   identity = the owning entry (stable)
             elif _FX_REC_LO <= rec_off < _FX_REC_HI and _FX_SRC_LO <= src9 < _ENTITY_HI:
                 handle = ("fx", src9)                            # 8922-projected effect (bonus items/popups):
-                #  identity = the float-effect SOURCE entry it was projected from — the effect sub-list
-                #  COMPACTS every tick as items scroll in/out, so record-address identity slid one item's
-                #  motion onto its neighbour (the classic slot-jitter); the source ref is instance-stable.
-            else:                                                # producer record: slot-stable identity
+                #  identity = the float-effect SOURCE entry — the effect sub-list COMPACTS every tick as items
+                #  scroll in/out, so record-address identity slid one item's motion onto its neighbour (the
+                #  classic slot-jitter); the source ref is instance-stable across compaction.
+            else:                                                # producer/object record: slot-stable identity
                 handle = ("rec", rec_off)
         sprites.append(SpriteInstance(handle=handle, slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
                                       world_x=wx, world_y=wy,
