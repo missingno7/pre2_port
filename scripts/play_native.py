@@ -186,7 +186,8 @@ def main(argv=None) -> int:
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
                 "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
                 "widescreen": False, "fullscreen": False, "true_widescreen": False,
-                "smooth_transitions": False, "hud_align": "center"}   # widescreen HUD: left / center / right
+                "smooth_transitions": False, "hud_align": "center",   # widescreen HUD: left / center / right
+                "overlay_scale": "auto"}   # F10 menu size: "auto" (by window) or 100/150/200/300 (%)
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -387,7 +388,14 @@ def main(argv=None) -> int:
 
     def _ui_scale() -> float:
         """The F10-overlay UI scale, so it stays a readable PHYSICAL size on hi-DPI / 4K / fullscreen windows
-        (the window is now DPI-aware = real pixels). Proportional to the window height, clamped."""
+        (the window is now DPI-aware = real pixels). "auto" = proportional to the window height (clamped);
+        else the user's fixed percentage (100/150/200/300)."""
+        os_scale = settings.get("overlay_scale", "auto")
+        if os_scale != "auto":
+            try:
+                return max(0.5, float(os_scale) / 100.0)
+            except (TypeError, ValueError):
+                pass
         h = view["screen"].get_size()[1]
         return max(1.0, min(3.5, h / 600.0))
 
@@ -889,6 +897,17 @@ def main(argv=None) -> int:
             settings["hud_align"] = _HUD_ALIGNS[(i + d) % len(_HUD_ALIGNS)]
             save_settings()
 
+        _MENU_SCALES = ["auto", 100, 150, 200, 300]
+
+        def adj_menu_scale(d):
+            cur = settings.get("overlay_scale", "auto")
+            i = _MENU_SCALES.index(cur) if cur in _MENU_SCALES else 0
+            settings["overlay_scale"] = _MENU_SCALES[(i + d) % len(_MENU_SCALES)]
+            save_settings()
+
+        _sc = settings.get("overlay_scale", "auto")
+        menu_scale_label = "Auto" if _sc == "auto" else f"{_sc}%"
+
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
             {"label": "Frame cap", "value": cap_label, "adjust": adj_cap, "activate": lambda: adj_cap(1)},
@@ -899,6 +918,8 @@ def main(argv=None) -> int:
              "activate": lambda: set_fullscreen(not settings["fullscreen"])},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
+            {"label": "Menu scale", "value": menu_scale_label, "adjust": adj_menu_scale,
+             "activate": lambda: adj_menu_scale(1)},
         ]
         audio_tab = [
             {"label": "Music", "value": onoff("music"), "activate": toggle("music", _audio_apply_settings)},
@@ -1105,6 +1126,9 @@ def main(argv=None) -> int:
                 print(f"menu: switching to level id {lvl:#04x}")
                 state = native_cold_boot(gr, level=lvl)
                 native_load_level_palette(state, dos)
+                from pre2.native.audio import native_level_song_name, native_load_song
+                native_load_song(state, native_level_song_name(state), gr)   # the NEW level's song (else the
+                #                                                              previous level's music keeps playing)
                 reveal_level(state, dos)
             if args.debug and settings["god"]:                     # Develop tab: keep the energy topped up
                 state.data[DS + 0x27D6] = 3                        # [asm 52a8] full hearts, refreshed pre-tick
