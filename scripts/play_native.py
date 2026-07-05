@@ -95,9 +95,12 @@ def main(argv=None) -> int:
                          "oracle's first gameplay tick, per-tick keys injected, gameplay digest checked vs the VM "
                          "every tick. Otherwise falls back to APPROXIMATE scancode replay (cold boot + live keys "
                          "merged; front-end timing drifts).")
-    ap.add_argument("--game-root", default=str(ROOT / "assets"),
+    # Frozen exe: look for the game data NEXT TO the .exe (drop it into the GOG folder and run). Source run:
+    # the repo's assets/. (ROOT is the PyInstaller temp extraction dir when frozen, so it can't hold the data.)
+    _default_game_root = str(Path(sys.executable).parent) if getattr(sys, "frozen", False) else str(ROOT / "assets")
+    ap.add_argument("--game-root", default=_default_game_root,
                     help="folder with the game data files (*.SQZ/*.TRK — e.g. the GOG Prehistorik 2 install "
-                         "dir); default: the repo's assets/")
+                         "dir); default: next to the .exe (frozen) or the repo's assets/ (source)")
     ap.add_argument("--fps", type=float, default=None,
                     help="gameplay tick-rate cap; default = the faithful 70/3 Hz (~23.33 — the original's "
                          "main loop waits 3 VGA retraces per tick)")
