@@ -94,9 +94,9 @@ Small and honest — **none block a normal cold-boot → credits playthrough:**
 - **A few rare edge-case paths still fail loud** (`Pre2HybridGap`) rather than run: an exotic bonus-level
   table-warp variant, and two defensive camera-pan guards on cave transitions. The normal path never
   reaches them; failing loud is deliberate (an unrecovered path is never silently faked).
-- **One cosmetic loader is deferred:** the `0x9dc0` parallax-background blit (its source over-reads past
-  the level data into the neighbouring allocation — a memory-layout coupling). Gameplay state is correct —
-  only that background layer is absent.
+- **No known missing visuals.** (The long-listed "`0x9dc0` parallax blit" turned out to be the loader's
+  level-data stash/restore through spare VRAM — a memory-reuse trick with no net effect, which native's
+  pure asset decode correctly sidesteps.)
 - **The state-view refactor is an in-progress internal sweep** (moving raw memory offsets out of the
   recovered logic into a named view layer). No gameplay or visual effect.
 

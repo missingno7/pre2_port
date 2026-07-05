@@ -104,9 +104,9 @@ def main() -> int:
     }
     for name, good in checks.items():
         print(f"  {'OK  ' if good else 'FAIL'} {name}")
-    # still-deferred halves (reported for scope, not asserted): the 3ead/41ca high-memory writes + the 0x9dc0
-    # parallax blit (its source over-reads past the level data into the next bump allocation — memory-layout).
-    print("  (deferred: 3ead/41ca high-mem + 0x9dc0 parallax)")
+    # 3ead + 41ca are recovered and live; the "0x9dc0 parallax" was a mislabel — [asm 3f8d-3ff7] is the
+    # loader's level-data STASH/RESTORE through spare VRAM around the shared-bank build (net no-op the pure
+    # native decode sidesteps; see native_level_load's docstring). Nothing remains deferred in the loader.
     ok = all(checks.values())
     print("native level-load (DGROUP + object tables):", "PASS (byte-exact vs ASM)" if ok else "FAIL")
     return 0 if ok else 1

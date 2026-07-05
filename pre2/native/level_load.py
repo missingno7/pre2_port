@@ -434,9 +434,16 @@ def native_level_load(state, level: int, *, game_root: str) -> None:
     42af 0 diff). The ``3ead`` secret-tile self-patch and the ``41ca`` proximity-scenery bank build are both
     recovered and live (``_self_patch_secret_tiles`` / ``_build_trigger_bank`` in ``native_level_load_objects``;
     the [+6]=0xFFFF-at-gameplay mystery resolved: the 4065 dup precedes 41ca, so 5237's 5251 backup-restore
-    reverts [+6] at level start and every respawn). Still TODO: the ``0x9dc0`` parallax-background blit (its
-    source over-reads past the level data into the next bump allocation, a memory-layout coupling — not just the
-    level file). Tracked in [[pre2-level-init-island]]."""
+    reverts [+6] at level start and every respawn).
+
+    The long-mislabelled "0x9dc0 parallax blit" is NOT a gap: [asm 3f8d-3ff7] is the loader's STASH/RESTORE of
+    the level data through spare VRAM (park 4x0x6240 bytes at A000:0x9dc0, decode the shared sprite bank OVER
+    the level segment as scratch, copy the level data back) — a 64KB-era memory-reuse trick whose net effect on
+    the level segment is nil. 0x9dc0..0x10000 sits above the display pages and the 0x7E80 sky; the renderer
+    never reads it, and the two 0x9dc0 references (3f9d write / 3fee read) are the only ones in the code
+    segment. Native's pure shared-bank decode never clobbers the level segment, so the stash pair is correctly
+    absent; the post-load byte-exact witnesses above prove the equivalent end state. NOTHING remains deferred
+    in the loader."""
     native_level_load_dgroup(state, level, game_root=game_root)
     # [asm 3f8d] the parallax blit runs HERE — right after the LEVEL<n> load, BEFORE UNION/BACK0. LEVEL<n>.SQZ
     # decodes LARGER than its reserved paragraphs ([0x2875] bump), so the blit's 4-plane over-read past the reserve

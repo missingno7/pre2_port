@@ -43,7 +43,7 @@ machine); digital SFX + per-level music; and the front-end flow (intro/titles/at
 - a few rare edge-case gameplay paths still fail loud rather than run (e.g. the game-over-via-respawn tail
   `506c`, a vertically/horizontally blocked cave-pan);
 - the level-end tally shows the exact score/percent but not yet the animated count-up *cutscene* (`4CCB`);
-- some deferred loader/render decor (parallax detail `0x9dc0`, trigger-sprite/self-patch visuals);
+- (loader decor fully recovered: 3ead self-patch, 41ca trigger bank + 52D2 restore; the `0x9dc0` "parallax" was a mislabel — the loader's level-data stash/restore through spare VRAM, a net no-op native sidesteps);
 - SoundBlaster/DMA/PIC emulation (`dos_re`) is the audio **oracle**; a fully recovered `AudioSystem` (below)
   is the remaining audio lift.
 
