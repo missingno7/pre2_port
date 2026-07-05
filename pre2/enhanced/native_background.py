@@ -112,25 +112,26 @@ class _HudCache:
 
 
 def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudCache,
-                              margin: int = 0) -> np.ndarray:
-    """The full 200x(320+2*margin) background colour-index image (``idx0``), built natively from ``rs`` -- the
-    drop-in replacement for ``render_frame(rebuild) -> deplanarize`` over a zeroed base. Raises
-    :class:`NativeBackgroundUnsupported` for anything the native path doesn't cover (-> explicit faithful
-    fallback). Palette-independent (indices); the caller colourises.
+                              margin_left: int = 0, margin_right: int = 0) -> np.ndarray:
+    """The full 200x(320+margin_left+margin_right) background colour-index image (``idx0``), built natively
+    from ``rs`` -- the drop-in replacement for ``render_frame(rebuild) -> deplanarize`` over a zeroed base.
+    Raises :class:`NativeBackgroundUnsupported` for anything the native path doesn't cover (-> explicit
+    faithful fallback). Palette-independent (indices); the caller colourises.
 
-    ``margin`` (px each side) is the WIDESCREEN extension: the tilemap is 256 tiles wide per row (row stride
-    0x100), so extra columns beyond the faithful 20-column window are sampled straight from the map -- real
-    level content the original camera never showed. The sampled map column is clamped to [0, 255] (never wraps
-    into the adjacent row); at a level's edge that repeats the boundary column. The HUD strip has no wider
-    source, so it extends by edge-pixel replication."""
+    ``margin_left``/``margin_right`` (px) are the WIDESCREEN extension: the tilemap is 256 tiles wide per row
+    (row stride 0x100), so extra columns beyond the faithful 20-column window are sampled straight from the
+    map -- real level content the original camera never showed. The sampled map column is clamped to [0, 255]
+    (never wraps into the adjacent row); the caller paints beyond-the-world pixels black over this. The HUD
+    strip has no wider source, so it extends by edge-pixel replication."""
     fine = rs.fine_scroll & 0xFF
     if fine > GRID_H - VIEWPORT_H:                        # fine scroll beyond one tile -> not steady gameplay
         raise NativeBackgroundUnsupported(f"fine_scroll {fine} out of range")
     if not rs.asset_planes or not rs.tiles:
         raise NativeBackgroundUnsupported("no tile assets")
     ver = tile_cache.asset_version(rs.asset_planes)
-    mcols = (margin + TILE - 1) // TILE                   # whole extra tile columns per side
-    gcols = VISIBLE_COLS + 2 * mcols
+    mcols_l = (margin_left + TILE - 1) // TILE            # whole extra tile columns per side
+    mcols_r = (margin_right + TILE - 1) // TILE
+    gcols = VISIBLE_COLS + mcols_l + mcols_r
     grid = np.zeros((GRID_H, gcols * TILE), dtype=np.uint8)
     tiles, flag_tbl, anim_xlat, blit_type = rs.tiles, rs.flag_tbl, rs.anim_xlat, rs.blit_type
     cy, cx = rs.camera_y, rs.camera_x
@@ -138,7 +139,7 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
         row_base = ((cy + r) * 0x100) & 0xFFFF
         y = r * TILE
         for c in range(gcols):
-            col = min(max(cx + c - mcols, 0), 0xFF)       # clamp: stay within THIS map row (edge-repeat)
+            col = min(max(cx + c - mcols_l, 0), 0xFF)     # clamp: stay within THIS map row
             tid = tiles[(row_base + col) & 0xFFFF]
             if flag_tbl[tid] != 0:                       # animated tile -> current-frame remap
                 gid = anim_xlat[tid]
@@ -147,10 +148,11 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
             else:
                 gid = tid
             grid[y:y + TILE, c * TILE:c * TILE + TILE] = tile_cache.get(gid, ver, rs.asset_planes)
-    w = 320 + 2 * margin
-    x0 = mcols * TILE - margin                            # crop the tile-aligned grid to the pixel margin
+    w = 320 + margin_left + margin_right
+    x0 = mcols_l * TILE - margin_left                     # crop the tile-aligned grid to the pixel margins
     idx0 = np.empty((200, w), dtype=np.uint8)
     idx0[:VIEWPORT_H] = grid[fine:fine + VIEWPORT_H, x0:x0 + w]
     strip = hud_cache.strip(rs, tile_cache.stats)
-    idx0[VIEWPORT_H:] = np.pad(strip, ((0, 0), (margin, margin)), mode="edge") if margin else strip
+    idx0[VIEWPORT_H:] = (np.pad(strip, ((0, 0), (margin_left, margin_right)), mode="edge")
+                         if (margin_left or margin_right) else strip)
     return idx0
