@@ -187,7 +187,8 @@ def main(argv=None) -> int:
                 "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
                 "widescreen": False, "fullscreen": False, "true_widescreen": False,
                 "smooth_transitions": False, "hud_align": "center",   # widescreen HUD: left / center / right
-                "overlay_scale": "auto"}   # F10 menu size: "auto" (by window) or 100/150/200/300 (%)
+                "overlay_scale": "auto",   # F10 menu size: "auto" (by window) or 100/150/200/300 (%)
+                "widescreen_bg": "stretch"}   # widescreen backdrop margins: stretch / mirror / black
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -575,7 +576,8 @@ def main(argv=None) -> int:
         m = wide_margin()
         efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
                                      bg_cache=_tx["bg"], effects=fx, margin=m,
-                                     wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"])
+                                     wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"],
+                                     bg_mode=settings["widescreen_bg"])
         if efs is None:
             return None
         return compose(efs, None, 1.0), m, efs
@@ -913,10 +915,19 @@ def main(argv=None) -> int:
         _sc = settings.get("overlay_scale", "auto")
         menu_scale_label = "Auto" if _sc == "auto" else f"{_sc}%"
 
+        _BG_MODES = ["stretch", "mirror", "black"]     # widescreen backdrop margin fill
+
+        def adj_bg(d):
+            i = _BG_MODES.index(settings["widescreen_bg"]) if settings["widescreen_bg"] in _BG_MODES else 0
+            settings["widescreen_bg"] = _BG_MODES[(i + d) % len(_BG_MODES)]
+            save_settings()
+
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
             {"label": "Frame cap", "value": cap_label, "adjust": adj_cap, "activate": lambda: adj_cap(1)},
             {"label": "Widescreen", "value": onoff("widescreen"), "activate": toggle("widescreen")},
+            {"label": "Widescreen backdrop", "value": settings["widescreen_bg"].capitalize(),
+             "adjust": adj_bg, "activate": lambda: adj_bg(1)},
             {"label": "HUD position", "value": settings["hud_align"].capitalize(),
              "adjust": adj_hud, "activate": lambda: adj_hud(1)},
             {"label": "Fullscreen", "value": onoff("fullscreen"),
@@ -1050,7 +1061,8 @@ def main(argv=None) -> int:
             try:
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
                                              tex_cache=enh["tex"], effects=fx, margin=wide_margin(),
-                                             wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"])
+                                             wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"],
+                                             bg_mode=settings["widescreen_bg"])
             finally:
                 if saved is not None:
                     for off, v in saved:
