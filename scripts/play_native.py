@@ -39,6 +39,9 @@ DS = 0x1A0F << 4
 _FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its FrontEndScene frames are per-retrace)
 _TRANSITION_FPS = 30          # curtains/fades: the VM's 3054/30C6 are vsync-paced sub-frame effects that span
 #                               ~20 retraces (~0.34s); presenting the ~11 reveal steps at 70Hz was ~2x too fast.
+TICK_HZ = 70.0 / 3.0          # the game's own tick rate: the 1C6F frame limiter waits 3 PIT/retrace periods per
+#                               main-loop tick (70Hz VGA / 3) — the faithful gameplay pacing (~23.33Hz). The old
+#                               default of 24 was a ~3% -fast approximation of this.
 
 
 class DemoInput:
@@ -88,10 +91,13 @@ def main(argv=None) -> int:
     ap.add_argument("--game-root", default=str(ROOT / "assets"),
                     help="folder with the game data files (*.SQZ/*.TRK — e.g. the GOG Prehistorik 2 install "
                          "dir); default: the repo's assets/")
-    ap.add_argument("--fps", type=int, default=24,
-                    help="gameplay tick-rate cap; default ~24Hz (the main loop waits 3 VGA retraces)")
+    ap.add_argument("--fps", type=float, default=None,
+                    help="gameplay tick-rate cap; default = the faithful 70/3 Hz (~23.33 — the original's "
+                         "main loop waits 3 VGA retraces per tick)")
     ap.add_argument("--scale", type=int, default=2)
     args = ap.parse_args(argv)
+    if args.fps is None:
+        args.fps = TICK_HZ                              # faithful pacing unless the user overrides
 
     import numpy as np
     import pygame
@@ -121,7 +127,16 @@ def main(argv=None) -> int:
     pygame.init()
     view = {"screen": pygame.display.set_mode((320 * args.scale, 200 * args.scale), pygame.RESIZABLE)}
     clock = pygame.time.Clock()
-    ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False}
+    # The MONITOR refresh rate — the presentation clock the (future) interpolation presents at. The game TICK
+    # stays locked at TICK_HZ regardless; only how many interpolated frames are shown per tick depends on this.
+    try:
+        display_hz = float(pygame.display.get_current_refresh_rate())     # pygame >= 2.2
+    except Exception:                                                     # noqa: BLE001 — older pygame / headless
+        display_hz = 0.0
+    if display_hz <= 0:
+        display_hz = 60.0                                                # safe fallback
+    print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
+    ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz}
     # ENTER-CODE (password screen): host hex key -> DOS make code. The game maps the DOS make code to a hex char
     # via its own [0xB068] table, so we must feed the make code of the PHYSICAL key position — like the original,
     # which reads raw scancodes. Key by SDL physical scancode (ev.scancode), NOT the keysym (ev.key): the keysym is
@@ -470,10 +485,24 @@ def main(argv=None) -> int:
                 break
 
     def gameplay_loop(state, dos):
-        """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap."""
+        """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap.
+
+        Structure: one loop iteration = one game TICK (native_frame_step; a transition yields several
+        presentation frames within its tick). ``present_tick_frame`` is the single seam where every rendered
+        gameplay frame reaches the screen — the (future) interpolation replaces exactly this: hold prev+cur
+        FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
+        The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
+
+        def present_tick_frame(planes, page):
+            """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
+            nonlocal n
+            rgb = render_planar_rgb_from_planes(planes, page, dos.vga_palette)
+            n += 1
+            present(rgb, args.fps, None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
+
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
@@ -481,9 +510,7 @@ def main(argv=None) -> int:
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
             try:
                 for planes, page in native_frame_step(state, dos, disp, game_root=gr):
-                    rgb = render_planar_rgb_from_planes(planes, page, dos.vga_palette)
-                    n += 1
-                    present(rgb, args.fps, None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
+                    present_tick_frame(planes, page)
                     pump()
                     if native_audio is not None:
                         native_audio.poll(state)               # PER FRAME: a transition (death fly-off) yields
