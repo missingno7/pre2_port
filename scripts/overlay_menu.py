@@ -48,6 +48,25 @@ _VALUE_SELECTED = (190, 235, 255)
 _HELP = (210, 210, 210)
 _HINT = (190, 210, 190)
 
+# A clean, light UI face rather than pygame's default (freesansbold — heavy, and faux-bolding it looks broad &
+# cramped). SysFont tries each name in order; the DejaVu/Arial tail covers Linux/mac when Segoe UI is absent.
+_UI_FACES = "segoeui,segoe ui,selawik,helveticaneue,helvetica neue,dejavusans,dejavu sans,arial"
+
+
+def _load_font(pg, size, bold):
+    """A regular- (or real-bold-) weight UI font at ``size``, falling back to pygame's default if no system
+    font is found (headless CI). Real bold from the face — never the synthetic set_bold broadening."""
+    try:
+        f = pg.font.SysFont(_UI_FACES, size, bold=bold)
+        if f is not None:
+            return f
+    except Exception:                          # noqa: BLE001 — no fontconfig / headless
+        pass
+    f = pg.font.Font(None, size + 4)           # default font renders a touch smaller per point -> nudge up
+    if bold:
+        f.set_bold(True)
+    return f
+
 
 class OverlayMenu:
     """The tabbed overlay. ``tabs_provider()`` returns ``[(tab_name, [items...]), ...]`` fresh each frame."""
@@ -68,11 +87,10 @@ class OverlayMenu:
         key = max(1, int(round(scale * 4)))          # bucket the scale so we rebuild fonts only on real changes
         if self._font is None or self._font_key != key:
             pg = self.pg
-            self._font_key = key
-            self._font = pg.font.Font(None, max(10, int(round(22 * scale))))
-            self._font_bold = pg.font.Font(None, max(10, int(round(22 * scale))))
-            self._font_bold.set_bold(True)
-            self._font_small = pg.font.Font(None, max(8, int(round(17 * scale))))
+            self._font_key = key                     # SysFont points render larger than Font(None) units -> 16/13
+            self._font = _load_font(pg, max(9, int(round(16 * scale))), False)
+            self._font_bold = _load_font(pg, max(9, int(round(16 * scale))), True)
+            self._font_small = _load_font(pg, max(7, int(round(13 * scale))), False)
         return self._font, self._font_bold, self._font_small
 
     # --- input ------------------------------------------------------------------------------------------
