@@ -137,17 +137,15 @@ def compose(cur, prev, alpha: float):
         _blit(frame, inst.rgba, sx + inst.tex_off_x, sy + inst.tex_off_y)
 
     # One-shot point particles (spider threads/sparkles) OVER the sprites, UNDER the foreground/firefly overlay
-    # (engine order). Each is rewound along its own per-frame velocity for smooth sub-source-frame motion, and
-    # glued to the scrolled world by the camera shift. They have no cross-frame identity (spawned+killed each
-    # frame), so the interpolation uses the current particle's own velocity (exact at alpha=1).
+    # (engine order), glued to the scrolled world by the camera shift and drawn at their CURRENT positions.
+    # No velocity rewind: they are spawned+killed each frame with no cross-frame identity, and rewinding a
+    # spider THREAD's dots along their per-dot "velocities" scattered the string instead of preserving the
+    # faithful white-dot look — a 1px dot stepping at the authentic tick rate is imperceptible and correct.
     if cur.particles:
         pr = cur.particle_rgb
         fh, fw = frame.shape[:2]
         for (sx, sy, vx, vy) in cur.particles:
-            if interp:
-                px, py = sx + bg_dx - round(inv * vx), sy + bg_dy - round(inv * vy)
-            else:
-                px, py = sx, sy
+            px, py = sx + bg_dx, sy + bg_dy
             if 0 <= px < fw and 0 <= py < VIEWPORT_H:
                 frame[py, px] = pr
 

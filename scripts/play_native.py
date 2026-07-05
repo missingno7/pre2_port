@@ -253,7 +253,15 @@ def main(argv=None) -> int:
                 _hud["t0"], _hud["ticks0"] = now, ref["tick_count"]               # proof enhancements never
                 _hud["text"] = (f"{clock.get_fps():3.0f} fps  {tps:5.1f} tps"     # touch the tick cadence)
                                 if tps > 0 else f"{clock.get_fps():3.0f} fps")
-            screen.blit(font.render(_hud["text"], True, (190, 210, 190)), (8, 22))
+                _hud["surf"] = None                              # re-render the cached text surface
+            surf = _hud.get("surf")
+            if surf is None:                                     # cache: render text (and its backing box)
+                text = font.render(_hud["text"], True, (190, 210, 190))          # once per 0.5s, not per frame
+                surf = pygame.Surface((text.get_width() + 10, text.get_height() + 6))
+                surf.fill((10, 12, 14))                          # opaque black box: readable over the game AND
+                surf.blit(text, (5, 3))                          # self-erasing over the letterbox (no ghosting,
+                _hud["surf"] = surf                              #  which the fill-once letterbox left behind)
+            screen.blit(surf, (8, 22))
         pygame.display.flip()
         pace(fps)
         if caption:

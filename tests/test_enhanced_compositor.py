@@ -128,16 +128,17 @@ def test_coverage_mask_drives_scroll_not_colour_difference():
     assert tuple(out[8, 10]) == (200, 0, 0), "tile block (incl. backdrop-coloured pixel) must scroll via mask"
 
 
-def test_particle_velocity_interpolation():
-    # A point particle at screen (10,8) with per-frame velocity (8,0): at alpha=1 it sits at its drawn pos;
-    # at alpha=0.5 it is rewound half its velocity (col 6); no cross-frame identity needed.
+def test_particle_drawn_at_current_position_every_alpha():
+    # Point particles have NO cross-frame identity and are drawn at their CURRENT positions at every alpha
+    # (camera-glued only). The old velocity rewind scattered a spider THREAD's dots (their per-dot
+    # "velocities" are spawn geometry, not motion) instead of preserving the faithful white-dot string.
     cur = _frame([], particles=[(10, 8, 8, 0)], particle_rgb=(255, 255, 255))
     assert tuple(compose(cur, None, 1.0)[8, 10]) == (255, 255, 255)         # alpha=1 -> drawn pos
     prev = _frame([], particles=[], camera=(0, 0))
     out = compose(_frame([], particles=[(10, 8, 8, 0)], particle_rgb=(255, 255, 255), camera=(0, 0)),
                   prev, 0.5)
-    assert tuple(out[8, 6]) == (255, 255, 255), "particle not rewound along its velocity"
-    assert tuple(out[8, 10]) == (0, 0, 0), "particle left a stale copy at the drawn position"
+    assert tuple(out[8, 10]) == (255, 255, 255), "particle must stay at its faithful drawn position"
+    assert tuple(out[8, 6]) == (0, 0, 0), "particle must NOT be rewound along its velocity"
 
 
 def test_firefly_slot_matched_interpolation():

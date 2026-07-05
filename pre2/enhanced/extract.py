@@ -56,6 +56,8 @@ _DS_BASE = 0x1A0F << 4
 _PLAYER_REC = 0x4F1C
 _CLUB_REC = 0x4F0A
 _ENTITY_LO, _ENTITY_HI = 0x8489, 0x9107   # the 2nd-pass entity + float-effect records (owner-ptr range)
+_FX_REC_LO, _FX_REC_HI = 0x52E8, 0x5450   # the 8922 effect draw-list slots (their [+9] = the source entry)
+_FX_SRC_LO = 0x8F1D                       # the float-effect source list (stride 7)
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
 # identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
@@ -271,9 +273,11 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     # palette is applied per frame, so fades never invalidate the cache.
     cache = tex_cache if tex_cache is not None else SpriteTextureCache()
     pversion = palette_version(palette)
-    # camera in PIXELS, matching _placement: X = cam_x*16; Y = cam_y*16 + fine_scroll. Used to interpolate
-    # the background scroll between source frames (objects stay glued to the scrolled bg).
-    camera_px = (cam.cam_x * 16, cam.cam_y * 16 + cam.fine_scroll)
+    # camera in PIXELS, matching the sprite placement: X = cam_x*16; Y = cam_y*16 + fine_scroll - row_factor
+    # (screen_y = world_y + y_off + row_factor - (cam_y*16 + fine) — so the SHAKE bias [0x6BF8] is part of
+    # the effective camera; including it makes the camera delta carry the shake and the WHOLE frame shakes
+    # between subframes, not just the sprites). Used to interpolate the background scroll between ticks.
+    camera_px = (cam.cam_x * 16, cam.cam_y * 16 + cam.fine_scroll - cam.row_factor)
     # enumerate -> `slot` is the active-list record index (stable cross-frame identity, animation-independent)
     for slot, spr in enumerate(rs.object_sprites or ()):
         attr = attrs.get(spr.sprite_id)
@@ -313,11 +317,17 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         else:
             d = mem.data
             owner = d[_DS_BASE + rec_off + 6] | (d[_DS_BASE + rec_off + 7] << 8)   # [+6] back-pointer (7F26)
+            src9 = d[_DS_BASE + rec_off + 9] | (d[_DS_BASE + rec_off + 10] << 8)   # [+9] source back-ref (8922)
             if _ENTITY_LO <= owner < _ENTITY_HI:                 # a projected entity: true identity + world
                 handle = ("ent", owner)
                 wx = d[_DS_BASE + owner + 9] | (d[_DS_BASE + owner + 10] << 8)     # [entry+9]  world X
                 wy = d[_DS_BASE + owner + 0xB] | (d[_DS_BASE + owner + 0xC] << 8)  # [entry+0xB] world Y
-            else:                                                # effect/producer record: slot-stable identity
+            elif _FX_REC_LO <= rec_off < _FX_REC_HI and _FX_SRC_LO <= src9 < _ENTITY_HI:
+                handle = ("fx", src9)                            # 8922-projected effect (bonus items/popups):
+                #  identity = the float-effect SOURCE entry it was projected from — the effect sub-list
+                #  COMPACTS every tick as items scroll in/out, so record-address identity slid one item's
+                #  motion onto its neighbour (the classic slot-jitter); the source ref is instance-stable.
+            else:                                                # producer record: slot-stable identity
                 handle = ("rec", rec_off)
         sprites.append(SpriteInstance(handle=handle, slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
                                       world_x=wx, world_y=wy,
