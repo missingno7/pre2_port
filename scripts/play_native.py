@@ -134,8 +134,23 @@ def main(argv=None) -> int:
         demo = DemoInput(InputDemoPlayback.load(args.play_demo))
         print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
 
+    # DPI awareness BEFORE any window exists: on Windows with display scaling (e.g. 150%) an un-aware process
+    # gets the LOGICAL desktop size, so a borderless-fullscreen window doesn't cover the physical screen and
+    # its (0,0) placement drifts. Make the process per-monitor DPI-aware so get_desktop_sizes() = real pixels.
+    if sys.platform == "win32":
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PER_MONITOR_AWARE_V2
+        except Exception:                                    # noqa: BLE001 — older Windows
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:                                # noqa: BLE001
+                pass
+    import os as _os
+    _os.environ.setdefault("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2")   # SDL's own DPI path (>= 2.24)
     pygame.init()
-    view = {"screen": pygame.display.set_mode((320 * args.scale, 200 * args.scale), pygame.RESIZABLE)}
+    view = {"screen": pygame.display.set_mode((320 * args.scale, 200 * args.scale), pygame.RESIZABLE),
+            "borderless": False}
     clock = pygame.time.Clock()
     # The MONITOR refresh rate — the presentation clock the (future) interpolation presents at. The game TICK
     # stays locked at TICK_HZ regardless; only how many interpolated frames are shown per tick depends on this.
@@ -169,22 +184,62 @@ def main(argv=None) -> int:
         except Exception as e:                                            # noqa: BLE001 — read-only game dir
             print(f"(settings not saved: {e})")
 
+    def _win_monitor_rect():
+        """(x, y, w, h) PHYSICAL-pixel rect of the monitor the current window sits on (Windows; the process is
+        DPI-aware so this is real pixels), or None. Lets the borderless window cover the RIGHT monitor exactly
+        on multi-monitor / scaled setups instead of guessing (0,0)+primary-size."""
+        if sys.platform != "win32":
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = pygame.display.get_wm_info().get("window")
+            if not hwnd:
+                return None
+            hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)        # MONITOR_DEFAULTTONEAREST
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if not ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                return None
+            r = mi.rcMonitor
+            return int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top)
+        except Exception:                                                # noqa: BLE001
+            return None
+
     def set_fullscreen(on: bool) -> None:
-        """Switch between BORDERLESS FULLSCREEN WINDOW (a frameless window covering the desktop — no video-mode
-        switch, so alt-tab is instant and the compositor stays smooth) and the remembered resizable window."""
+        """Switch between BORDERLESS FULLSCREEN WINDOW (a frameless window covering the CURRENT monitor exactly
+        — no video-mode switch, so alt-tab is instant and the compositor stays smooth) and the remembered
+        resizable window."""
         import os
         settings["fullscreen"] = on
         if on:
             if not view.get("borderless"):
                 view["win_size"] = view["screen"].get_size()              # remember the window size for the way back
-            try:
-                dw, dh = pygame.display.get_desktop_sizes()[0]            # primary display (pygame >= 2.0)
-            except Exception:                                            # noqa: BLE001 — older pygame
-                info = pygame.display.Info()
-                dw, dh = info.current_w, info.current_h
-            os.environ["SDL_VIDEO_WINDOW_POS"] = "0,0"                    # SDL reads this on (re)create -> top-left
-            view["screen"] = pygame.display.set_mode((dw, dh), pygame.NOFRAME)
+            rect = _win_monitor_rect()                                    # exact monitor rect (DPI/multi-mon safe)
+            if rect is not None:
+                x, y, w, h = rect
+            else:
+                try:
+                    w, h = pygame.display.get_desktop_sizes()[0]
+                except Exception:                                        # noqa: BLE001 — older pygame
+                    info = pygame.display.Info()
+                    w, h = info.current_w, info.current_h
+                x, y = 0, 0
+            os.environ["SDL_VIDEO_WINDOW_POS"] = f"{x},{y}"               # SDL reads this on (re)create
+            view["screen"] = pygame.display.set_mode((w, h), pygame.NOFRAME)
             view["borderless"] = True
+            if rect is not None:                                         # force exact monitor placement (belt +
+                try:                                                     # braces: SDL may reuse the window and
+                    import ctypes                                        # skip the pos env; the surface is (w,h)
+                    hwnd = pygame.display.get_wm_info().get("window")    # so a same-size move is safe)
+                    if hwnd:
+                        ctypes.windll.user32.SetWindowPos(hwnd, 0, x, y, w, h, 0x0014)   # NOZORDER|NOACTIVATE
+                except Exception:                                        # noqa: BLE001
+                    pass
         else:
             os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
             view["screen"] = pygame.display.set_mode(view.get("win_size", (320 * args.scale, 200 * args.scale)),
