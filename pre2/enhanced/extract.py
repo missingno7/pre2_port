@@ -41,7 +41,21 @@ _BACKDROP_BASE = 0x7E80
 _BASE_OFF = _BACKDROP_BASE - ASSET_LO   # offset of the parallax base within RendererState.asset_planes
 VIEWPORT_H = 176                         # gameplay viewport rows (the HUD strip below shows no backdrop)
 
-_OBJ_SEG = 0x1030 << 4   # active-list records live in segment 1030; the per-instance handle is byte 6
+# --- sprite IDENTITY + true-motion sources (the interpolation anchors) --------------------------------------
+# The render-slot array lives in DGROUP (0x4F0A..0x5720, stride 0x12; read_active_list iterates TOP-DOWN, so
+# enumerate index i -> DS record LIST_TOP - i*0x12). A PROJECTED entity record's [+6] is the back-pointer
+# project_entity (7F26) copies from the owning 2nd-pass entry — the per-instance identity, and that entry
+# holds the TRUE world position ([entry+9]=X, [entry+0xB]=Y), free of per-cel anim anchors. The two FIXED
+# records repurpose [+6] (the player's is its Xvel!), so they get fixed identities instead — and the CLUB
+# overlay (0x4F0A, the top-most attack sprite) is rigidly attached to the PLAYER, so its motion source is the
+# player's world position: its own slot x/y swings by cel anchor per attack pose (31->35->65 px in one swing),
+# which is POSE, not motion — lerping it was the "player shakes while bashing" bug. (The old code also read
+# the handle bytes from the CODE segment at the DS offset — constant code bytes per slot, colliding at 0 for
+# player+club, which lerped the player against the club's previous position.)
+_DS_BASE = 0x1A0F << 4
+_PLAYER_REC = 0x4F1C
+_CLUB_REC = 0x4F0A
+_ENTITY_LO, _ENTITY_HI = 0x8489, 0x9107   # the 2nd-pass entity + float-effect records (owner-ptr range)
 
 _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
 # identity "palette": de-indexing with this returns the raw EGA index in the R channel (fast numpy path)
@@ -282,10 +296,26 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                 continue                           # no opaque pixels (don't cache empties)
             cache.put(key, tex)
         rgba = cache.colorize(key, tex, palette, pversion)   # apply the current palette (memoised per version)
-        rec = _OBJ_SEG + (LIST_TOP - slot * RECORD_BYTES)        # the object's persistent handle (pointer)
-        handle = mem.data[rec + 6] | (mem.data[rec + 7] << 8)
+        rec_off = LIST_TOP - slot * RECORD_BYTES                 # this record's DS offset (top-down list)
+        wx, wy = cmd.world_x, cmd.world_y
+        if rec_off == _PLAYER_REC:
+            handle = ("player",)                                 # fixed record: [+6] is the Xvel, not a pointer
+        elif rec_off == _CLUB_REC:
+            handle = ("club",)                                   # the attack overlay: rigidly player-attached,
+            d = mem.data                                         # so its MOTION is the player's world position
+            wx = d[_DS_BASE + _PLAYER_REC] | (d[_DS_BASE + _PLAYER_REC + 1] << 8)
+            wy = d[_DS_BASE + _PLAYER_REC + 2] | (d[_DS_BASE + _PLAYER_REC + 3] << 8)
+        else:
+            d = mem.data
+            owner = d[_DS_BASE + rec_off + 6] | (d[_DS_BASE + rec_off + 7] << 8)   # [+6] back-pointer (7F26)
+            if _ENTITY_LO <= owner < _ENTITY_HI:                 # a projected entity: true identity + world
+                handle = ("ent", owner)
+                wx = d[_DS_BASE + owner + 9] | (d[_DS_BASE + owner + 10] << 8)     # [entry+9]  world X
+                wy = d[_DS_BASE + owner + 0xB] | (d[_DS_BASE + owner + 0xC] << 8)  # [entry+0xB] world Y
+            else:                                                # effect/producer record: slot-stable identity
+                handle = ("rec", rec_off)
         sprites.append(SpriteInstance(handle=handle, slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
-                                      world_x=cmd.world_x, world_y=cmd.world_y,
+                                      world_x=wx, world_y=wy,
                                       screen_x=cmd.screen_x, screen_y=cmd.screen_y,
                                       tex_off_x=tex.off_x, tex_off_y=tex.off_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
