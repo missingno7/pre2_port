@@ -323,12 +323,22 @@ def native_level_reveal(state, dos, display_page: int, *, game_root: str):
 
 
 def native_frame_step(state, dos, display_page: int, *, game_root: str):
-    """Advance the recovered gameplay over ``state`` (in place) and ``yield`` each frame to display as
-    ``(planes, page)`` — the four EGA plane buffers + committed page, ready to present.
+    """The public 2-tuple API: ``for planes, page in native_frame_step(...): present(planes, page)``.
+    Wraps :func:`native_frame_step_tagged`, dropping its interpolation tag."""
+    for planes, page, _interp in native_frame_step_tagged(state, dos, display_page, game_root=game_root):
+        yield planes, page
+
+
+def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str):
+    """Advance the recovered gameplay over ``state`` (in place) and ``yield (planes, page, interpolatable)``.
+
+    ``interpolatable`` is True for a real gameplay frame (a single object-motion frame — the normal tick AND
+    each death-bounce frame, whose parabolic arc the enhanced presenter can lerp), False for a VRAM TRANSITION
+    frame (cave-teleport fade/pan/reveal, death fade-to-black + checkpoint curtain, scene passthrough), which
+    must be streamed 1:1 (there is no object motion to interpolate; lerping a wipe looks wrong).
 
     Normally exactly one frame. During the death-respawn transition it yields each death-bounce frame (the whole
-    60-frame arc animates) then the checkpoint frame, so the standalone runner shows the animation instead of an
-    instant respawn. Iterate it: ``for planes, page in native_frame_step(...): present(planes, page)``."""
+    60-frame arc animates) then the checkpoint frames."""
     try:
         native_gameplay_frame(state)
     except Pre2CaveTeleport as tp:
@@ -341,7 +351,7 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         pan_n = 0
         for phase in native_cave_teleport(state, tp.si):
             if phase[0] == "fade":
-                yield _vfade_frame(base_planes, base_page, phase[1])
+                yield (*_vfade_frame(base_planes, base_page, phase[1]), False)
             elif phase[0] == "pan":
                 # The hidden camera pan yields one step per row/column moved — a far cave is DOZENS of steps, and
                 # presenting a black frame per (2) steps made the between-curtains black last ~2s. The pan is
@@ -349,15 +359,15 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
                 # frames (a brief blink) and drive the remaining pan silently to the destination.
                 pan_n += 1
                 if pan_n <= 2 * _CAVE_BLACK_FRAMES and pan_n % 2 == 0:
-                    yield _vfade_frame(base_planes, base_page, 9)
+                    yield (*_vfade_frame(base_planes, base_page, 9), False)
             else:                                     # ("reveal", k)
                 if "planes" not in new:
                     native_sync_render_state(state)   # the camera is at the destination now
                     new["planes"], new["page"] = native_render(state, dos, display_page, game_root=game_root,
                                                                force_gameplay=True)
-                yield _reveal_frame(new["planes"], new["page"], phase[1])
+                yield (*_reveal_frame(new["planes"], new["page"], phase[1]), False)
         native_sync_render_state(state)
-        yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)   # settled arrival
+        yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True), True)  # arrival
         return
     except Pre2RespawnTransition:
         # the respawn fired this frame (the prefix already ran the death hit). Drive native_4f6c — a per-frame
@@ -369,7 +379,7 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         for _ in native_4f6c(state):
             native_sync_render_state(state)
             last = native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
-            yield last
+            yield (*last, True)                                    # a death-bounce frame -> interpolatable
         # native_4f6c has restored the checkpoint. The VM finishes the respawn with the SAME transition as a
         # cave entrance (verified on demo 115310's level-6 death): the death frame fades to black (30C6) then the
         # checkpoint curtains in center-out (3054). Compose both here (native snapped straight to the checkpoint
@@ -377,8 +387,9 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         if last is not None:
             base_planes, base_page = last
             for k in range(1, 10):                          # [asm 30C6] fade the death frame to black
-                yield _vfade_frame(base_planes, base_page, k)
-        yield from native_level_reveal(state, dos, display_page, game_root=game_root)   # [asm 3054] curtain in
+                yield (*_vfade_frame(base_planes, base_page, k), False)
+        for _rp, _rpg in native_level_reveal(state, dos, display_page, game_root=game_root):   # [asm 3054] curtain
+            yield (_rp, _rpg, False)
         return
     except Pre2LevelEndTransition:
         # PROPAGATES to the caller — the between-levels flow (the VM's 4F65 -> BRAVO tally scene -> CARTE world
@@ -393,7 +404,7 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # (an unloaded state), so only the bounce frames are rendered here.
         for _ in native_5063(state):
             native_sync_render_state(state)
-            yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)
+            yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True), True)
         raise
     except Pre2GameComplete:
         # [asm 5034] THE END — the player cleared the final level 0xE. The game-complete SCENE (THEEND.SQZ fade +
@@ -408,7 +419,7 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         # a real non-gameplay scene reached via a carry path we don't drive as a transition — let the SceneKind
         # classifier run (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
         native_sync_render_state(state)
-        yield native_render(state, dos, display_page, game_root=game_root)
+        yield (*native_render(state, dos, display_page, game_root=game_root), False)   # scene passthrough
         return
     native_sync_render_state(state)   # re-derive the render-only tile-ring + prev-camera mirrors from the camera
-    yield native_render(state, dos, display_page, game_root=game_root, force_gameplay=True)   # a normal gameplay frame
+    yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True), True)  # normal frame

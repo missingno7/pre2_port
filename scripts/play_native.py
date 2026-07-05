@@ -111,8 +111,8 @@ def main(argv=None) -> int:
     from pre2.native.front_end import native_front_end
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
-    from pre2.native.runtime import (native_exit_anim, native_frame_step, native_iris_close,
-                                      native_level_reveal)
+    from pre2.native.runtime import (native_exit_anim, native_frame_step, native_frame_step_tagged,
+                                      native_iris_close, native_level_reveal)
     from pre2.native.state import NativeGameState
     from sdl_view import front_end_scene_to_rgb, render_planar_rgb_from_planes
 
@@ -783,26 +783,22 @@ def main(argv=None) -> int:
                 return ref["running"]
 
             try:
-                gen = native_frame_step(state, dos, disp, game_root=gr)
-                if not settings["interpolation"]:              # faithful: exactly the classic per-frame stream
-                    enh["prev"] = enh["next_tick"] = None
-                    for planes, page in gen:
+                # Per-frame tag decides interpolation: an ``interpolatable`` frame (the normal tick AND every
+                # death-BOUNCE frame — object motion) lerps; a transition frame (cave curtain, death fade +
+                # checkpoint curtain, scene) streams 1:1 and breaks the lerp pair. So the parabolic death arc
+                # smooths out (each of its 60 frames is a lerp tick) while wipes stay faithful.
+                for planes, page, interp_ok in native_frame_step_tagged(state, dos, disp, game_root=gr):
+                    if settings["interpolation"] and interp_ok:
+                        present_interpolated(planes, page)
+                        pump()
+                        if native_audio is not None:
+                            native_audio.poll(state)
+                        if not ref["running"]:
+                            break
+                    else:
+                        enh["prev"] = enh["next_tick"] = None   # transition (or interp off) -> break the lerp pair
                         if not stream_frame(planes, page):
                             break
-                else:                                          # one-frame LOOKAHEAD: a steady tick (exactly one
-                    first = next(gen, None)                    # frame) lerps; a transition streams faithfully
-                    if first is not None:
-                        second = next(gen, None)
-                        if second is None:
-                            present_interpolated(*first)
-                            if native_audio is not None:
-                                native_audio.poll(state)
-                        else:
-                            enh["prev"] = enh["next_tick"] = None   # a transition breaks the lerp pair
-                            if stream_frame(*first) and stream_frame(*second):
-                                for planes, page in gen:
-                                    if not stream_frame(planes, page):
-                                        break
                 ref["tick_count"] += 1                         # one native_frame_step drive == one game tick
             except Pre2LevelEndTransition:
                 between_levels(state, dos)                          # tally/carte flow, then the next level
