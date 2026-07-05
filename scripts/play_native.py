@@ -170,14 +170,26 @@ def main(argv=None) -> int:
             print(f"(settings not saved: {e})")
 
     def set_fullscreen(on: bool) -> None:
-        """Switch between desktop-resolution fullscreen and the remembered resizable window."""
+        """Switch between BORDERLESS FULLSCREEN WINDOW (a frameless window covering the desktop — no video-mode
+        switch, so alt-tab is instant and the compositor stays smooth) and the remembered resizable window."""
+        import os
         settings["fullscreen"] = on
         if on:
-            view["win_size"] = view["screen"].get_size()                  # restore size for the way back
-            view["screen"] = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+            if not view.get("borderless"):
+                view["win_size"] = view["screen"].get_size()              # remember the window size for the way back
+            try:
+                dw, dh = pygame.display.get_desktop_sizes()[0]            # primary display (pygame >= 2.0)
+            except Exception:                                            # noqa: BLE001 — older pygame
+                info = pygame.display.Info()
+                dw, dh = info.current_w, info.current_h
+            os.environ["SDL_VIDEO_WINDOW_POS"] = "0,0"                    # SDL reads this on (re)create -> top-left
+            view["screen"] = pygame.display.set_mode((dw, dh), pygame.NOFRAME)
+            view["borderless"] = True
         else:
+            os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
             view["screen"] = pygame.display.set_mode(view.get("win_size", (320 * args.scale, 200 * args.scale)),
                                                      pygame.RESIZABLE)
+            view["borderless"] = False
         save_settings()
 
     if settings["fullscreen"]:                                            # persisted preference -> apply at boot
