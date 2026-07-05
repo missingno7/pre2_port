@@ -145,7 +145,8 @@ def main(argv=None) -> int:
     # --- the end-user settings (the F10 menu edits these; the CLI shrinks to dev flags) -----------------
     import json
     settings_path = Path(gr) / "pre2native_settings.json"
-    settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False}
+    settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
+                "interpolation": False}
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -562,6 +563,7 @@ def main(argv=None) -> int:
             return act
 
         view_tab = [
+            {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
         ]
@@ -630,8 +632,14 @@ def main(argv=None) -> int:
         FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
         The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
+        from time import perf_counter
+        from pre2.enhanced.compositor import compose
+        from pre2.enhanced.extract import extract_enhanced_frame
+        from pre2.enhanced.sprite_cache import SpriteTextureCache
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
+        tick_dt = 1.0 / TICK_HZ
+        enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None}   # the prev+cur snapshot pair
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
@@ -639,6 +647,36 @@ def main(argv=None) -> int:
             rgb = render_planar_rgb_from_planes(planes, page, dos.vga_palette)
             n += 1
             present(rgb, args.fps, None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
+
+        def present_interpolated(planes, page):
+            """The INTERPOLATION presentation for a steady (single-frame) tick: extract the tick's snapshot,
+            then present compose(cur, prev, alpha) frames at the DISPLAY rate until the next tick is due
+            (a fixed-timestep accumulator — the tick cadence is enforced by wall-clock due times, never
+            changed by how many frames are shown between ticks). Pure presentation: reads the state, writes
+            nothing — the endpoints are parity-proven pixel-equal to the faithful frames (alpha=1 gate)."""
+            cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=enh["tex"])
+            now = perf_counter()
+            if enh["next_tick"] is None or enh["next_tick"] < now - 0.25:   # (re)sync after start/pause/menu
+                enh["next_tick"] = now
+            if cur is None or enh["prev"] is None:              # no snapshot (or no pair yet) -> one faithful frame
+                present_tick_frame(planes, page)
+                enh["prev"] = cur
+                enh["next_tick"] += tick_dt
+                return
+            nonlocal n
+            n += 1
+            while True:                                         # >=1 frame per tick, then up to the due time
+                now = perf_counter()
+                alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
+                present(compose(cur, enh["prev"], alpha), ref["display_hz"],
+                        None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
+                if perf_counter() >= enh["next_tick"]:
+                    break
+                pump()                                          # stay responsive between ticks (F10/resize/quit;
+                if not ref["running"]:                          #  a menu stall resyncs via the 0.25s clause)
+                    break
+            enh["prev"] = cur
+            enh["next_tick"] += tick_dt
 
         while ref["running"]:
             pump()
@@ -655,16 +693,38 @@ def main(argv=None) -> int:
                 state.data[DS + 0x27D6] = 3                        # [asm 52a8] full hearts, refreshed pre-tick
             drive_input(state)
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+
+            def stream_frame(planes, page):
+                """One faithful frame of a (possibly multi-frame) tick — today's path, per-frame audio."""
+                present_tick_frame(planes, page)
+                pump()
+                if native_audio is not None:
+                    native_audio.poll(state)                   # PER FRAME: a transition (death fly-off) yields
+                    #   dozens of frames in ONE step — its queued sfx (the death SCREAM at the bounce start,
+                    #   509d/50a6) must sound AT that frame, not after the whole animation
+                return ref["running"]
+
             try:
-                for planes, page in native_frame_step(state, dos, disp, game_root=gr):
-                    present_tick_frame(planes, page)
-                    pump()
-                    if native_audio is not None:
-                        native_audio.poll(state)               # PER FRAME: a transition (death fly-off) yields
-                        #   dozens of frames in ONE step — its queued sfx (the death SCREAM at the bounce start,
-                        #   509d/50a6) must sound AT that frame, not after the whole animation
-                    if not ref["running"]:
-                        break
+                gen = native_frame_step(state, dos, disp, game_root=gr)
+                if not settings["interpolation"]:              # faithful: exactly the classic per-frame stream
+                    enh["prev"] = enh["next_tick"] = None
+                    for planes, page in gen:
+                        if not stream_frame(planes, page):
+                            break
+                else:                                          # one-frame LOOKAHEAD: a steady tick (exactly one
+                    first = next(gen, None)                    # frame) lerps; a transition streams faithfully
+                    if first is not None:
+                        second = next(gen, None)
+                        if second is None:
+                            present_interpolated(*first)
+                            if native_audio is not None:
+                                native_audio.poll(state)
+                        else:
+                            enh["prev"] = enh["next_tick"] = None   # a transition breaks the lerp pair
+                            if stream_frame(*first) and stream_frame(*second):
+                                for planes, page in gen:
+                                    if not stream_frame(planes, page):
+                                        break
                 ref["tick_count"] += 1                         # one native_frame_step drive == one game tick
             except Pre2LevelEndTransition:
                 between_levels(state, dos)                          # tally/carte flow, then the next level
