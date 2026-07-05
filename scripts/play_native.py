@@ -977,9 +977,10 @@ def main(argv=None) -> int:
     reached_gameplay = False
     try:
         for scene in native_front_end(state, dos, 0, game_root=gr):
-            # front-end scenes are per-retrace (70Hz), but the ATTRACT demo ([0x2879]=1) is GAMEPLAY and must run at
-            # the game rate (args.fps ~24Hz) or it plays ~3x too fast.
-            fps = args.fps if state.data[DS + 0x2879] == 1 else _FRONT_END_FPS
+            # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
+            # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
+            # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
+            fps = args.fps if (state.data[DS + 0x2879] == 1 or scene.game_paced) else _FRONT_END_FPS
             present(front_end_scene_to_rgb(scene), fps, "PRE2 VM-less — cold boot (front-end)")
             pump()
             # the OLDIES scene-wait (0bbe) reads fire; the mode-select toggles BEGINNER<->EXPERT on UP/DOWN and

@@ -115,7 +115,9 @@ def native_attract_title(state, game_root: str):
     pal256 = _expand_pal(pal6)
 
     def frame(planes):
-        return FrontEndScene(MODE_PLANAR, palette=pal256, planes=planes, page=_PAGE)
+        # game_paced: the VM presents each animation frame via 44FB -> the 3-retrace 1C6F wait (~23.33Hz),
+        # NOT the 70Hz single-retrace of the static front-end screens. The runner must pace it likewise.
+        return FrontEndScene(MODE_PLANAR, palette=pal256, planes=planes, page=_PAGE, game_paced=True)
 
     # -------- SETUP (8F2D..8F8F) -------- #
     d[_DS + 0x6C01] = 0; d[_DS + 0x6C02] = 1; d[_DS + 0x6C03] = 0   # [8F46..8F50] byte flags

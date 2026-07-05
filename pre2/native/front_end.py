@@ -66,11 +66,27 @@ class FrontEndScene:
     pel: int = 0                         # MODE_PLANAR pan: fine pel-pan 0..7 (attr 0x33)
     wrap: int = 0xFFFF                   # MODE_PLANAR pan: display-start wrap (0x1FFF for the menu window)
     active_width: int = 320              # MODE_PLANAR pan: CRTC H-display width (carte narrows to 312)
+    game_paced: bool = False             # True = this frame is a game-TICK-rate scene (the VM presents it via
+    #                                      44FB -> the 3-retrace 1C6F wait, ~23.33Hz), NOT the 70Hz retrace of
+    #                                      the static front-end screens. The attract title animation is such a
+    #                                      scene; the runner must pace it at the game rate or it plays 3x fast.
 
 
 def _expand_palette6(pal6: bytes) -> tuple:
     """6-bit DAC palette (768 bytes) -> 256 × (r,g,b) 8-bit, the way the VGA DAC expands it ([asm out 3C9])."""
     return tuple((_dac8(pal6[i * 3]), _dac8(pal6[i * 3 + 1]), _dac8(pal6[i * 3 + 2])) for i in range(256))
+
+
+def _dac_fade_palettes(target_dac, *, into: bool, steps: int = 0x10):
+    """Yield ``steps`` intermediate 256-entry DAC palettes ramping between black and ``target_dac`` (the demo
+    level's live palette) — ``into=True`` fades IN (black -> target), ``into=False`` fades OUT (target -> black).
+    The attract's [asm 8EB3/8F29] 9286 fade-to-black transitions bracket the demo; native snapped instantly."""
+    tgt = tuple(target_dac)
+    n = len(tgt)
+    for i in range(1, steps + 1):
+        k = i / steps
+        f = k if into else (1.0 - k)
+        yield tuple((int(r * f), int(g * f), int(b * f)) for (r, g, b) in tgt) if n else tgt
 
 
 def _planar_fade_out(state, pal6_off: int, planes, page: int, pel: int, wrap: int = 0x1FFF):
@@ -156,15 +172,26 @@ def _native_attract(state, dos, game_root: str):
     native_load_level_palette(state, dos)                    # [asm 0ba0] the per-level DAC palette (else the demo
     #                                                          renders under the leftover MENU palette — wrong colours)
     disp = d[_DS + 0x2DD6] | (d[_DS + 0x2DD7] << 8)
+    last = None                                              # (planes, page) of the last demo frame -> fade-out over it
+    first = True
     try:
         while True:
             for planes, page in native_frame_step(state, dos, disp, game_root=game_root):
+                frozen = tuple(bytes(p) for p in planes)
+                if first:                                    # [asm 8EB3 fade-to-black -> the demo] fade IN from black
+                    first = False                            #   over the demo's first rendered frame
+                    for pal in _dac_fade_palettes(dos.vga_palette, into=True):
+                        yield FrontEndScene(MODE_PLANAR, palette=pal, planes=frozen, page=page, game_paced=True)
                 yield FrontEndScene(MODE_PLANAR, palette=tuple(dos.vga_palette),
-                                    planes=tuple(bytes(p) for p in planes), page=page)
+                                    planes=frozen, page=page, game_paced=True)
+                last = (frozen, page)
             disp = d[_DS + 0x2DD6] | (d[_DS + 0x2DD7] << 8)
     except (Pre2GameOverTransition, Pre2LevelEndTransition, Pre2RespawnTransition,
             Pre2CaveTeleport, Pre2HybridGap):
         pass                                                 # any end/gap in the idle demo -> back to the menu
+    if last is not None:                                     # fade the demo OUT to black before re-showing the menu
+        for pal in _dac_fade_palettes(dos.vga_palette, into=False):
+            yield FrontEndScene(MODE_PLANAR, palette=pal, planes=last[0], page=last[1], game_paced=True)
     d[_DS + 0x2879] = 0                                       # back to live keyboard input
     d[_DS + 0x287A] = 0; d[_DS + 0x287B] = 0
     for sel in (0x6BE4, 0x6BE5, 0x6BE6):
