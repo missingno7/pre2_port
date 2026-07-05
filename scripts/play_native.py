@@ -140,7 +140,7 @@ def main(argv=None) -> int:
         display_hz = 60.0                                                # safe fallback
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
-           "menu_request": False, "switch_level": None}
+           "menu_request": False, "switch_level": None, "tick_count": 0}
 
     # --- the end-user settings (the F10 menu edits these; the CLI shrinks to dev flags) -----------------
     import json
@@ -180,11 +180,15 @@ def main(argv=None) -> int:
             elif ev.type == pygame.VIDEORESIZE:                    # user dragged the window edge -> rebind + rescale
                 view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
-                ref["menu_request"] = True                        # the gameplay loop opens the modal menu
+                ref["menu_request"] = True
             elif ev.type == pygame.KEYDOWN:                        # latch the hex make code typed THIS frame
                 sc = _SDL_HEX.get(getattr(ev, "scancode", -1)) or _KEYSYM_HEX.get(ev.key)   # physical, keysym fallback
                 if sc:
                     ref["last_scan"] = sc
+        if ref["menu_request"]:
+            ref["menu_request"] = False
+            menu_modal()                                          # EVERY loop pumps -> the F10 menu opens anywhere
+            #   (late-bound: defined below in main(); no loop runs before it exists)
 
     def blit_frame(rgb):
         """Scale + letterbox one game frame onto the window (no flip) — shared by present() and the menu."""
@@ -201,14 +205,22 @@ def main(argv=None) -> int:
         screen.blit(pygame.transform.scale(surf, (tw, th)), ((sw - tw) // 2, (sh - th) // 2))
         return screen
 
-    _hud_font = {}
+    _hud = {"font": None, "t0": 0.0, "ticks0": 0, "text": ""}
 
     def present(rgb, fps, caption=None):
         screen = blit_frame(rgb)
         if settings["fps_overlay"]:
-            font = _hud_font.get("f") or _hud_font.setdefault("f", pygame.font.Font(None, 17))
-            screen.blit(font.render(f"{clock.get_fps():3.0f} fps  tick {TICK_HZ:.2f} Hz", True,
-                                    (190, 210, 190)), (8, 22))
+            import time as _time
+            font = _hud["font"]
+            if font is None:
+                font = _hud["font"] = pygame.font.Font(None, 17)
+            now = _time.perf_counter()
+            if now - _hud["t0"] >= 0.5:                          # MEASURED rates over a rolling half-second:
+                tps = (ref["tick_count"] - _hud["ticks0"]) / (now - _hud["t0"])   # real game ticks/sec (the
+                _hud["t0"], _hud["ticks0"] = now, ref["tick_count"]               # proof enhancements never
+                _hud["text"] = (f"{clock.get_fps():3.0f} fps  {tps:5.1f} tps"     # touch the tick cadence)
+                                if tps > 0 else f"{clock.get_fps():3.0f} fps")
+            screen.blit(font.render(_hud["text"], True, (190, 210, 190)), (8, 22))
         pygame.display.flip()
         clock.tick(fps)
         if caption:
@@ -586,13 +598,11 @@ def main(argv=None) -> int:
 
     menu = OverlayMenu(pygame, _menu_tabs)
 
-    def menu_check(state):
-        """The modal F10 overlay: the game TICK is frozen while open (like the P pause) and every key event
-        is routed to the menu — nothing it consumes can reach the game's input cells, so demo determinism
-        and the oracle chain are structurally untouched. Music keeps playing (the sink runs on its own)."""
-        if not ref["menu_request"]:
-            return
-        ref["menu_request"] = False
+    def menu_modal():
+        """The modal F10 overlay, openable from ANY loop (every scene pumps): the game/scene is frozen while
+        open and every key event is routed to the menu — nothing it consumes can reach the game's input
+        cells, so demo determinism and the oracle chain are structurally untouched. Music keeps playing
+        (the SDL sink streams the current song autonomously; no polling needed while frozen)."""
         menu.open = True
         while ref["running"] and menu.open:
             for ev in pygame.event.get():
@@ -604,11 +614,12 @@ def main(argv=None) -> int:
                     menu.handle_keydown(ev)
             if ref["last"] is not None:
                 screen = blit_frame(ref["last"])
-                menu.draw(screen)
-                pygame.display.flip()
+            else:                                                 # menu before the first frame -> over black
+                screen = view["screen"]
+                screen.fill((0, 0, 0))
+            menu.draw(screen)
+            pygame.display.flip()
             clock.tick(60)
-            if native_audio is not None:
-                native_audio.poll(state)
 
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap.
@@ -632,7 +643,6 @@ def main(argv=None) -> int:
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
-            menu_check(state)                                      # F10 overlay (modal — tick frozen while open)
             if ref["switch_level"] is not None:                    # Develop tab: jump/restart (a --debug cheat)
                 lvl = ref["switch_level"]
                 ref["switch_level"] = None
@@ -655,6 +665,7 @@ def main(argv=None) -> int:
                         #   509d/50a6) must sound AT that frame, not after the whole animation
                     if not ref["running"]:
                         break
+                ref["tick_count"] += 1                         # one native_frame_step drive == one game tick
             except Pre2LevelEndTransition:
                 between_levels(state, dos)                          # tally/carte flow, then the next level
             except Pre2CheatCredits:
