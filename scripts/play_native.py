@@ -292,6 +292,17 @@ def main(argv=None) -> int:
         if sh <= 0:
             return 0
         return min(_WIDE_MAX, max(0, (round(200 * sw / sh) - 320 + 1) // 2))
+
+    # Levels where widescreen must stay OFF: their scenery is drawn from off-screen tilemap columns that the
+    # wide margins would reveal. LEVEL A (id 0x09) is the gorilla boss — its alternate faces (calm / roaring)
+    # sit in the columns just right of the 320 window and pop into view widescreen.
+    _WS_EXCLUDE_LEVELS = {0x09}
+
+    def _margin_for(state) -> int:
+        """wide_margin(), but forced to 0 on levels that can't be widescreened (LEVEL A boss-face tiles)."""
+        if state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
+            return 0
+        return wide_margin()
     # ENTER-CODE (password screen): host hex key -> DOS make code. The game maps the DOS make code to a hex char
     # via its own [0xB068] table, so we must feed the make code of the PHYSICAL key position — like the original,
     # which reads raw scancodes. Key by SDL physical scancode (ev.scancode), NOT the keysym (ev.key): the keysym is
@@ -573,7 +584,7 @@ def main(argv=None) -> int:
         fg.page = disp & 0xFFFF
         fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
                                       foreground_frame=fg)
-        m = wide_margin()
+        m = _margin_for(state)
         efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
                                      bg_cache=_tx["bg"], effects=fx, margin=m,
                                      wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"],
@@ -1053,7 +1064,7 @@ def main(argv=None) -> int:
                     state.data[DS + off + 5] |= 0x40
             try:
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
-                                             tex_cache=enh["tex"], effects=fx, margin=wide_margin(),
+                                             tex_cache=enh["tex"], effects=fx, margin=_margin_for(state),
                                              wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"],
                                              bg_mode=settings["widescreen_bg"])
             finally:
