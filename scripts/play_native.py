@@ -95,6 +95,9 @@ def main(argv=None) -> int:
                     help="gameplay tick-rate cap; default = the faithful 70/3 Hz (~23.33 — the original's "
                          "main loop waits 3 VGA retraces per tick)")
     ap.add_argument("--scale", type=int, default=2)
+    ap.add_argument("--debug", action="store_true",
+                    help="show the Develop tab in the F10 overlay menu (level select, god mode — cheats; "
+                         "hidden from the end-user product by default)")
     args = ap.parse_args(argv)
     if args.fps is None:
         args.fps = TICK_HZ                              # faithful pacing unless the user overrides
@@ -136,7 +139,25 @@ def main(argv=None) -> int:
     if display_hz <= 0:
         display_hz = 60.0                                                # safe fallback
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
-    ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz}
+    ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
+           "menu_request": False, "switch_level": None}
+
+    # --- the end-user settings (the F10 menu edits these; the CLI shrinks to dev flags) -----------------
+    import json
+    settings_path = Path(gr) / "pre2native_settings.json"
+    settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False}
+    try:
+        settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
+    except Exception:                                                     # noqa: BLE001 — first run / unreadable
+        pass
+    settings["god"] = False                                              # a cheat never persists across runs
+
+    def save_settings():
+        try:
+            persist = {k: v for k, v in settings.items() if k != "god"}
+            settings_path.write_text(json.dumps(persist, indent=1))
+        except Exception as e:                                            # noqa: BLE001 — read-only game dir
+            print(f"(settings not saved: {e})")
     # ENTER-CODE (password screen): host hex key -> DOS make code. The game maps the DOS make code to a hex char
     # via its own [0xB068] table, so we must feed the make code of the PHYSICAL key position — like the original,
     # which reads raw scancodes. Key by SDL physical scancode (ev.scancode), NOT the keysym (ev.key): the keysym is
@@ -158,21 +179,36 @@ def main(argv=None) -> int:
                 ref["running"] = False
             elif ev.type == pygame.VIDEORESIZE:                    # user dragged the window edge -> rebind + rescale
                 view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
+            elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
+                ref["menu_request"] = True                        # the gameplay loop opens the modal menu
             elif ev.type == pygame.KEYDOWN:                        # latch the hex make code typed THIS frame
                 sc = _SDL_HEX.get(getattr(ev, "scancode", -1)) or _KEYSYM_HEX.get(ev.key)   # physical, keysym fallback
                 if sc:
                     ref["last_scan"] = sc
 
-    def present(rgb, fps, caption=None):
+    def blit_frame(rgb):
+        """Scale + letterbox one game frame onto the window (no flip) — shared by present() and the menu."""
         arr = np.asarray(rgb, np.uint8)
         fh, fw = arr.shape[:2]                                    # the frame's OWN size (320x200, or 640x480 for
         surf = pygame.surfarray.make_surface(arr.swapaxes(0, 1))  # the 12h creators screen) — fit it aspect-correct
         screen = view["screen"]
         sw, sh = screen.get_size()
         f = min(sw / fw, sh / fh)                                 # fit THIS frame, PRESERVING aspect ratio
+        if settings["integer_scale"] and f >= 1.0:
+            f = float(int(f))                                     # crisp pixel-exact multiples (menu toggle)
         tw, th = max(1, int(fw * f)), max(1, int(fh * f))
         screen.fill((0, 0, 0))                                    # letterbox the unused margin
         screen.blit(pygame.transform.scale(surf, (tw, th)), ((sw - tw) // 2, (sh - th) // 2))
+        return screen
+
+    _hud_font = {}
+
+    def present(rgb, fps, caption=None):
+        screen = blit_frame(rgb)
+        if settings["fps_overlay"]:
+            font = _hud_font.get("f") or _hud_font.setdefault("f", pygame.font.Font(None, 17))
+            screen.blit(font.render(f"{clock.get_fps():3.0f} fps  tick {TICK_HZ:.2f} Hz", True,
+                                    (190, 210, 190)), (8, 22))
         pygame.display.flip()
         clock.tick(fps)
         if caption:
@@ -265,12 +301,24 @@ def main(argv=None) -> int:
 
     # ---- audio: the recovered ENHANCED player (VM-free), driven by the native frame's audio commands ----
     native_audio = None
+    audio_post = None                                               # the sink's command inlet (menu toggles post here)
     try:
         from sdl_view import SdlEnhancedAudio
         from pre2.native.audio import NativeAudio
-        native_audio = NativeAudio(SdlEnhancedAudio(pygame, gr, {}).post, gr)
+        audio_post = SdlEnhancedAudio(pygame, gr, {}).post
+        native_audio = NativeAudio(audio_post, gr)
     except Exception as e:                                          # noqa: BLE001 — no audio device -> run silent
         print(f"  (audio disabled: {type(e).__name__}: {str(e)[:60]})")
+
+    def _audio_apply_settings():
+        """Push the music/sfx settings into the audio sink (SetMusicEnabled / SetSfxEnabled events)."""
+        if audio_post is None:
+            return
+        from pre2.audio.events import SetMusicEnabled, SetSfxEnabled
+        audio_post(SetMusicEnabled(enabled=bool(settings["music"])))
+        audio_post(SetSfxEnabled(enabled=bool(settings["sfx"])))
+
+    _audio_apply_settings()                                         # honour persisted settings from launch
 
     def reveal_level(state, dos):
         """Curtain the freshly-loaded level in (the VM's 3054 center-out level-start reveal) instead of it
@@ -484,6 +532,84 @@ def main(argv=None) -> int:
             if _p_edge():
                 break
 
+    # ---- the F10 overlay menu (modal; visual style from pre2_editor) --------------------------------------
+    from overlay_menu import OverlayMenu
+
+    def _menu_tabs():
+        """The tab/item data (re-evaluated each frame so values render live). Closures edit `settings` +
+        `ref` — HOST/presentation state only; the Develop tab (cheats) exists only under --debug."""
+        def onoff(k):
+            return "On" if settings[k] else "Off"
+
+        def toggle(k, apply=None):
+            def act():
+                settings[k] = not settings[k]
+                if apply:
+                    apply()
+                save_settings()
+            return act
+
+        view_tab = [
+            {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
+            {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
+        ]
+        audio_tab = [
+            {"label": "Music", "value": onoff("music"), "activate": toggle("music", _audio_apply_settings)},
+            {"label": "Sound effects", "value": onoff("sfx"), "activate": toggle("sfx", _audio_apply_settings)},
+        ]
+        help_tab = [
+            {"label": "F10", "value": "open / close this menu"},
+            {"label": "Arrows / numpad", "value": "move"},
+            {"label": "Space", "value": "fire / jump"},
+            {"label": "P", "value": "pause"},
+            {"label": "Esc", "value": "close menu, then quit"},
+        ]
+        tabs = [("View", view_tab), ("Audio", audio_tab)]
+        if args.debug:
+            lvl = ref.get("menu_level", 0)
+
+            def adj_level(d):
+                ref["menu_level"] = (lvl + d) % 0x11
+
+            def go_level():
+                ref["switch_level"] = ref.get("menu_level", 0)
+                menu.open = False
+
+            tabs.append(("Develop", [
+                {"label": "God mode", "value": onoff("god"), "activate": toggle("god")},
+                {"label": "Level", "value": f"id {lvl:#04x}", "adjust": adj_level, "activate": go_level},
+                {"label": "Restart level", "value": "reload current", "activate": lambda: (
+                    ref.__setitem__("switch_level", "restart"), setattr(menu, "open", False))},
+            ]))
+        tabs.append(("Help", help_tab))
+        return tabs
+
+    menu = OverlayMenu(pygame, _menu_tabs)
+
+    def menu_check(state):
+        """The modal F10 overlay: the game TICK is frozen while open (like the P pause) and every key event
+        is routed to the menu — nothing it consumes can reach the game's input cells, so demo determinism
+        and the oracle chain are structurally untouched. Music keeps playing (the sink runs on its own)."""
+        if not ref["menu_request"]:
+            return
+        ref["menu_request"] = False
+        menu.open = True
+        while ref["running"] and menu.open:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    ref["running"] = False
+                elif ev.type == pygame.VIDEORESIZE:
+                    view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
+                elif ev.type == pygame.KEYDOWN:
+                    menu.handle_keydown(ev)
+            if ref["last"] is not None:
+                screen = blit_frame(ref["last"])
+                menu.draw(screen)
+                pygame.display.flip()
+            clock.tick(60)
+            if native_audio is not None:
+                native_audio.poll(state)
+
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap.
 
@@ -506,6 +632,17 @@ def main(argv=None) -> int:
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
+            menu_check(state)                                      # F10 overlay (modal — tick frozen while open)
+            if ref["switch_level"] is not None:                    # Develop tab: jump/restart (a --debug cheat)
+                lvl = ref["switch_level"]
+                ref["switch_level"] = None
+                lvl = state.data[DS + 0x2D8A] if lvl == "restart" else lvl
+                print(f"menu: switching to level id {lvl:#04x}")
+                state = native_cold_boot(gr, level=lvl)
+                native_load_level_palette(state, dos)
+                reveal_level(state, dos)
+            if args.debug and settings["god"]:                     # Develop tab: keep the energy topped up
+                state.data[DS + 0x27D6] = 3                        # [asm 52a8] full hearts, refreshed pre-tick
             drive_input(state)
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
             try:
