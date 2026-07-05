@@ -39,6 +39,11 @@ DS = 0x1A0F << 4
 _FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its FrontEndScene frames are per-retrace)
 VIEWPORT_H = 176              # gameplay viewport rows (the HUD strip below never scrolls / fades)
 _VFADE_MID = 88               # the 30C6 vertical fade's two bands meet here (fully closed)
+# Smooth-transition durations in wall-clock SECONDS (present-time driven -> frame-rate-independent).
+_REVEAL_S = 0.45             # level-start / checkpoint / cave center-out curtain reveal
+_IRIS_S = 1.0                # level-end circular iris close
+_FADE_S = 0.35               # cave / death vertical fade-to-black
+_CAVE_BLACK_S = 0.12         # the brief black hold while the camera pans behind the fade
 _TRANSITION_FPS = 30          # curtains/fades: the VM's 3054/30C6 are vsync-paced sub-frame effects that span
 #                               ~20 retraces (~0.34s); presenting the ~11 reveal steps at 70Hz was ~2x too fast.
 TICK_HZ = 70.0 / 3.0          # the game's own tick rate: the 1C6F frame limiter waits 3 PIT/retrace periods per
@@ -440,30 +445,42 @@ def main(argv=None) -> int:
             return None
         return compose(efs, None, 1.0), m, efs
 
-    def _present_smooth_reveal(state, dos):
-        """The level-start CURTAIN reveal, smooth + full-width: compose the loaded level once, then wipe it in
-        center-out over the reveal duration. Returns True if it ran (smooth mode + a gameplay frame)."""
-        wide = compose_wide_now(state, dos)
-        if wide is None:
-            return False
-        import numpy as np
-        rgb, _m, _efs = wide
-        w = rgb.shape[1]
-        cx = w // 2
-        steps = 14
-        for i in range(1, steps + 1):
-            half = int(round((i / steps) * (w / 2.0)))
-            fr = np.zeros_like(rgb)
-            lo, hi = max(0, cx - half), min(w, cx + half)
-            fr[:VIEWPORT_H, lo:hi] = rgb[:VIEWPORT_H, lo:hi]   # curtain the VIEWPORT only
-            fr[VIEWPORT_H:] = rgb[VIEWPORT_H:]                  # the HUD is static chrome (never wiped)
-            present(fr, _TRANSITION_FPS, "PRE2 VM-less — level start")
+    def _animate(state, duration, render, caption="PRE2 VM-less — transition"):
+        """Present ``render(progress 0..1)`` at the DISPLAY rate for ``duration`` wall-clock seconds, so the
+        effect is smooth AND frame-rate-INDEPENDENT (progress comes from the clock, not a fixed source step
+        count). Ends exactly at progress 1.0. Pumps + polls audio each displayed frame."""
+        from time import perf_counter
+        t0 = perf_counter()
+        while ref["running"]:
+            p = (perf_counter() - t0) / duration if duration > 0 else 1.0
+            present(render(min(1.0, p)), present_hz(), caption)
             pump()
             if native_audio is not None:
                 native_audio.poll(state)
-            if not ref["running"]:
-                return True
-        present(rgb, _TRANSITION_FPS, "PRE2 VM-less — level start")
+            if p >= 1.0 or not ref["running"]:
+                break
+
+    def _curtain_frame(rgb, p):
+        """Center-out curtain of ``rgb`` at progress ``p`` — VIEWPORT only; the HUD strip is static chrome."""
+        import numpy as np
+        w = rgb.shape[1]
+        cx = w // 2
+        half = int(round(min(1.0, max(0.0, p)) * (w / 2.0)))
+        fr = np.zeros_like(rgb)
+        lo, hi = max(0, cx - half), min(w, cx + half)
+        fr[:VIEWPORT_H, lo:hi] = rgb[:VIEWPORT_H, lo:hi]
+        fr[VIEWPORT_H:] = rgb[VIEWPORT_H:]
+        return fr
+
+    def _present_smooth_reveal(state, dos):
+        """The level-start CURTAIN reveal, smooth + full-width + FRAME-RATE-INDEPENDENT: compose the loaded
+        level once, then wipe it in center-out over ``_REVEAL_S`` wall-clock seconds at the display rate.
+        Returns True if it ran (smooth mode + a gameplay frame)."""
+        wide = compose_wide_now(state, dos)
+        if wide is None:
+            return False
+        rgb = wide[0]
+        _animate(state, _REVEAL_S, lambda p: _curtain_frame(rgb, p), "PRE2 VM-less — level start")
         return True
 
     def reveal_level(state, dos):
@@ -520,30 +537,49 @@ def main(argv=None) -> int:
         print("  level complete -> IRIS close -> exit-anim (walk-in + food-throw score count-up + walk-off) -> carte")
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
         smooth = compose_wide_now(state, dos) if _smooth_active() else None
-        for planes, page in native_iris_close(state, dos, disp, game_root=gr):   # 316F circle-close on the player
-            if smooth is not None:                                 # SMOOTH iris: shrink a true circle over the
-                from pre2.bridge.render_state import read_renderer_state   # composed WIDESCREEN frozen frame,
-                from pre2.enhanced.transitions import apply_iris          # keeping the player visible on top
-                from pre2.enhanced.compositor import _blit
-                rgb, m, efs = smooth
-                iris = read_renderer_state(state, dos).iris
+        if smooth is not None:
+            # SMOOTH iris: drain native_iris_close for its STATE work (reading the recovered iris centre off the
+            # first frame), then present-time animate a true circle 0xE6->0 over the frozen wide frame at the
+            # display rate (frame-rate-independent), the player held on top.
+            from pre2.bridge.render_state import read_renderer_state
+            from pre2.enhanced.compositor import _blit
+            from pre2.enhanced.transitions import apply_iris
+            rgb, m, efs = smooth
+            players = [i for i in efs.sprites if i.handle == ("player",)]
+            center = None
+            for planes, page in native_iris_close(state, dos, disp, game_root=gr):
+                if center is None:
+                    iris = read_renderer_state(state, dos).iris
+                    if iris is not None:                           # centre: screen COL = center_y (+margin),
+                        center = (iris.center_y + m, iris.center_x)   # ROW = center_x (axes swapped)
+                pump()
+                if native_audio is not None:
+                    native_audio.poll(state)
+                if not ref["running"]:
+                    return
+            if center is None:
+                center = (rgb.shape[1] // 2, _VFADE_MID)
+
+            def _iris_fr(p):
                 fr = rgb.copy()
-                if iris is not None and iris.radius > 0:           # centre: screen COLUMN = center_y (+margin),
-                    apply_iris(fr, iris.radius, iris.center_y + m, iris.center_x)   # ROW = center_x (axes swapped)
+                r = 0xE6 * (1.0 - p)
+                if r > 0:
+                    apply_iris(fr, r, center[0], center[1])
                 else:
                     fr[:] = 0
-                for inst in efs.sprites:                           # the player holds on top of the closing iris
-                    if inst.handle == ("player",):
-                        _blit(fr, inst.rgba, inst.screen_x + inst.tex_off_x, inst.screen_y + inst.tex_off_y)
-                present(fr, _FRONT_END_FPS, "PRE2 VM-less — level complete")
-            else:
+                for inst in players:
+                    _blit(fr, inst.rgba, inst.screen_x + inst.tex_off_x, inst.screen_y + inst.tex_off_y)
+                return fr
+            _animate(state, _IRIS_S, _iris_fr, "PRE2 VM-less — level complete")
+        else:
+            for planes, page in native_iris_close(state, dos, disp, game_root=gr):   # 316F circle-close (faithful)
                 present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
                         "PRE2 VM-less — level complete")
-            pump()
-            if native_audio is not None:
-                native_audio.poll(state)
-            if not ref["running"]:
-                return
+                pump()
+                if native_audio is not None:
+                    native_audio.poll(state)
+                if not ref["running"]:
+                    return
         try:
             native_load_song(state, "BRAVO.TRK", gr)               # the tally jingle
         except Exception:                                          # noqa: BLE001 — no audio -> silent tally
@@ -831,7 +867,7 @@ def main(argv=None) -> int:
         n = 0
         tick_dt = 1.0 / TICK_HZ
         enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None,   # the prev+cur snapshot pair
-               "last_cur": None, "tx_new": None}   # smooth-tx: last wide snapshot (fade base) + reveal new-frame
+               "last_cur": None}   # smooth-tx: the last wide gameplay/bounce frame = the fade base
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
@@ -877,7 +913,6 @@ def main(argv=None) -> int:
                 enh["next_tick"] = None
                 return
             enh["last_cur"] = cur                                # smooth-tx fade base = the last wide gameplay frame
-            enh["tx_new"] = None                                 # a real gameplay frame ends any pending reveal
             if not settings["interpolation"]:                   # WIDESCREEN without interpolation: one composed
                 n += 1                                          #   (wide) frame per tick, faithful pacing
                 present(compose(cur, None, 1.0), args.fps,
@@ -910,44 +945,33 @@ def main(argv=None) -> int:
             enh["prev"] = cur
             enh["next_tick"] += tick_dt
 
-        def present_smooth_tx(state, dos, tx):
-            """Render one SMOOTH FULL-WIDTH transition frame from a `native_frame_step_tagged` descriptor
-            (cave/death fade -> black -> curtain), instead of streaming the faithful pillarboxed 320px frame.
-            The fade dims the last wide gameplay frame; the reveal composes + wipes in the new wide room."""
-            import numpy as np
+        def present_smooth_tx_run(state, dos, run):
+            """Present a SMOOTH FULL-WIDTH, FRAME-RATE-INDEPENDENT cave/death transition. ``run`` is the whole
+            transition (already drained from native_frame_step_tagged, so ``state`` is now at the destination):
+            its ``tx`` phases decide fade -> black -> curtain. The fade dims the last wide gameplay/bounce frame
+            (enh.last_cur); the reveal wipes in the freshly-composed wide destination room. Each phase runs by
+            wall clock at the display rate (not the source step count)."""
             from pre2.enhanced.compositor import compose
             from pre2.enhanced.transitions import apply_vfade
             enh["prev"] = enh["next_tick"] = None               # a transition breaks the interpolation pair
-            kind = tx[0]
-            if kind in ("fade", "black"):
-                base = compose(enh["last_cur"], None, 1.0) if enh["last_cur"] is not None else None
-                if base is None:
-                    w = compose_wide_now(state, dos)
-                    base = w[0] if w is not None else None
-                if base is None:
-                    return
-                fr = base.copy()
-                if kind == "black":
-                    fr[:VIEWPORT_H] = 0                          # viewport fully black (camera panning); HUD held
-                else:
-                    frac = tx[1]                                 # bands converge to the mid row (fully black at 1)
-                    apply_vfade(fr, int(_VFADE_MID * frac), int(2 * _VFADE_MID - _VFADE_MID * frac))
-                present(fr, _TRANSITION_FPS, "PRE2 VM-less — transition")
-            else:                                               # ("reveal", frac): wipe the NEW room in center-out
-                if enh["tx_new"] is None:
-                    w = compose_wide_now(state, dos)
-                    enh["tx_new"] = w[0] if w is not None else None
-                base = enh["tx_new"]
-                if base is None:
-                    return
-                cw = base.shape[1]
-                cx = cw // 2
-                half = int(round(min(1.0, max(0.0, tx[1])) * (cw / 2.0)))
-                fr = np.zeros_like(base)
-                lo, hi = max(0, cx - half), min(cw, cx + half)
-                fr[:VIEWPORT_H, lo:hi] = base[:VIEWPORT_H, lo:hi]   # curtain the VIEWPORT only
-                fr[VIEWPORT_H:] = base[VIEWPORT_H:]                 # the HUD is static chrome (never wiped)
-                present(fr, _TRANSITION_FPS, "PRE2 VM-less — transition")
+            kinds = {t[3][0] for t in run if t[3] is not None}
+            old = compose(enh["last_cur"], None, 1.0) if enh["last_cur"] is not None else None
+            neww = compose_wide_now(state, dos)                 # state is at the arrival/checkpoint now
+            new = neww[0] if neww is not None else None
+            if "fade" in kinds and old is not None:
+                _animate(state, _FADE_S, lambda p: apply_vfade(
+                    old.copy(), int(_VFADE_MID * p), int(2 * _VFADE_MID - _VFADE_MID * p)))
+            if "black" in kinds:
+                base = old if old is not None else new
+                if base is not None:
+                    def _black(p):
+                        fr = base.copy(); fr[:VIEWPORT_H] = 0
+                        return fr
+                    _animate(state, _CAVE_BLACK_S, _black)
+            if "reveal" in kinds:
+                base = new if new is not None else old
+                if base is not None:
+                    _animate(state, _REVEAL_S, lambda p: _curtain_frame(base, p))
 
         while ref["running"]:
             pump()
@@ -980,10 +1004,19 @@ def main(argv=None) -> int:
                 # death-BOUNCE frame — object motion) lerps; a transition frame (cave curtain, death fade +
                 # checkpoint curtain, scene) streams 1:1 and breaks the lerp pair. So the parabolic death arc
                 # smooths out (each of its 60 frames is a lerp tick) while wipes stay faithful.
-                for planes, page, interp_ok, tx in native_frame_step_tagged(state, dos, disp, game_root=gr):
-                    # Enhanced present path when interpolation OR widescreen is on (widescreen needs the
-                    # composed wide frame even unlerped); transition frames stream faithful 1:1 UNLESS smooth
-                    # transitions is on (then the cave/death fade+curtain render full-width from `tx`).
+                _it = iter(native_frame_step_tagged(state, dos, disp, game_root=gr))
+                for planes, page, interp_ok, tx in _it:
+                    # A SMOOTH transition run: drain the whole transition (state advances to the destination),
+                    # then present it present-time full-width (fade -> black -> curtain). The preceding bounce
+                    # frames (interp) were already presented + stashed as the fade base (enh.last_cur).
+                    if _smooth_active() and tx is not None:
+                        run = [(planes, page, interp_ok, tx)]
+                        run.extend(_it)
+                        present_smooth_tx_run(state, dos, run)
+                        break
+                    # Enhanced present path when interpolation OR widescreen is on (widescreen needs the composed
+                    # wide frame even unlerped); a transition frame streams faithful 1:1 (smooth off) and breaks
+                    # the lerp pair.
                     if (settings["interpolation"] or settings["widescreen"]) and interp_ok:
                         present_interpolated(planes, page)
                         pump()
@@ -991,16 +1024,8 @@ def main(argv=None) -> int:
                             native_audio.poll(state)
                         if not ref["running"]:
                             break
-                    elif _smooth_active() and tx is not None:
-                        present_smooth_tx(state, dos, tx)   # full-width fade / black / curtain from the descriptor
-                        pump()
-                        if native_audio is not None:
-                            native_audio.poll(state)
-                        if not ref["running"]:
-                            break
                     else:
                         enh["prev"] = enh["next_tick"] = None   # transition (or interp off) -> break the lerp pair
-                        enh["tx_new"] = None
                         if not stream_frame(planes, page):
                             break
                 ref["tick_count"] += 1                         # one native_frame_step drive == one game tick
