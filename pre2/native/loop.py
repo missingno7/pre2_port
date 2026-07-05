@@ -159,9 +159,10 @@ def native_trigger_scan(state) -> None:
     raises :class:`Pre2CaveTeleport` (BEFORE mutating anything) — the caller drives the multi-frame 5326
     transition via the ``native_cave_teleport`` generator (fade-out curtain, hidden pan, mini-pass, reveal,
     then the frame's remainder)."""
+    from pre2.bridge.dgroup_view import PlayerView
     rb, rw = readers(state)
     if rb(0x6BE1) != 0 and rb(0x6BC5) == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
-        dx = _player_tile_coords(rw)                        # [asm 5313 -> 549A] the player's packed tile coord
+        dx = PlayerView(state).tile_coords                  # [asm 5313 -> 549A] the player's packed tile coord
         si = 0x8367                                         # [asm 5316]
         for _ in range(0x14):                               # [asm 5319 cx=0x14] the 20-entry table
             if rw(si) == dx:                                # [asm 531C je 5326] a match -> the cave teleport
@@ -192,20 +193,22 @@ def native_cave_teleport(state, si):
          "one-tick drift" (demo 195135 @frame 206) — now byte-reproduced. 3054 is the CENTER-OUT REVEAL curtain
          -> yields ``("reveal", k)`` k=1..10 (the panel_copy strip pairs).
       6. The interrupted frame's REMAINDER (the post-0238 spine) — ``_frame_tail_after_trigger``."""
+    from pre2.bridge.dgroup_view import PlayerView
     rb, rw = readers(state)
+    player = PlayerView(state)
     dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
     dest_x, dest_y = dest_cam & 0xFF, (dest_cam >> 8) & 0xFF
     dest_tile = rw((si + 4) & 0xFFFF)                         # [si+4] destination player tile
     flag = rb((si + 6) & 0xFFFF)                              # [si+6] -> [0x6BD9]
-    _ww(state, 0x4F22, 0)                                     # [asm 5326] Xvel = 0
-    _ww(state, 0x4F2A, 0)                                     # [asm 532C] Yvel = 0
+    player.xvel = 0                                           # [asm 5326]
+    player.yvel = 0                                           # [asm 532C]
     for k in range(1, 10):                                    # [asm 5332] 30C6 vertical fade-out (VRAM-only)
         yield ("fade", k)
     _wb(state, 0x6BC4, 0)                                     # [asm 5335] vertical sub-tile accumulator
     saved_8164 = rw(0x8164)                                   # [asm 533A] push [0x8164]
     _ww(state, 0x8164, 0xEC)                                  # [asm 533F] pan clamp -> max (don't block the pan)
-    _ww(state, 0x4F1C, (dest_tile & 0xFF) << 4)              # [asm 5350] player X = tile.lo << 4
-    _ww(state, 0x4F1E, ((dest_tile >> 8) & 0xFF) << 4)       # [asm 535A] player Y = tile.hi << 4
+    player.x = (dest_tile & 0xFF) << 4                        # [asm 5350] player X = tile.lo << 4
+    player.y = ((dest_tile >> 8) & 0xFF) << 4                 # [asm 535A] player Y = tile.hi << 4
     while rb(0x2DE6) != dest_y:                               # [asm 5361-5375] vertical pan first
         ok = _v_scroll_up(state, 0x10) if rb(0x2DE6) > dest_y else _v_scroll_down(state, 0x10)
         if not ok:                                            # the ASM would spin forever; we fail loud
@@ -239,25 +242,14 @@ def native_cave_teleport(state, si):
     _frame_tail_after_trigger(state)                          # the interrupted frame's remainder (023B..026D)
 
 
-def _player_tile_coords(rw) -> int:
-    """[asm 549A] dx = (sar(player_Y,4) & 0xFF) << 8 | (sar(player_X,4) & 0xFF) — the player's packed tile coord."""
-    def _sar4(v: int) -> int:
-        v &= 0xFFFF
-        if v & 0x8000:
-            v -= 0x10000
-        return (v >> 4) & 0xFF
-    return ((_sar4(rw(0x4F1E)) << 8) | _sar4(rw(0x4F1C))) & 0xFFFF
-
-
 def native_proximity_trigger(state) -> None:
     """[asm 53F6..5497] The per-frame proximity-trigger scan (breakable-wall / opening-passage triggers): 15
     :class:`ProximityTrigger` entries. When the player comes within 8 (packed) of an armed entry it FIRES
     (``trigger_pos`` = FIRED, camera shake = 7); a fired entry re-applies its map modification
     (:func:`native_proximity_mapmod`) each frame until its countdown disarms it. No trigger in range and
     none fired -> a byte-exact no-op."""
-    from pre2.bridge.dgroup_view import ProximityTrigger, ProximityView
-    _rb, rw = readers(state)
-    player = _player_tile_coords(rw)                              # [asm 5313 -> 549A] packed player tile
+    from pre2.bridge.dgroup_view import PlayerView, ProximityTrigger, ProximityView
+    player = PlayerView(state).tile_coords                        # [asm 5313 -> 549A] packed player tile
     v = ProximityView(state)
     for trig in v.triggers:
         pos = trig.trigger_pos
@@ -470,8 +462,11 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
                     state.data[(eb + ((off + 1) & 0xFFFF)) & 0xFFFFF] = (val >> 8) & 0xFF
         # _redraws = the on-screen tile re-blit (a render side-effect) — the faithful renderer's job.
         did = collected                                             # [asm 890D] jae -> skip the bounce if no collect
-    if bounce and did and rw(_PLAYER_YVEL) != 0:                     # [asm 890F/8914] player Yvel != 0
-        _ww(state, _PLAYER_YVEL, 0xFFB0)                            # [asm 8916] bounce up (-0x50)
+    if bounce and did:
+        from pre2.bridge.dgroup_view import PlayerView
+        player = PlayerView(state)
+        if player.yvel != 0:                                        # [asm 890F/8914] airborne only
+            player.yvel = -0x50                                     # [asm 8916] bounce up
 
 
 def native_combat_pass(state) -> None:
@@ -626,21 +621,20 @@ def native_death_bounce_509d(state):
     residual is the 8 effect slots that the render 26FA frees ([slot+4]=0xffff) as their lifetime expires —
     render-managed, and in the full 4F6C respawn it is immediately wiped by 5237's pool re-init, so it is
     irrelevant to the respawn outcome (and would be reproduced by native_render's per-frame draw in a renderer)."""
-    def _s16(v):
-        return v - 0x10000 if v & 0x8000 else v
-
-    rb, rw = readers(state)
+    from pre2.bridge.dgroup_view import PlayerView
     from pre2.native.audio import native_play_sfx
+    rb, rw = readers(state)
+    player = PlayerView(state)
     native_play_sfx(state, 7)                                        # [asm 50a6-50a9] the death SCREAM (play_sfx 7)
-    _wb(state, 0x4F2D, 0)                                            # [asm 50ac] clear the player death-state byte
-    _ww(state, 0x4F20, 0x21)                                        # [asm 50b1] death anim frame
-    _ww(state, 0x4F2A, 0x0F)                                        # [asm 50b7] Yvel = +15 (the upward kick)
-    centre = ((rw(0x2DE4) + 0xA) << 4) & 0xFFFF                     # [asm 50c0-50cd] (camera cell + 10 tiles) * 16
-    _ww(state, 0x4F22, 5 if rw(0x4F1C) < centre else (-5 & 0xFFFF))  # [asm 50cf-50d8] drift toward screen centre
-    for _ in range(0x3C):                                           # [asm 50db cx=0x3c] 60 frames
+    player.death_state = 0                                           # [asm 50ac]
+    player.sprite = 0x21                                             # [asm 50b1] the death anim frame
+    player.yvel = 0x0F                                               # [asm 50b7] the upward kick
+    centre = ((rw(0x2DE4) + 0xA) << 4) & 0xFFFF                      # [asm 50c0-50cd] (camera cell + 10 tiles) * 16
+    player.xvel = 5 if player.x < centre else -5                     # [asm 50cf-50d8] drift toward screen centre
+    for _ in range(0x3C):                                            # [asm 50db cx=0x3c] 60 frames
         yield                                                       # render THIS bounce frame (mirrors the ASM
         #   loop-top 0x50de: the caller renders the corpse mid-arc, then we advance one frame of physics)
-        _ww(state, 0x4F0E, 0xFFFF)                                  # [asm 50df] suppress the normal player render
+        player.slot0.sprite = 0xFFFF                                 # [asm 50df] suppress the normal player draw
         apply_ds(state, tick_popup_ring(rw))                        # [asm 50e5] 581E
         native_object_system_step(state)                           # [asm 50e8] 6822
         apply_ds(state, tick_projectiles(rw, rb))                  # [asm 50eb] 6210
@@ -656,10 +650,10 @@ def native_death_bounce_509d(state):
         native_firefly_step(state)                                 # [asm 5106] 54AB
         native_scroll_script(state)                                # [asm 5109] 3922
         # [asm 510c] 44FB render/timing helper
-        _ww(state, 0x4F1C, (rw(0x4F1C) + rw(0x4F22)) & 0xFFFF)      # [asm 510f] X += Xvel
-        yv = _s16(rw(0x4F2A)) - 1                                   # [asm 5116] Yvel -= 1 (gravity)
-        if yv < -0x10:                                             # [asm 511a] clamp at terminal -0x10
+        player.x = (player.x + player.xvel) & 0xFFFF                 # [asm 510f] X += Xvel
+        yv = player.yvel - 1                                         # [asm 5116] Yvel -= 1 (gravity)
+        if yv < -0x10:                                              # [asm 511a] clamp at terminal -0x10
             yv = -0x10
-        _ww(state, 0x4F2A, yv & 0xFFFF)                            # [asm 5122]
-        _ww(state, 0x4F1E, (rw(0x4F1E) - yv) & 0xFFFF)            # [asm 5125] Y -= Yvel
+        player.yvel = yv                                             # [asm 5122]
+        player.y = (player.y - yv) & 0xFFFF                          # [asm 5125] Y -= Yvel
     # [asm 512c] call 30c6 — camera/scroll fixup (the renderer's job; no gameplay DGROUP state)

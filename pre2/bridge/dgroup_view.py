@@ -273,6 +273,14 @@ class StructView:
         self._base = base
 
 
+def _coerce_backend(source):
+    """A backend passes through; anything else (NativeGameState / VM ``mem`` / raw ``bytearray``) is wrapped
+    in a :class:`ByteBackend`."""
+    if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend)):
+        return source
+    return ByteBackend(source)
+
+
 class DgroupView(StructView):
     """A whole-DGROUP view (base 0, so field offsets ARE DGROUP offsets). Construct from a backend, or directly
     from a ``NativeGameState`` / VM ``mem`` / raw ``bytearray`` (wrapped in a :class:`ByteBackend`)."""
@@ -280,8 +288,7 @@ class DgroupView(StructView):
     __slots__ = ()
 
     def __init__(self, source):
-        backend = source if isinstance(source, (ByteBackend, OverlayBackend)) else ByteBackend(source)
-        super().__init__(backend, 0)
+        super().__init__(_coerce_backend(source), 0)
 
 
 class _ScriptEntry(StructView):
@@ -445,3 +452,56 @@ class RenderSlot(StructView):
     def sprite_id(self) -> int:
         """The bare sprite index (``sprite`` with the flag bits masked off)."""
         return self._backend.rw(self._base + 4) & 0x1FFF
+
+
+# ---- the player (the 58A7 FSM's struct at 0x4F1C — literally render slot #1 with kinematics appended) -------
+
+RENDER_SLOTS_BASE = 0x4F0A     # slot 0; the player is slot 1 (base + 0x12 = 0x4F1C)
+PLAYER_BASE = 0x4F1C
+
+
+class PlayerView(RenderSlot):
+    """The player struct — render slot #1 (so ``x``/``y``/``sprite``/``flags`` are inherited: the player's
+    on-screen record IS its slot; ``sprite`` is the packed anim-frame word, 0x2000 flag included) plus the
+    58A7 FSM's kinematics fields appended after it.
+
+    **Width-alias convention** (the "union" answer): when the ASM reads the same bytes at different widths,
+    each width gets its OWN named field, because a different width is a different *semantic* — ``facing`` is
+    the signed +1/-1 word the FSM integrates with; ``facing_lo`` is the low byte the anim mirror passes to
+    ``player_advance_anim``. Same storage, two meanings, two names — never a width argument at the call site.
+
+    ``death_state`` [+0x11, 0x4F2D] aliases the generic slot's ``life`` byte — for the PLAYER that byte is the
+    death/hurt state the respawn logic reads, so it carries the player-specific name here."""
+
+    __slots__ = ()
+
+    xvel        = _S16(0x06)    # 0x4F22 — X velocity, 12.4 fixed [asm 5A0F integrate]
+    motion_mode = _U8(0x08)     # 0x4F24 — kinematics mode/shift (friction = 0xC >> mode; launchers set 2/3)
+    facing      = _S16(0x09)    # 0x4F25 — +1 / -1 (the FSM's word)
+    facing_lo   = _U8(0x09)     # 0x4F25 low byte — the anim-mirror flag (width alias of ``facing``)
+    anim_b      = _U8(0x0B)     # 0x4F27 — anim B-state (anim id memory; also the camera-shake gate input)
+    anim_ptr    = _U16(0x0C)    # 0x4F28 — current anim-script pointer (638B advances it)
+    yvel        = _S16(0x0E)    # 0x4F2A — Y velocity, 12.4 fixed [asm 5A36 integrate]
+    run_flag    = _U8(0x10)     # 0x4F2C — run state (reset on an anim change)
+    death_state = _U8(0x11)     # 0x4F2D — death/hurt state byte (aliases RenderSlot.life for the player slot)
+
+    def __init__(self, source):
+        super().__init__(_coerce_backend(source), PLAYER_BASE)
+
+    @property
+    def slot0(self) -> RenderSlot:
+        """Render slot 0 (just below the player slot) — its ``sprite``=0xFFFF is the 'suppress the normal
+        player draw' switch the death bounce flips [asm 50DF]."""
+        return RenderSlot(self._backend, RENDER_SLOTS_BASE)
+
+    @property
+    def tile_coords(self) -> int:
+        """The packed player TILE coordinate ``(sar(y,4)&0xFF)<<8 | (sar(x,4)&0xFF)`` — what the trigger
+        tables match against [asm 549A]. Arithmetic (sign-preserving) shifts exactly like the ASM ``sar``."""
+        def sar4(v: int) -> int:
+            v &= 0xFFFF
+            if v & 0x8000:
+                v -= 0x10000
+            return (v >> 4) & 0xFF
+        return ((sar4(self._backend.rw(self._base + 2)) << 8)
+                | sar4(self._backend.rw(self._base))) & 0xFFFF
