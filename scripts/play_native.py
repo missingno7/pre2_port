@@ -413,9 +413,13 @@ def main(argv=None) -> int:
         screen = blit_frame(rgb)
         if settings["fps_overlay"]:
             import time as _time
+            us = _ui_scale()                                     # scale the readout with the UI (hi-DPI / 4K)
+            if _hud["font"] is None or _hud.get("font_scale") != us:
+                from overlay_menu import _load_font              # the same clean UI face as the F10 menu
+                _hud["font"] = _load_font(pygame, max(9, int(round(13 * us))), False)
+                _hud["font_scale"] = us
+                _hud["surf"] = None
             font = _hud["font"]
-            if font is None:
-                font = _hud["font"] = pygame.font.Font(None, 17)
             now = _time.perf_counter()
             if now - _hud["t0"] >= 0.5:                          # MEASURED rates over a rolling half-second:
                 tps = (ref["tick_count"] - _hud["ticks0"]) / (now - _hud["t0"])   # real game ticks/sec (the
@@ -426,11 +430,12 @@ def main(argv=None) -> int:
             surf = _hud.get("surf")
             if surf is None:                                     # cache: render text (and its backing box)
                 text = font.render(_hud["text"], True, (190, 210, 190))          # once per 0.5s, not per frame
-                surf = pygame.Surface((text.get_width() + 10, text.get_height() + 6))
+                px, py = int(round(5 * us)), int(round(3 * us))
+                surf = pygame.Surface((text.get_width() + 2 * px, text.get_height() + 2 * py))
                 surf.fill((10, 12, 14))                          # opaque black box: readable over the game AND
-                surf.blit(text, (5, 3))                          # self-erasing over the letterbox (no ghosting,
+                surf.blit(text, (px, py))                        # self-erasing over the letterbox (no ghosting,
                 _hud["surf"] = surf                              #  which the fill-once letterbox left behind)
-            screen.blit(surf, (8, 22))
+            screen.blit(surf, (int(round(8 * us)), int(round(14 * us))))
         pygame.display.flip()
         pace(fps)
         if caption:
