@@ -449,7 +449,13 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
     rb, rw = readers(state)
     writes, sfx, hit, _slot = projectile_vs_enemies(rb, rw, si)       # [asm 8C21] source-vs-ENEMY
     _apply_bytes(state, writes)
-    native_emit_sfx(state, sfx)                                       # emit the kill sound (play_sfx 2)
+    # Enhanced STEREO: the kill sound pans to where the enemy is relative to the player (the screen-centre
+    # listener). _slot is the hit enemy's object record; [+0] its world X, player world X at 0x4F1C.
+    sx = None
+    if sfx and _slot is not None:
+        rel = (rw(_slot & 0xFFFF) - rw(0x4F1C)) & 0xFFFF
+        sx = 160 + (rel - 0x10000 if rel & 0x8000 else rel)      # enemy X relative to the player, +160 = screen
+    native_emit_sfx(state, sfx, sx)                                   # emit the kill sound (play_sfx 2)
     did = hit                                                        # [asm 88EB/8908] jb -> skip the bonus scan
     if not hit:                                                      # CF=0 -> source-vs-BONUS pickup
         ds, mapw, _redraws, collected = bonus_pickup_scan(rb, rw, si)   # [asm 899E]

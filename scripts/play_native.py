@@ -184,6 +184,7 @@ def main(argv=None) -> int:
     import json
     settings_path = Path(gr) / "pre2native_settings.json"
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
+                "stereo_sfx": True,   # ENHANCED: pan effects by where on screen they fire (music is already stereo)
                 "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
                 "widescreen": False, "fullscreen": False, "true_widescreen": False,
                 "smooth_transitions": False, "hud_align": "center",   # widescreen HUD: left / center / right
@@ -565,6 +566,8 @@ def main(argv=None) -> int:
 
     def _audio_apply_settings():
         """Push the music/sfx settings into the audio sink (SetMusicEnabled / SetSfxEnabled events)."""
+        if native_audio is not None:
+            native_audio.stereo = bool(settings["stereo_sfx"])         # ENHANCED: pan SFX by on-screen X
         if audio_post is None:
             return
         from pre2.audio.events import SetMusicEnabled, SetSfxEnabled
@@ -966,6 +969,8 @@ def main(argv=None) -> int:
         audio_tab = [
             {"label": "Music", "value": onoff("music"), "activate": toggle("music", _audio_apply_settings)},
             {"label": "Sound effects", "value": onoff("sfx"), "activate": toggle("sfx", _audio_apply_settings)},
+            {"label": "Stereo SFX", "value": onoff("stereo_sfx"),
+             "activate": toggle("stereo_sfx", _audio_apply_settings)},
         ]
         experimental_tab = [
             {"label": "True widescreen", "value": onoff("true_widescreen"), "activate": toggle("true_widescreen")},

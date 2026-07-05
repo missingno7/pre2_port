@@ -379,7 +379,10 @@ class SdlEnhancedAudio:
                     self.sfx_missed += 1
                     return
                 self.sfx_played += 1
-                self._sfx_channels[self._rr % len(self._sfx_channels)].play(self._sfx_sound(command))
+                ch = self._sfx_channels[self._rr % len(self._sfx_channels)]
+                ch.play(self._sfx_sound(command))
+                p = max(-1.0, min(1.0, command.pan))          # -1 full-left .. +1 full-right (equal-power-ish)
+                ch.set_volume(min(1.0, 1.0 - p), min(1.0, 1.0 + p))   # per-channel L/R gain = the stereo pan
                 self._rr += 1
         except Exception as exc:               # never let a bad command kill the game loop
             self.errors += 1

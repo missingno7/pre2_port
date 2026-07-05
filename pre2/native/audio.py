@@ -24,8 +24,11 @@ _ORDER_TABLE = 0xDC7      # [asm 22B3] order table (pattern sequence)
 _SFX_DEV_FLAGS = (0x1D6C, 0x1D6D)   # cs: digital-device-present flags (either == 1 -> the SB/digital path)
 
 
-def native_play_sfx(state, dl: int) -> None:
+def native_play_sfx(state, dl: int, x: "int | None" = None) -> None:
     """[asm 0282] Emit sound effect ``dl`` the way ``play_sfx`` does — reproduce its device dispatch:
+
+    ``x`` is the OPTIONAL trigger screen X (0..320) for the enhanced STEREO pan (None = centre); it only rides
+    the native ``sfx_queue`` side-channel, never the byte-exact ``play_sfx`` writes below.
 
     * a digital device is present (``cs:[0x1D6C]`` or ``cs:[0x1D6D]`` == 1) -> write the SB descriptor
       ``[0x1004]`` (src) / ``[0x1006]`` (len) from the table entry ``[0x1009 + dl*4]`` (0x2A9). This is exactly
@@ -46,16 +49,17 @@ def native_play_sfx(state, dl: int) -> None:
         d[_DS + 0x1035] = ptr & 0xFF; d[_DS + 0x1036] = (ptr >> 8) & 0xFF
     q = getattr(state, "sfx_queue", None)                                   # every CALL is a distinct trigger (a
     if q is not None:                                                       #   repeated identical effect re-fires)
-        q.append(dl)
+        q.append((dl, x))                                                   # x = trigger SCREEN X (0..320) or None
         if len(q) > 64:                                                     # cap for a consumer-less run (the oracle)
             del q[:-64]
 
 
-def native_emit_sfx(state, sfx) -> None:
+def native_emit_sfx(state, sfx, x: "int | None" = None) -> None:
     """Emit each ``play_sfx`` index a recovered pass produced (its ``sfx`` list), in order (last wins the single
-    ``[0x1004]`` descriptor, as in the VM's per-frame sequence). A no-op for an empty list."""
+    ``[0x1004]`` descriptor, as in the VM's per-frame sequence). A no-op for an empty list. ``x`` is the optional
+    trigger screen X for the enhanced stereo pan (applies to every index in this batch)."""
     for dl in sfx:
-        native_play_sfx(state, dl)
+        native_play_sfx(state, dl, x)
 
 
 _SFX_BANK_SEG = 0xC000    # native home for the SFX PCM bank (upper memory, above the 0xA000 video aperture)
@@ -146,6 +150,7 @@ class NativeAudio:
         self._game_root = game_root
         self._song = None     # last song order-signature emitted (fire once per change)
         self._req_file = None  # last song_request .TRK loaded (gate the per-frame boss re-request)
+        self.stereo = False    # ENHANCED: pan SFX by their on-screen trigger X (else all centre / faithful)
 
     def poll(self, state) -> None:
         """Emit the audio commands the native frame just produced. Call once per displayed frame."""
@@ -173,9 +178,12 @@ class NativeAudio:
         queue = getattr(state, "sfx_queue", None)
         if queue:
             if sfx_enabled(state):
-                for dl in queue:
+                for dl, x in queue:
+                    pan = 0.0
+                    if self.stereo and x is not None:           # screen X 0..320 -> pan -1..+1 (centre 160)
+                        pan = max(-1.0, min(1.0, (x - 160.0) / 160.0))
                     try:
-                        self._emit(resolve_sfx(state, dl))
+                        self._emit(resolve_sfx(state, dl, pan=pan))
                     except Exception:                           # noqa: BLE001 (bank not loaded yet)
                         break
             queue.clear()

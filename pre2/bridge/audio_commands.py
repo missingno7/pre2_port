@@ -73,18 +73,19 @@ def music_enabled(mem) -> bool:
 
 # --- PlaySfx (0x0282 digital path) ------------------------------------------------
 
-def resolve_sfx(mem, dl: int, *, volume: int = 0x40, source_rate: int = SOURCE_RATE) -> PlaySfx:
+def resolve_sfx(mem, dl: int, *, volume: int = 0x40, source_rate: int = SOURCE_RATE, pan: float = 0.0) -> PlaySfx:
     """Resolve the ``play_sfx(dl)`` digital command into a self-contained event.
 
     Mirrors 0x2a9: ``bx = dl*4``; ``src = [bx+0x1009]``, ``len = [bx+0x100b]``; the
-    sample bytes come from segment ``[0x0b59]:src``."""
+    sample bytes come from segment ``[0x0b59]:src``. ``pan`` (-1 left .. +1 right) is the ENHANCED stereo
+    position (advisory; the faithful backend ignores it) — 0 = centre / faithful mono."""
     base = SFX_TABLE + (dl & 0xFF) * 4
     src = _a._rw(mem, DATA_SEG, base)
     length = _a._rw(mem, DATA_SEG, base + 2)
     seg = _a._rw(mem, DATA_SEG, _a.SFX_SEG_PTR)
     flat = ((seg << 4) + src) & 0xFFFFF
     pcm = bytes(mem.data[flat:flat + length])
-    return PlaySfx(sfx_id=dl & 0xFF, pcm=pcm, volume=volume, source_rate=source_rate)
+    return PlaySfx(sfx_id=dl & 0xFF, pcm=pcm, volume=volume, source_rate=source_rate, pan=pan)
 
 
 # --- StartSong (the loaded module) ------------------------------------------------
