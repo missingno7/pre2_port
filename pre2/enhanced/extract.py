@@ -22,7 +22,7 @@ from pre2.bridge.render_state import read_renderer_state
 from time import perf_counter as _perf
 
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
-from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache,
+from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache, hud_pad as _hud_pad,
                                              native_background_indices)
 from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
 from pre2.recovered.object_render import (LIST_TOP, MODE_ERASE, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, _s16,
@@ -200,7 +200,7 @@ def _make_sprite_texture(draw, attr, src_bank):
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
                            tex_cache=None, bg_cache=None, margin=0,
-                           wide_cull=False) -> EnhancedFrameState | None:
+                           wide_cull=False, hud_align="center") -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -273,15 +273,17 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     tile_cache, hud_cache = bg_cache
     _t0 = _perf()
     try:
-        idx0 = native_background_indices(rs, tile_cache, hud_cache, m_left, m_right)
+        idx0 = native_background_indices(rs, tile_cache, hud_cache, m_left, m_right, hud_align)
     except NativeBackgroundUnsupported:
         tile_cache.stats["fallbacks"] += 1
         bg0_planes = [bytearray(0x10000) for _ in range(4)]
         render_frame(replace(rs, object_camera=None, asset_planes=_zero_base(rs.asset_planes)),
                      bg0_planes, palette, rebuild=True)
         idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]
-        if margin:                                       # faithful fallback is 320-wide -> edge-extend
-            idx0 = np.pad(idx0, ((0, 0), (m_left, m_right)), mode="edge")
+        if margin:                                       # faithful fallback is 320-wide -> edge-extend the
+            vp = np.pad(idx0[:VIEWPORT_H], ((0, 0), (m_left, m_right)), mode="edge")   # viewport by margins,
+            pl, pr = _hud_pad(320 + m_left + m_right, hud_align)                        # the HUD by its own align
+            idx0 = np.concatenate([vp, np.pad(idx0[VIEWPORT_H:], ((0, 0), (pl, pr)), mode="edge")], axis=0)
     tile_cache.stats["native_s"] += _perf() - _t0
     tile_mask = idx0 != 0
     backdrop_full = backdrop_rgb.copy()

@@ -150,7 +150,7 @@ def main(argv=None) -> int:
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
                 "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
                 "widescreen": False, "fullscreen": False, "true_widescreen": False,
-                "smooth_transitions": False}
+                "smooth_transitions": False, "hud_align": "center"}   # widescreen HUD: left / center / right
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -435,7 +435,7 @@ def main(argv=None) -> int:
         m = wide_margin()
         efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
                                      bg_cache=_tx["bg"], effects=fx, margin=m,
-                                     wide_cull=settings["true_widescreen"])
+                                     wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"])
         if efs is None:
             return None
         return compose(efs, None, 1.0), m, efs
@@ -454,7 +454,9 @@ def main(argv=None) -> int:
         for i in range(1, steps + 1):
             half = int(round((i / steps) * (w / 2.0)))
             fr = np.zeros_like(rgb)
-            fr[:, max(0, cx - half):min(w, cx + half)] = rgb[:, max(0, cx - half):min(w, cx + half)]
+            lo, hi = max(0, cx - half), min(w, cx + half)
+            fr[:VIEWPORT_H, lo:hi] = rgb[:VIEWPORT_H, lo:hi]   # curtain the VIEWPORT only
+            fr[VIEWPORT_H:] = rgb[VIEWPORT_H:]                  # the HUD is static chrome (never wiped)
             present(fr, _TRANSITION_FPS, "PRE2 VM-less — level start")
             pump()
             if native_audio is not None:
@@ -722,10 +724,19 @@ def main(argv=None) -> int:
             settings["frame_cap"] = caps[(i + d) % len(caps)]
             save_settings()
 
+        _HUD_ALIGNS = ["left", "center", "right"]
+
+        def adj_hud(d):
+            i = _HUD_ALIGNS.index(settings["hud_align"]) if settings["hud_align"] in _HUD_ALIGNS else 1
+            settings["hud_align"] = _HUD_ALIGNS[(i + d) % len(_HUD_ALIGNS)]
+            save_settings()
+
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
             {"label": "Frame cap", "value": cap_label, "adjust": adj_cap, "activate": lambda: adj_cap(1)},
             {"label": "Widescreen", "value": onoff("widescreen"), "activate": toggle("widescreen")},
+            {"label": "HUD position", "value": settings["hud_align"].capitalize(),
+             "adjust": adj_hud, "activate": lambda: adj_hud(1)},
             {"label": "Fullscreen", "value": onoff("fullscreen"),
              "activate": lambda: set_fullscreen(not settings["fullscreen"])},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
@@ -855,7 +866,7 @@ def main(argv=None) -> int:
             try:
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
                                              tex_cache=enh["tex"], effects=fx, margin=wide_margin(),
-                                             wide_cull=settings["true_widescreen"])
+                                             wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"])
             finally:
                 if saved is not None:
                     for off, v in saved:
@@ -933,7 +944,9 @@ def main(argv=None) -> int:
                 cx = cw // 2
                 half = int(round(min(1.0, max(0.0, tx[1])) * (cw / 2.0)))
                 fr = np.zeros_like(base)
-                fr[:, max(0, cx - half):min(cw, cx + half)] = base[:, max(0, cx - half):min(cw, cx + half)]
+                lo, hi = max(0, cx - half), min(cw, cx + half)
+                fr[:VIEWPORT_H, lo:hi] = base[:VIEWPORT_H, lo:hi]   # curtain the VIEWPORT only
+                fr[VIEWPORT_H:] = base[VIEWPORT_H:]                 # the HUD is static chrome (never wiped)
                 present(fr, _TRANSITION_FPS, "PRE2 VM-less — transition")
 
         while ref["running"]:

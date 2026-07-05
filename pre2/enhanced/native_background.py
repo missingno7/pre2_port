@@ -111,8 +111,17 @@ class _HudCache:
         return strip
 
 
+def hud_pad(wide_w: int, align: str) -> tuple[int, int]:
+    """Left/right padding (px) to place the 320px HUD strip within a ``wide_w`` frame by ``align``
+    ('left'/'right'/'center') — INDEPENDENT of the camera/margin so the HUD never slides with scrolling."""
+    extra = max(0, wide_w - 320)
+    x = 0 if align == "left" else extra if align == "right" else extra // 2
+    return x, extra - x
+
+
 def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudCache,
-                              margin_left: int = 0, margin_right: int = 0) -> np.ndarray:
+                              margin_left: int = 0, margin_right: int = 0,
+                              hud_align: str = "center") -> np.ndarray:
     """The full 200x(320+margin_left+margin_right) background colour-index image (``idx0``), built natively
     from ``rs`` -- the drop-in replacement for ``render_frame(rebuild) -> deplanarize`` over a zeroed base.
     Raises :class:`NativeBackgroundUnsupported` for anything the native path doesn't cover (-> explicit
@@ -153,6 +162,7 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
     idx0 = np.empty((200, w), dtype=np.uint8)
     idx0[:VIEWPORT_H] = grid[fine:fine + VIEWPORT_H, x0:x0 + w]
     strip = hud_cache.strip(rs, tile_cache.stats)
-    idx0[VIEWPORT_H:] = (np.pad(strip, ((0, 0), (margin_left, margin_right)), mode="edge")
-                         if (margin_left or margin_right) else strip)
+    # HUD strip placed by ``hud_align`` (fixed, NOT camera/margin-dependent -> it never slides with scrolling)
+    pl, pr = hud_pad(w, hud_align)
+    idx0[VIEWPORT_H:] = np.pad(strip, ((0, 0), (pl, pr)), mode="edge") if (pl or pr) else strip
     return idx0
