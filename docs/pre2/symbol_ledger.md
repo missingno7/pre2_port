@@ -567,3 +567,39 @@ oracle; `fireflies.firefly_color()` keeps the true flicker for the enhanced rend
 - **`1030:9990` — "ENTER CODE" password menu.** Reads 4 HEX chars into `[0xB1B9]` (16-bit), validates by
   looping levels 0..0x12 vs `932F(level)` (plus a master-code path at 9A53 checking a 3-word hash of
   `[0xB1B3/5/7]` against 0x36C8/0x8BD1/0x8E71). Index→level: idx 0 = L1 beginner, idx 10 = L1 expert.
+
+
+### Proximity-scenery persistence + loader stash + light-fade split (recovered 2026-07-04/05)
+- **`1030:41CA` — proximity-scenery trigger-bank BUILD (the loader's last open sub-step, called at 4070). VERIFIED.**
+  For each live `[0x83F3]` entry (15 x stride 0xA, `[+0]` != 0xFFFF) saves the pristine map block — from
+  `[+0] - [+8]*0x100` over `[+3]+[+8]` rows x `[+2]` columns — into the `[0x2875]` bank as
+  `{word map_off, byte rows, byte width, tiles row-major}`, 0xFFFF-terminated; `[+6]` = the bank offset of the
+  LAST saved row (the 5427 reveal cursor, walked backward by width per fire). Byte-verified 150/150 vs the VM
+  bank on the L0xD level-start snapshot. `[+6]`=0xFFFF-at-gameplay explained: the 4065 dup precedes 41CA, so
+  5237's 5251 backup-restore reverts `[+6]` at level start and every respawn.
+  (`pre2/native/level_load.py:_build_trigger_bank`.)
+- **`1030:52D2` — scenery map RESTORE (called from 5237 @5292 at level start AND respawn). VERIFIED + live.**
+  Walks the 41CA bank and copies each saved block back over the `[0x2DDA]` level map (one row per 0x100 stride).
+  Was misclassified "render sprite blit" — `[0x2DDA]` is the COLLISION map, the one gameplay-mutated state
+  outside DGROUP (invisible to the tick digest). Fixes the L0xD earthquake respawn phantom-wall bug; demo
+  210723 verifies end-to-end (2326/2326) with it. (`pre2/native/level_init.py:native_52d2`.)
+- **`1030:3F8D-3FF7` — loader level-data STASH/RESTORE through spare VRAM. CLASSIFIED (no recovery needed).**
+  Parks 4x0x6240 bytes of the level segment at A000:0x9dc0 (above the display pages + the 0x7E80 sky), decodes
+  the shared sprite bank OVER the level segment as scratch (0x492/4389 with [0x2875] retargeted), copies the
+  level data back. Net no-op on the level segment; the renderer never reads 0x9dc0 (3f9d/3fee are the only
+  references). This is what was long mislabelled "the 0x9dc0 parallax blit". Native's pure decode sidesteps it.
+- **`1030:51F0` — tally pot-FLAME animation. VERIFIED + live.** Every 4th frame (`[0x6BD5]&3==0`) advances the
+  flame sprite id `[0x4F56]` (masked to base) through 0x68..0x6D and wraps. Reproduced in
+  `pre2/native/runtime.py:native_exit_anim`.
+- **`1030:6772` — light-fade pass, SPLIT along the state/render seam. VERIFIED + live.** The tick-owned half
+  (`[0x6C03]`++ @677B + the fade-complete `[0x6C01]/[0x6C02]` clear @67C8) runs in the gameplay frame
+  (`loop.native_light_fade_step`, spine slot 0267); the DAC ramp is the renderer's
+  (`render.native_apply_palette_fade`, now idempotent — the fade advances per game TICK, not per render call).
+  Found by safe-hooks demo 230900 (tick 382, the L2 dark-cave lamp).
+- **`1030:1C6F` — PIT frame-limiter wait: now collapsed by the deterministic fast-forward** (see
+  `timing_hook_design.md`; `pre2/bridge/timing_fastforward.py`, mock-CFG test).
+- **Outside-DGROUP write audit (2026-07-05): the digest-blind class is CLOSED.**
+  `pre2/probes/audit_outside_dgroup_writers.py` on demo 210723 (fires + respawn + walk-back): map writers =
+  exactly 5427 (shift @~5450 + reveal @~5479) and 52D2 (@~52EE); the bank has no runtime writers; CS-locals =
+  the recovered camera-follow vars (563a/5642), the HUD dirty counter `cs:[0x45AE]` (render bookkeeping),
+  curtain/iris render scratch (30xx), and timer-ISR internals (07Bx) native's timing model owns.

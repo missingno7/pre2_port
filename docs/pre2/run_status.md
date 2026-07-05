@@ -1,5 +1,13 @@
 # Prehistorik 2 run status
 
+> **This is a dated progress LOG — sections state what was true at their date.** Claims like "4232 is NOT
+> recovered" or "audio is not recovered source" below were later closed (4232 = `native_level_load_classify`;
+> the mixer/tracker are recovered hooks and native plays SFX + per-level music from recovered banks). For the
+> CURRENT state read: [`../../README.md`](../../README.md) (what runs + known issues),
+> [`symbol_ledger.md`](symbol_ledger.md) (per-routine status, dated recovery sections at the tail),
+> [`recovered_islands.md`](recovered_islands.md) (auto-generated island manifest). As of **2026-07-05** the
+> native port has **zero known behavior/visual gaps** and the outside-DGROUP write audit is closed.
+
 ## ★ COVERAGE AUDIT (2026-06-25) — FaithfulVisual vs hybrid live-replacement
 
 Two SEPARATE axes (a FaithfulVisual shadow update is NOT a hybrid live replacement):

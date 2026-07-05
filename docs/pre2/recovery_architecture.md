@@ -197,6 +197,23 @@ runtime. **Hybrid is the workshop; faithful is the product** — code is prepare
 hybrid, then the *same* code is plugged into the VM-less faithful core. Write every island
 with an exit path, not "VM forever + ever-cleverer hooks".
 
+### Workbench execution modes (2026-07-05)
+
+`play.py` runs the VM in one of three modes — the SAME axis everywhere (recording, replay, verification):
+
+| mode | flag | what runs | for |
+|---|---|---|---|
+| **hybrid** | (default) | every recovered hook | day-to-day workbench, fastest |
+| **safe** | `--safe-hooks` | only `pre2.checkpoints.SAFE_ORACLE_HOOKS` (render/audio-owned + input-closed asset decode + verified object_render) — original ASM game logic | **fluent demo recording**: the draw/mixer/decode sinks collapse (~real-time at `--chunk-steps 150000`) while every gameplay-owned byte comes from PRE2.EXE, and a hook bug cannot corrupt the state a recording certifies |
+| **pure** | `--no-replacements` | no hooks — the untouched ASM oracle | reference capture, final-authority verification |
+
+**Reproducibility law:** the mode AND the hook-set composition are trajectory knobs — hooks execute fewer VM
+instructions than the ASM they replace, so a demo replays bit-identically ONLY under the exact set it was
+recorded with. Demo metadata therefore stamps `replacements: pure|safe|hybrid` plus a `hook_set` fingerprint
+(count + sha1 of the sorted hook names); replay auto-adopts the recorded mode and warns loudly on a
+fingerprint mismatch. The deterministic wait fast-forward (retrace polls + the 1C6F PIT gate,
+`timing_hook_design.md`) is byte-equivalent in every mode and is what makes safe/pure recording usable.
+
 ### The two layers, and who owns the state
 
 Every serious island is **two layers**: the **recovered behaviour** (pure source-level logic

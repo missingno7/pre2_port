@@ -44,8 +44,15 @@ architectural effect is zero registers**; they exist only to consume time until 
 `cs:[1]` is 5 on the GOG build → 44CD always takes the **color (0x3DA)** path; the mono path is
 disasm-classified but not runtime-exercised, so its primitive is a guarded synthetic case, never assumed.
 
-**NOT in this pass:** `1030:1C6F` — a PIT/timer-tick spin on `[0x27EE]` (advanced by the timer ISR), a
-different mechanism (it waits for an ISR-driven counter, not a VGA phase). Left interpreted in pass 1.
+**Added 2026-07-05:** `1030:1C6F` — the PIT/timer-tick spin on `[0x27EE]` (the game's ~23Hz frame gate:
+wait until 3 PIT ticks since the last frame) is now ALSO collapsed by the fast-forward. Different mechanism
+(an ISR-driven counter, not a VGA phase) but the same safety argument in the deterministic model: `[0x27EE]`
+is written only by the timer ISR and IRQs are delivered exclusively at sub_batch boundaries, so within a
+segment every iteration (5 instructions, 6 when the delta is negative) is register/flag/memory-identical —
+bulk-skip to the step budget. This wait — not the retrace — is where a hook-collapsed frame's surplus budget
+burns (~84% of all interpreted instructions in `--safe-hooks` gameplay); collapsing it measured x29 at
+chunk 150000, byte-equivalent (0 memory diff, identical registers + instruction count; the mock-CFG sweep in
+`tests/test_timing_fastforward.py` guards the arithmetic).
 
 All three retrace loops **exit with the retrace status bit SET**.
 
@@ -113,7 +120,7 @@ see §4/§5.
 1030:9900  -> wait_for_retrace_start   (poll until bit SET)
 1030:990D  -> wait_for_retrace_edge    (wait SET->clear, then until SET; shares 9905 tail)
 1030:44CD  -> wait_for_retrace_edge    (color 0x3DA / mono 0x3BA; the present/page-flip workhorse)
-1030:1C6F  -> PIT_tick_wait            (NOT this pass)
+1030:1C6F  -> PIT_tick_wait            (collapsed since 2026-07-05, see above)
 ```
 
 Only `{9900, 990D, 44CD}` are candidates in pass 1. No global hooking of port-0x3DA reads — only these
