@@ -147,7 +147,8 @@ def main(argv=None) -> int:
     settings_path = Path(gr) / "pre2native_settings.json"
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
                 "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
-                "widescreen": False, "fullscreen": False, "true_widescreen": False}
+                "widescreen": False, "fullscreen": False, "true_widescreen": False,
+                "smooth_transitions": False}
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -404,9 +405,68 @@ def main(argv=None) -> int:
 
     _audio_apply_settings()                                         # honour persisted settings from launch
 
+    # --- smooth transitions (Experimental): render level-start/level-end effects full-width + smoothly over the
+    #     composed WIDESCREEN frame, instead of streaming the faithful pillarboxed 320px transition frames. Pure
+    #     presentation (reads state, writes nothing); the smooth projections live in pre2.enhanced.transitions. ---
+    _tx = {"tex": None, "bg": None}
+
+    def _smooth_active() -> bool:
+        return settings["smooth_transitions"] and wide_margin() > 0
+
+    def compose_wide_now(state, dos):
+        """Compose the CURRENT gameplay state as a widescreen RGB frame (static, alpha=1). Returns
+        (rgb, margin_left, efs) or None if this is not a gameplay frame (no object camera)."""
+        from pre2.bridge.foreground_tiles import read_foreground_state
+        from pre2.bridge.gameplay_effects import capture_gameplay_effects
+        from pre2.enhanced.compositor import compose
+        from pre2.enhanced.extract import extract_enhanced_frame
+        from pre2.enhanced.native_background import TileTextureCache, _HudCache
+        from pre2.enhanced.sprite_cache import SpriteTextureCache
+        if _tx["tex"] is None:
+            _tx["tex"] = SpriteTextureCache()
+            _tx["bg"] = (TileTextureCache(), _HudCache())
+        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        fg = read_foreground_state(state)
+        fg.page = disp & 0xFFFF
+        fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
+                                      foreground_frame=fg)
+        m = wide_margin()
+        efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
+                                     bg_cache=_tx["bg"], effects=fx, margin=m,
+                                     wide_cull=settings["true_widescreen"])
+        if efs is None:
+            return None
+        return compose(efs, None, 1.0), m, efs
+
+    def _present_smooth_reveal(state, dos):
+        """The level-start CURTAIN reveal, smooth + full-width: compose the loaded level once, then wipe it in
+        center-out over the reveal duration. Returns True if it ran (smooth mode + a gameplay frame)."""
+        wide = compose_wide_now(state, dos)
+        if wide is None:
+            return False
+        import numpy as np
+        rgb, _m, _efs = wide
+        w = rgb.shape[1]
+        cx = w // 2
+        steps = 14
+        for i in range(1, steps + 1):
+            half = int(round((i / steps) * (w / 2.0)))
+            fr = np.zeros_like(rgb)
+            fr[:, max(0, cx - half):min(w, cx + half)] = rgb[:, max(0, cx - half):min(w, cx + half)]
+            present(fr, _TRANSITION_FPS, "PRE2 VM-less — level start")
+            pump()
+            if native_audio is not None:
+                native_audio.poll(state)
+            if not ref["running"]:
+                return True
+        present(rgb, _TRANSITION_FPS, "PRE2 VM-less — level start")
+        return True
+
     def reveal_level(state, dos):
         """Curtain the freshly-loaded level in (the VM's 3054 center-out level-start reveal) instead of it
         appearing instantly. Driven once at every level start (cold boot + between-levels)."""
+        if _smooth_active() and _present_smooth_reveal(state, dos):
+            return
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
         for planes, page in native_level_reveal(state, dos, disp, game_root=gr):
             present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _TRANSITION_FPS,
@@ -455,9 +515,26 @@ def main(argv=None) -> int:
 
         print("  level complete -> IRIS close -> exit-anim (walk-in + food-throw score count-up + walk-off) -> carte")
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        smooth = compose_wide_now(state, dos) if _smooth_active() else None
         for planes, page in native_iris_close(state, dos, disp, game_root=gr):   # 316F circle-close on the player
-            present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
-                    "PRE2 VM-less — level complete")
+            if smooth is not None:                                 # SMOOTH iris: shrink a true circle over the
+                from pre2.bridge.render_state import read_renderer_state   # composed WIDESCREEN frozen frame,
+                from pre2.enhanced.transitions import apply_iris          # keeping the player visible on top
+                from pre2.enhanced.compositor import _blit
+                rgb, m, efs = smooth
+                iris = read_renderer_state(state, dos).iris
+                fr = rgb.copy()
+                if iris is not None and iris.radius > 0:           # centre: screen COLUMN = center_y (+margin),
+                    apply_iris(fr, iris.radius, iris.center_y + m, iris.center_x)   # ROW = center_x (axes swapped)
+                else:
+                    fr[:] = 0
+                for inst in efs.sprites:                           # the player holds on top of the closing iris
+                    if inst.handle == ("player",):
+                        _blit(fr, inst.rgba, inst.screen_x + inst.tex_off_x, inst.screen_y + inst.tex_off_y)
+                present(fr, _FRONT_END_FPS, "PRE2 VM-less — level complete")
+            else:
+                present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _FRONT_END_FPS,
+                        "PRE2 VM-less — level complete")
             pump()
             if native_audio is not None:
                 native_audio.poll(state)
@@ -658,6 +735,8 @@ def main(argv=None) -> int:
         ]
         experimental_tab = [
             {"label": "True widescreen", "value": onoff("true_widescreen"), "activate": toggle("true_widescreen")},
+            {"label": "Smooth transitions", "value": onoff("smooth_transitions"),
+             "activate": toggle("smooth_transitions")},
             {"label": "", "info": True},
             {"label": "These options change what the game shows beyond the original,", "info": True},
             {"label": "so the picture is no longer accurate to the DOS original.", "info": True},
@@ -666,6 +745,9 @@ def main(argv=None) -> int:
             {"label": "True widescreen: draw enemies/objects in the widescreen margins", "info": True},
             {"label": "instead of them appearing at the original screen edge.", "info": True},
             {"label": "(Needs Widescreen on. Distant spawns may still pop in.)", "info": True},
+            {"label": "", "info": True},
+            {"label": "Smooth transitions: full-width, smoothly-drawn level-start and", "info": True},
+            {"label": "level-end iris/curtain (else transitions show pillarboxed 4:3).", "info": True},
         ]
         tabs = [("View", view_tab), ("Audio", audio_tab), ("Experimental", experimental_tab)]
         if args.debug:
