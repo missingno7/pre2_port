@@ -152,14 +152,30 @@ def main(argv=None) -> int:
     view = {"screen": pygame.display.set_mode((320 * args.scale, 200 * args.scale), pygame.RESIZABLE),
             "borderless": False}
     clock = pygame.time.Clock()
-    # The MONITOR refresh rate — the presentation clock the (future) interpolation presents at. The game TICK
-    # stays locked at TICK_HZ regardless; only how many interpolated frames are shown per tick depends on this.
-    try:
-        display_hz = float(pygame.display.get_current_refresh_rate())     # pygame >= 2.2
-    except Exception:                                                     # noqa: BLE001 — older pygame / headless
-        display_hz = 0.0
-    if display_hz <= 0:
-        display_hz = 60.0                                                # safe fallback
+
+    def detect_display_hz() -> float:
+        """The monitor's REAL current refresh rate. pygame's get_current_refresh_rate is unreliable (often
+        reports 60 regardless), so on Windows read the actual mode via GDI VREFRESH first."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                hdc = ctypes.windll.user32.GetDC(None)
+                hz = ctypes.windll.gdi32.GetDeviceCaps(hdc, 116)         # VREFRESH (current display refresh)
+                ctypes.windll.user32.ReleaseDC(None, hdc)
+                if hz and hz > 1:                                        # 0/1 = "default"; a real panel is >1
+                    return float(hz)
+            except Exception:                                            # noqa: BLE001
+                pass
+        try:
+            r = float(pygame.display.get_current_refresh_rate())        # pygame >= 2.2 (fallback)
+            if r > 0:
+                return r
+        except Exception:                                                # noqa: BLE001 — older pygame / headless
+            pass
+        return 60.0                                                      # safe fallback
+    # The MONITOR refresh rate — the presentation clock interpolation/smooth transitions present at. The game
+    # TICK stays locked at TICK_HZ regardless; only how many presented frames per tick depend on this.
+    display_hz = detect_display_hz()
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
            "menu_request": False, "switch_level": None, "tick_count": 0}
@@ -242,9 +258,21 @@ def main(argv=None) -> int:
                     pass
         else:
             os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
-            view["screen"] = pygame.display.set_mode(view.get("win_size", (320 * args.scale, 200 * args.scale)),
-                                                     pygame.RESIZABLE)
+            wsz = view.get("win_size", (320 * args.scale, 200 * args.scale))
+            view["screen"] = pygame.display.set_mode(wsz, pygame.RESIZABLE)
             view["borderless"] = False
+            rect = _win_monitor_rect()                                   # SDL keeps the window at the fullscreen
+            if rect is not None:                                         # origin (a tiny window in the corner) and
+                mx, my, mw, mh = rect                                    # may not repaint the frame -> re-centre it
+                cx, cy = mx + (mw - wsz[0]) // 2, my + (mh - wsz[1]) // 2   # on the monitor + force the frame back
+                try:
+                    import ctypes
+                    hwnd = pygame.display.get_wm_info().get("window")
+                    if hwnd:                                             # SWP_FRAMECHANGED|NOZORDER|NOACTIVATE
+                        ctypes.windll.user32.SetWindowPos(hwnd, 0, cx, cy, wsz[0], wsz[1], 0x0034)
+                except Exception:                                        # noqa: BLE001
+                    pass
+        ref["display_hz"] = detect_display_hz()                          # the window may now be on another monitor
         save_settings()
 
     if settings["fullscreen"]:                                            # persisted preference -> apply at boot
@@ -277,6 +305,25 @@ def main(argv=None) -> int:
                    pygame.K_a: 0x1E, pygame.K_b: 0x30, pygame.K_c: 0x2E, pygame.K_d: 0x20, pygame.K_e: 0x12,
                    pygame.K_f: 0x21}
 
+    def save_screenshot():
+        """F12: save the current frame (the clean game image, no letterbox) as a timestamped PNG under
+        <game-root>/screenshots/."""
+        rgb = ref.get("last")
+        if rgb is None:
+            return
+        import time as _t
+        out = Path(gr) / "screenshots"
+        try:
+            out.mkdir(exist_ok=True)
+            arr = np.asarray(rgb, np.uint8)
+            surf = pygame.Surface((arr.shape[1], arr.shape[0]))
+            pygame.surfarray.blit_array(surf, arr.swapaxes(0, 1))
+            path = out / f"pre2_{_t.strftime('%Y%m%d_%H%M%S')}.png"
+            pygame.image.save(surf, str(path))
+            print(f"screenshot saved: {path}")
+        except Exception as e:                                            # noqa: BLE001 — read-only dir / no PIL
+            print(f"(screenshot failed: {type(e).__name__}: {e})")
+
     def pump():
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
@@ -288,6 +335,8 @@ def main(argv=None) -> int:
                 set_fullscreen(not settings["fullscreen"])
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
                 ref["menu_request"] = True
+            elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12:
+                save_screenshot()
             elif ev.type == pygame.KEYDOWN:                        # latch the hex make code typed THIS frame
                 sc = _SDL_HEX.get(getattr(ev, "scancode", -1)) or _KEYSYM_HEX.get(ev.key)   # physical, keysym fallback
                 if sc:
@@ -335,6 +384,12 @@ def main(argv=None) -> int:
         """The interpolated-presentation rate from the Frame-cap setting (0=detected display Hz)."""
         cap = settings["frame_cap"]
         return ref["display_hz"] if cap == 0 else (0.0 if cap < 0 else float(cap))
+
+    def _ui_scale() -> float:
+        """The F10-overlay UI scale, so it stays a readable PHYSICAL size on hi-DPI / 4K / fullscreen windows
+        (the window is now DPI-aware = real pixels). Proportional to the window height, clamped."""
+        h = view["screen"].get_size()[1]
+        return max(1.0, min(3.5, h / 600.0))
 
     def pace(fps: float) -> None:
         """Frame pacing: pygame's Clock.tick sleeps in ~ms grains (SDL_Delay), which lands ~60fps when asked
@@ -911,7 +966,7 @@ def main(argv=None) -> int:
             else:                                                 # menu before the first frame -> over black
                 screen = view["screen"]
                 screen.fill((0, 0, 0))
-            menu.draw(screen)
+            menu.draw(screen, _ui_scale())
             pygame.display.flip()
             clock.tick(60)
 

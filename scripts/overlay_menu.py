@@ -61,15 +61,18 @@ class OverlayMenu:
         self._font = None
         self._font_bold = None
         self._font_small = None
+        self._font_key = None
 
-    # --- fonts (lazy: pygame.font needs init) ----------------------------------------------------------
-    def _fonts(self):
-        if self._font is None:
+    # --- fonts (lazy: pygame.font needs init; re-created when the UI scale changes, e.g. DPI / window size) --
+    def _fonts(self, scale=1.0):
+        key = max(1, int(round(scale * 4)))          # bucket the scale so we rebuild fonts only on real changes
+        if self._font is None or self._font_key != key:
             pg = self.pg
-            self._font = pg.font.Font(None, 22)
-            self._font_bold = pg.font.Font(None, 22)
+            self._font_key = key
+            self._font = pg.font.Font(None, max(10, int(round(22 * scale))))
+            self._font_bold = pg.font.Font(None, max(10, int(round(22 * scale))))
             self._font_bold.set_bold(True)
-            self._font_small = pg.font.Font(None, 17)
+            self._font_small = pg.font.Font(None, max(8, int(round(17 * scale))))
         return self._font, self._font_bold, self._font_small
 
     # --- input ------------------------------------------------------------------------------------------
@@ -114,9 +117,15 @@ class OverlayMenu:
         _, _, small = self._fonts()
         screen.blit(small.render("F10 menu", True, _HINT), (8, 6))
 
-    def draw(self, screen) -> None:
+    def draw(self, screen, scale=1.0) -> None:
+        """Draw the overlay. ``scale`` (>= 1) is the UI scale — the caller passes the display's DPI / a
+        resolution factor so the panel + text stay a readable PHYSICAL size on hi-DPI / 4K screens."""
         pg = self.pg
-        font, bold, small = self._fonts()
+        s = max(1.0, float(scale))
+
+        def S(v):
+            return int(round(v * s))
+        font, bold, small = self._fonts(s)
         tabs = self._tabs()
         names = [t[0] for t in tabs]
         self.tab %= max(1, len(names))
@@ -125,37 +134,39 @@ class OverlayMenu:
             self.item %= len(items)
 
         win_w, win_h = screen.get_size()
-        panel_w = min(max(360, win_w - 80), 640)
-        panel_h = min(max(240, win_h - 80), 400)
+        panel_w = min(max(S(360), win_w - S(80)), S(640))
+        row_h = S(26)
+        n_rows = len(items) if items else 1
+        panel_h = min(max(S(240), S(76) + n_rows * row_h + S(44)), win_h - S(40))
         x = (win_w - panel_w) // 2
         y = (win_h - panel_h) // 2
         panel = pg.Surface((panel_w, panel_h), pg.SRCALPHA)
         panel.fill(_PANEL_BG)
         screen.blit(panel, (x, y))
-        pg.draw.rect(screen, _PANEL_BORDER, (x, y, panel_w, panel_h), width=1)
-        screen.blit(bold.render("Settings", True, _TEXT_SELECTED), (x + 16, y + 13))
+        pg.draw.rect(screen, _PANEL_BORDER, (x, y, panel_w, panel_h), width=max(1, S(1)))
+        screen.blit(bold.render("Settings", True, _TEXT_SELECTED), (x + S(16), y + S(13)))
 
         # tabs — text centred (both axes) inside each chip
-        tab_x, tab_y = x + 14, y + 40
+        tab_x, tab_y = x + S(14), y + S(40)
         for i, name in enumerate(names):
             active = i == self.tab
             surf = (bold if active else font).render(name, True, (20, 20, 20) if active else _TEXT)
-            chip = pg.Rect(tab_x, tab_y, surf.get_width() + 20, surf.get_height() + 8)
+            chip = pg.Rect(tab_x, tab_y, surf.get_width() + S(20), surf.get_height() + S(8))
             pg.draw.rect(screen, _TAB_ACTIVE_BG if active else _TAB_BG, chip)
-            pg.draw.rect(screen, _TAB_BORDER, chip, width=1)
+            pg.draw.rect(screen, _TAB_BORDER, chip, width=max(1, S(1)))
             screen.blit(surf, surf.get_rect(center=chip.center))
-            tab_x += chip.width + 6
+            tab_x += chip.width + S(6)
 
         # rows — label/value vertically centred in the row band (matches the selection bar);
         # "info" rows are non-interactive text (small dim font, no value, never selected)
         if items and items[self.item].get("info"):
             self.item = _step_selectable(items, self.item, 1)
-        row_y, row_h = y + 76, 26
+        row_y = y + S(76)
         for i, item in enumerate(items):
-            row = pg.Rect(x + 16, row_y, panel_w - 32, row_h)
+            row = pg.Rect(x + S(16), row_y, panel_w - S(32), row_h)
             if item.get("info"):
                 text = small.render(str(item.get("label", "")), True, _HELP)
-                screen.blit(text, text.get_rect(midleft=(x + 26, row.centery)))
+                screen.blit(text, text.get_rect(midleft=(x + S(26), row.centery)))
                 row_y += row_h
                 continue
             selected = i == self.item
@@ -163,12 +174,12 @@ class OverlayMenu:
                 pg.draw.rect(screen, _ROW_SELECTED, row)
             label = (bold if selected else font).render(str(item.get("label", "")), True,
                                                         _TEXT_SELECTED if selected else _TEXT)
-            screen.blit(label, label.get_rect(midleft=(x + 26, row.centery)))
+            screen.blit(label, label.get_rect(midleft=(x + S(26), row.centery)))
             val = font.render(str(item.get("value", "")), True,
                               _VALUE_SELECTED if selected else _VALUE)
-            screen.blit(val, val.get_rect(midright=(x + panel_w - 28, row.centery)))
+            screen.blit(val, val.get_rect(midright=(x + panel_w - S(28), row.centery)))
             row_y += row_h
 
         screen.blit(small.render("Up/Down select   Left/Right adjust or switch tab   Enter activate",
-                                 True, _HELP), (x + 16, y + panel_h - 40))
-        screen.blit(small.render("F10 / Esc close", True, _HELP), (x + 16, y + panel_h - 21))
+                                 True, _HELP), (x + S(16), y + panel_h - S(40)))
+        screen.blit(small.render("F10 / Esc close", True, _HELP), (x + S(16), y + panel_h - S(21)))
