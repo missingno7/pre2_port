@@ -41,6 +41,7 @@ _TAB_ACTIVE_BG = (210, 220, 235)
 _TAB_BG = (48, 54, 66)
 _TAB_BORDER = (100, 110, 130)
 _ROW_SELECTED = (56, 84, 120)
+_ROW_EDITING = (72, 118, 170)        # brighter bar while a row is "entered" for Left/Right editing
 _TEXT = (225, 225, 225)
 _TEXT_SELECTED = (255, 255, 255)
 _VALUE = (175, 195, 215)
@@ -83,6 +84,7 @@ class OverlayMenu:
         self._font_small = None
         self._font_key = None
         self._scroll = 0                             # first visible row index (rows scroll; the panel is capped)
+        self.editing = False                         # an adjustable row is "entered" -> Left/Right change it
 
     # --- fonts (lazy: pygame.font needs init; re-created when the UI scale changes, e.g. DPI / window size) --
     def _fonts(self, scale=1.0):
@@ -97,38 +99,65 @@ class OverlayMenu:
 
     # --- input ------------------------------------------------------------------------------------------
     def handle_keydown(self, event) -> bool:
-        """Consume one KEYDOWN while open. Returns False when the menu closed on this key."""
+        """Consume one KEYDOWN while open. Returns False when the menu closed on this key.
+
+        Interaction model (no Left/Right ambiguity): Left/Right ALWAYS switch tabs, EXCEPT while a row is
+        "entered" for editing. Enter/Space on an adjustable row ENTERS it (then Left/Right change the value,
+        Enter/Space CONFIRMS -> applies + exits, Esc CANCELS -> exits without applying). Enter/Space on a
+        plain toggle/action row fires it immediately."""
         pg = self.pg
         tabs = self._tabs()
         names = [t[0] for t in tabs]
         items = tabs[self.tab % len(tabs)][1] if tabs else []
-        if event.key in (pg.K_F10, pg.K_m, pg.K_ESCAPE):
+        cur = items[self.item % len(items)] if items else {}
+
+        if event.key in (pg.K_F10, pg.K_m):          # F10/M always close outright
+            self.open = self.editing = False
+            return False
+        if event.key == pg.K_ESCAPE:                 # Esc backs out: cancel an edit first, else close
+            if self.editing:
+                self.editing = False
+                return True
             self.open = False
             return False
+
+        if self.editing:                             # --- EDITING an adjustable row ---
+            adjust = cur.get("adjust")
+            if event.key in (pg.K_LEFT, pg.K_a) and adjust:
+                adjust(-1)
+            elif event.key in (pg.K_RIGHT, pg.K_d) and adjust:
+                adjust(1)
+            elif event.key in (pg.K_RETURN, pg.K_SPACE):     # confirm -> apply (level jump etc.) + exit
+                self.editing = False
+                act = cur.get("activate")
+                if act is not None:
+                    act()
+            elif event.key in (pg.K_UP, pg.K_w):             # move away -> exit edit, then move
+                self.editing = False
+                self.item = _step_selectable(items, self.item, -1)
+            elif event.key in (pg.K_DOWN, pg.K_s):
+                self.editing = False
+                self.item = _step_selectable(items, self.item, 1)
+            return True
+
+        # --- NOT editing ---
         if event.key in (pg.K_UP, pg.K_w):
             self.item = _step_selectable(items, self.item, -1)
         elif event.key in (pg.K_DOWN, pg.K_s):
             self.item = _step_selectable(items, self.item, 1)
-        elif event.key in (pg.K_PAGEUP, pg.K_q):
+        elif event.key in (pg.K_PAGEUP, pg.K_q, pg.K_LEFT):
             self.tab = (self.tab - 1) % len(names)
             self.item = 0
-        elif event.key in (pg.K_PAGEDOWN, pg.K_e, pg.K_TAB):
+        elif event.key in (pg.K_PAGEDOWN, pg.K_e, pg.K_TAB, pg.K_RIGHT):
             self.tab = (self.tab + 1) % len(names)
             self.item = 0
-        elif event.key in (pg.K_LEFT, pg.K_RIGHT):
-            direction = -1 if event.key == pg.K_LEFT else 1
-            item = items[self.item % len(items)] if items else {}
-            adjust = item.get("adjust")
-            if adjust is not None:
-                adjust(direction)
-            else:
-                self.tab = (self.tab + direction) % len(names)
-                self.item = 0
         elif event.key in (pg.K_RETURN, pg.K_SPACE):
-            item = items[self.item % len(items)] if items else {}
-            action = item.get("activate")
-            if action is not None:
-                action()
+            if cur.get("adjust") is not None:        # adjustable -> enter edit mode (Left/Right now change it)
+                self.editing = True
+            else:                                    # plain toggle / action -> fire immediately
+                action = cur.get("activate")
+                if action is not None:
+                    action()
         return True
 
     # --- drawing (at WINDOW resolution, over the already-scaled game frame) ------------------------------
@@ -154,14 +183,15 @@ class OverlayMenu:
             self.item %= len(items)
 
         win_w, win_h = screen.get_size()
-        panel_w = min(max(S(360), win_w - S(80)), S(640))
+        panel_w = min(max(S(340), win_w - S(80)), S(560))
         row_h = S(26)
         top, footer = S(76), S(44)                   # rows band top / footer help text height
         n_rows = len(items) if items else 1
-        # Cap the panel height: show at most _MAX_VISIBLE_ROWS (or fewer if the window is short); the rest
-        # scroll. Keeps the panel compact even with a long View tab.
+        # FIXED panel height across all tabs: the rows band is always ``visible`` rows tall (capped at
+        # _MAX_VISIBLE_ROWS, or fewer only if the window is short) — so a short tab (Audio/Experimental) is the
+        # same size as View instead of a thin strip; extra rows scroll.
         fit_rows = max(1, (win_h - S(40) - top - footer) // row_h)
-        visible = max(1, min(n_rows, _MAX_VISIBLE_ROWS, fit_rows))
+        visible = max(1, min(_MAX_VISIBLE_ROWS, fit_rows))
         panel_h = top + visible * row_h + footer
         x = (win_w - panel_w) // 2
         y = (win_h - panel_h) // 2
@@ -189,14 +219,14 @@ class OverlayMenu:
             self._scroll = self.item
         elif self.item >= self._scroll + visible:
             self._scroll = self.item - visible + 1
-        self._scroll = max(0, min(self._scroll, n_rows - visible))
+        self._scroll = max(0, min(self._scroll, max(0, n_rows - visible)))
         scrollbar = n_rows > visible
         sb_pad = S(14) if scrollbar else 0           # keep row text/values clear of the scrollbar
 
         # rows — label/value vertically centred in the row band (matches the selection bar);
         # "info" rows are non-interactive text (small dim font, no value, never selected)
         row_y = y + top
-        for i in range(self._scroll, self._scroll + visible):
+        for i in range(self._scroll, min(n_rows, self._scroll + visible)):
             item = items[i]
             row = pg.Rect(x + S(16), row_y, panel_w - S(32) - sb_pad, row_h)
             if item.get("info"):
@@ -205,13 +235,15 @@ class OverlayMenu:
                 row_y += row_h
                 continue
             selected = i == self.item
+            editing = selected and self.editing and item.get("adjust") is not None
             if selected:
-                pg.draw.rect(screen, _ROW_SELECTED, row)
+                pg.draw.rect(screen, _ROW_EDITING if editing else _ROW_SELECTED, row)
             label = (bold if selected else font).render(str(item.get("label", "")), True,
                                                         _TEXT_SELECTED if selected else _TEXT)
             screen.blit(label, label.get_rect(midleft=(x + S(26), row.centery)))
-            val = font.render(str(item.get("value", "")), True,
-                              _VALUE_SELECTED if selected else _VALUE)
+            # while editing, frame the value in ‹ › so it's clear Left/Right now change THIS row
+            vtext = f"‹ {item.get('value', '')} ›" if editing else str(item.get("value", ""))
+            val = font.render(vtext, True, _VALUE_SELECTED if selected else _VALUE)
             screen.blit(val, val.get_rect(midright=(x + panel_w - S(28) - sb_pad, row.centery)))
             row_y += row_h
 
@@ -223,6 +255,7 @@ class OverlayMenu:
             thumb_y = track_y + int((track_h - thumb_h) * self._scroll / max(1, n_rows - visible))
             pg.draw.rect(screen, _VALUE, (track_x, thumb_y, S(4), thumb_h))
 
-        screen.blit(small.render("Up/Down select   Left/Right adjust or switch tab   Enter activate",
-                                 True, _HELP), (x + S(16), y + panel_h - S(40)))
+        hint = ("Left/Right change   Enter/Space apply   Esc cancel" if self.editing
+                else "Up/Down select   Left/Right switch tab   Enter/Space change")
+        screen.blit(small.render(hint, True, _HELP), (x + S(16), y + panel_h - S(40)))
         screen.blit(small.render("F10 / Esc close", True, _HELP), (x + S(16), y + panel_h - S(21)))

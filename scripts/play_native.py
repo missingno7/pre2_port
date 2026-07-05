@@ -924,20 +924,19 @@ def main(argv=None) -> int:
 
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
-            {"label": "Frame cap", "value": cap_label, "adjust": adj_cap, "activate": lambda: adj_cap(1)},
+            {"label": "Frame cap", "value": cap_label, "adjust": adj_cap},
             {"label": "Widescreen", "value": onoff("widescreen"), "activate": toggle("widescreen")},
             {"label": "Widescreen backdrop", "value": settings["widescreen_bg"].capitalize(),
-             "adjust": adj_bg, "activate": lambda: adj_bg(1)},
+             "adjust": adj_bg},
             {"label": "HUD position", "value": settings["hud_align"].capitalize(),
-             "adjust": adj_hud, "activate": lambda: adj_hud(1)},
+             "adjust": adj_hud},
             {"label": "Fullscreen", "value": onoff("fullscreen"),
              "activate": lambda: set_fullscreen(not settings["fullscreen"])},
             {"label": "Smooth transitions", "value": onoff("smooth_transitions"),
              "activate": toggle("smooth_transitions")},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
-            {"label": "Menu scale", "value": menu_scale_label, "adjust": adj_menu_scale,
-             "activate": lambda: adj_menu_scale(1)},
+            {"label": "Menu scale", "value": menu_scale_label, "adjust": adj_menu_scale},
         ]
         audio_tab = [
             {"label": "Music", "value": onoff("music"), "activate": toggle("music", _audio_apply_settings)},
