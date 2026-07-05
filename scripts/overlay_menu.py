@@ -47,6 +47,7 @@ _VALUE = (175, 195, 215)
 _VALUE_SELECTED = (190, 235, 255)
 _HELP = (210, 210, 210)
 _HINT = (190, 210, 190)
+_MAX_VISIBLE_ROWS = 8            # cap the rows band; beyond this the list scrolls (slim scrollbar on the right)
 
 # A clean, light UI face rather than pygame's default (freesansbold — heavy, and faux-bolding it looks broad &
 # cramped). SysFont tries each name in order; the DejaVu/Arial tail covers Linux/mac when Segoe UI is absent.
@@ -81,6 +82,7 @@ class OverlayMenu:
         self._font_bold = None
         self._font_small = None
         self._font_key = None
+        self._scroll = 0                             # first visible row index (rows scroll; the panel is capped)
 
     # --- fonts (lazy: pygame.font needs init; re-created when the UI scale changes, e.g. DPI / window size) --
     def _fonts(self, scale=1.0):
@@ -154,8 +156,13 @@ class OverlayMenu:
         win_w, win_h = screen.get_size()
         panel_w = min(max(S(360), win_w - S(80)), S(640))
         row_h = S(26)
+        top, footer = S(76), S(44)                   # rows band top / footer help text height
         n_rows = len(items) if items else 1
-        panel_h = min(max(S(240), S(76) + n_rows * row_h + S(44)), win_h - S(40))
+        # Cap the panel height: show at most _MAX_VISIBLE_ROWS (or fewer if the window is short); the rest
+        # scroll. Keeps the panel compact even with a long View tab.
+        fit_rows = max(1, (win_h - S(40) - top - footer) // row_h)
+        visible = max(1, min(n_rows, _MAX_VISIBLE_ROWS, fit_rows))
+        panel_h = top + visible * row_h + footer
         x = (win_w - panel_w) // 2
         y = (win_h - panel_h) // 2
         panel = pg.Surface((panel_w, panel_h), pg.SRCALPHA)
@@ -175,13 +182,23 @@ class OverlayMenu:
             screen.blit(surf, surf.get_rect(center=chip.center))
             tab_x += chip.width + S(6)
 
-        # rows — label/value vertically centred in the row band (matches the selection bar);
-        # "info" rows are non-interactive text (small dim font, no value, never selected)
+        # scroll so the selected row stays in the visible band
         if items and items[self.item].get("info"):
             self.item = _step_selectable(items, self.item, 1)
-        row_y = y + S(76)
-        for i, item in enumerate(items):
-            row = pg.Rect(x + S(16), row_y, panel_w - S(32), row_h)
+        if self.item < self._scroll:
+            self._scroll = self.item
+        elif self.item >= self._scroll + visible:
+            self._scroll = self.item - visible + 1
+        self._scroll = max(0, min(self._scroll, n_rows - visible))
+        scrollbar = n_rows > visible
+        sb_pad = S(14) if scrollbar else 0           # keep row text/values clear of the scrollbar
+
+        # rows — label/value vertically centred in the row band (matches the selection bar);
+        # "info" rows are non-interactive text (small dim font, no value, never selected)
+        row_y = y + top
+        for i in range(self._scroll, self._scroll + visible):
+            item = items[i]
+            row = pg.Rect(x + S(16), row_y, panel_w - S(32) - sb_pad, row_h)
             if item.get("info"):
                 text = small.render(str(item.get("label", "")), True, _HELP)
                 screen.blit(text, text.get_rect(midleft=(x + S(26), row.centery)))
@@ -195,8 +212,16 @@ class OverlayMenu:
             screen.blit(label, label.get_rect(midleft=(x + S(26), row.centery)))
             val = font.render(str(item.get("value", "")), True,
                               _VALUE_SELECTED if selected else _VALUE)
-            screen.blit(val, val.get_rect(midright=(x + panel_w - S(28), row.centery)))
+            screen.blit(val, val.get_rect(midright=(x + panel_w - S(28) - sb_pad, row.centery)))
             row_y += row_h
+
+        if scrollbar:                                # a slim track + proportional thumb on the right
+            track_x = x + panel_w - S(10)
+            track_y, track_h = y + top, visible * row_h
+            pg.draw.rect(screen, _TAB_BG, (track_x, track_y, S(4), track_h))
+            thumb_h = max(S(16), int(track_h * visible / n_rows))
+            thumb_y = track_y + int((track_h - thumb_h) * self._scroll / max(1, n_rows - visible))
+            pg.draw.rect(screen, _VALUE, (track_x, thumb_y, S(4), thumb_h))
 
         screen.blit(small.render("Up/Down select   Left/Right adjust or switch tab   Enter activate",
                                  True, _HELP), (x + S(16), y + panel_h - S(40)))

@@ -932,6 +932,8 @@ def main(argv=None) -> int:
              "adjust": adj_hud, "activate": lambda: adj_hud(1)},
             {"label": "Fullscreen", "value": onoff("fullscreen"),
              "activate": lambda: set_fullscreen(not settings["fullscreen"])},
+            {"label": "Smooth transitions", "value": onoff("smooth_transitions"),
+             "activate": toggle("smooth_transitions")},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
             {"label": "Menu scale", "value": menu_scale_label, "adjust": adj_menu_scale,
@@ -943,19 +945,9 @@ def main(argv=None) -> int:
         ]
         experimental_tab = [
             {"label": "True widescreen", "value": onoff("true_widescreen"), "activate": toggle("true_widescreen")},
-            {"label": "Smooth transitions", "value": onoff("smooth_transitions"),
-             "activate": toggle("smooth_transitions")},
             {"label": "", "info": True},
-            {"label": "These options change what the game shows beyond the original,", "info": True},
-            {"label": "so the picture is no longer accurate to the DOS original.", "info": True},
-            {"label": "Game logic stays untouched (recordings/verification unaffected).", "info": True},
-            {"label": "", "info": True},
-            {"label": "True widescreen: draw enemies/objects in the widescreen margins", "info": True},
-            {"label": "instead of them appearing at the original screen edge.", "info": True},
-            {"label": "(Needs Widescreen on. Distant spawns may still pop in.)", "info": True},
-            {"label": "", "info": True},
-            {"label": "Smooth transitions: full-width, smoothly-drawn level-start and", "info": True},
-            {"label": "level-end iris/curtain (else transitions show pillarboxed 4:3).", "info": True},
+            {"label": "Draws objects in the widescreen margins — not accurate", "info": True},
+            {"label": "to the original. Game logic is unaffected.", "info": True},
         ]
         tabs = [("View", view_tab), ("Audio", audio_tab), ("Experimental", experimental_tab)]
         if args.debug:

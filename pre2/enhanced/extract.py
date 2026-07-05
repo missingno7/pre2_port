@@ -256,7 +256,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     backdrop_rgb = _render_backdrop(rs, page, palette)
     wide_w = 320 + m_left + m_right                       # constant across the level (m_left+m_right == 2*margin)
     if margin:
-        backdrop_rgb = _widescreen_backdrop(backdrop_rgb, wide_w, m_left, m_right, bg_mode)
+        backdrop_rgb = _widescreen_backdrop(backdrop_rgb, wide_w, bg_mode)
 
     # Background colour INDICES over a zeroed base: every base-showing pixel is index 0, opaque tile/effect
     # pixels keep their (base-independent) colour. So tile_mask = index!=0 is the TRUE tile coverage
@@ -467,25 +467,27 @@ def _resize_linear(img, n_out: int, axis: int):
 _BD_FIT_CACHE: dict = {}                 # (wide_w, backdrop-bytes hash) -> scaled uint8 (bounded)
 
 
-def _widescreen_backdrop(backdrop, wide_w: int, m_left: int, m_right: int, mode: str):
+def _widescreen_backdrop(backdrop, wide_w: int, mode: str):
     """Fill the widescreen backdrop (parallax sky/mountains — a fixed 320-wide image with no wider source) to
-    ``wide_w``. The parallax is screen-FIXED, so the central 320 columns [m_left:m_left+320] hold the native
-    backdrop; ONLY the margins are synthesised, per ``mode``:
-      * ``stretch`` — fit the whole 320 image to the full width (sharp-bilinear zoom). Fills edge-to-edge but
-        the parallax proportions change and the centre is no longer pixel-native.
-      * ``mirror``  — native backdrop centred, each margin a MIRROR reflection of the adjacent edge (seamless).
-      * ``black``   — native backdrop centred, black margins (cinematic; centre stays pixel-native).
-    ``mirror`` / ``black`` keep the central 320 IDENTICAL to the faithful (margin=0) backdrop."""
+    ``wide_w``, per ``mode``. The parallax is screen-FIXED, so the native image is ALWAYS CENTRED (equal
+    margins each side) and STATIC across the level — it never slides with the wide_cull margin split (which is
+    a tile-layer/gameplay-window concern, not the backdrop's):
+      * ``stretch`` — fit the whole 320 image to the full width (sharp-bilinear zoom); edge-to-edge, zoomed.
+      * ``mirror``  — native centred, each margin a MIRROR reflection of the adjacent edge (seamless).
+      * ``black``   — native centred, black margins (cinematic).
+    ``mirror`` / ``black`` keep the central 320 pixel-native."""
     if mode == "stretch":
         return _fit_backdrop_width(backdrop, wide_w)
     in_h = backdrop.shape[0]
+    left = (wide_w - 320) // 2                                # symmetric, centred (wide_w-320 == 2*margin, even)
+    right = wide_w - 320 - left
     out = np.zeros((in_h, wide_w, 3), dtype=backdrop.dtype)   # black margins by default
-    out[:, m_left:m_left + 320] = backdrop                    # native, screen-fixed centre
+    out[:, left:left + 320] = backdrop
     if mode == "mirror":
-        if m_left > 0:                                        # reflect about the left edge of the native image
-            out[:, :m_left] = backdrop[:, :m_left][:, ::-1]
-        if m_right > 0:                                       # reflect about the right edge
-            out[:, m_left + 320:] = backdrop[:, 320 - m_right:][:, ::-1]
+        if left > 0:                                          # reflect about the left edge of the native image
+            out[:, :left] = backdrop[:, :left][:, ::-1]
+        if right > 0:                                         # reflect about the right edge
+            out[:, left + 320:] = backdrop[:, 320 - right:][:, ::-1]
     return out
 
 
