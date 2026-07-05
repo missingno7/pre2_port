@@ -37,6 +37,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 DS = 0x1A0F << 4
 _FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its FrontEndScene frames are per-retrace)
+VIEWPORT_H = 176              # gameplay viewport rows (the HUD strip below never scrolls / fades)
+_VFADE_MID = 88               # the 30C6 vertical fade's two bands meet here (fully closed)
 _TRANSITION_FPS = 30          # curtains/fades: the VM's 3054/30C6 are vsync-paced sub-frame effects that span
 #                               ~20 retraces (~0.34s); presenting the ~11 reveal steps at 70Hz was ~2x too fast.
 TICK_HZ = 70.0 / 3.0          # the game's own tick rate: the 1C6F frame limiter waits 3 PIT/retrace periods per
@@ -817,7 +819,8 @@ def main(argv=None) -> int:
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
         tick_dt = 1.0 / TICK_HZ
-        enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None}   # the prev+cur snapshot pair
+        enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None,   # the prev+cur snapshot pair
+               "last_cur": None, "tx_new": None}   # smooth-tx: last wide snapshot (fade base) + reveal new-frame
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
@@ -862,6 +865,8 @@ def main(argv=None) -> int:
                 enh["prev"] = None
                 enh["next_tick"] = None
                 return
+            enh["last_cur"] = cur                                # smooth-tx fade base = the last wide gameplay frame
+            enh["tx_new"] = None                                 # a real gameplay frame ends any pending reveal
             if not settings["interpolation"]:                   # WIDESCREEN without interpolation: one composed
                 n += 1                                          #   (wide) frame per tick, faithful pacing
                 present(compose(cur, None, 1.0), args.fps,
@@ -894,6 +899,43 @@ def main(argv=None) -> int:
             enh["prev"] = cur
             enh["next_tick"] += tick_dt
 
+        def present_smooth_tx(state, dos, tx):
+            """Render one SMOOTH FULL-WIDTH transition frame from a `native_frame_step_tagged` descriptor
+            (cave/death fade -> black -> curtain), instead of streaming the faithful pillarboxed 320px frame.
+            The fade dims the last wide gameplay frame; the reveal composes + wipes in the new wide room."""
+            import numpy as np
+            from pre2.enhanced.compositor import compose
+            from pre2.enhanced.transitions import apply_vfade
+            enh["prev"] = enh["next_tick"] = None               # a transition breaks the interpolation pair
+            kind = tx[0]
+            if kind in ("fade", "black"):
+                base = compose(enh["last_cur"], None, 1.0) if enh["last_cur"] is not None else None
+                if base is None:
+                    w = compose_wide_now(state, dos)
+                    base = w[0] if w is not None else None
+                if base is None:
+                    return
+                fr = base.copy()
+                if kind == "black":
+                    fr[:VIEWPORT_H] = 0                          # viewport fully black (camera panning); HUD held
+                else:
+                    frac = tx[1]                                 # bands converge to the mid row (fully black at 1)
+                    apply_vfade(fr, int(_VFADE_MID * frac), int(2 * _VFADE_MID - _VFADE_MID * frac))
+                present(fr, _TRANSITION_FPS, "PRE2 VM-less — transition")
+            else:                                               # ("reveal", frac): wipe the NEW room in center-out
+                if enh["tx_new"] is None:
+                    w = compose_wide_now(state, dos)
+                    enh["tx_new"] = w[0] if w is not None else None
+                base = enh["tx_new"]
+                if base is None:
+                    return
+                cw = base.shape[1]
+                cx = cw // 2
+                half = int(round(min(1.0, max(0.0, tx[1])) * (cw / 2.0)))
+                fr = np.zeros_like(base)
+                fr[:, max(0, cx - half):min(cw, cx + half)] = base[:, max(0, cx - half):min(cw, cx + half)]
+                present(fr, _TRANSITION_FPS, "PRE2 VM-less — transition")
+
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
@@ -925,9 +967,10 @@ def main(argv=None) -> int:
                 # death-BOUNCE frame — object motion) lerps; a transition frame (cave curtain, death fade +
                 # checkpoint curtain, scene) streams 1:1 and breaks the lerp pair. So the parabolic death arc
                 # smooths out (each of its 60 frames is a lerp tick) while wipes stay faithful.
-                for planes, page, interp_ok in native_frame_step_tagged(state, dos, disp, game_root=gr):
+                for planes, page, interp_ok, tx in native_frame_step_tagged(state, dos, disp, game_root=gr):
                     # Enhanced present path when interpolation OR widescreen is on (widescreen needs the
-                    # composed wide frame even unlerped); transition frames always stream faithful 1:1.
+                    # composed wide frame even unlerped); transition frames stream faithful 1:1 UNLESS smooth
+                    # transitions is on (then the cave/death fade+curtain render full-width from `tx`).
                     if (settings["interpolation"] or settings["widescreen"]) and interp_ok:
                         present_interpolated(planes, page)
                         pump()
@@ -935,8 +978,16 @@ def main(argv=None) -> int:
                             native_audio.poll(state)
                         if not ref["running"]:
                             break
+                    elif _smooth_active() and tx is not None:
+                        present_smooth_tx(state, dos, tx)   # full-width fade / black / curtain from the descriptor
+                        pump()
+                        if native_audio is not None:
+                            native_audio.poll(state)
+                        if not ref["running"]:
+                            break
                     else:
                         enh["prev"] = enh["next_tick"] = None   # transition (or interp off) -> break the lerp pair
+                        enh["tx_new"] = None
                         if not stream_frame(planes, page):
                             break
                 ref["tick_count"] += 1                         # one native_frame_step drive == one game tick
