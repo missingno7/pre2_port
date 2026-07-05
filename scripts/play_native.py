@@ -146,7 +146,7 @@ def main(argv=None) -> int:
     import json
     settings_path = Path(gr) / "pre2native_settings.json"
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
-                "interpolation": False}
+                "interpolation": False, "frame_cap": 0}   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -207,6 +207,22 @@ def main(argv=None) -> int:
         return screen
 
     _hud = {"font": None, "t0": 0.0, "ticks0": 0, "text": ""}
+    _FRAME_CAPS = [0, 60, 120, 144, 240, -1]              # Display(auto) -> fixed caps -> Uncapped
+
+    def present_hz() -> float:
+        """The interpolated-presentation rate from the Frame-cap setting (0=detected display Hz)."""
+        cap = settings["frame_cap"]
+        return ref["display_hz"] if cap == 0 else (0.0 if cap < 0 else float(cap))
+
+    def pace(fps: float) -> None:
+        """Frame pacing: pygame's Clock.tick sleeps in ~ms grains (SDL_Delay), which lands ~60fps when asked
+        for 240 — use the busy-wait variant for high rates (precise), plain tick otherwise, none for uncapped."""
+        if fps <= 0:
+            clock.tick()                                   # uncapped (still updates get_fps)
+        elif fps > 90:
+            clock.tick_busy_loop(fps)
+        else:
+            clock.tick(fps)
 
     def present(rgb, fps, caption=None):
         screen = blit_frame(rgb)
@@ -223,7 +239,7 @@ def main(argv=None) -> int:
                                 if tps > 0 else f"{clock.get_fps():3.0f} fps")
             screen.blit(font.render(_hud["text"], True, (190, 210, 190)), (8, 22))
         pygame.display.flip()
-        clock.tick(fps)
+        pace(fps)
         if caption:
             pygame.display.set_caption(caption)
         ref["last"] = rgb
@@ -562,8 +578,19 @@ def main(argv=None) -> int:
                 save_settings()
             return act
 
+        cap = settings["frame_cap"]
+        cap_label = (f"Display ({ref['display_hz']:.0f} Hz)" if cap == 0
+                     else "Uncapped" if cap < 0 else f"{cap} Hz")
+
+        def adj_cap(d):
+            caps = _FRAME_CAPS
+            i = caps.index(cap) if cap in caps else 0
+            settings["frame_cap"] = caps[(i + d) % len(caps)]
+            save_settings()
+
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
+            {"label": "Frame cap", "value": cap_label, "adjust": adj_cap, "activate": lambda: adj_cap(1)},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
         ]
@@ -668,7 +695,7 @@ def main(argv=None) -> int:
             while True:                                         # >=1 frame per tick, then up to the due time
                 now = perf_counter()
                 alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
-                present(compose(cur, enh["prev"], alpha), ref["display_hz"],
+                present(compose(cur, enh["prev"], alpha), present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:
                     break
