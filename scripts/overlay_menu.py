@@ -121,33 +121,32 @@ class OverlayMenu:
         panel.fill(_PANEL_BG)
         screen.blit(panel, (x, y))
         pg.draw.rect(screen, _PANEL_BORDER, (x, y, panel_w, panel_h), width=1)
-        screen.blit(bold.render("PREHISTORIK 2", True, _TEXT_SELECTED), (x + 16, y + 12))
+        screen.blit(bold.render("Settings", True, _TEXT_SELECTED), (x + 16, y + 13))
 
-        # tabs
+        # tabs — text centred (both axes) inside each chip
         tab_x, tab_y = x + 14, y + 40
         for i, name in enumerate(names):
             active = i == self.tab
-            surf = (bold if active else font).render(f" {name} ", True,
-                                                     (20, 20, 20) if active else _TEXT)
-            rect = surf.get_rect(topleft=(tab_x, tab_y))
-            rect.inflate_ip(8, 6)
-            pg.draw.rect(screen, _TAB_ACTIVE_BG if active else _TAB_BG, rect)
-            pg.draw.rect(screen, _TAB_BORDER, rect, width=1)
-            screen.blit(surf, (tab_x + 4, tab_y + 3))
-            tab_x += rect.width + 6
+            surf = (bold if active else font).render(name, True, (20, 20, 20) if active else _TEXT)
+            chip = pg.Rect(tab_x, tab_y, surf.get_width() + 20, surf.get_height() + 8)
+            pg.draw.rect(screen, _TAB_ACTIVE_BG if active else _TAB_BG, chip)
+            pg.draw.rect(screen, _TAB_BORDER, chip, width=1)
+            screen.blit(surf, surf.get_rect(center=chip.center))
+            tab_x += chip.width + 6
 
-        # rows
-        row_y, row_h = y + 78, 26
+        # rows — label/value vertically centred in the row band (matches the selection bar)
+        row_y, row_h = y + 76, 26
         for i, item in enumerate(items):
             selected = i == self.item
+            row = pg.Rect(x + 16, row_y, panel_w - 32, row_h)
             if selected:
-                pg.draw.rect(screen, _ROW_SELECTED, (x + 16, row_y - 3, panel_w - 32, row_h))
-            screen.blit((bold if selected else font).render(str(item.get("label", "")), True,
-                                                            _TEXT_SELECTED if selected else _TEXT),
-                        (x + 26, row_y))
+                pg.draw.rect(screen, _ROW_SELECTED, row)
+            label = (bold if selected else font).render(str(item.get("label", "")), True,
+                                                        _TEXT_SELECTED if selected else _TEXT)
+            screen.blit(label, label.get_rect(midleft=(x + 26, row.centery)))
             val = font.render(str(item.get("value", "")), True,
                               _VALUE_SELECTED if selected else _VALUE)
-            screen.blit(val, (x + panel_w - 28 - val.get_width(), row_y))
+            screen.blit(val, val.get_rect(midright=(x + panel_w - 28, row.centery)))
             row_y += row_h
 
         screen.blit(small.render("Up/Down select   Left/Right adjust or switch tab   Enter activate",

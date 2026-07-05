@@ -622,13 +622,6 @@ def main(argv=None) -> int:
             {"label": "Music", "value": onoff("music"), "activate": toggle("music", _audio_apply_settings)},
             {"label": "Sound effects", "value": onoff("sfx"), "activate": toggle("sfx", _audio_apply_settings)},
         ]
-        help_tab = [
-            {"label": "F10", "value": "open / close this menu"},
-            {"label": "Arrows / numpad", "value": "move"},
-            {"label": "Space", "value": "fire / jump"},
-            {"label": "P", "value": "pause"},
-            {"label": "Esc", "value": "close menu, then quit"},
-        ]
         tabs = [("View", view_tab), ("Audio", audio_tab)]
         if args.debug:
             lvl = ref.get("menu_level", 0)
@@ -649,7 +642,6 @@ def main(argv=None) -> int:
                 {"label": "Restart level", "value": "reload current", "activate": lambda: (
                     ref.__setitem__("switch_level", "restart"), setattr(menu, "open", False))},
             ]))
-        tabs.append(("Help", help_tab))
         return tabs
 
     menu = OverlayMenu(pygame, _menu_tabs)
