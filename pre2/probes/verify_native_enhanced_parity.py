@@ -132,6 +132,26 @@ def main() -> int:
     print(f"  full sweep: {60 - fails}/60 ticks pixel-exact vs native_render (worst diff {worst}px)")
     total += fails
 
+    # WIDESCREEN invariant: a wide extract's central 320 columns must be pixel-IDENTICAL to margin=0
+    # (widescreen only ADDS pixels outside the faithful window; margin deliberately not tile-aligned).
+    print("widescreen sweep (margin=54 -> 428px wide), same level, 30 ticks, central-320 crop == margin 0:")
+    wfails = wworst = 0
+    for t in range(30):
+        native_gameplay_frame(state)
+        native_sync_render_state(state)
+        base = extract_enhanced_frame(state, dos, game_root=GR, with_faithful=False)
+        wide = extract_enhanced_frame(state, dos, game_root=GR, with_faithful=False, margin=54)
+        if base is None or wide is None:
+            continue
+        cw = compose(wide, None, 1.0)
+        assert cw.shape[1] == 428, cw.shape
+        d = int(np.any(cw[:, 54:374] != compose(base, None, 1.0), axis=2).sum())
+        wworst = max(wworst, d)
+        if d:
+            wfails += 1
+    print(f"  widescreen: {30 - wfails}/30 ticks central-crop exact (worst diff {wworst}px)")
+    total += wfails
+
     print("PASS — the enhanced pipeline is parity-proven over native state" if total == 0
           else f"FAIL — {total} residual (px + ticks)")
     return 1 if total else 0

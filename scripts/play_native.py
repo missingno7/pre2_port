@@ -146,7 +146,8 @@ def main(argv=None) -> int:
     import json
     settings_path = Path(gr) / "pre2native_settings.json"
     settings = {"integer_scale": False, "fps_overlay": False, "music": True, "sfx": True, "god": False,
-                "interpolation": False, "frame_cap": 0}   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
+                "interpolation": False, "frame_cap": 0,   # 0 = Display (detected Hz), -1 = Uncapped, else Hz
+                "widescreen": False, "fullscreen": False}
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -159,6 +160,33 @@ def main(argv=None) -> int:
             settings_path.write_text(json.dumps(persist, indent=1))
         except Exception as e:                                            # noqa: BLE001 — read-only game dir
             print(f"(settings not saved: {e})")
+
+    def set_fullscreen(on: bool) -> None:
+        """Switch between desktop-resolution fullscreen and the remembered resizable window."""
+        settings["fullscreen"] = on
+        if on:
+            view["win_size"] = view["screen"].get_size()                  # restore size for the way back
+            view["screen"] = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        else:
+            view["screen"] = pygame.display.set_mode(view.get("win_size", (320 * args.scale, 200 * args.scale)),
+                                                     pygame.RESIZABLE)
+        save_settings()
+
+    if settings["fullscreen"]:                                            # persisted preference -> apply at boot
+        set_fullscreen(True)
+
+    _WIDE_MAX = 128                                       # widescreen margin cap (px/side): 576px total, ~2.9:1
+
+    def wide_margin() -> int:
+        """The widescreen margin (px each side) for the CURRENT window: just enough extra width for the
+        window's aspect ratio at the game's 200px frame height (square pixels, like the 4:3 present), capped.
+        0 when the Widescreen setting is off or the window is 16:10/4:3 or narrower."""
+        if not settings["widescreen"]:
+            return 0
+        sw, sh = view["screen"].get_size()
+        if sh <= 0:
+            return 0
+        return min(_WIDE_MAX, max(0, (round(200 * sw / sh) - 320 + 1) // 2))
     # ENTER-CODE (password screen): host hex key -> DOS make code. The game maps the DOS make code to a hex char
     # via its own [0xB068] table, so we must feed the make code of the PHYSICAL key position — like the original,
     # which reads raw scancodes. Key by SDL physical scancode (ev.scancode), NOT the keysym (ev.key): the keysym is
@@ -178,8 +206,11 @@ def main(argv=None) -> int:
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
                 ref["running"] = False
-            elif ev.type == pygame.VIDEORESIZE:                    # user dragged the window edge -> rebind + rescale
+            elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:   # drag-resize (fullscreen: SDL
                 view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
+            elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN
+                  and ev.mod & pygame.KMOD_ALT):                   # Alt+Enter = fullscreen toggle (the classic)
+                set_fullscreen(not settings["fullscreen"])
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
                 ref["menu_request"] = True
             elif ev.type == pygame.KEYDOWN:                        # latch the hex make code typed THIS frame
@@ -615,6 +646,9 @@ def main(argv=None) -> int:
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
             {"label": "Frame cap", "value": cap_label, "adjust": adj_cap, "activate": lambda: adj_cap(1)},
+            {"label": "Widescreen", "value": onoff("widescreen"), "activate": toggle("widescreen")},
+            {"label": "Fullscreen", "value": onoff("fullscreen"),
+             "activate": lambda: set_fullscreen(not settings["fullscreen"])},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
         ]
@@ -656,8 +690,11 @@ def main(argv=None) -> int:
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
                     ref["running"] = False
-                elif ev.type == pygame.VIDEORESIZE:
+                elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
                     view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
+                elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN
+                      and ev.mod & pygame.KMOD_ALT):
+                    set_fullscreen(not settings["fullscreen"])
                 elif ev.type == pygame.KEYDOWN:
                     menu.handle_keydown(ev)
             if ref["last"] is not None:
@@ -705,6 +742,7 @@ def main(argv=None) -> int:
             # The EFFECTS bundle, mirroring native_render's own construction (same sources; the tick's
             # native_render already consumed the one-shots, so use the *_last stashes it leaves): point
             # particles (spider threads/sparkles), foreground tiles (z-order OVER sprites), fireflies, snow.
+            nonlocal n
             disp2 = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
             fg = read_foreground_state(state)
             fg.page = disp2 & 0xFFFF
@@ -720,20 +758,34 @@ def main(argv=None) -> int:
                     state.data[DS + off + 5] |= 0x40
             try:
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
-                                             tex_cache=enh["tex"], effects=fx)
+                                             tex_cache=enh["tex"], effects=fx, margin=wide_margin())
             finally:
                 if saved is not None:
                     for off, v in saved:
                         state.data[DS + off + 5] = v
+            if cur is None:                                     # no snapshot -> one faithful frame
+                present_tick_frame(planes, page)
+                enh["prev"] = None
+                enh["next_tick"] = None
+                return
+            if not settings["interpolation"]:                   # WIDESCREEN without interpolation: one composed
+                n += 1                                          #   (wide) frame per tick, faithful pacing
+                present(compose(cur, None, 1.0), args.fps,
+                        None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
+                enh["prev"] = cur                               # keep the pair warm for a live interp toggle-on
+                enh["next_tick"] = None
+                return
+            if (enh["prev"] is not None
+                    and enh["prev"].background_rgb.shape != cur.background_rgb.shape):
+                enh["prev"] = None                              # widescreen width changed (resize/toggle) -> snap
             now = perf_counter()
             if enh["next_tick"] is None or enh["next_tick"] < now - 0.25:   # (re)sync after start/pause/menu
                 enh["next_tick"] = now
-            if cur is None or enh["prev"] is None:              # no snapshot (or no pair yet) -> one faithful frame
-                present_tick_frame(planes, page)
+            if enh["prev"] is None:                             # no pair yet -> the composed frame, unlerped
+                present(compose(cur, None, 1.0), args.fps)
                 enh["prev"] = cur
                 enh["next_tick"] += tick_dt
                 return
-            nonlocal n
             n += 1
             while True:                                         # >=1 frame per tick, then up to the due time
                 now = perf_counter()
@@ -780,7 +832,9 @@ def main(argv=None) -> int:
                 # checkpoint curtain, scene) streams 1:1 and breaks the lerp pair. So the parabolic death arc
                 # smooths out (each of its 60 frames is a lerp tick) while wipes stay faithful.
                 for planes, page, interp_ok in native_frame_step_tagged(state, dos, disp, game_root=gr):
-                    if settings["interpolation"] and interp_ok:
+                    # Enhanced present path when interpolation OR widescreen is on (widescreen needs the
+                    # composed wide frame even unlerped); transition frames always stream faithful 1:1.
+                    if (settings["interpolation"] or settings["widescreen"]) and interp_ok:
                         present_interpolated(planes, page)
                         pump()
                         if native_audio is not None:

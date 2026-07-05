@@ -176,7 +176,7 @@ def _make_sprite_texture(draw, attr, src_bank):
 
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
-                           tex_cache=None, bg_cache=None) -> EnhancedFrameState | None:
+                           tex_cache=None, bg_cache=None, margin=0) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -189,6 +189,13 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     source frames; a throwaway one is made when None (parity path) -> identical output, no cross-frame reuse.
     ``bg_cache`` is a ``(TileTextureCache, _HudCache)`` pair persisting the native-background tile/HUD textures
     likewise (a throwaway pair when None).
+    ``margin`` (px each side) is WIDESCREEN: the tile background renders wider straight from the recovered
+    tilemap (real level content); every screen-space X (sprites, particles, fireflies, overlay placement) is
+    shifted by +margin; the backdrop and HUD strip (no wider source exists) extend by edge-pixel replication.
+    The central 320 columns are IDENTICAL to margin=0 (widescreen only ADDS pixels outside the faithful
+    window); entities fully outside the original window pop in at its edge (the game never emits render
+    records for them) — the standard widescreen-mod artifact. margin=0 (the default and the parity path)
+    is byte-identical to the pre-widescreen extractor.
     """
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
@@ -199,7 +206,10 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     pal_rgb = np.asarray(palette, dtype=np.uint8)
 
     # Backdrop = the FIXED parallax base layer (sky/mountains), de-planarized directly from 0x7E80.
+    # Widescreen: the backdrop is a fixed 320px VRAM image with no wider source -> edge-pixel replication.
     backdrop_rgb = _render_backdrop(rs, page, palette)
+    if margin:
+        backdrop_rgb = np.pad(backdrop_rgb, ((0, 0), (margin, margin), (0, 0)), mode="edge")
 
     # Background colour INDICES over a zeroed base: every base-showing pixel is index 0, opaque tile/effect
     # pixels keep their (base-independent) colour. So tile_mask = index!=0 is the TRUE tile coverage
@@ -216,13 +226,15 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     tile_cache, hud_cache = bg_cache
     _t0 = _perf()
     try:
-        idx0 = native_background_indices(rs, tile_cache, hud_cache)
+        idx0 = native_background_indices(rs, tile_cache, hud_cache, margin=margin)
     except NativeBackgroundUnsupported:
         tile_cache.stats["fallbacks"] += 1
         bg0_planes = [bytearray(0x10000) for _ in range(4)]
         render_frame(replace(rs, object_camera=None, asset_planes=_zero_base(rs.asset_planes)),
                      bg0_planes, palette, rebuild=True)
         idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]
+        if margin:                                       # faithful fallback is 320-wide -> edge-extend
+            idx0 = np.pad(idx0, ((0, 0), (margin, margin)), mode="edge")
     tile_cache.stats["native_s"] += _perf() - _t0
     tile_mask = idx0 != 0
     backdrop_full = backdrop_rgb.copy()
@@ -249,13 +261,17 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
             ov_fx = replace(ov_fx, foreground=replace(ov_fx.foreground, page=page))
         apply_gameplay_effects(ov_planes, page, ov_fx)
         idx_ov = render_planar_rgb_from_planes(ov_planes, page, _ID_PAL)[:, :, 0]
+        if margin:                                       # screen-space records: place at +margin, empty margins
+            idx_ov = np.pad(idx_ov, ((0, 0), (margin, margin)))
         overlay_mask = idx_ov != 0
         overlay_rgb = pal_rgb[idx_ov]
         if effects.particles is not None:
-            particles = _extract_particles(effects.particles)
+            particles = [(sx + margin, sy, vx, vy)
+                         for (sx, sy, vx, vy) in _extract_particles(effects.particles)]
             particle_rgb = tuple(int(c) for c in pal_rgb[15])    # 4B8E plots colour 15 (white)
         if effects.fireflies is not None:
-            fireflies = _extract_fireflies(effects.fireflies)
+            fireflies = [(i, wx, wy, sx + margin, sy)
+                         for (i, wx, wy, sx, sy) in _extract_fireflies(effects.fireflies)]
             firefly_rgb = tuple(int(c) for c in pal_rgb[15])     # VM oracle collapses the 14/15 flicker to 15
 
     faithful_rgb = None
@@ -343,7 +359,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                 handle = ("rec", rec_off)
         sprites.append(SpriteInstance(handle=handle, slot=slot, base_id=cmd.base_id, sprite_id=cmd.sprite_id,
                                       world_x=wx, world_y=wy,
-                                      screen_x=cmd.screen_x, screen_y=cmd.screen_y,
+                                      screen_x=cmd.screen_x + margin, screen_y=cmd.screen_y,
                                       tex_off_x=tex.off_x, tex_off_y=tex.off_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
