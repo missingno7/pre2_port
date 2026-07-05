@@ -91,6 +91,47 @@ def main() -> int:
     total += fails
     print(f"  sweep: {60 - fails}/60 ticks pixel-exact at alpha=1; mid-alpha compose OK")
 
+    print("full-pipeline sweep vs native_render (EFFECTS + FLASH: particles/foreground/fireflies/opaque),")
+    print("earthquake level, 60 ticks — the exact construction play_native's interpolation uses:")
+    from pre2.bridge.foreground_tiles import read_foreground_state
+    from pre2.bridge.gameplay_effects import capture_gameplay_effects
+    from pre2.native.render import native_render
+    from sdl_view import render_planar_rgb_from_planes
+    state, dos = _boot(0x0D, 120)
+    ds = 0x1A0F << 4
+    fails = worst = 0
+    for t in range(60):
+        native_gameplay_frame(state)
+        native_sync_render_state(state)
+        disp = state.data[ds + 0x2DD6] | (state.data[ds + 0x2DD7] << 8)
+        planes, page = native_render(state, dos, disp, game_root=GR, force_gameplay=True)   # the reference
+        faith = np.asarray(render_planar_rgb_from_planes(planes, page, dos.vga_palette), np.uint8)
+        fg = read_foreground_state(state)
+        fg.page = disp & 0xFFFF
+        fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
+                                      foreground_frame=fg)
+        flash = getattr(state, "flash_slots_last", None)
+        saved = [(off, state.data[ds + off + 5]) for off in (flash or [])]
+        for off in (flash or []):
+            state.data[ds + off + 5] |= 0x40
+        try:
+            efs = extract_enhanced_frame(state, dos, game_root=GR, with_faithful=False, effects=fx)
+        finally:
+            for off, v in saved:
+                state.data[ds + off + 5] = v
+        if efs is None:
+            continue
+        comp = compose(efs, None, 1.0)[:VIEW_H]
+        d = int(np.any(comp != faith[:VIEW_H], axis=2).sum())
+        worst = max(worst, d)
+        if d:
+            fails += 1
+            if fails <= 3:
+                ys, xs = np.nonzero(np.any(comp != faith[:VIEW_H], axis=2))
+                print(f"  tick {t}: diff={d}px  bbox rows {ys.min()}..{ys.max()} cols {xs.min()}..{xs.max()}")
+    print(f"  full sweep: {60 - fails}/60 ticks pixel-exact vs native_render (worst diff {worst}px)")
+    total += fails
+
     print("PASS — the enhanced pipeline is parity-proven over native state" if total == 0
           else f"FAIL — {total} residual (px + ticks)")
     return 1 if total else 0

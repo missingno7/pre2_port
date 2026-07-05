@@ -161,6 +161,10 @@ def native_render(state, dos, display_page: int, *, game_root: str,
         if pf is None:
             pf = read_particles(state)                             # [4b8e] one-shot point particles (live)
         particle_capture = pf if pf.particles else None
+    # non-destructive stash for SAME-tick consumers AFTER this render (the interpolation extractor runs post-
+    # native_frame_step, by which time the one-shot above is already consumed). Overwritten every render —
+    # None on particle-less ticks — so it can never go stale across ticks.
+    state.particle_capture_last = particle_capture
     fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
     # Re-apply the one-frame OPAQUE flash flag (id bit14 = [+5]&0x40) on the slots native_object_render_state
     # captured before 26FA cleared it, so the hit/death flash draws as the VM's solid-white silhouette. The
@@ -168,6 +172,7 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     # after — leaving the flag set would desync the next frame's carried-forward state from the VM's cleared record.
     flash = getattr(state, "flash_slots", None)
     state.flash_slots = None                                       # one-shot, like particle_capture
+    state.flash_slots_last = flash                                 # non-destructive stash (same-tick extractor)
     saved = None
     if flash:
         d = state.data

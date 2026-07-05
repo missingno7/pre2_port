@@ -25,7 +25,7 @@ from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache,
                                              native_background_indices)
 from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
-from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, RECORD_BYTES, paint_sprite,
+from pre2.recovered.object_render import (LIST_TOP, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, paint_sprite,
                                           plan_sprite, plan_sprite_command)
 from pre2.recovered.fireflies import _sar
 from pre2.recovered.particles import advance_particle
@@ -282,7 +282,12 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         cmd = plan_sprite_command(spr, attr, cam)
         if cmd is None:
             continue
-        if int(cmd.mode) != MODE_NORMAL:           # OPAQUE/ERASE: bg-dependent blend, not a texture
+        if int(cmd.mode) not in (MODE_NORMAL, MODE_OPAQUE):   # ERASE: bg-dependent blend, not a texture.
+            # OPAQUE (the one-frame white hit/death flash, id bit14) IS texturable: paint_sprite ORs the
+            # coverage block into all four planes -> covered pixels are index 15 REGARDLESS of background,
+            # so the dual-buffer bake below yields exactly the white silhouette (uncovered pixels disagree
+            # between the two buffers and drop out as transparent). _texture_key includes draw.mode, so
+            # flash cels never collide with their normal variants in the cache.
             unsupported.append((slot, cmd.base_id, _MODE_NAME.get(int(cmd.mode), hex(int(cmd.mode)))))
             continue
         draw = plan_sprite(spr, attr, cam)

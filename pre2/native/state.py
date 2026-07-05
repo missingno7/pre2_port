@@ -20,7 +20,7 @@ class NativeGameState:
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
     __slots__ = ("data", "sfx_queue", "particle_capture", "flash_slots", "song_request", "boss_glyph",
-                 "snow_plots")
+                 "snow_plots", "particle_capture_last", "flash_slots_last")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -53,6 +53,11 @@ class NativeGameState:
         #: 3922 render half (native_scroll_script -> scroll_script_snow) plots white into the frame. Empty/None on
         #: every other level (wind [0x6bf6] == 0). native_render's effect pass (draw_snow) overlays them.
         self.snow_plots: list | None = None
+        #: NON-DESTRUCTIVE stashes of the two one-shots above, left by native_render for SAME-tick consumers
+        #: that run after it (the interpolation extractor in play_native). Overwritten on every render (None
+        #: when the tick had none), so they can never go stale across ticks.
+        self.particle_capture_last = None
+        self.flash_slots_last: list[int] | None = None
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
