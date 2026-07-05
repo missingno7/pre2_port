@@ -47,6 +47,32 @@ class ByteBackend:
         self.data[a + 1] = (v >> 8) & 0xFF
 
 
+class SegmentBackend:
+    """Reads/writes through the 1 MB image at ``(seg << 4) + (offset & 0xFFFF)`` — a typed-view backend for
+    the game's OTHER segments (the ``[0x2DDA]`` level map, the ``[0x2875]`` asset/trigger bank). Offsets wrap
+    at 64 KB exactly like the 16-bit registers the ASM addresses them with. The same :class:`StructView`
+    machinery runs over it unchanged — only the base translation differs from :class:`ByteBackend`."""
+
+    __slots__ = ("data", "base")
+
+    def __init__(self, source, seg: int):
+        self.data = source.data if hasattr(source, "data") else source
+        self.base = (seg & 0xFFFF) << 4
+
+    def rb(self, off: int) -> int:
+        return self.data[(self.base + (off & 0xFFFF)) & 0xFFFFF]
+
+    def wb(self, off: int, v: int) -> None:
+        self.data[(self.base + (off & 0xFFFF)) & 0xFFFFF] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb(off + 1) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v)
+        self.wb(off + 1, v >> 8)
+
+
 class OverlayBackend:
     """Read-through overlay: reads fall through to ``base_rb(offset)`` unless already written; writes accumulate
     the ``writes`` contract (``{offset: byte}``) and never touch the base. A contract-returning island runs its
@@ -324,6 +350,77 @@ class SwarmView(DgroupView):
     cam_col = _S16(0x2DE4)
     cam_row = _S16(0x2DE6)
     page    = _U16(0x2DD8)
+
+
+# ---- proximity-scenery triggers (53F6 scan / 5427 map-mod / 41CA bank build / 52D2 restore) -----------------
+
+class ProximityTrigger(StructView):
+    """One earthquake/breakable-scenery trigger — a stride-0xA entry of the 15-entry ``[0x83F3]`` table.
+
+    ``block_top`` is the map offset of the collapsible block's CURRENT top row (the map-mod moves it up
+    0x100/row as the block rises); ``trigger_pos`` is the packed player-tile coordinate that arms it
+    (0xFFFF = inactive, 0xFFFE = fired — then the map-mod runs each frame until ``countdown`` hits 0);
+    ``reveal_cursor`` walks BACKWARD through the 41CA-saved pristine rows in the ``[0x2875]`` bank, one
+    ``width`` per fire."""
+
+    __slots__ = ()
+
+    FIRED    = 0xFFFE
+    INACTIVE = 0xFFFF
+
+    block_top     = _U16(0)
+    width         = _U8(2)
+    height        = _U8(3)
+    trigger_pos   = _U16(4)
+    reveal_cursor = _U16(6)
+    countdown     = _U8(8)
+
+    @property
+    def dead(self) -> bool:
+        """No trigger in this entry at all (the load left ``block_top`` = 0xFFFF)."""
+        return self._backend.rw(self._base) == 0xFFFF
+
+
+class ProximityView(DgroupView):
+    """The proximity-scenery island's DGROUP state: the trigger table + the frame gate + the camera shake it
+    kicks, and the two segment registers its map/bank halves address."""
+
+    __slots__ = ()
+
+    triggers  = StructArray(0x83F3, 0xA, 15, ProximityTrigger)
+    tick      = _U8(0x6BD5)     # the free-running frame counter (the map-mod's &3 every-4th-frame gate)
+    shake     = _U8(0x6BEA)     # camera-shake magnitude (set to 7 while a trigger is armed-in-range/fired)
+    map_seg   = _U16(0x2DDA)    # the level-map segment (collision tiles — the state 5427/52D2 mutate)
+    bank_seg  = _U16(0x2875)    # the 41CA save bank (pristine block rows; 52D2's restore source)
+
+
+class LightFadeView(DgroupView):
+    """The dark-cave light-fade state (6772 / the light pickups 876C/8790): the two direction flags, the
+    per-tick step, and the resting lights-off bit — plus what the DAC ramp derives from (the level id and the
+    palette bytes, read via :meth:`palette_byte`)."""
+
+    __slots__ = ()
+
+    DARK_PALETTE = 0xACB7       # the fixed "lights off" 16-colour palette [asm 6791]
+
+    to_dark    = _U8(0x6C01)    # fade toward the dark palette (set by the light-OFF pickup)
+    to_light   = _U8(0x6C02)    # fade back toward the level palette
+    step       = _U8(0x6C03)    # the ramp step, ++ per game tick while a fade is active [asm 677B]
+    lights_off = _U8(0x6C04)    # resting state after a completed fade-to-dark
+    level      = _U8(0x2D8A)
+
+    @property
+    def active(self) -> bool:
+        return bool(self.to_dark | self.to_light)
+
+    @property
+    def level_palette(self) -> int:
+        """DGROUP offset of the current level's 0x30-byte palette [asm 677F-6787]."""
+        return self._backend.rw(0x2D00 + self.level * 2)
+
+    def palette_byte(self, base: int, k: int) -> int:
+        """One 6-bit DAC channel byte from a palette at DGROUP offset ``base``."""
+        return self._backend.rb((base + k) & 0xFFFF)
 
 
 # ---- the shared render/object slot (stride 0x12) ------------------------------------------------------------

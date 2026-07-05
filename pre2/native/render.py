@@ -106,31 +106,27 @@ def native_apply_palette_fade(state, dos) -> None:
     is idempotent per render call, so the fade advances per game TICK exactly like the VM (it previously
     advanced per render call, i.e. at --fps rate, and its state was invisible to state-only verification —
     found by the safe-hooks demo 230900 at tick 382). No-op in the common case (no fade, lights on)."""
-    d = state.data
-    active = d[_DS + 0x6C01] | d[_DS + 0x6C02]
-    if not active and d[_DS + 0x6C04] == 0:                          # [asm 6779] no fade + lights on -> level pal
+    from pre2.bridge.dgroup_view import LightFadeView
+    fade = LightFadeView(state)
+    if not fade.active and fade.lights_off == 0:                     # [asm 6779] no fade + lights on -> level pal
         return
-    level = d[_DS + 0x2D8A]
-    lvl_pal = d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8)   # [asm 6787]
-
-    def g(off, k):
-        return d[_DS + ((off + k) & 0xFFFF)]
-
-    if active:
-        step = d[_DS + 0x6C03]                                       # [asm 677B]'s inc already ran in the tick
+    if fade.active:
+        step = fade.step                                             # [asm 677B]'s inc already ran in the tick
         #                                                              (native_light_fade_step — the state half)
-        s_off, b_off = lvl_pal, _LIGHT_DARK_PAL                      # [asm 6787/6791]
-        if d[_DS + 0x6C02]:                                          # [asm 6799-67A0] [0x6C02] -> swap src/dst
-            s_off, b_off = b_off, s_off
+        src, dst = fade.level_palette, _LIGHT_DARK_PAL               # [asm 6787/6791]
+        if fade.to_light:                                            # [asm 6799-67A0] fading BACK -> swap
+            src, dst = dst, src
         dac = []
         for k in range(0x30):                                        # [asm 67A2-67C6] 16 colours x 3
-            s = g(s_off, k); b = g(b_off, k); diff = s - b
+            s = fade.palette_byte(src, k)
+            b = fade.palette_byte(dst, k)
+            diff = s - b
             if abs(diff) > step:                                     # [asm 67B3 ja] ramp s toward b
                 dac.append((s - step) if diff >= 0 else (s + step))
             else:                                                   # [asm 67B7] within a step -> snap to b
                 dac.append(b)
     else:                                                            # at rest with the lights off -> the dark pal
-        dac = [g(_LIGHT_DARK_PAL, k) for k in range(0x30)]
+        dac = [fade.palette_byte(_LIGHT_DARK_PAL, k) for k in range(0x30)]
     for c in range(0x10):
         dos.vga_palette[c] = (_dac8(dac[c * 3]), _dac8(dac[c * 3 + 1]), _dac8(dac[c * 3 + 2]))
 

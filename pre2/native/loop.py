@@ -251,54 +251,50 @@ def _player_tile_coords(rw) -> int:
 
 def native_proximity_trigger(state) -> None:
     """[asm 53F6..5497] The per-frame proximity-trigger scan (breakable-wall / opening-passage triggers): 15
-    entries at [0x83F3] (stride 0xA), field [+4] = a packed tile coord (0xFFFF inactive, 0xFFFE already-fired).
-    When the player comes within 8 (packed) of an armed entry it FIRES ([+4]=0xFFFE, camera shake [0x6BEA]=7); a
-    fired entry re-applies its map modification (native_proximity_mapmod) each frame. No trigger in range and
+    :class:`ProximityTrigger` entries. When the player comes within 8 (packed) of an armed entry it FIRES
+    (``trigger_pos`` = FIRED, camera shake = 7); a fired entry re-applies its map modification
+    (:func:`native_proximity_mapmod`) each frame until its countdown disarms it. No trigger in range and
     none fired -> a byte-exact no-op."""
-    rb, rw = readers(state)
-    dx = _player_tile_coords(rw)
-    si = 0x83F3
-    for _ in range(0xF):
-        entry = rw((si + 4) & 0xFFFF)
-        if entry == 0xFFFE:                                       # [asm 5407 je 5427] already fired -> the map mod
-            native_proximity_mapmod(state, si)
-        elif entry != 0xFFFF and ((dx - entry) & 0xFFFF) <= 8:   # [asm 540C-5413 jbe 541B] in range -> FIRST fire
-            _ww(state, (si + 4) & 0xFFFF, 0xFFFE)                # [asm 541B] mark fired
-            _wb(state, 0x6BEA, 7)                                # [asm 5420] camera shake
-        si = (si + 0xA) & 0xFFFF
+    from pre2.bridge.dgroup_view import ProximityTrigger, ProximityView
+    _rb, rw = readers(state)
+    player = _player_tile_coords(rw)                              # [asm 5313 -> 549A] packed player tile
+    v = ProximityView(state)
+    for trig in v.triggers:
+        pos = trig.trigger_pos
+        if pos == ProximityTrigger.FIRED:                         # [asm 5407 je 5427] fired -> the map mod
+            native_proximity_mapmod(state, trig)
+        elif pos != ProximityTrigger.INACTIVE and ((player - pos) & 0xFFFF) <= 8:
+            trig.trigger_pos = ProximityTrigger.FIRED             # [asm 540C-541B] in range -> FIRST fire
+            v.shake = 7                                           # [asm 5420] camera shake
 
 
-def native_proximity_mapmod(state, si) -> None:
+def native_proximity_mapmod(state, trig) -> None:
     """[asm 5427..5497] The fired-trigger map modification (a wall rising / passage opening): every 4th frame
-    ([0x6BD5]&3==0), shift the entry's ``height``x``width`` tile block ([si+3]x[si+2]) UP one row in the level map
-    (es=[0x2DDA]), move the block anchor [si] up (-=0x100), reveal a fresh bottom row from the level asset
-    ([0x2875]:[si+6]), advance the source ([si+6]-=width), and count down [si+8] — disarming ([si+4]=0xFFFF) at 0.
-    The per-tile 653D re-blit is a render side-effect (the faithful renderer redraws the changed tiles)."""
-    rb, rw = readers(state)
-    _wb(state, 0x6BEA, 7)                                        # [asm 5429] camera shake
-    if (rb(0x6BD5) & 3) != 0:                                    # [asm 542E] only acts every 4th frame
+    (``tick & 3 == 0``), shift the trigger's ``height x width`` tile block UP one row in the level map, move
+    ``block_top`` up a row, reveal a fresh bottom row from the 41CA-saved pristine rows in the bank (walking
+    ``reveal_cursor`` backward one ``width`` per fire), and count down — disarming at 0. The per-tile 653D
+    re-blit is a render side-effect (the faithful renderer redraws the changed tiles)."""
+    from pre2.bridge.dgroup_view import ProximityTrigger, ProximityView, SegmentBackend
+    v = ProximityView(state)
+    v.shake = 7                                                   # [asm 5429] camera shake (even on gated frames)
+    if v.tick & 3:                                                # [asm 542E] only acts every 4th frame
         return
-    eb = (rw(0x2DDA) << 4) & 0xFFFFF                             # [asm 5435] level-map segment
-    sb = (rw(0x2875) << 4) & 0xFFFFF                             # [asm 5471] level-asset (reveal source) segment
-    width = rb((si + 2) & 0xFFFF)                                # [asm 5439]
-    height = rb((si + 3) & 0xFFFF)                               # [asm 543B]
-    di = (rw(si) - 0x100) & 0xFFFF                               # [asm 543F/5445] block anchor, one row up
-    for _row in range(height):                                   # [asm 5449-5463] shift the block up one row
-        for _col in range(width):
-            state.data[(eb + di) & 0xFFFFF] = state.data[(eb + ((di + 0x100) & 0xFFFF)) & 0xFFFFF]   # [asm 544B-5450]
-            di = (di + 1) & 0xFFFF
-        di = (di - width + 0x100) & 0xFFFF                       # [asm 545B-545D] next row
-    _ww(state, si, (rw(si) - 0x100) & 0xFFFF)                    # [asm 5465] [si] -= 0x100
-    bx = rw((si + 6) & 0xFFFF)                                   # [asm 5469] source pointer
-    for _col in range(width):                                    # [asm 5471-5483] reveal a fresh bottom row
-        state.data[(eb + di) & 0xFFFFF] = state.data[(sb + bx) & 0xFFFFF]
-        di = (di + 1) & 0xFFFF
-        bx = (bx + 1) & 0xFFFF
-    _ww(state, (si + 6) & 0xFFFF, (rw((si + 6) & 0xFFFF) - width) & 0xFFFF)   # [asm 5488] [si+6] -= width
-    cnt = (rb((si + 8) & 0xFFFF) - 1) & 0xFF                     # [asm 548B] countdown
-    _wb(state, (si + 8) & 0xFFFF, cnt)
-    if cnt == 0:                                                 # [asm 548E]
-        _ww(state, (si + 4) & 0xFFFF, 0xFFFF)                    # [asm 5490] done -> disarm
+    game_map = SegmentBackend(state, v.map_seg)                   # [asm 5435] es = the level map
+    bank = SegmentBackend(state, v.bank_seg)                      # [asm 5471] ds = the pristine-row bank
+    width, height = trig.width, trig.height                       # [asm 5439/543B]
+    row = (trig.block_top - 0x100) & 0xFFFF                       # [asm 543F/5445] block top, one row up
+    for _ in range(height):                                       # [asm 5449-5463] shift the block up one row
+        for col in range(width):
+            game_map.wb(row + col, game_map.rb(row + col + 0x100))   # [asm 544B-5450]
+        row = (row + 0x100) & 0xFFFF                              # [asm 545B-545D] next row
+    trig.block_top = (trig.block_top - 0x100) & 0xFFFF            # [asm 5465] the block rose one row
+    src = trig.reveal_cursor                                      # [asm 5469]
+    for col in range(width):                                      # [asm 5471-5483] reveal a fresh bottom row
+        game_map.wb(row + col, bank.rb(src + col))
+    trig.reveal_cursor = (src - width) & 0xFFFF                   # [asm 5488] next pristine row (backward)
+    trig.countdown = cnt = (trig.countdown - 1) & 0xFF            # [asm 548B]
+    if cnt == 0:                                                  # [asm 548E]
+        trig.trigger_pos = ProximityTrigger.INACTIVE              # [asm 5490] done -> disarm
 
 
 _DS_BASE = DATA_SEG << 4
@@ -573,26 +569,21 @@ def native_light_fade_step(state) -> None:
     in the gameplay frame — found by the safe-hooks demo 230900 (tick 382: the VM counted [0x6C03] 1,2,4...
     while state-only native stayed 0), and it also fixes the native fade PACING (it advanced per RENDER call,
     i.e. --fps-dependent, instead of per game tick)."""
-    d = state.data
-    base = DATA_SEG << 4
-    if d[base + 0x6C01] == 0 and d[base + 0x6C02] == 0:              # [asm 6771/6775 je 67D6] no active fade
+    from pre2.bridge.dgroup_view import LightFadeView
+    fade = LightFadeView(state)
+    if not fade.active:                                              # [asm 6771/6775 je 67D6] no active fade
         return
-    step = (d[base + 0x6C03] + 1) & 0xFF                             # [asm 677B] inc byte [0x6C03]
-    d[base + 0x6C03] = step
-    level = d[base + 0x2D8A]
-    lvl_pal = d[base + 0x2D00 + level * 2] | (d[base + 0x2D00 + level * 2 + 1] << 8)   # [asm 677F-6787]
-    s_off, b_off = lvl_pal, 0xACB7                                   # [asm 6787/6791] src=level, dst=dark
-    if d[base + 0x6C02]:                                             # [asm 6799-67A0] fading BACK -> swap
-        s_off, b_off = b_off, s_off
-    anim = 0
+    fade.step = step = (fade.step + 1) & 0xFF                        # [asm 677B] inc byte [0x6C03]
+    src, dst = fade.level_palette, LightFadeView.DARK_PALETTE        # [asm 6787/6791] level -> dark
+    if fade.to_light:                                                # [asm 6799-67A0] fading BACK -> swap
+        src, dst = dst, src
+    still_ramping = 0
     for k in range(0x30):                                            # [asm 67A2-67C6] 16 colours x RGB
-        s = d[base + ((s_off + k) & 0xFFFF)]
-        b = d[base + ((b_off + k) & 0xFFFF)]
-        if abs(s - b) > step:                                        # [asm 67B3 ja] still ramping
-            anim += 1
-    if anim == 0:                                                    # [asm 67C8-67D1] complete -> clear flags
-        d[base + 0x6C01] = 0
-        d[base + 0x6C02] = 0
+        if abs(fade.palette_byte(src, k) - fade.palette_byte(dst, k)) > step:   # [asm 67B3 ja]
+            still_ramping += 1
+    if still_ramping == 0:                                           # [asm 67C8-67D1] complete -> clear flags
+        fade.to_dark = 0
+        fade.to_light = 0
 
 
 def native_object_render_state(state) -> None:

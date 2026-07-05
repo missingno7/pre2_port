@@ -60,20 +60,20 @@ def native_52d2(state) -> None:
     210723 (L0xD) — die on collapsed scenery, respawn, walk back: the VM restored the 74 collapsed bytes at
     the respawn (tick 653) while native kept them, and the stale tile stopped the player as a phantom wall
     at tick 788 (the reported "camera inaccuracy")."""
-    d = state.data
-    bank = (d[_DS + 0x2875] | (d[_DS + 0x2876] << 8)) << 4           # [asm 52d8] ds = [0x2875]
-    mapb = (d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)) << 4           # [asm 52d4] es = [0x2DDA]
+    from pre2.bridge.dgroup_view import ProximityView, SegmentBackend
+    v = ProximityView(state)
+    bank = SegmentBackend(state, v.bank_seg)                         # [asm 52d8] ds = [0x2875]
+    game_map = SegmentBackend(state, v.map_seg)                      # [asm 52d4] es = [0x2DDA]
     si = 0                                                           # [asm 52dc]
     for _ in range(0x10):                                            # bank holds at most 15 entries (41CA cx=0xf)
-        dest = d[bank + si] | (d[bank + si + 1] << 8)                # [asm 52de] di = [si]
+        dest = bank.rw(si)                                           # [asm 52de] the block's map offset
         if dest == 0xFFFF:                                           # [asm 52e0] terminator
             return
-        rows = d[bank + si + 2]                                      # [asm 52e5] al
-        width = d[bank + si + 3]                                     #            ah
+        rows, width = bank.rb(si + 2), bank.rb(si + 3)               # [asm 52e5] al=rows, ah=width
         si += 4                                                      # [asm 52e8]
         for _r in range(rows):                                       # [asm 52eb-52f7]
             for k in range(width):                                   # rep movsb (one map row)
-                d[mapb + ((dest + k) & 0xFFFF)] = d[bank + ((si + k) & 0xFFFF)]
+                game_map.wb(dest + k, bank.rb(si + k))
             si += width
             dest = (dest + 0x100) & 0xFFFF                           # [asm 52f1] next map row
     raise Pre2HybridGap("52D2 scenery-restore: no 0xFFFF terminator within 15 entries — "

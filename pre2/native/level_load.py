@@ -228,31 +228,29 @@ def _build_trigger_bank(d) -> None:
     52D2 restore (respawn / level-start un-collapse). Note the 4065 dup runs BEFORE this, so the [0x9203]
     backup keeps the pre-41CA ``[+6]`` (0xFFFF) — 5237's 5251 restore puts 0xFFFF back each respawn, exactly
     as observed in the L0xD snapshots."""
-    bank = (d[_DS + 0x2875] | (d[_DS + 0x2876] << 8)) << 4           # [asm 41ca] es = [0x2875]
-    mapb = (d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)) << 4           # [asm 41fc] ds = [0x2DDA]
+    from pre2.bridge.dgroup_view import ProximityView, SegmentBackend
+    v = ProximityView(d)
+    bank = SegmentBackend(d, v.bank_seg)                             # [asm 41ca] es = [0x2875]
+    game_map = SegmentBackend(d, v.map_seg)                          # [asm 41fc] ds = [0x2DDA]
     di = 0                                                           # [asm 41ce]
-    d[bank] = 0xFF; d[bank + 1] = 0xFF                               # [asm 41d0] empty-bank terminator
-    for k in range(0xF):                                             # [asm 41d5/41d8] 15 entries
-        bx = 0x83F3 + k * 0xA
-        src = d[_DS + bx] | (d[_DS + bx + 1] << 8)
-        if src == 0xFFFF:                                            # [asm 41db] dead entry
+    bank.ww(0, 0xFFFF)                                               # [asm 41d0] empty-bank terminator
+    for trig in v.triggers:                                          # [asm 41d5/41d8] 15 entries
+        if trig.dead:                                                # [asm 41db]
             continue
-        count = d[_DS + bx + 8]                                      # [asm 41e8] ah=[bx+8]
-        si = (src - (count << 8)) & 0xFFFF                           # [asm 41ed] si -= count*0x100
-        rows = (d[_DS + bx + 3] + count) & 0xFF                      # [asm 41ef/41f2] dl = height + count
-        width = d[_DS + bx + 2]                                      # [asm 41f5] dh
-        d[bank + di] = si & 0xFF; d[bank + di + 1] = si >> 8         # [asm 4200] es:[di] = map offset
-        d[bank + di + 2] = rows; d[bank + di + 3] = width            # [asm 4203] es:[di+2] = dx (dl,dh)
+        count = trig.countdown                                       # [asm 41e8] fires this trigger will make
+        src = (trig.block_top - (count << 8)) & 0xFFFF               # [asm 41ed] top minus the rows it will rise
+        rows = (trig.height + count) & 0xFF                          # [asm 41ef/41f2] everything the mod touches
+        width = trig.width                                           # [asm 41f5]
+        bank.ww(di, src)                                             # [asm 4200] record: map offset
+        bank.wb(di + 2, rows); bank.wb(di + 3, width)                # [asm 4203] rows, width
         di += 4                                                      # [asm 4207]
-        for _r in range(rows):                                       # [asm 420a-421d]
+        for _r in range(rows):                                       # [asm 420a-421d] save the pristine block
             for c in range(width):                                   # movsb x width (one map row)
-                d[bank + di] = d[mapb + ((si + c) & 0xFFFF)]
+                bank.wb(di, game_map.rb(src + c))
                 di += 1
-            si = (si + 0x100) & 0xFFFF                               # [asm 4215/4217] next map row
-        cursor = (di - width) & 0xFFFF                               # [asm 4224] the LAST saved row's offset
-        d[_DS + bx + 6] = cursor & 0xFF                              # [asm 4228] [bx+6] = the reveal cursor
-        d[_DS + bx + 7] = cursor >> 8
-        d[bank + di] = 0xFF; d[bank + di + 1] = 0xFF                 # [asm 422b] terminator after this entry
+            src = (src + 0x100) & 0xFFFF                             # [asm 4215/4217] next map row
+        trig.reveal_cursor = (di - width) & 0xFFFF                   # [asm 4224/4228] = the LAST saved row
+        bank.ww(di, 0xFFFF)                                          # [asm 422b] terminator after this entry
 
 
 def native_level_load_objects(state) -> None:
