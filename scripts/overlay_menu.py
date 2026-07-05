@@ -85,6 +85,8 @@ class OverlayMenu:
         self._font_key = None
         self._scroll = 0                             # first visible row index (rows scroll; the panel is capped)
         self.editing = False                         # an adjustable row is "entered" -> Left/Right change it
+        self._hover = -1                             # item index under the mouse (-1 = none); shows ‹ › affordance
+        self._hit = {"panel": None, "tabs": [], "rows": [], "arrows": {}}   # layout rects from the last draw
 
     # --- fonts (lazy: pygame.font needs init; re-created when the UI scale changes, e.g. DPI / window size) --
     def _fonts(self, scale=1.0):
@@ -160,6 +162,64 @@ class OverlayMenu:
                     action()
         return True
 
+    def handle_mouse(self, event) -> bool:
+        """Consume one mouse event (motion / wheel / button) while open, using the hit rects recorded by the
+        last ``draw``. Returns False when the menu closed. Click a tab to switch; hover to highlight; click a
+        toggle to fire it; click an adjustable row (or its ‹ / › ) to change it; wheel to scroll; click outside
+        the panel to close."""
+        pg = self.pg
+        hit = self._hit
+        tabs = self._tabs()
+        items = tabs[self.tab % len(tabs)][1] if tabs else []
+
+        if event.type == pg.MOUSEMOTION:
+            self._hover = -1
+            for rect, i in hit.get("rows", []):
+                if i < len(items) and rect.collidepoint(event.pos) and not items[i].get("info"):
+                    self._hover = i
+                    if i != self.item:               # hovering a new row selects it (and cancels any edit)
+                        self.item, self.editing = i, False
+                    break
+            return True
+
+        if event.type == pg.MOUSEWHEEL:              # scroll the list (if it scrolls)
+            n, vis = hit.get("n", 0), hit.get("visible", 0)
+            self._scroll = max(0, min(self._scroll - event.y, max(0, n - vis)))
+            return True
+
+        if event.type != pg.MOUSEBUTTONDOWN:
+            return True
+        if event.button not in (1, 3):               # only left / right clicks act
+            return True
+        pos = event.pos
+        if hit.get("panel") is not None and not hit["panel"].collidepoint(pos):
+            self.open = self.editing = False         # click outside the panel closes
+            return False
+        for rect, i in hit.get("tabs", []):          # a tab chip
+            if rect.collidepoint(pos):
+                self.tab, self.item, self.editing = i, 0, False
+                return True
+        for rect, i in hit.get("rows", []):          # a row
+            if i >= len(items) or not rect.collidepoint(pos) or items[i].get("info"):
+                continue
+            self.item = i
+            item = items[i]
+            adjust, act = item.get("adjust"), item.get("activate")
+            if adjust is not None:
+                la, ra = hit.get("arrows", {}).get(i, (None, None))
+                if event.button == 3 or (la is not None and la.collidepoint(pos)):
+                    adjust(-1)                       # right-click or the ‹ arrow -> previous
+                elif ra is not None and ra.collidepoint(pos):
+                    adjust(1)                        # the › arrow -> next
+                elif act is not None:
+                    act()                            # body click on an apply-row (Develop Level) -> apply
+                else:
+                    adjust(1)                        # body click on a plain cycle-row -> next
+            elif act is not None and event.button == 1:
+                act()                                # a toggle / action row fires
+            return True
+        return True
+
     # --- drawing (at WINDOW resolution, over the already-scaled game frame) ------------------------------
     def draw_hint(self, screen) -> None:
         """The discreet closed-state hint (editor style)."""
@@ -195,6 +255,7 @@ class OverlayMenu:
         panel_h = top + visible * row_h + footer
         x = (win_w - panel_w) // 2
         y = (win_h - panel_h) // 2
+        self._hit = {"panel": pg.Rect(x, y, panel_w, panel_h), "tabs": [], "rows": [], "arrows": {}}
         panel = pg.Surface((panel_w, panel_h), pg.SRCALPHA)
         panel.fill(_PANEL_BG)
         screen.blit(panel, (x, y))
@@ -210,6 +271,7 @@ class OverlayMenu:
             pg.draw.rect(screen, _TAB_ACTIVE_BG if active else _TAB_BG, chip)
             pg.draw.rect(screen, _TAB_BORDER, chip, width=max(1, S(1)))
             screen.blit(surf, surf.get_rect(center=chip.center))
+            self._hit["tabs"].append((pg.Rect(chip), i))
             tab_x += chip.width + S(6)
 
         # scroll so the selected row stays in the visible band
@@ -220,6 +282,7 @@ class OverlayMenu:
         elif self.item >= self._scroll + visible:
             self._scroll = self.item - visible + 1
         self._scroll = max(0, min(self._scroll, max(0, n_rows - visible)))
+        self._hit["visible"], self._hit["n"] = visible, n_rows   # for mouse-wheel scroll clamping
         scrollbar = n_rows > visible
         sb_pad = S(14) if scrollbar else 0           # keep row text/values clear of the scrollbar
 
@@ -234,17 +297,24 @@ class OverlayMenu:
                 screen.blit(text, text.get_rect(midleft=(x + S(26), row.centery)))
                 row_y += row_h
                 continue
+            self._hit["rows"].append((pg.Rect(row), i))
             selected = i == self.item
-            editing = selected and self.editing and item.get("adjust") is not None
+            adjustable = item.get("adjust") is not None
+            # show the ‹ › affordance when the row is being edited (keyboard) OR hovered by the mouse
+            arrows = adjustable and (selected and self.editing or self._hover == i)
             if selected:
-                pg.draw.rect(screen, _ROW_EDITING if editing else _ROW_SELECTED, row)
+                pg.draw.rect(screen, _ROW_EDITING if (self.editing and adjustable) else _ROW_SELECTED, row)
             label = (bold if selected else font).render(str(item.get("label", "")), True,
                                                         _TEXT_SELECTED if selected else _TEXT)
             screen.blit(label, label.get_rect(midleft=(x + S(26), row.centery)))
-            # while editing, frame the value in ‹ › so it's clear Left/Right now change THIS row
-            vtext = f"‹ {item.get('value', '')} ›" if editing else str(item.get("value", ""))
+            vtext = f"‹ {item.get('value', '')} ›" if arrows else str(item.get("value", ""))
             val = font.render(vtext, True, _VALUE_SELECTED if selected else _VALUE)
-            screen.blit(val, val.get_rect(midright=(x + panel_w - S(28) - sb_pad, row.centery)))
+            vrect = val.get_rect(midright=(x + panel_w - S(28) - sb_pad, row.centery))
+            screen.blit(val, vrect)
+            if arrows:                               # clickable ‹ (left third) / › (right third) of the value
+                third = vrect.width // 3
+                self._hit["arrows"][i] = (pg.Rect(vrect.left, row.top, third, row.height),
+                                          pg.Rect(vrect.right - third, row.top, third, row.height))
             row_y += row_h
 
         if scrollbar:                                # a slim track + proportional thumb on the right

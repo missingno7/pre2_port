@@ -989,6 +989,8 @@ def main(argv=None) -> int:
                     set_fullscreen(not settings["fullscreen"])
                 elif ev.type == pygame.KEYDOWN:
                     menu.handle_keydown(ev)
+                elif ev.type in (pygame.MOUSEMOTION, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
+                    menu.handle_mouse(ev)
             if ref["last"] is not None:
                 screen = blit_frame(ref["last"])
             else:                                                 # menu before the first frame -> over black
