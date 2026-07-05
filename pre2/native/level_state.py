@@ -69,7 +69,8 @@ def native_4f6c(state):
     effect-sprite-source + active-flag tables, re-inits the level (5237), drops the player at the checkpoint
     ``[0x6bad]``/``[0x6baf]``, re-inits the camera (3af2), restores the snapshot (keeping the re-init's transient
     effect sprites + re-freeing the slots that were dead), and cleans up (51df). Returns with NO level change —
-    the gameplay loop continues. The pending-death tail (506c, carry -> main's 0x12f game-over) is not yet here.
+    the gameplay loop continues. A pending REAL death instead takes the shared 506c game-over tail: the reset
+    is applied (``_game_over_reset``) and :class:`Pre2GameOverTransition` propagates to the flow driver.
 
     GENERATOR: ``yield``s once per death-bounce frame (60 frames) so the caller renders the whole arc, THEN runs
     the checkpoint restore (instantaneous — the screen jumps to the checkpoint on the next rendered frame). Drive
