@@ -329,8 +329,12 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         yield planes, page
 
 
-def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str):
+def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, raster_normal: bool = True):
     """Advance the recovered gameplay over ``state`` (in place) and ``yield (planes, page, interpolatable, tx)``.
+
+    ``raster_normal=False`` skips the faithful raster for the NORMAL gameplay tick (yields ``planes=None``) — the
+    ~7ms saved when the caller presents via the enhanced compositor, which rebuilds the frame itself and needs
+    only the effect stashes native_render leaves. Transition frames always raster (their planes ARE shown).
 
     ``interpolatable`` is True for a real gameplay frame (a single object-motion frame — the normal tick AND
     each death-bounce frame, whose parabolic arc the enhanced presenter can lerp), False for a VRAM TRANSITION
@@ -429,4 +433,5 @@ def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str):
         yield (*native_render(state, dos, display_page, game_root=game_root), False, None)   # scene passthrough
         return
     native_sync_render_state(state)   # re-derive the render-only tile-ring + prev-camera mirrors from the camera
-    yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True), True, None)  # normal
+    yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True,
+                          skip_raster=not raster_normal), True, None)  # normal tick (raster skipped -> enhanced path)

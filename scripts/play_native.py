@@ -1050,6 +1050,7 @@ def main(argv=None) -> int:
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.sprite_cache import SpriteTextureCache
+        from pre2.native.render import native_render                # for the enhanced-path faithful fallback
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
         tick_dt = 1.0 / TICK_HZ
@@ -1101,6 +1102,8 @@ def main(argv=None) -> int:
                     for off, v in saved:
                         state.data[DS + off + 5] = v
             if cur is None:                                     # no snapshot -> one faithful frame
+                if planes is None:                              # raster was skipped -> render it now for the fallback
+                    planes, page = native_render(state, dos, disp2, game_root=gr, force_gameplay=True)
                 present_tick_frame(planes, page)
                 enh["prev"] = None
                 enh["next_tick"] = None
@@ -1204,7 +1207,11 @@ def main(argv=None) -> int:
                 # LEVEL A (0x09) is the gorilla boss whose fight only plays right in the plain 4:3 pipeline
                 # (widescreen also bleeds its boss-face tiles). Matches the verified-working non-widescreen case.
                 enhance_ok = state.data[DS + 0x2D8A] not in _WS_EXCLUDE_LEVELS
-                _it = iter(native_frame_step_tagged(state, dos, disp, game_root=gr))
+                # When the enhanced compositor will present the normal tick, its own compose rebuilds the frame,
+                # so native_frame_step_tagged can SKIP the ~7ms faithful raster for that tick (the biggest per-tick
+                # cost). Transitions + the faithful fallback still raster.
+                want_enhanced = enhance_ok and (settings["interpolation"] or settings["widescreen"])
+                _it = iter(native_frame_step_tagged(state, dos, disp, game_root=gr, raster_normal=not want_enhanced))
                 for planes, page, interp_ok, tx in _it:
                     # A SMOOTH transition run: drain the whole transition (state advances to the destination),
                     # then present it present-time full-width (fade -> black -> curtain). The preceding bounce

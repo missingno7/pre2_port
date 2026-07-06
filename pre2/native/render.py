@@ -132,7 +132,8 @@ def native_apply_palette_fade(state, dos) -> None:
 
 
 def native_render(state, dos, display_page: int, *, game_root: str,
-                  particle_capture=None, foreground_capture=None, force_gameplay: bool = False):
+                  particle_capture=None, foreground_capture=None, force_gameplay: bool = False,
+                  skip_raster: bool = False):
     """Render one gameplay frame from ``state`` (a NativeGameState). ``dos`` carries the VGA palette + registers;
     ``display_page`` is the on-screen page (``ega_display_start``). ``particle_capture``/``foreground_capture``
     are the mid-frame overlay captures; when not supplied (the standalone path) they are read straight from the
@@ -145,7 +146,7 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     (never a VM). Raises FaithfulVisualGap for non-gameplay scenes (no silent fallback)."""
     native_apply_palette_fade(state, dos)                          # [asm 6772] the light-pickup DAC fade (skipped
     #                                                                by the gameplay frame as 'render'); no-op idle
-    if foreground_capture is None:
+    if foreground_capture is None and not skip_raster:            # (only the raster consumes the foreground layer)
         foreground_capture = read_foreground_state(state)          # [3721] the front tile layer
         # read_foreground_state reads the BACK page [0x2DD8] as the blit target (the VM's 3721 draws to the page
         # being composed). But native renders the CORE frame to the DISPLAY page [0x2DD6] and never flips the two
@@ -165,14 +166,20 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     # native_frame_step, by which time the one-shot above is already consumed). Overwritten every render —
     # None on particle-less ticks — so it can never go stale across ticks.
     state.particle_capture_last = particle_capture
-    fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
-    # Re-apply the one-frame OPAQUE flash flag (id bit14 = [+5]&0x40) on the slots native_object_render_state
-    # captured before 26FA cleared it, so the hit/death flash draws as the VM's solid-white silhouette. The
-    # renderer state is a SNAPSHOT (capture_game_visual_state reads it synchronously), so restore state.data right
-    # after — leaving the flag set would desync the next frame's carried-forward state from the VM's cleared record.
+    # The one-frame OPAQUE flash flag (id bit14 = [+5]&0x40) on the slots native_object_render_state captured
+    # before 26FA cleared it — stashed for the SAME-tick extractor.
     flash = getattr(state, "flash_slots", None)
     state.flash_slots = None                                       # one-shot, like particle_capture
     state.flash_slots_last = flash                                 # non-destructive stash (same-tick extractor)
+    if skip_raster:
+        # The enhanced/interpolation path rebuilds the whole frame itself (its own background + compositor); it
+        # needs only the effect STASHES above, not the ~7ms faithful raster. Skip it (the single biggest per-tick
+        # cost when interpolation/widescreen is on). Returns no planes — the caller uses the enhanced compose.
+        return None, display_page & 0xFFFF
+    fx = capture_gameplay_effects(state, particle_frame=particle_capture, foreground_frame=foreground_capture)
+    # Re-apply the flash flag so the hit/death flash draws as the VM's solid-white silhouette; the renderer state
+    # is a SNAPSHOT (capture_game_visual_state reads it synchronously), so restore state.data right after —
+    # leaving the flag set would desync the next frame's carried-forward state from the VM's cleared record.
     saved = None
     if flash:
         d = state.data
