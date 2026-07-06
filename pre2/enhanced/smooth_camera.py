@@ -1,59 +1,57 @@
 """SMOOTH-CAMERA (experimental enhancement): the presentation-camera X follow.
 
-The model is pre2_editor's "vanilla" camera (the behaviour the user wants): X is a CONTINUOUS BAND-DRAG —
-the camera holds still while the player is inside the [X1..X2] screen band and is dragged along by the
-player's overshoot past either edge — while Y keeps the full DOS centering state machine (native already
-computes the byte-exact DOS cam_y; the presenter shows it sub-tick interpolated).
+Design (v4, from playtesting + measuring the recovered DOS camera):
 
-Two hard-won rules (v2 -> v3, from playtesting):
-  * NO gluing to the DOS camera: the measured DOS X camera is a park-then-PAN machine that lets the player
-    reach screen ~230 before panning and OVERSHOOTS ahead of the walk direction on recenter — clamping the
-    band camera to its neighbourhood re-injects exactly the jumpy motion the enhancement removes. Instead
-    the band camera clamps to the REAL world bounds (the same [0x8164] tile limit the DOS pan uses), plus
-    the extract-coverage bound.
-  * NEVER jump — GLIDE: the camera's per-frame step is rate-limited to (player speed + CREEP). At the band
-    edge the drag follows the player 1:1 (the limit always covers the player's own motion); when the camera
-    finds itself far outside the band (enable-time seed, DOS handoff), it glides back at CREEP instead of
-    snapping. Frame-rate independent (dt-based)."""
+* X = a RIGID, CENTERED BAND: the camera holds still while the player is inside the [X1..X2] band and is
+  dragged 1:1 by the overshoot past either edge (pre2_editor-vanilla drag — inherently smooth because the
+  player's presented position is sub-tick interpolated). The band straddles the display centre, so walking
+  either direction rides the player near mid-screen (v3's off-centre band read as "the view is shifted").
+* NO coupling to the DOS camera. v2/v3 clamped the presentation camera to the DOS camera's neighbourhood —
+  but the measured DOS X camera is a park-then-PAN machine (pan-right until the player is 5 tiles from the
+  camera, pan-left until 15, triggers at 16/4), so its placement swings the player across screen ~[8..271]
+  and any tether eventually YANKS the smooth view at pan speed (the "instant shift"). With a centred band
+  the deviation is STRUCTURALLY bounded (dos_rel-band_rel in ~[-180,+131]), so CROP=192 of extracted margin
+  covers it and the hard clamp below is a pure safety that never engages in play.
+* The world bounds are the DOS camera's own: left 0, right the [0x8164] tile limit (with the past-the-end
+  0xEC backing-map rule) — at a wall both cameras pin identically (the player walks to the screen edge
+  exactly like the faithful game).
+* GLIDE on seed: the per-frame step is capped at (player speed + CATCHUP), dt-based — while band-dragging
+  the cap always covers the player's own motion (zero lag), but an out-of-band seed (enabling mid-game,
+  post-transition handoff) converges at CATCHUP instead of snapping.
+* Y is not handled here: the presenter shows the DOS cam_y exactly (its per-level centering preserved),
+  sub-tick interpolated.
+"""
 from __future__ import annotations
 
-# The player screen band (world-relative: player_world_x - camera_x; the sprite draw offset is ~14px, so
-# these correspond to screen ~[114..178] — pre2_editor vanilla feel). Camera holds inside, drags outside.
-X1 = 128
-X2 = 192
-# Extract-coverage bound (px each side): the presenter extracts this much extra tile margin and crops it
-# back off, so the band camera may deviate from the DOS camera by up to CROP and still show real tiles.
-# (Measured worst DOS pan-overshoot deviation is ~94px away from world edges; 128 leaves headroom so the
-# coverage clamp never engages in normal play — engaging it steps the camera visibly.)
-CROP = 128
-# Recenter glide speed (px/s) when the camera is outside the band but the player isn't pushing it.
-CREEP = 45.0
+# The band in player-record units (player_world_x - camera_x). The record x is ~14px left of the drawn
+# sprite and the sprite is ~24px wide, so the SPRITE CENTRE sits at screen ~(rel - 2): [140..188] rides the
+# player around display centre (160) with 48px of drag slack.
+X1 = 140
+X2 = 188
+# Extracted tile margin (px each side) the presenter reserves + crops; bounds |smooth - DOS| coverage.
+# Structural max deviation with the centred band is ~180 (see module docstring) -> 192 never engages.
+CROP = 192
+# Seed/recovery glide speed (px/s) on top of the player's own speed.
+CATCHUP = 240.0
 
 
 def smooth_cam_x(scam_x: float, player_wx: float, player_vx: float, dt: float,
                  cur_x: float, world_max: float) -> float:
-    """One presentation-camera X update (pure). ``player_vx`` in px/s; ``dt`` seconds since the last update;
-    ``cur_x`` = the CURRENT tick's DOS camera x (the frame the compositor shifts from — bounds the shift to
-    the extracted margin); ``world_max`` = the level's right camera limit in px (the DOS [0x8164] clamp)."""
-    # the band target: hold inside [X1..X2], dragged by the exact overshoot outside
-    t = scam_x
-    rel = player_wx - scam_x
-    if rel > X2:
-        t = player_wx - X2
-    elif rel < X1:
-        t = player_wx - X1
+    """One presentation-camera X update (pure). ``player_vx`` px/s; ``dt`` s since the last update; ``cur_x``
+    = the CURRENT tick's DOS camera x (the frame the compositor shifts from — extraction-coverage safety);
+    ``world_max`` = the level's right camera limit in px (the DOS [0x8164] clamp)."""
+    # rigid band target: unchanged inside [X1..X2], clamped into the band by the exact overshoot outside
+    t = min(max(scam_x, player_wx - X2), player_wx - X1)
     t = max(0.0, min(world_max, t))                    # the DOS camera's own world bounds
-    t = max(cur_x - CROP, min(cur_x + CROP, t))        # never target beyond the extracted margin
-    # glide, never jump: per-frame step capped at player speed + CREEP (locks 1:1 at the band edge while
-    # walking; gently recenters from an out-of-band seed instead of snapping)
-    lim = (abs(player_vx) + CREEP) * max(0.0, dt)
+    # glide cap: 1:1 during band-drag (the cap covers the player's own speed), CATCHUP-limited on seed
+    lim = (abs(player_vx) + CATCHUP) * max(0.0, dt)
     d = t - scam_x
     if d > lim:
         d = lim
     elif d < -lim:
         d = -lim
     x = max(0.0, scam_x + d)
-    return max(cur_x - CROP, min(cur_x + CROP, x))     # hard coverage clamp (holes otherwise)
+    return max(cur_x - CROP, min(cur_x + CROP, x))     # extraction-coverage safety (structurally inactive)
 
 
 def world_max_px(w8164: int, player_wx: float) -> float:
