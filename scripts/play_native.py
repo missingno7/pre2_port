@@ -975,7 +975,7 @@ def main(argv=None) -> int:
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.sprite_cache import SpriteTextureCache
-        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP, smooth_cam_x
+        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP, smooth_cam_x, world_max_px
         from pre2.native.render import native_render                # for the enhanced-path faithful fallback
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
@@ -984,11 +984,12 @@ def main(argv=None) -> int:
                "last_cur": None, "scam": None, "scam_t": 0.0}   # smooth-tx fade base + smooth-camera state
 
         def _smooth_cam(cur, alpha):
-            """The SMOOTH-CAMERA presentation position, or None when off. X = pre2_editor-vanilla BAND-DRAG:
-            the camera is dragged by exactly the player's overshoot past the [X1..X2] screen band (continuous,
-            pixel-exact — not the DOS parked-then-pan trigger), clamped to the DOS camera's neighbourhood so
-            scripted modes / recentering still carry the view. Y = the DOS camera exactly (its per-level
-            centering preserved), sub-tick interpolated. Presentation only; a teleport / level load snaps."""
+            """The SMOOTH-CAMERA presentation position, or None when off. X = pre2_editor-vanilla BAND-DRAG
+            (pure — no DOS-camera glue, whose park-then-pan/overshoot motion is exactly what this replaces):
+            the camera holds inside the screen band and is dragged by the (sub-tick interpolated) player past
+            its edges, rate-limited so it GLIDES rather than ever jumping, clamped to the level's real camera
+            bounds (the DOS [0x8164] limit). Y = the DOS camera exactly (its per-level centering preserved),
+            sub-tick interpolated. Presentation only; a teleport / level load reseeds."""
             if not settings["smooth_camera"] or enh["prev"] is None:
                 enh["scam"] = None
                 return None
@@ -996,19 +997,25 @@ def main(argv=None) -> int:
             inv = 1.0 - alpha
             dosx = cur.camera[0] - inv * (cur.camera[0] - prev.camera[0])   # the interpolated DOS camera
             dosy = cur.camera[1] - inv * (cur.camera[1] - prev.camera[1])
+            now = perf_counter()
+            dt = min(0.05, max(0.0, now - enh["scam_t"]))
+            enh["scam_t"] = now
             pc = next((i for i in cur.sprites if i.handle == ("player",)), None)
             s = enh["scam"]
-            if s is not None and abs(cur.camera[0] - s[0]) > 240:           # teleport / level load -> snap
+            if s is not None and abs(cur.camera[0] - s[0]) > 240:           # teleport / level load -> reseed
                 s = enh["scam"] = None
-            if pc is None:                                                  # no player this frame (blink-off is
-                return (s[0], dosy) if s is not None else None              # still drawn; this is rare) -> hold X
+            if pc is None:                                                  # no player this frame (rare) ->
+                return (s[0], dosy) if s is not None else None              # hold X
             pp = next((i for i in prev.sprites if i.handle == ("player",)), None)
-            pwx = float(pc.world_x)
-            if pp is not None and abs(pc.world_x - pp.world_x) <= 32:      # the player's sub-tick position
-                pwx -= inv * (pc.world_x - pp.world_x)
+            pwx, pvx = float(pc.world_x), 0.0
+            if pp is not None and abs(pc.world_x - pp.world_x) <= 32:      # the player's sub-tick position +
+                dx_t = float(pc.world_x - pp.world_x)                      # velocity (px/s) for the rate limit
+                pwx -= inv * dx_t
+                pvx = dx_t * TICK_HZ
             if s is None:
-                s = enh["scam"] = [float(dosx)]
-            s[0] = smooth_cam_x(s[0], pwx, dosx, float(cur.camera[0]))
+                s = enh["scam"] = [float(dosx)]                            # seed at the current view; glide in
+            w8164 = state.data[DS + 0x8164] | (state.data[DS + 0x8165] << 8)
+            s[0] = smooth_cam_x(s[0], pwx, pvx, dt, float(cur.camera[0]), world_max_px(w8164, pwx))
             return (s[0], dosy)
 
         def present_tick_frame(planes, page):

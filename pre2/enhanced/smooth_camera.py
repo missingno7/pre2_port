@@ -1,39 +1,66 @@
 """SMOOTH-CAMERA (experimental enhancement): the presentation-camera X follow.
 
-The model is pre2_editor's "vanilla" camera (the behaviour the user wants), which is a pixel-exact version
-of the DOS camera: X is a CONTINUOUS BAND-DRAG — the camera moves the same frame by exactly the player's
-overshoot past the [X1..X2] screen band, so walking *drags* the camera with the player (no parked-then-pan
-threshold, no 2px scroll snap) — while Y keeps the full DOS centering state machine (native already computes
-the byte-exact DOS cam_y; the presenter shows it sub-tick interpolated).
+The model is pre2_editor's "vanilla" camera (the behaviour the user wants): X is a CONTINUOUS BAND-DRAG —
+the camera holds still while the player is inside the [X1..X2] screen band and is dragged along by the
+player's overshoot past either edge — while Y keeps the full DOS centering state machine (native already
+computes the byte-exact DOS cam_y; the presenter shows it sub-tick interpolated).
 
-This module is pure math over the presentation camera; the DOS camera target (with all its per-level
-centering / scripted modes) stays the byte-exact recovered one. The deviation clamp keeps the presentation
-camera GLUED (within DEV px) to the DOS camera, so scripted pans / autoscroll / recentering still carry the
-view along — the band-drag only reshapes the short-range follow feel."""
+Two hard-won rules (v2 -> v3, from playtesting):
+  * NO gluing to the DOS camera: the measured DOS X camera is a park-then-PAN machine that lets the player
+    reach screen ~230 before panning and OVERSHOOTS ahead of the walk direction on recenter — clamping the
+    band camera to its neighbourhood re-injects exactly the jumpy motion the enhancement removes. Instead
+    the band camera clamps to the REAL world bounds (the same [0x8164] tile limit the DOS pan uses), plus
+    the extract-coverage bound.
+  * NEVER jump — GLIDE: the camera's per-frame step is rate-limited to (player speed + CREEP). At the band
+    edge the drag follows the player 1:1 (the limit always covers the player's own motion); when the camera
+    finds itself far outside the band (enable-time seed, DOS handoff), it glides back at CREEP instead of
+    snapping. Frame-rate independent (dt-based)."""
 from __future__ import annotations
 
-# The PRE2 player screen-x band (pre2_editor vanilla / blues TILEMAP_SCROLL_W*2): the camera holds still
-# while the player is between X1 and X2 on screen, and is dragged by exactly the overshoot beyond either.
+# The player screen band (world-relative: player_world_x - camera_x; the sprite draw offset is ~14px, so
+# these correspond to screen ~[114..178] — pre2_editor vanilla feel). Camera holds inside, drags outside.
 X1 = 128
 X2 = 192
-# Max deviation of the presentation camera from the DOS camera (px). Keeps scripted camera modes (autoscroll,
-# recentering pans, boss cameras) glued: once the DOS camera walks away, the clamp drags the view along.
-DEV = 48
-# The extract/crop margin the presenter must reserve for the deviation (>= DEV + the max per-tick cam delta).
-CROP = 64
+# Extract-coverage bound (px each side): the presenter extracts this much extra tile margin and crops it
+# back off, so the band camera may deviate from the DOS camera by up to CROP and still show real tiles.
+# (Measured worst DOS pan-overshoot deviation is ~94px away from world edges; 128 leaves headroom so the
+# coverage clamp never engages in normal play — engaging it steps the camera visibly.)
+CROP = 128
+# Recenter glide speed (px/s) when the camera is outside the band but the player isn't pushing it.
+CREEP = 45.0
 
 
-def smooth_cam_x(scam_x: float, player_wx: float, dos_x: float, cur_x: float) -> float:
-    """One presentation-camera X update: band-drag toward the player, clamped to the DOS camera's
-    neighbourhood. ``scam_x`` = the current presentation camera, ``player_wx`` = the player's (interpolated)
-    world x, ``dos_x`` = the (interpolated) DOS camera x, ``cur_x`` = the CURRENT tick's DOS camera x (the
-    frame the compositor shifts from — bounds the shift to what the extract margin covers)."""
-    x = float(scam_x)
-    rel = player_wx - x
-    if rel > X2:                       # player pushed past the right edge of the band -> dragged along
-        x = player_wx - X2
-    elif rel < X1:                     # past the left edge -> dragged along
-        x = player_wx - X1
-    x = max(dos_x - DEV, min(dos_x + DEV, x))    # stay glued to the DOS camera (scripted modes / recenter)
-    x = max(cur_x - CROP, min(cur_x + CROP, x))  # never shift beyond the extracted margin
-    return max(0.0, x)                           # world left edge
+def smooth_cam_x(scam_x: float, player_wx: float, player_vx: float, dt: float,
+                 cur_x: float, world_max: float) -> float:
+    """One presentation-camera X update (pure). ``player_vx`` in px/s; ``dt`` seconds since the last update;
+    ``cur_x`` = the CURRENT tick's DOS camera x (the frame the compositor shifts from — bounds the shift to
+    the extracted margin); ``world_max`` = the level's right camera limit in px (the DOS [0x8164] clamp)."""
+    # the band target: hold inside [X1..X2], dragged by the exact overshoot outside
+    t = scam_x
+    rel = player_wx - scam_x
+    if rel > X2:
+        t = player_wx - X2
+    elif rel < X1:
+        t = player_wx - X1
+    t = max(0.0, min(world_max, t))                    # the DOS camera's own world bounds
+    t = max(cur_x - CROP, min(cur_x + CROP, t))        # never target beyond the extracted margin
+    # glide, never jump: per-frame step capped at player speed + CREEP (locks 1:1 at the band edge while
+    # walking; gently recenters from an out-of-band seed instead of snapping)
+    lim = (abs(player_vx) + CREEP) * max(0.0, dt)
+    d = t - scam_x
+    if d > lim:
+        d = lim
+    elif d < -lim:
+        d = -lim
+    x = max(0.0, scam_x + d)
+    return max(cur_x - CROP, min(cur_x + CROP, x))     # hard coverage clamp (holes otherwise)
+
+
+def world_max_px(w8164: int, player_wx: float) -> float:
+    """The level's right camera limit in px — the DOS pan's own clamp [asm 3435: 344C-345E]: the header limit
+    ``[0x8164]`` (tiles), or the full 256-tile backing map (0xEC + the 20-tile window) once the player is past
+    the logical end (cave rooms beyond the main strip)."""
+    lim = w8164 if w8164 < 0x8000 else 0                # signed guard (jge)
+    if lim < (int(player_wx) >> 4) - 0x14:
+        lim = 0xEC
+    return float(lim << 4)
