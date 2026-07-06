@@ -507,14 +507,19 @@ def main(argv=None) -> int:
         # (frame-rate-independent) at whatever width the compose runs (320 when widescreen is off, wide when on).
         return bool(settings["smooth_transitions"])
 
-    def compose_wide_now(state, dos):
+    def compose_wide_now(state, dos, present_cam=None):
         """Compose the CURRENT gameplay state as a widescreen RGB frame (static, alpha=1). Returns
-        (rgb, margin_left, efs) or None if this is not a gameplay frame (no object camera)."""
+        (rgb, margin_left, efs, sprite_dx) or None if this is not a gameplay frame (no object camera).
+        ``present_cam`` (the smooth camera's window-space position) freezes the frame at the EASED camera —
+        matching the last displayed gameplay frame so a transition doesn't jump the view; it extracts the CROP
+        margin, composes at that camera, and crops it back to the display width. ``sprite_dx`` is the offset to
+        add to an efs sprite's screen_x to place it in the returned (possibly cropped) frame (0 unless eased)."""
         from pre2.bridge.foreground_tiles import read_foreground_state
         from pre2.bridge.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.native_background import TileTextureCache, _HudCache
+        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP
         from pre2.enhanced.sprite_cache import SpriteTextureCache
         if _tx["tex"] is None:
             _tx["tex"] = SpriteTextureCache()
@@ -525,13 +530,20 @@ def main(argv=None) -> int:
         fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
                                       foreground_frame=fg)
         m = _margin_for(state)
+        pad = _CAM_CROP if present_cam is not None else 0
         efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
-                                     bg_cache=_tx["bg"], effects=fx, margin=m,
-                                     wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"],
-                                     bg_mode=settings["widescreen_bg"])
+                                     bg_cache=_tx["bg"], effects=fx, margin=m + pad,
+                                     wide_cull=settings["true_widescreen"] and not pad,
+                                     hud_align=settings["hud_align"], bg_mode=settings["widescreen_bg"], bd_pad=pad)
         if efs is None:
             return None
-        return compose(efs, None, 1.0), m, efs
+        if pad:                                                  # freeze at the eased camera, then crop off pad
+            bg_dx = round(efs.camera[0] - present_cam[0])        # world shift compose applied (= DOS - scam)
+            rgb = compose(efs, efs, 1.0, present_cam=present_cam)
+            # sprite_dx: efs sprite screen_x (in the m+pad margin) -> the cropped frame; center_dx: a DOS-screen
+            # point (0..320) -> the cropped frame. They differ by the cropped-away pad.
+            return np.ascontiguousarray(rgb[:, pad:rgb.shape[1] - pad]), m, efs, bg_dx - pad, bg_dx
+        return compose(efs, None, 1.0), m, efs, 0, 0
 
     def _animate(state, duration, render, caption="PRE2 VM-less — transition"):
         """Present ``render(progress 0..1)`` at the DISPLAY rate for ``duration`` wall-clock seconds, so the
@@ -624,7 +636,9 @@ def main(argv=None) -> int:
 
         print("  level complete -> IRIS close -> exit-anim (walk-in + food-throw score count-up + walk-off) -> carte")
         disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
-        smooth = compose_wide_now(state, dos) if _smooth_active() else None
+        # freeze the iris at the eased camera when the smooth camera is on, so the view doesn't jump on close
+        _pcam = ref.get("last_pcam") if settings["smooth_camera"] else None
+        smooth = compose_wide_now(state, dos, present_cam=_pcam) if _smooth_active() else None
         if smooth is not None:
             # SMOOTH iris: drain native_iris_close for its STATE work (reading the recovered iris centre off the
             # first frame), then present-time animate a true circle 0xE6->0 over the frozen wide frame at the
@@ -632,14 +646,14 @@ def main(argv=None) -> int:
             from pre2.bridge.render_state import read_renderer_state
             from pre2.enhanced.compositor import _blit
             from pre2.enhanced.transitions import apply_iris
-            rgb, m, efs = smooth
+            rgb, m, efs, sdx, cdx = smooth                        # sdx/cdx: eased-camera offsets (sprite / centre)
             players = [i for i in efs.sprites if i.handle == ("player",)]
             center = None
             for planes, page in native_iris_close(state, dos, disp, game_root=gr):
                 if center is None:
                     iris = read_renderer_state(state, dos).iris
-                    if iris is not None:                           # centre: screen COL = center_y (+margin),
-                        center = (iris.center_y + m, iris.center_x)   # ROW = center_x (axes swapped)
+                    if iris is not None:                           # centre: screen COL = center_y (+margin + the
+                        center = (iris.center_y + m + cdx, iris.center_x)   # eased shift), ROW = center_x (swapped)
                 pump()
                 if native_audio is not None:
                     native_audio.poll(state)
@@ -656,7 +670,7 @@ def main(argv=None) -> int:
                 else:
                     fr[:] = 0
                 for inst in players:
-                    _blit(fr, inst.rgba, inst.screen_x + inst.tex_off_x, inst.screen_y + inst.tex_off_y)
+                    _blit(fr, inst.rgba, inst.screen_x + inst.tex_off_x + sdx, inst.screen_y + inst.tex_off_y)
                 return fr
             _animate(state, _IRIS_S, _iris_fr, "PRE2 VM-less — level complete")
         else:
@@ -1113,7 +1127,9 @@ def main(argv=None) -> int:
             while True:                                         # >=1 frame per tick, then up to the due time
                 now = perf_counter()
                 alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
-                present(_crop(compose(cur, enh["prev"], alpha, present_cam=_smooth_cam(cur, alpha))), present_hz(),
+                pcam = _smooth_cam(cur, alpha)
+                ref["last_pcam"] = pcam                          # so a transition can freeze at the eased camera
+                present(_crop(compose(cur, enh["prev"], alpha, present_cam=pcam)), present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:
                     break
@@ -1133,12 +1149,20 @@ def main(argv=None) -> int:
             from pre2.enhanced.transitions import apply_vfade
             enh["prev"] = enh["next_tick"] = None               # a transition breaks the interpolation pair
             kinds = {t[3][0] for t in run if t[3] is not None}
-            old = compose(enh["last_cur"], None, 1.0) if enh["last_cur"] is not None else None
+            # The fade base = what was LAST on screen. With the smooth camera that frame sits at the eased
+            # (scam) position, not the DOS camera, so re-composing enh.last_cur (DOS-centred) would JUMP the
+            # view as the fade starts. ref["last"] IS the last displayed frame (cropped, at scam, right width)
+            # — use it directly. (Non-smooth: keep the recompose; ref["last"] would be an interp subframe.)
             neww = compose_wide_now(state, dos)                 # state is at the arrival/checkpoint now
             new = neww[0] if neww is not None else None
-            if old is not None and new is not None and old.shape[1] > new.shape[1]:
-                d = (old.shape[1] - new.shape[1]) // 2          # smooth-camera stash carries the CROP margin ->
-                old = np.ascontiguousarray(old[:, d:d + new.shape[1]])   # crop the fade base to the display width
+            if settings["smooth_camera"] and ref.get("last") is not None \
+                    and new is not None and np.asarray(ref["last"]).shape == new.shape:
+                old = np.asarray(ref["last"], np.uint8)
+            else:
+                old = compose(enh["last_cur"], None, 1.0) if enh["last_cur"] is not None else None
+                if old is not None and new is not None and old.shape[1] > new.shape[1]:
+                    d = (old.shape[1] - new.shape[1]) // 2      # smooth-camera stash carries the CROP margin ->
+                    old = np.ascontiguousarray(old[:, d:d + new.shape[1]])   # crop the fade base to display width
             if "fade" in kinds and old is not None:
                 _animate(state, _FADE_S, lambda p: apply_vfade(
                     old.copy(), int(_VFADE_MID * p), int(2 * _VFADE_MID - _VFADE_MID * p)))
