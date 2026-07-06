@@ -440,6 +440,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                                       tex_off_x=tex.off_x, tex_off_y=tex.off_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
+                              cam_margin_left=m_left,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
                               backdrop_rgb=backdrop_rgb, tile_mask=tile_mask,
                               overlay_rgb=overlay_rgb, overlay_mask=overlay_mask,

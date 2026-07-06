@@ -995,17 +995,26 @@ def main(argv=None) -> int:
                 return None
             prev = enh["prev"]
             inv = 1.0 - alpha
-            dosx = cur.camera[0] - inv * (cur.camera[0] - prev.camera[0])   # the interpolated DOS camera
+            # SPACES: cur.camera[0] is the frame WINDOW's world-left (= DOS camera - cam_margin_left, the
+            # widescreen + smooth-camera margins folded in) — the space compose expects present_cam in. The
+            # band math must run in TRUE camera space (comparable with the player's world x), so convert via
+            # cam_margin_left both ways. (Feeding window-left into the band/clamps was THE v2-v4 bug: the CROP
+            # clamp pinned the view margin-left of the DOS camera — "everything shifted right" — and the band
+            # never engaged, so the view just followed the DOS pan steps.)
+            ml_cur = cur.cam_margin_left
+            cam0 = float(cur.camera[0] + ml_cur)                            # TRUE DOS camera x (this tick)
+            prev0 = float(prev.camera[0] + prev.cam_margin_left)
+            dosx = cam0 - inv * (cam0 - prev0)                              # the interpolated TRUE DOS camera
             dosy = cur.camera[1] - inv * (cur.camera[1] - prev.camera[1])
             now = perf_counter()
             dt = min(0.05, max(0.0, now - enh["scam_t"]))
             enh["scam_t"] = now
             pc = next((i for i in cur.sprites if i.handle == ("player",)), None)
             s = enh["scam"]
-            if s is not None and abs(cur.camera[0] - s[0]) > 240:           # teleport / level load -> reseed
+            if s is not None and abs(cam0 - s[0]) > 240:                    # teleport / level load -> reseed
                 s = enh["scam"] = None
             if pc is None:                                                  # no player this frame (rare) ->
-                return (s[0], dosy) if s is not None else None              # hold X
+                return (s[0] - ml_cur, dosy) if s is not None else None     # hold X (back in window space)
             pp = next((i for i in prev.sprites if i.handle == ("player",)), None)
             pwx, pvx = float(pc.world_x), 0.0
             if pp is not None and abs(pc.world_x - pp.world_x) <= 32:      # the player's sub-tick position +
@@ -1015,8 +1024,8 @@ def main(argv=None) -> int:
             if s is None:
                 s = enh["scam"] = [float(dosx)]                            # seed at the current view; glide in
             w8164 = state.data[DS + 0x8164] | (state.data[DS + 0x8165] << 8)
-            s[0] = smooth_cam_x(s[0], pwx, pvx, dt, float(cur.camera[0]), world_max_px(w8164, pwx))
-            return (s[0], dosy)
+            s[0] = smooth_cam_x(s[0], pwx, pvx, dt, cam0, world_max_px(w8164, pwx))
+            return (s[0] - ml_cur, dosy)                                    # back to WINDOW space for compose
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""

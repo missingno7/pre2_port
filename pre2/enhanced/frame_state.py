@@ -49,10 +49,14 @@ class SpriteInstance:
 class EnhancedFrameState:
     """A source frame projected into modern layers."""
     background_rgb: np.ndarray          # bg WITHOUT moving sprites (recovered render, object_camera=None)
-    camera: tuple                       # (x_px, y_px) grounded source camera (for relative placement)
+    camera: tuple                       # (x_px, y_px) grounded source camera (for relative placement).
+                            # NOTE: x is the frame WINDOW's world-left = DOS camera − cam_margin_left (widescreen /
+                            # smooth-camera margins included); constant margins cancel in the compositor's deltas.
     sprites: list                       # SpriteInstance, in draw order
     faithful_rgb: np.ndarray            # the full faithful frame (fallback / alpha=1 parity oracle)
     unsupported: list = field(default_factory=list)   # [(base_id, mode_name)] sprites not interpolated (OPAQUE/ERASE)
+    cam_margin_left: int = 0            # px of left margin folded into camera[0]: TRUE DOS camera x =
+                            # camera[0] + cam_margin_left (the smooth camera does its band math in TRUE space)
     backdrop_rgb: "np.ndarray | None" = None   # the FIXED-screen parallax base layer (sky/mountains). The
                             # compositor holds it still and scrolls only the tile layer over it (so the backdrop
                             # does NOT shake). None -> compositor falls back to a uniform whole-bg shift.
