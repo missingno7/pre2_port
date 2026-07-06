@@ -151,9 +151,14 @@ def main(argv=None) -> int:
                 pass
     import os as _os
     _os.environ.setdefault("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2")   # SDL's own DPI path (>= 2.24)
+    _os.environ.setdefault("SDL_HINT_RENDER_SCALE_QUALITY", "0")          # crisp nearest-neighbour GPU upscale
     pygame.init()
-    view = {"screen": pygame.display.set_mode((320 * args.scale, 200 * args.scale), pygame.RESIZABLE),
-            "borderless": False}
+    from display import Display
+    # GPU-accelerated present (SDL2 renderer): uploads the small game frame and lets the GPU scale it to the
+    # window, so fps no longer collapses as the window grows (the old software path scaled + flipped the whole
+    # window surface every frame). Falls back to a software surface where the renderer is unavailable.
+    disp = Display((320 * args.scale, 200 * args.scale))
+    view = {"win_size": (320 * args.scale, 200 * args.scale)}     # remembered windowed size (for exit-fullscreen)
     clock = pygame.time.Clock()
 
     def detect_display_hz() -> float:
@@ -206,78 +211,14 @@ def main(argv=None) -> int:
         except Exception as e:                                            # noqa: BLE001 — read-only game dir
             print(f"(settings not saved: {e})")
 
-    def _win_monitor_rect():
-        """(x, y, w, h) PHYSICAL-pixel rect of the monitor the current window sits on (Windows; the process is
-        DPI-aware so this is real pixels), or None. Lets the borderless window cover the RIGHT monitor exactly
-        on multi-monitor / scaled setups instead of guessing (0,0)+primary-size."""
-        if sys.platform != "win32":
-            return None
-        try:
-            import ctypes
-            from ctypes import wintypes
-            hwnd = pygame.display.get_wm_info().get("window")
-            if not hwnd:
-                return None
-            hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)        # MONITOR_DEFAULTTONEAREST
-
-            class MONITORINFO(ctypes.Structure):
-                _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
-                            ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
-            mi = MONITORINFO()
-            mi.cbSize = ctypes.sizeof(MONITORINFO)
-            if not ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
-                return None
-            r = mi.rcMonitor
-            return int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top)
-        except Exception:                                                # noqa: BLE001
-            return None
-
     def set_fullscreen(on: bool) -> None:
-        """Switch between BORDERLESS FULLSCREEN WINDOW (a frameless window covering the CURRENT monitor exactly
-        — no video-mode switch, so alt-tab is instant and the compositor stays smooth) and the remembered
-        resizable window."""
-        import os
+        """Borderless fullscreen (SDL's own fullscreen-desktop on the GPU renderer — DPI/monitor-correct, instant
+        alt-tab, no video-mode switch) <-> the remembered resizable window."""
         settings["fullscreen"] = on
-        if on:
-            if not view.get("borderless"):
-                view["win_size"] = view["screen"].get_size()              # remember the window size for the way back
-            rect = _win_monitor_rect()                                    # exact monitor rect (DPI/multi-mon safe)
-            if rect is not None:
-                x, y, w, h = rect
-            else:
-                try:
-                    w, h = pygame.display.get_desktop_sizes()[0]
-                except Exception:                                        # noqa: BLE001 — older pygame
-                    info = pygame.display.Info()
-                    w, h = info.current_w, info.current_h
-                x, y = 0, 0
-            os.environ["SDL_VIDEO_WINDOW_POS"] = f"{x},{y}"               # SDL reads this on (re)create
-            view["screen"] = pygame.display.set_mode((w, h), pygame.NOFRAME)
-            view["borderless"] = True
-            if rect is not None:                                         # force exact monitor placement (belt +
-                try:                                                     # braces: SDL may reuse the window and
-                    import ctypes                                        # skip the pos env; the surface is (w,h)
-                    hwnd = pygame.display.get_wm_info().get("window")    # so a same-size move is safe)
-                    if hwnd:
-                        ctypes.windll.user32.SetWindowPos(hwnd, 0, x, y, w, h, 0x0014)   # NOZORDER|NOACTIVATE
-                except Exception:                                        # noqa: BLE001
-                    pass
-        else:
-            os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
-            wsz = view.get("win_size", (320 * args.scale, 200 * args.scale))
-            view["screen"] = pygame.display.set_mode(wsz, pygame.RESIZABLE)
-            view["borderless"] = False
-            rect = _win_monitor_rect()                                   # SDL keeps the window at the fullscreen
-            if rect is not None:                                         # origin (a tiny window in the corner) and
-                mx, my, mw, mh = rect                                    # may not repaint the frame -> re-centre it
-                cx, cy = mx + (mw - wsz[0]) // 2, my + (mh - wsz[1]) // 2   # on the monitor + force the frame back
-                try:
-                    import ctypes
-                    hwnd = pygame.display.get_wm_info().get("window")
-                    if hwnd:                                             # SWP_FRAMECHANGED|NOZORDER|NOACTIVATE
-                        ctypes.windll.user32.SetWindowPos(hwnd, 0, cx, cy, wsz[0], wsz[1], 0x0034)
-                except Exception:                                        # noqa: BLE001
-                    pass
+        if on and not view.get("fs"):
+            view["win_size"] = disp.get_size()                            # remember the windowed size for the way back
+        view["fs"] = on
+        disp.set_fullscreen(on, windowed_size=view.get("win_size"))
         ref["display_hz"] = detect_display_hz()                          # the window may now be on another monitor
         save_settings()
 
@@ -292,7 +233,7 @@ def main(argv=None) -> int:
         0 when the Widescreen setting is off or the window is 16:10/4:3 or narrower."""
         if not settings["widescreen"]:
             return 0
-        sw, sh = view["screen"].get_size()
+        sw, sh = disp.get_size()
         if sh <= 0:
             return 0
         return min(_WIDE_MAX, max(0, (round(200 * sw / sh) - 320 + 1) // 2))
@@ -359,8 +300,8 @@ def main(argv=None) -> int:
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
                 ref["running"] = False
-            elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:   # drag-resize (fullscreen: SDL
-                view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
+            elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
+                disp.resize(ev.w, ev.h)
             elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN
                   and ev.mod & pygame.KMOD_ALT):                   # Alt+Enter = fullscreen toggle (the classic)
                 set_fullscreen(not settings["fullscreen"])
@@ -377,36 +318,11 @@ def main(argv=None) -> int:
             menu_modal()                                          # EVERY loop pumps -> the F10 menu opens anywhere
             #   (late-bound: defined below in main(); no loop runs before it exists)
 
-    _bf = {"src_size": None, "src": None, "geom": None, "sub": None}
-
     def blit_frame(rgb):
-        """Scale + letterbox one game frame onto the window (no flip) — shared by present() and the menu.
-
-        Allocation-free steady state (the 240Hz path): a persistent source surface filled via blit_array,
-        scaled DIRECTLY into a cached subsurface of the window at the letterbox rect — no per-frame Surface
-        allocations, no extra blit, and the black letterbox is filled only when the geometry changes
-        (profiled: the old make_surface + allocating transform.scale + blit was ~3.7ms/frame at 1440p; this
-        path is ~1.4ms)."""
-        arr = np.asarray(rgb, np.uint8)
-        fh, fw = arr.shape[:2]                                    # the frame's OWN size (320x200, or 640x480 for
-        screen = view["screen"]                                   # the 12h creators screen) — fit aspect-correct
-        sw, sh = screen.get_size()
-        f = min(sw / fw, sh / fh)                                 # fit THIS frame, PRESERVING aspect ratio
-        if settings["integer_scale"] and f >= 1.0:
-            f = float(int(f))                                     # crisp pixel-exact multiples (menu toggle)
-        tw, th = max(1, int(fw * f)), max(1, int(fh * f))
-        x0, y0 = (sw - tw) // 2, (sh - th) // 2
-        if _bf["src_size"] != (fw, fh):
-            _bf["src"] = pygame.Surface((fw, fh))
-            _bf["src_size"] = (fw, fh)
-        pygame.surfarray.blit_array(_bf["src"], arr.swapaxes(0, 1))
-        geom = (id(screen), sw, sh, tw, th, x0, y0)
-        if _bf["geom"] != geom:                                   # resize / new frame size -> re-letterbox once
-            screen.fill((0, 0, 0))
-            _bf["sub"] = screen.subsurface((x0, y0, tw, th))
-            _bf["geom"] = geom
-        pygame.transform.scale(_bf["src"], (tw, th), _bf["sub"])
-        return screen
+        """Draw + letterbox one game frame via the GPU (or software fallback); no present yet. Returns its
+        on-screen rect."""
+        disp.integer_scale = settings["integer_scale"]
+        return disp.draw_game(rgb)
 
     _hud = {"font": None, "t0": 0.0, "ticks0": 0, "text": ""}
     _FRAME_CAPS = [0, 60, 120, 144, 240, -1]              # Display(auto) -> fixed caps -> Uncapped
@@ -426,7 +342,7 @@ def main(argv=None) -> int:
                 return max(0.5, float(os_scale) / 100.0)
             except (TypeError, ValueError):
                 pass
-        h = view["screen"].get_size()[1]
+        h = disp.get_size()[1]
         return max(1.0, min(3.5, h / 600.0))
 
     def pace(fps: float) -> None:
@@ -440,7 +356,7 @@ def main(argv=None) -> int:
             clock.tick(fps)
 
     def present(rgb, fps, caption=None):
-        screen = blit_frame(rgb)
+        blit_frame(rgb)
         if settings["fps_overlay"]:
             import time as _time
             us = _ui_scale()                                     # scale the readout with the UI (hi-DPI / 4K)
@@ -465,8 +381,8 @@ def main(argv=None) -> int:
                 surf.fill((10, 12, 14))                          # opaque black box: readable over the game AND
                 surf.blit(text, (px, py))                        # self-erasing over the letterbox (no ghosting,
                 _hud["surf"] = surf                              #  which the fill-once letterbox left behind)
-            screen.blit(surf, (int(round(8 * us)), int(round(14 * us))))
-        pygame.display.flip()
+            disp.draw_overlay(surf, (int(round(8 * us)), int(round(14 * us))))
+        disp.flip()
         pace(fps)
         if caption:
             pygame.display.set_caption(caption)
@@ -1018,7 +934,7 @@ def main(argv=None) -> int:
                 if ev.type == pygame.QUIT:
                     ref["running"] = False
                 elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
-                    view["screen"] = pygame.display.set_mode((max(160, ev.w), max(100, ev.h)), pygame.RESIZABLE)
+                    disp.resize(ev.w, ev.h)
                 elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN
                       and ev.mod & pygame.KMOD_ALT):
                     set_fullscreen(not settings["fullscreen"])
@@ -1027,12 +943,17 @@ def main(argv=None) -> int:
                 elif ev.type in (pygame.MOUSEMOTION, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
                     menu.handle_mouse(ev)
             if ref["last"] is not None:
-                screen = blit_frame(ref["last"])
-            else:                                                 # menu before the first frame -> over black
-                screen = view["screen"]
-                screen.fill((0, 0, 0))
-            menu.draw(screen, _ui_scale())
-            pygame.display.flip()
+                blit_frame(ref["last"])                            # the frozen game frame (GPU) UNDER the menu
+            else:
+                disp.draw_game(np.zeros((200, 320, 3), np.uint8))  # menu before the first frame -> over black
+            sz = disp.get_size()                                  # draw the menu onto a persistent transparent
+            canvas = view.get("menu_canvas")                      # window-size surface, then composite it over
+            if canvas is None or canvas.get_size() != sz:         # the game frame
+                canvas = view["menu_canvas"] = disp.new_overlay_canvas()
+            canvas.fill((0, 0, 0, 0))
+            menu.draw(canvas, _ui_scale())
+            disp.draw_overlay(canvas, (0, 0))
+            disp.flip()
             clock.tick(60)
 
     def gameplay_loop(state, dos):
