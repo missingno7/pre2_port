@@ -203,14 +203,29 @@ def despawn_check(obj_x: int, obj_y: int, state: int, flags5: int, old_id: int,
 ONSCREEN_X = (-2, 0x16)   # [asm 802A/802F] tile X relative to camera must be in [-2, 22] inclusive
 ONSCREEN_Y = (-2, 0x0D)   # [asm 803A/803F] tile Y relative to camera must be in [-2, 13] inclusive
 
+# WIDESCREEN ACTIVE ZONE (experimental, opt-in): extra tiles the X window is widened by so entities
+# activate + stay live across the widescreen margins, not just the 320 view. 0 = the FAITHFUL window (every
+# test and the plain runtime run at 0). The native runtime sets it PER FRAME from the state; because 8022 is
+# shared by the 2nd-pass projector AND the object-walker tick/despawn, widening it activates margin enemies
+# AND keeps them alive there. Module-level (not a threaded arg) to avoid touching the ~10 pure callers; it is
+# a DELIBERATE, gated impurity for the one experimental feature (state-mutating, gameplay-affecting when on).
+_ACTIVE_ZONE_X = [0]
+
+
+def set_active_zone_margin(tiles: int) -> None:
+    """Widen :func:`on_screen_tile`'s X window by ``tiles`` each side (0 = faithful). Runtime-set per frame."""
+    _ACTIVE_ZONE_X[0] = max(0, int(tiles))
+
 
 def on_screen_tile(x: int, y: int, cam_x: int, cam_y: int) -> bool:
     """Recover ``1030:8022`` — is the pixel ``(x, y)`` within the visible tile window around the camera?
     Tile = ``pixel >> 4`` (arithmetic), then the SIGNED tile offset from the camera (``[0x2DE4]``/``[0x2DE6]``,
     tiles) must satisfy ``-2 <= tx <= 22`` and ``-2 <= ty <= 13``. Returns True (the ASM's CF=0 path) when on
-    screen, False (CF=1) otherwise. Pure (the camera is passed in)."""
+    screen, False (CF=1) otherwise. Pure (the camera is passed in). The X window is widened by the widescreen
+    active-zone margin (0 = faithful) — see :data:`_ACTIVE_ZONE_X`."""
+    mx = _ACTIVE_ZONE_X[0]
     tx = _s16(((_s16(x) >> 4) - cam_x) & 0xFFFF)             # [asm 8024-8026]
-    if not (ONSCREEN_X[0] <= tx <= ONSCREEN_X[1]):           # [asm 802A-8032 signed jl/jg]
+    if not (ONSCREEN_X[0] - mx <= tx <= ONSCREEN_X[1] + mx):  # [asm 802A-8032 signed jl/jg] (+ active zone)
         return False
     ty = _s16(((_s16(y) >> 4) - cam_y) & 0xFFFF)             # [asm 8034-8036]
     return ONSCREEN_Y[0] <= ty <= ONSCREEN_Y[1]              # [asm 803A-8042]

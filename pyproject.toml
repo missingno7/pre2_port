@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pre2-source-port"
-version = "0.1.0"
+version = "0.2.2"
 description = "Prehistorik 2 source-port workbench on top of a reusable DOS real-mode VM"
 requires-python = ">=3.11"
 dependencies = []

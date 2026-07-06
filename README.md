@@ -13,6 +13,67 @@ no x86, loads no `PRE2.EXE`, and starts no emulator.
 $ python scripts/play_native.py        # cold-boots the real game: titles → menu → levels → endings
 ```
 
+## Getting started — how to actually run it
+
+There are two ways to play. **You never need the original `PRE2.EXE` to play** — only the game's data
+files. (The `.EXE` is only for the contributor workbench; see [the hybrid workbench](#the-hybrid-workbench--for-contributors) far below.)
+
+### The fastest way — the prebuilt Windows binary (no Python)
+
+1. Download the latest release zip from the [releases page](https://github.com/missingno7/pre2_port/releases/latest).
+2. Unzip it **into your own Prehistorik 2 game folder** (the one containing `SPRITES.SQZ`), so
+   `pre2native.exe` sits next to the game data.
+3. Double-click **`pre2native.exe`**. Done — no Python, no emulator, no setup.
+
+### Running from source (Windows / macOS / Linux)
+
+You need **Python 3.11 or newer** ([python.org](https://www.python.org/downloads/)) and your game's data
+files. The game itself needs just **two** libraries — `numpy` and `pygame`. Step by step:
+
+```bash
+# 1. get the code
+git clone https://github.com/missingno7/pre2_port
+cd pre2_port
+
+# 2. create a virtual environment (a private spot for the two libraries) and activate it
+python -m venv venv
+#    Windows (PowerShell):  venv\Scripts\Activate.ps1
+#    Windows (cmd.exe):     venv\Scripts\activate.bat
+#    macOS / Linux:         source venv/bin/activate
+
+# 3. install the two libraries the game needs
+pip install numpy pygame
+#    (shortcut equivalent:  pip install -e ".[viewer]")
+
+# 4. copy your Prehistorik 2 data files into the  assets/  folder:
+#    every *.SQZ and *.TRK from your game folder — you do NOT need PRE2.EXE.
+
+# 5. play!
+python scripts/play_native.py
+```
+
+**Hit `ModuleNotFoundError: No module named 'pygame'`?** Step 3 didn't run, or the virtual environment
+isn't active — re-run the *activate* line from step 2 (your prompt should show `(venv)`), then step 3.
+
+**From VS Code:** open the `pre2_port` folder → *Python: Select Interpreter* (Ctrl/Cmd+Shift+P) → pick the
+`venv` one → open `scripts/play_native.py` and press **▶ Run**. Or just type `python scripts/play_native.py`
+in VS Code's integrated terminal (with the venv active).
+
+Controls: `SPACE` = advance / fire+jump, arrows or numpad = move, **`F10`** = the enhancements menu
+(widescreen, smooth motion, fullscreen…), `ESC` = quit. Handy flags: `--from-level 0` drops straight into
+LEVEL 1; `--game-root "C:\path\to\game"` reads the data files from there instead of `assets/`.
+
+### Which copy of the game do I need?
+
+**To play, you need only the game's data files (`*.SQZ` and `*.TRK`) — not the executable.** `pyproject.toml`
+lists the Python libraries; it is *not* the game data. This repo ships **no game data** — bring a copy you
+legally own, and never commit it.
+
+- The port is built and tested against the **GOG.com DRM-free release** — that's the recommended copy.
+- Because the native game **never runs the original `.EXE`**, other DOS releases of Prehistorik 2 *may* also
+  work, but that's untested and unsupported.
+- Put the data in [`assets/`](assets/), or point `--game-root` at your install folder.
+
 ## Architecture — layered by dependency, verified at every seam
 
 The whole design is one idea: **separate *what the game does* from *where the bytes live* from *how it
@@ -120,54 +181,51 @@ Small and honest — **none block a normal cold-boot → credits playthrough:**
 - **The state-view refactor is an in-progress internal sweep** (moving raw memory offsets out of the
   recovered logic into a named view layer). No gameplay or visual effect.
 
-## Two runtimes: the product and the workbench
+## The hybrid workbench — for contributors
 
-| | Entry point | VM? | For |
-|---|---|---|---|
-| **Native** (the product) | `scripts/play_native.py` | none | playing / shipping the recovered game |
-| **Hybrid** (the workbench) | `scripts/play.py` | yes — as oracle | recovering & proving new behaviour against the live ASM |
+Everything above is about **playing** the game, and needs no `.EXE`. This section is only for **working on
+the port** — recovering new behaviour and proving it byte-for-byte against the original ASM. If you just
+want to play, you can stop here.
 
-The workbench is where a new piece is prepared and proven; the **same** recovered functions then run in
-the native product with the hooks gone (*"hybrid is the workshop, native is the product"*). The workbench
-never silently falls back to ASM — an unrecovered path **fails loud** (`Pre2HybridGap`) so the gap becomes
-the next task. Verification replays a recorded demo through the ASM oracle and the native core **tick by
-tick** and compares the full memory image; native reproduces the VM exactly (render/async offsets aside).
+There are two runtimes:
 
-## Quickstart
+| | Entry point | Emulator? | Needs `PRE2.EXE`? | For |
+|---|---|---|---|---|
+| **Native** — the product | `scripts/play_native.py` | none | **no** | playing / shipping the recovered game |
+| **Hybrid** — the workbench | `scripts/play.py` | yes, as an oracle | **yes** | recovering & proving new behaviour against the live ASM |
 
-**No Python?** Grab the prebuilt Windows binary from the [latest release](https://github.com/missingno7/pre2_port/releases/latest),
-unzip it into your legal GOG *Prehistorik 2* folder (next to `SPRITES.SQZ`), and run `pre2native.exe`.
+A new piece is prepared and proven in the workbench (recovered code runs *hooked over* the real ASM inside
+the `dos_re` VM, lock-stepped against it); the **same** recovered functions then run in the native product
+with the hooks gone (*"hybrid is the workshop, native is the product"*). The workbench never silently falls
+back to ASM — an unrecovered path **fails loud** (`Pre2HybridGap`) so the gap becomes the next task.
+Verification replays a recorded demo through the ASM oracle and the native core **tick by tick** and
+compares the full memory image; native reproduces the VM exactly (render/async offsets aside).
+
+### Getting `PRE2.EXE` (workbench only)
+
+The workbench needs the **GOG.com release specifically** — every recovered address is derived against that
+build, so no other version lines up. The GOG release doesn't ship `PRE2.EXE` as a plain file; it's packed
+inside **`PRE2.SQZ`** (a Titus CDRUN wrapper). Unpack it once with the included script:
 
 ```bash
-# play the recovered game — no emulator, cold boot from the first screen
-python scripts/play_native.py                     # full boot: titles → menu → play
-python scripts/play_native.py --from-level 0      # debug: drop straight into LEVEL1
-python scripts/play_native.py --snapshot <dir>    # resume a saved gameplay state
-
-# ship it — a standalone folder (+ optional PyInstaller exe), with no VM or EXE
-python scripts/deploy_native.py                   # build + smoke-test dist/pre2native/
-python scripts/deploy_native.py --exe             # + PyInstaller (needs `pip install pyinstaller`)
-
-# the workbench — hybrid runtime over the ASM oracle
-python scripts/play.py --view                     # live viewer, recovered hooks over the VM
-python scripts/play.py --view --verify-hooks      # lockstep contract check vs the ASM
-python scripts/play.py --view --record-demo run1  # record a regression demo
+# extract the GOG PRE2.EXE from its PRE2.SQZ wrapper into assets/
+python scripts/extract_pre2_from_sqz.py "C:\path\to\GOG\PRE2.SQZ" assets/PRE2.EXE
 ```
 
-Native controls: `SPACE` = advance / fire+jump, arrows or numpad = move, `ESC` = quit.
+(This only touches your own legal copy — it downloads and bundles nothing.) With `assets/PRE2.EXE` and the
+data files in place:
 
-## Bring your own legal copy
+```bash
+# the workbench — hybrid runtime over the ASM oracle  (needs numpy + pygame, as in Getting started)
+python scripts/play.py --view                     # live viewer: recovered hooks over the VM
+python scripts/play.py --view --verify-hooks      # lockstep contract check vs the ASM
+python scripts/play.py --view --record-demo run1  # record a regression demo
+pip install pytest && python -m pytest -q         # the byte-exact test suite
 
-This is a source-port **workbench**, not a redistribution. It needs the original Prehistorik 2 data files,
-which are **not** in this repository — supply them from a copy you legally own.
-
-- Target the **GOG.com DRM-free release**. Copy the game's `*.SQZ` / `*.TRK` data into [`assets/`](assets/),
-  or point `--game-root` at your GOG install folder.
-- All addresses and recovered logic are derived against that GOG build; another build has a different memory
-  layout and will not line up.
-- The native game (`play_native.py`) needs **only the data files**. The workbench (`play.py`, verification)
-  also needs the GOG `PRE2.EXE` in `assets/` — the oracle.
-- Never commit the game binary or data; they stay local to your checkout.
+# ship the native game as a standalone folder (+ optional PyInstaller exe) — no VM, no EXE
+python scripts/deploy_native.py                   # build + smoke-test dist/pre2native/
+python scripts/deploy_native.py --exe             # + PyInstaller (needs `pip install pyinstaller`)
+```
 
 ## Where to read more
 

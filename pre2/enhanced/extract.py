@@ -18,6 +18,7 @@ from dataclasses import replace
 import numpy as np
 
 from pre2.bridge.gameplay_effects import apply_gameplay_effects
+from pre2.bridge.object_render import read_attr as _read_attr
 from pre2.bridge.render_state import read_renderer_state
 from time import perf_counter as _perf
 
@@ -65,11 +66,16 @@ _MODE_NAME = {0x00: "ERASE", 0x01: "NORMAL", 0x10: "OPAQUE"}
 _ID_PAL = [(i, 0, 0) for i in range(256)]
 
 
-def _extract_particles(pf):
+def _extract_particles(pf, m_left=0, m_right=0):
     """Lift the one-shot point particles (4B8E) to interpolatable points: ``(screen_x, screen_y, vel_x,
     vel_y)`` for each on-screen particle, matching draw_particles' advance + cull + screen mapping exactly
     (so at alpha=1 the compositor plots the same pixel). vel is the particle's per-frame world delta (=
-    screen delta), used to rewind it along its own path for sub-source-frame motion."""
+    screen delta), used to rewind it along its own path for sub-source-frame motion.
+
+    ``m_left``/``m_right`` widen the X cull to the WIDESCREEN window: the returned ``screen_x`` is still
+    relative to the 320-window left (so the caller's ``+ m_left`` lands it in the wide buffer); at margin 0
+    the cull is exactly the faithful ``sx >= 0x140`` (spider threads pop out at the faithful edge otherwise —
+    the left margin wrapped negative and the right margin exceeded 320, so both edges dropped them)."""
     cam_x = (pf.cam_col << 4) & 0xFFFF
     cam_y = (pf.cam_row << 4) & 0xFFFF
     yb = (pf.y_bias & 0xFF) - 256 if pf.y_bias & 0x80 else pf.y_bias & 0xFF
@@ -80,7 +86,8 @@ def _extract_particles(pf):
         if sy >= 0xB0:                                  # off top/bottom (cull, as _plot_particle)
             continue
         sx = (nx - cam_x) & 0xFFFF
-        if sx >= 0x140:                                 # off left/right
+        sx = sx - 0x10000 if sx >= 0x8000 else sx       # SIGNED screen X rel to the 320-window left edge
+        if not (-m_left <= sx < 0x140 + m_right):       # off left/right (wide window)
             continue
         vx = ((nx - x + 0x8000) & 0xFFFF) - 0x8000      # signed per-frame delta
         vy = ((ny - y + 0x8000) & 0xFFFF) - 0x8000
@@ -88,12 +95,13 @@ def _extract_particles(pf):
     return pts
 
 
-def _extract_fireflies(ff):
+def _extract_fireflies(ff, m_left=0, m_right=0):
     """Lift the persistent firefly swarm (54AB) to interpolatable points: ``(slot, world_x, world_y,
     screen_x, screen_y)`` for each on-screen firefly, matching draw_fireflies' screen mapping exactly
     (so at alpha=1 the compositor plots the same pixel). ``slot`` is the persistent slot index used to
     match prev/cur and lerp the world position; ``world = (x>>3, y>>3)`` (the camera-relative draw uses
-    those shifted coords)."""
+    those shifted coords). ``m_left``/``m_right`` widen the X cull to the widescreen window (screen_x stays
+    relative to the 320-window left; caller adds m_left); margin 0 == the faithful ``sx >= 0x140`` cull."""
     cam_x = (ff.cam_col << 4) & 0xFFFF
     cam_y = (ff.cam_row << 4) & 0xFFFF
     pts = []
@@ -103,7 +111,8 @@ def _extract_fireflies(ff):
         if sy >= 0xB0:
             continue
         sx = (wx - cam_x) & 0xFFFF
-        if sx >= 0x140:
+        sx = sx - 0x10000 if sx >= 0x8000 else sx       # SIGNED screen X rel to the 320-window left edge
+        if not (-m_left <= sx < 0x140 + m_right):
             continue
         pts.append((idx, wx, wy, sx, sy))
     return pts
@@ -154,6 +163,109 @@ def _replan_wide(spr, attr, cam, m_left, m_right):
     return replace(cmd, screen_x=cmd.screen_x + 16 * k), k
 
 
+from pre2.recovered.object_render import Sprite as _Sprite
+
+# The two per-frame projectors (terrain platforms 4907 -> render slots 0x5570, float-effect/pickup items 8922 ->
+# render slots 0x52E8) cull each SOURCE entity to the faithful 320 window BEFORE writing the render-slot array
+# that object_render reads. So a platform or floating item in the WIDESCREEN MARGIN is dropped at the state
+# projection and can NEVER be re-admitted by _replan_wide (it isn't in the active list at all). This read-only
+# pass re-walks the two SOURCE lists and synthesizes active-list Sprite records for the entities that were NOT
+# projected, so the sprite loop textures + _replan_wide-places them in the margins like enemies.
+#
+# "Not projected" is decided from the ACTUAL render slots (each slot's [+9] = the source offset it came from),
+# NOT by recomputing the faithful X cull. The projectors run mid-tick (8922 @0235) BEFORE the scroll advances
+# the camera, so a recomputed cull using the post-tick camera disagrees with them by up to one tile at the
+# boundary -- a boundary item then falls through BOTH (the projector's camera said "margin", ours said "the
+# projector has it") and BLINKS one frame as it crosses the 320 edge. Reading the render slots is exact and
+# phase-proof. Parity is preserved by the sprite loop: a re-projected record is only DRAWN when plan_sprite_command
+# culls it at 320 (it's in a margin) -- one that plans inside 320 (a budget-dropped central item) is dropped, so
+# the central 320 never diverges from faithful. DS-relative reads only; the game state is never touched.
+_TERRAIN_SRC, _TERRAIN_STRIDE, _TERRAIN_N = 0x9107, 0xF, 0x10      # [asm 4907] source list
+_TERRAIN_DST, _TERRAIN_DST_N = 0x5570, 7                          # its render slots (stride 0x12, [+9]=source)
+_FLOAT_SRC, _FLOAT_STRIDE, _FLOAT_N = 0x8F1D, 7, 0x46             # [asm 8922] source list
+_FLOAT_DST, _FLOAT_DST_N = 0x52E8, 0x14                           # its render slots (stride 0x12, [+9]=source)
+_DST_STRIDE = 0x12
+# 2nd-pass entity list (6913 walker): variable stride at [si], ends at stride >= 0x32; entry 0 = the player.
+_ENT2_LO, _ENT2_HI = 0x8489, 0x8F1D          # the list's address span (ends before the 0x8F1D float list)
+_ENT2_STRIDE_END = 0x32                       # [6916] stride >= this terminates the walk
+_ENT2_SELF_POS_IDX = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 11})   # handlers that project at the entity's OWN pos
+
+
+def _reproject_wide_entities(mem, cam):
+    """Synthesize active-list :class:`Sprite` records for the terrain-platform + float-item SOURCE entities that
+    the faithful projectors did NOT write into their render slots this frame (i.e. the margin entities). Returns
+    ``[(Sprite, handle), ...]``; the handle is keyed to the stable SOURCE-entry offset (the same identity the
+    projected records carry in slot[+9]) so interpolation matches the entity across frames and across the
+    margin<->faithful hand-off. The sprite loop culls/places each via plan_sprite_command + _replan_wide."""
+    d = mem.data
+    base = 0x1A0F << 4
+
+    def rw(off):
+        return d[base + (off & 0xFFFF)] | (d[base + ((off + 1) & 0xFFFF)] << 8)
+
+    def drawn_sources(dst, n):
+        """The set of SOURCE offsets the projector actually wrote this frame ([+9] of each live render slot)."""
+        s = set()
+        for j in range(n):
+            slot = dst + j * _DST_STRIDE
+            if rw(slot + 4) != 0xFFFF:                           # live slot (not the 0xFFFF terminator/dead)
+                s.add(rw(slot + 9))
+        return s
+
+    out = []
+    # terrain platforms (4907): not-drawn source entities -> synthesize. Y-nudge -2 (the projector's non-ridden
+    # nudge; a margin platform is never ridden by the centred player).
+    drawn = drawn_sources(_TERRAIN_DST, _TERRAIN_DST_N)
+    for k in range(_TERRAIN_N):
+        si = _TERRAIN_SRC + k * _TERRAIN_STRIDE
+        if rw(si + 4) == 0xFFFF or si in drawn:
+            continue
+        out.append((_Sprite(x=rw(si), y=(rw(si + 2) - 2) & 0xFFFF, sprite_id=rw(si + 4), flags=0, life=0),
+                    ("terrain", si)))
+    # float-effect / pickup items (8922): not-drawn source entities -> synthesize at their SOURCE Y as-is. The
+    # 8922 float bounce advances the source [+2] only on PROJECTED (on-screen) frames, so a margin item's Y is
+    # frozen at exactly the value the on-screen path would resume its bounce FROM -- so a pickup crossing the 320
+    # edge hands off render-slot<->re-projection SEAMLESSLY (both read source [+2]). (An earlier presentation-side
+    # bounce here animated the margin items but ran a DIFFERENT phase from the on-screen faithful bounce, so they
+    # jumped at the boundary = the reported flicker; frozen-then-resume matches the original.)
+    drawn = drawn_sources(_FLOAT_DST, _FLOAT_DST_N)
+    for k in range(_FLOAT_N):
+        si = _FLOAT_SRC + k * _FLOAT_STRIDE
+        if rw(si + 4) == 0xFFFF or si in drawn:
+            continue
+        out.append((_Sprite(x=rw(si), y=rw(si + 2), sprite_id=rw(si + 4), flags=0, life=0), ("fx", si)))
+
+    # 2nd-pass ENEMIES (6913 walker -> project_entity 7F26 into the shared pool 0x4FD0): these dormant enemies
+    # (cave spiders etc.) are activated/drawn only when on-screen (on_screen_tile 8022 cull), so a margin enemy
+    # pops in at the 320 edge. Re-project the not-yet-projected ones (read-only) at their own X[+9]/Y[+0xB]/
+    # sprite[+2]. "Not projected" = its offset is not a back-ref [+6] of any live pool record. ONLY handlers that
+    # draw the entity at its OWN position (idx 1-9,11 = the on_screen_tile projectors) qualify; idx 0 (a
+    # player-relative aura), 10 (player trail) and 12 (proximity, its own gate/mode) draw elsewhere -> left to
+    # the tick. The parity guard in the sprite loop drops any that plan inside 320 (never diverges the centre).
+    d_rb = mem.data
+    ent_drawn = set()
+    for k in range(0x40):                                        # pool 0x4FD0, 0x40 slots, [+6] = source back-ref
+        po = 0x4FD0 + k * 0x12
+        if rw(po + 4) != 0xFFFF:
+            bp = rw(po + 6)
+            if _ENT2_LO <= bp < _ENT2_HI:
+                ent_drawn.add(bp)
+    b198 = d_rb[base + 0xB198]
+    si = _ENT2_LO
+    for _ in range(0x40):                                        # variable stride; bounded loop as a backstop
+        stride = d_rb[base + si]
+        if stride >= _ENT2_STRIDE_END:                           # [6916] end of the list
+            break
+        flags1 = d_rb[base + si + 1]
+        sprite = rw(si + 2)
+        skip = (sprite == 0xFFFF or (d_rb[base + si + 4] & 4) or (b198 != 1 and (flags1 & 0x80)))
+        if (not skip and si != _ENT2_LO                          # entry 0 = the player (drawn as 0x4F1C)
+                and (flags1 & 0x7F) in _ENT2_SELF_POS_IDX and si not in ent_drawn):
+            out.append((_Sprite(x=rw(si + 9), y=rw(si + 0xB), sprite_id=sprite, flags=0, life=0), ("ent", si)))
+        si += stride
+    return out
+
+
 def _texture_key(draw, attr):
     """The PALETTE- and POSITION-independent key for a sprite cel: only what changes its pixels -- cel
     identity (src segment + the cel's source offset), the full (unclipped) decoded geometry, flip, and draw
@@ -201,7 +313,7 @@ def _make_sprite_texture(draw, attr, src_bank):
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
                            tex_cache=None, bg_cache=None, margin=0,
                            wide_cull=False, hud_align="center", bg_mode="stretch",
-                           bd_pad=0) -> EnhancedFrameState | None:
+                           bd_pad=0, slide_margins=None, room_mode=False) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -230,6 +342,14 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     at the level start, the right grows by the same amount) so the wide window stays inside the world and no
     beyond-the-world void shows. Without it the split is symmetric and beyond-the-world pixels render BLACK.
     """
+    # ``slide_margins`` decouples the world-edge margin SLIDE from the rest of wide_cull: the SMOOTH CAMERA passes
+    # wide_cull=True (entities still re-admit in the margins) with slide_margins=False (its crop needs a symmetric
+    # split, and it respects the world edge via its own presentation clamp). None -> follow wide_cull (normal cam).
+    # ``room_mode`` (LEVEL6 tower bands / LEVEL F single-screen): black-void everything outside the CURRENT 320
+    # window -- the room renders centred with black margins (the neighbouring tilemap columns are other rooms/
+    # bands, so revealing them is wrong). The caller passes wide_cull=False with it (no margin content to re-admit).
+    if slide_margins is None:
+        slide_margins = wide_cull
     rs = read_renderer_state(mem, dos, game_root=game_root)
     cam = rs.object_camera
     if cam is None:
@@ -245,7 +365,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     # placement below; with wide_cull off (or margin 0) m_left == m_right == margin — behavior unchanged.
     m_left = m_right = margin
     cam_px = cam.cam_x * 16
-    if margin and wide_cull:
+    if margin and slide_margins:
         m_left = min(margin, cam_px)                                    # don't extend past the world's left
         m_left = max(m_left, 2 * margin - max(0, _WORLD_W_PX - (cam_px + 320)))   # borrow when pinned right
         m_left = min(max(m_left, 0), 2 * margin)
@@ -300,8 +420,13 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         # BEYOND-THE-WORLD void: wide pixels mapping outside the 256-tile world render BLACK (not tilemap
         # edge repeats, not backdrop). Marked as tile coverage so the compositor scrolls the void with the
         # world (it is world-anchored). With the wide_cull slide the window stays inside the world -> empty.
+        # ROOM MODE (LEVEL6 tower / LEVEL F single-screen): the level is a 320-wide ROOM inside the 256-tile
+        # backing map -- the columns beside it belong to OTHER rooms/bands, so revealing them is wrong. The
+        # void covers everything outside the CURRENT faithful window instead: the room renders centred in the
+        # wide frame with pure black each side ("see outside the level border, filled with black").
         wx_world = np.arange(wide_w) + (cam_px - m_left)      # wide pixel column -> world pixel X
-        void = (wx_world < 0) | (wx_world >= _WORLD_W_PX)
+        w_lo, w_hi = (cam_px, cam_px + 320) if room_mode else (0, _WORLD_W_PX)
+        void = (wx_world < w_lo) | (wx_world >= w_hi)
         if void.any():
             background_rgb[:VIEWPORT_H, void] = 0
             tile_mask[:VIEWPORT_H, void] = True
@@ -330,13 +455,18 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
             idx_ov = np.pad(idx_ov, ((0, 0), (m_left, m_right)))
         overlay_mask = idx_ov != 0
         overlay_rgb = pal_rgb[idx_ov]
+        # TRUE WIDESCREEN (wide_cull) admits particles/fireflies into the margins too (else spider threads +
+        # sparkles pop out at the faithful edge like the culled sprites did); plain widescreen keeps them in
+        # the central 320 (margins are backdrop-extension only). margin 0 -> both cull args 0 -> parity-exact.
+        cull_l = m_left if wide_cull else 0
+        cull_r = m_right if wide_cull else 0
         if effects.particles is not None:
             particles = [(sx + m_left, sy, vx, vy)
-                         for (sx, sy, vx, vy) in _extract_particles(effects.particles)]
+                         for (sx, sy, vx, vy) in _extract_particles(effects.particles, cull_l, cull_r)]
             particle_rgb = tuple(int(c) for c in pal_rgb[15])    # 4B8E plots colour 15 (white)
         if effects.fireflies is not None:
             fireflies = [(i, wx, wy, sx + m_left, sy)
-                         for (i, wx, wy, sx, sy) in _extract_fireflies(effects.fireflies)]
+                         for (i, wx, wy, sx, sy) in _extract_fireflies(effects.fireflies, cull_l, cull_r)]
             firefly_rgb = tuple(int(c) for c in pal_rgb[15])     # VM oracle collapses the 14/15 flicker to 15
 
     faithful_rgb = None
@@ -348,6 +478,25 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     sprites, unsupported = [], []
     attrs = rs.object_attrs or {}
     banks = rs.object_src_banks or {}
+    # TRUE WIDESCREEN: re-project the terrain-platform + float-item entities the state projector X-culled to the
+    # faithful 320 window, so they draw in the margins (like enemies, which stay in the active list). Each is an
+    # (index, Sprite, handle) triple with a synthetic slot (identity comes from the explicit handle, not the
+    # record offset); attrs/banks are extended for any id the culled entities reference. margin 0 / no wide_cull
+    # -> the list is empty and the loop is byte-identical to before.
+    extra_sprites = []
+    if wide_cull and margin:
+        reproj = _reproject_wide_entities(mem, cam)
+        if reproj:
+            attrs = dict(attrs)                                  # copy: never mutate the shared render-state dicts
+            banks = dict(banks)
+            for spr, handle in reproj:
+                a = attrs.get(spr.sprite_id)
+                if a is None:
+                    a = attrs[spr.sprite_id] = _read_attr(mem, spr.sprite_id)
+                if a.src_seg not in banks:
+                    lo = (a.src_seg << 4) & 0xFFFFF
+                    banks[a.src_seg] = bytes(mem.data[lo:lo + 0x10000])
+                extra_sprites.append((spr, handle))
     # Sprite texture cache (layer A): the palette-INDEPENDENT cel textures are reused across source frames when
     # the session passes a persistent ``tex_cache`` (steady gameplay re-extracts only cels that actually
     # changed), else a throwaway cache (the parity path -> identical output, just no cross-frame reuse). The
@@ -362,8 +511,11 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     # shake and the WHOLE frame shakes between subframes, not just the sprites). Used to interpolate the
     # background scroll between ticks.
     camera_px = (cam_px - m_left, cam.cam_y * 16 + cam.fine_scroll - cam.row_factor)
-    # enumerate -> `slot` is the active-list record index (stable cross-frame identity, animation-independent)
-    for slot, spr in enumerate(rs.object_sprites or ()):
+    # enumerate -> `slot` is the active-list record index (stable cross-frame identity, animation-independent).
+    # The re-projected margin entities follow with slot=None (identity via their explicit handle); they are ALL
+    # X-culled at 320 (only margin entities are re-projected), so they route through _replan_wide like enemies.
+    real = ((slot, spr, None) for slot, spr in enumerate(rs.object_sprites or ()))
+    for slot, spr, ext_handle in (*real, *((None, s, h) for s, h in extra_sprites)):
         attr = attrs.get(spr.sprite_id)
         if attr is None:
             continue
@@ -377,6 +529,11 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                 cmd, kshift = res
             else:
                 continue
+        elif ext_handle is not None:
+            # A re-projected entity that plans INSIDE the 320 window = a source item the faithful projector did
+            # not draw yet IS within the central view (budget-drop / a mid-tick-camera boundary item now central).
+            # Faithful doesn't draw it, so neither do we -- the central 320 must stay byte-exact with faithful.
+            continue
         mode = int(cmd.mode)
         if mode not in (MODE_NORMAL, MODE_OPAQUE, MODE_ERASE):
             unsupported.append((slot, cmd.base_id, _MODE_NAME.get(mode, hex(mode))))
@@ -406,6 +563,14 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                 continue                           # no opaque pixels (don't cache empties)
             cache.put(key, tex)
         rgba = cache.colorize(key, tex, palette, pversion)   # apply the current palette (memoised per version)
+        wx, wy = cmd.world_x, cmd.world_y
+        if ext_handle is not None:                               # a re-projected margin entity: identity is its
+            sprites.append(SpriteInstance(handle=ext_handle, slot=-1, base_id=cmd.base_id,   # explicit handle,
+                                          sprite_id=cmd.sprite_id, world_x=wx, world_y=wy,    # no active-list rec
+                                          screen_x=cmd.screen_x + m_left, screen_y=cmd.screen_y,
+                                          tex_off_x=tex.off_x, tex_off_y=tex.off_y,
+                                          rgba=rgba, interpolate=not cmd.is_hud))
+            continue
         rec_off = LIST_TOP - slot * RECORD_BYTES                 # this record's DS offset (top-down list)
         # MOTION always = the record's own [+0]/[+2] (cmd.world_x/world_y) — the quantity screen_x/screen_y
         # are derived from, so the interpolation rewind is consistent with the drawn position for EVERY class.

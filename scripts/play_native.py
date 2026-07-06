@@ -198,7 +198,13 @@ def main(argv=None) -> int:
                 "widescreen": False, "fullscreen": False, "true_widescreen": False,
                 "smooth_transitions": False, "hud_align": "center",   # widescreen HUD: left / center / right
                 "overlay_scale": "auto",   # F10 menu size: "auto" (by window) or 100/150/200/300 (%)
-                "widescreen_bg": "stretch",   # widescreen backdrop margins: stretch / mirror / black
+                "widescreen_bg": "mirror",   # widescreen backdrop margins: stretch / mirror / black
+                "pixel_aspect": "square",   # "square" (1:1, sharp; keeps the iris a true circle) or "4:3" (CRT
+                #                             proportions -> more widescreen margin, but the pixel-circle iris ovals)
+                "widescreen_aspect": "auto",   # widescreen target aspect: "auto" (fill the window) or a fixed
+                #                                16:9 / 16:10 / 4:3 / 21:9 / 32:9 (letterboxed if the window differs)
+                "widescreen_active_zone": False,   # EXPERIMENTAL: activate enemies/objects across the widescreen
+                #                                    margins (state-mutating, gameplay-affecting) instead of frozen
                 "smooth_camera": False}   # ease the camera toward the DOS target (experimental)
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
@@ -227,31 +233,69 @@ def main(argv=None) -> int:
     if settings["fullscreen"]:                                            # persisted preference -> apply at boot
         set_fullscreen(True)
 
-    _WIDE_MAX = 128                                       # widescreen margin cap (px/side): 576px total, ~2.9:1
+    _WIDE_MAX = 272                                       # widescreen margin cap (px/side): fills 32:9 in BOTH
+    #                                                        aspect modes (4:3 super-ultrawide wants ~267/side).
+
+    def _pixel_par() -> float:
+        """Displayed pixel aspect (height/width): 1.2 for the DOS 4:3 look, 1.0 for square pixels."""
+        return 1.2 if settings.get("pixel_aspect") == "4:3" else 1.0
+
+    _WS_ASPECT_RATIOS = {"16:9": 16 / 9, "16:10": 16 / 10, "4:3": 4 / 3, "21:9": 21 / 9, "32:9": 32 / 9}
+
+    def _target_ratio() -> float:
+        """The widescreen TARGET display aspect: the live window ('auto') or a fixed pick. 0 if unavailable."""
+        wa = settings.get("widescreen_aspect", "auto")
+        if wa in _WS_ASPECT_RATIOS:
+            return _WS_ASPECT_RATIOS[wa]
+        sw, sh = disp.get_size()                          # 'auto' -> fill the actual window
+        return sw / sh if sh > 0 else 0.0
 
     def wide_margin() -> int:
-        """The widescreen margin (px each side) for the CURRENT window: just enough extra width for the
-        window's aspect ratio at the game's 200px frame height (square pixels, like the 4:3 present), capped.
-        0 when the Widescreen setting is off or the window is 16:10/4:3 or narrower."""
+        """The widescreen margin (px each side) needed to reach the TARGET display aspect at the game's displayed
+        frame height, capped. In 4:3-pixel mode the frame is 240 units tall (200 * 1.2), so the same aspect fits
+        ~3x more margin than square-pixel's 200. 0 when Widescreen is off or the target is <= the game's 4:3 base
+        (e.g. widescreen_aspect '4:3' -> no horizontal extension)."""
         if not settings["widescreen"]:
             return 0
-        sw, sh = disp.get_size()
-        if sh <= 0:
+        ratio = _target_ratio()
+        if ratio <= 0:
             return 0
-        return min(_WIDE_MAX, max(0, (round(200 * sw / sh) - 320 + 1) // 2))
+        eh = 200 * _pixel_par()                           # displayed frame height in px units (240 for 4:3)
+        return min(_WIDE_MAX, max(0, (round(eh * ratio) - 320 + 1) // 2))
 
     # Levels whose GAMEPLAY must render in the plain 4:3 pipeline (widescreen would reveal off-screen tilemap
     # columns / break the fight). LEVEL A (0x09) is the gorilla boss — its alternate faces sit just right of the
-    # 320 window and its fight only plays right faithfully (verified: works with widescreen OFF). LEVEL F (0x0E)
-    # likewise. On these, gameplay uses the faithful stream path (see `enhance_ok`); when Widescreen is on we still
-    # give a WIDE HUD via `_widehud_frame` (black gameplay borders + a stretched HUD — "some widescreen feeling").
-    _WS_EXCLUDE_LEVELS = {0x09, 0x0E}
+    # 320 window and its fight only plays right faithfully (verified: works with widescreen OFF). On it, gameplay
+    # uses the faithful stream path (see `enhance_ok`); when Widescreen is on we still give a WIDE HUD via
+    # `_widehud_frame` (black gameplay borders + a stretched HUD — "some widescreen feeling").
+    _WS_EXCLUDE_LEVELS = {0x09}
+    # ROOM levels: the playable area is a 320-wide room/band inside the 256-tile backing map (LEVEL6's tower
+    # sections sit side by side; LEVEL F is single-screen), so widescreen margins must NOT reveal the neighbouring
+    # columns. These render CENTRED with pure black margins (extract room_mode) — and keep every presentation
+    # enhancement (interpolation, smooth transitions, wide HUD); only margin content + the smooth camera are off.
+    _WS_ROOM_LEVELS = {0x05, 0x0E}
+
+    def _room_for(state) -> bool:
+        """Widescreen ROOM mode for the current level (centred 320, black margins, no margin content)."""
+        return state.data[DS + 0x2D8A] in _WS_ROOM_LEVELS
 
     def _margin_for(state) -> int:
-        """wide_margin(), but forced to 0 on levels that can't be widescreened (LEVEL A/F boss-face tiles)."""
+        """wide_margin(), but forced to 0 on levels that can't be widescreened at all (LEVEL A boss)."""
         if state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
             return 0
         return wide_margin()
+
+    from pre2.enhanced.smooth_camera import CROP as _CAM_CROP        # the band-drag over-coverage baseline
+    from pre2.recovered.object_update import set_active_zone_margin   # widescreen active-zone cull widener (enemies)
+    from pre2.recovered.object_particles import set_item_zone_margins  # widescreen item-zone cull widener (pickups)
+
+    def _smooth_extra(state) -> int:
+        """Extraction over-coverage (px/side) the SMOOTH CAMERA extracts then crops: enough for BOTH the
+        band-drag deviation (``CROP``) AND pinning the view at a world edge (the display margin ``m_disp``), so
+        no beyond-the-world void shows at the level ends. 0 when the smooth camera is off. Equals CROP for every
+        window up to ~21:9; only super-ultrawide (m_disp > CROP) widens it. 0 on ROOM levels — their camera is
+        band-locked (the tower jumps between sections), so band-drag has nothing meaningful to follow there."""
+        return max(_CAM_CROP, _margin_for(state)) if settings["smooth_camera"] and not _room_for(state) else 0
 
     def _widehud_frame(rgb, margin: int):
         """A 4:3-gameplay-with-WIDE-HUD frame: centre the faithful 320 gameplay in a ``320+2*margin`` frame with
@@ -324,6 +368,7 @@ def main(argv=None) -> int:
         """Draw + letterbox one game frame via the GPU (or software fallback); no present yet. Returns its
         on-screen rect."""
         disp.integer_scale = settings["integer_scale"]
+        disp.par = _pixel_par()                              # 4:3 (1.2) vs square (1.0) display pixel aspect
         return disp.draw_game(rgb)
 
     _hud = {"font": None, "t0": 0.0, "ticks0": 0, "text": ""}
@@ -530,19 +575,22 @@ def main(argv=None) -> int:
         fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
                                       foreground_frame=fg)
         m = _margin_for(state)
-        pad = _CAM_CROP if present_cam is not None else 0
+        pad = _smooth_extra(state) if present_cam is not None else 0    # match the gameplay smooth-cam coverage
+        _room = _room_for(state)
+        _wc = settings["true_widescreen"] and not _room
         efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
                                      bg_cache=_tx["bg"], effects=fx, margin=m + pad,
-                                     wide_cull=settings["true_widescreen"] and not pad,
-                                     hud_align=settings["hud_align"], bg_mode=settings["widescreen_bg"], bd_pad=pad)
+                                     wide_cull=_wc, slide_margins=_wc and pad == 0,
+                                     hud_align=settings["hud_align"], bg_mode=settings["widescreen_bg"],
+                                     bd_pad=pad, room_mode=_room)
         if efs is None:
             return None
-        if pad:                                                  # freeze at the eased camera, then crop off pad
+        if pad:                                                  # freeze at the eased camera; compose crops the pad
             bg_dx = round(efs.camera[0] - present_cam[0])        # world shift compose applied (= DOS - scam)
-            rgb = compose(efs, efs, 1.0, present_cam=present_cam)
+            rgb = compose(efs, efs, 1.0, present_cam=present_cam, crop=pad)   # crop-aware -> already display width
             # sprite_dx: efs sprite screen_x (in the m+pad margin) -> the cropped frame; center_dx: a DOS-screen
             # point (0..320) -> the cropped frame. They differ by the cropped-away pad.
-            return np.ascontiguousarray(rgb[:, pad:rgb.shape[1] - pad]), m, efs, bg_dx - pad, bg_dx
+            return rgb, m, efs, bg_dx - pad, bg_dx
         return compose(efs, None, 1.0), m, efs, 0, 0
 
     def _animate(state, duration, render, caption="PRE2 VM-less — transition"):
@@ -598,6 +646,67 @@ def main(argv=None) -> int:
             if not ref["running"]:
                 return
 
+    # ---- ENHANCED front-end map screens: the CARTE scroll-in + the MODE-SELECT/PASSWORD map render widescreen
+    #      and display-rate SMOOTH from the recovered ingredients the scenes carry (FrontEndScene.enh); verified
+    #      pixel-exact vs the faithful raster at W=320 (menu 0-diff; carte <=0.03% = the mid-blit frontier col).
+    fe = {"carte": None, "menu": None, "prev": None, "due": None}
+
+    def present_front_scene(scene, fps, caption=None):
+        """Present one front-end scene: the scrolling map screens (scene.enh) render ENHANCED — widescreen
+        (real 640px map content on the carte; the seamlessly-wrapping bg ring on the menu) + sub-frame smooth
+        pan when Interpolation is on. Everything else presents the faithful raster unchanged."""
+        enh_on = scene.enh is not None and (settings["widescreen"] or settings["interpolation"])
+        if not enh_on:
+            fe["prev"] = fe["due"] = None
+            present(front_end_scene_to_rgb(scene), fps, caption)
+            return
+        from pre2.enhanced.front_scenes import CarteEnh, MenuEnh
+        from time import perf_counter
+        W = 320 + 2 * wide_margin()
+        kind = scene.enh[0]
+        if kind == "carte":
+            if fe["carte"] is None:
+                fe["carte"] = CarteEnh()
+            cur = float(scene.enh[2])
+            render = lambda s: fe["carte"].frame(scene.enh[1], s, scene.palette, W)     # noqa: E731
+        else:
+            if fe["menu"] is None:
+                fe["menu"] = MenuEnh()
+            cur = float(MenuEnh.pan_px(scene))
+            render = lambda s: fe["menu"].frame(scene, s, scene.palette, W, front_end_scene_to_rgb)  # noqa: E731
+        prev = fe["prev"] if (fe["prev"] is not None and fe["prev"][0] == kind) else None
+        fe["prev"] = (kind, cur)
+        if not settings["interpolation"]:                      # widescreen only: one wide frame per scene
+            fe["due"] = None
+            present(render(cur), fps, caption)
+            return
+        # Display-rate smoothing: sub-frames lerp the HORIZONTAL pan between the prev and cur scene positions
+        # (fixed-timestep accumulator like present_interpolated). The menu's linear-ring pan folds its vertical
+        # sine-bounce in as whole ±320px rows — interpolate only the horizontal residue (rows step faithfully;
+        # lerping them would read as a horizontal glitch, not a vertical bounce).
+        now = perf_counter()
+        if fe["due"] is None or fe["due"] < now - 0.25:
+            fe["due"] = now
+        dx = 0.0
+        if prev is not None:
+            d = cur - prev[1]
+            if kind == "menu":
+                d = ((d + 32768.0) % 65536.0) - 32768.0        # shortest path around the 65536px ring
+                d = ((d + 160.0) % 320.0) - 160.0              # the horizontal residue of the linear pan
+            if abs(d) <= 16.0:
+                dx = d
+        step = 1.0 / fps
+        while True:
+            now = perf_counter()
+            alpha = min(1.0, max(0.0, 1.0 - (fe["due"] - now) / step))
+            present(render(cur - (1.0 - alpha) * dx), present_hz(), caption if alpha >= 1.0 else None)
+            if perf_counter() >= fe["due"]:
+                break
+            pump()
+            if not ref["running"]:
+                break
+        fe["due"] += step
+
     def between_levels(state, dos):
         """The between-levels flow (the VM's 4F65 -> BRAVO tally -> CARTE world map -> next-level load): show the
         level-end TALLY (SCORE / LEVEL COMPLETED %), advance + load the next level (byte-exact), then drive the
@@ -648,18 +757,28 @@ def main(argv=None) -> int:
             from pre2.enhanced.transitions import apply_iris
             rgb, m, efs, sdx, cdx = smooth                        # sdx/cdx: eased-camera offsets (sprite / centre)
             players = [i for i in efs.sprites if i.handle == ("player",)]
-            center = None
+            # Drain native_iris_close for its STATE work (it advances the recovered iris close); the DOS iris
+            # centre it exposes is CLAMPED to the 320 view, so it misses the player when the smooth camera has
+            # them out in a widescreen margin. Centre on the PLAYER'S OWN displayed position instead (the exact
+            # coords the player blit below uses) so the iris always closes on the player, wherever they are.
+            dos_center = None
             for planes, page in native_iris_close(state, dos, disp, game_root=gr):
-                if center is None:
+                if dos_center is None:
                     iris = read_renderer_state(state, dos).iris
-                    if iris is not None:                           # centre: screen COL = center_y (+margin + the
-                        center = (iris.center_y + m + cdx, iris.center_x)   # eased shift), ROW = center_x (swapped)
+                    if iris is not None:                           # fallback centre: COL = center_y (+margin +
+                        dos_center = (iris.center_y + m + cdx, iris.center_x)   # eased shift), ROW = center_x
                 pump()
                 if native_audio is not None:
                     native_audio.poll(state)
                 if not ref["running"]:
                     return
-            if center is None:
+            if players:                                            # target the player exactly (margin-safe)
+                p = players[0]
+                ph, pw = p.rgba.shape[:2]
+                center = (p.screen_x + p.tex_off_x + sdx + pw // 2, p.screen_y + p.tex_off_y + ph // 2)
+            elif dos_center is not None:
+                center = dos_center
+            else:
                 center = (rgb.shape[1] // 2, _VFADE_MID)
 
             def _iris_fr(p):
@@ -698,7 +817,7 @@ def main(argv=None) -> int:
                 return
         native_level_end(state, game_root=gr)
         for scene in _native_carte(state, dos, gr):                # fire (press after release) advances
-            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — world map")
+            present_front_scene(scene, _FRONT_END_FPS, "PRE2 VM-less — world map")
             pump()
             drive_input(state)
             if native_audio is not None:
@@ -745,7 +864,7 @@ def main(argv=None) -> int:
                 return
         for scene in native_menu_flow(state, dos, gr):             # [main 011C] menu -> map -> carte -> loader
             fps = args.fps if state.data[DS + 0x2879] == 1 else _FRONT_END_FPS
-            present(front_end_scene_to_rgb(scene), fps, "PRE2 VM-less — restart")
+            present_front_scene(scene, fps, "PRE2 VM-less — restart")
             pump(); drive_input(state)
             if native_audio is not None:
                 native_audio.poll(state)
@@ -776,7 +895,7 @@ def main(argv=None) -> int:
             state.data[DS + sel] = 0
         for scene in native_menu_flow(state, dos, gr):             # [main 0x12f] menu -> map -> carte -> loader (L1)
             fps = args.fps if state.data[DS + 0x2879] == 1 else _FRONT_END_FPS
-            present(front_end_scene_to_rgb(scene), fps, "PRE2 VM-less — restart")
+            present_front_scene(scene, fps, "PRE2 VM-less — restart")
             pump(); drive_input(state)
             if native_audio is not None:
                 native_audio.poll(state)
@@ -887,19 +1006,44 @@ def main(argv=None) -> int:
             settings["widescreen_bg"] = _BG_MODES[(i + d) % len(_BG_MODES)]
             save_settings()
 
+        _ASPECTS = ["square", "4:3"]                   # displayed pixel aspect
+
+        def adj_aspect(d):
+            i = _ASPECTS.index(settings.get("pixel_aspect", "square")) if settings.get("pixel_aspect") in _ASPECTS else 0
+            settings["pixel_aspect"] = _ASPECTS[(i + d) % len(_ASPECTS)]
+            save_settings()
+
+        _ASPECT_LABEL = {"square": "Square (1:1)", "4:3": "4:3 (CRT)"}
+
+        _WS_ASPECTS = ["auto", "16:9", "16:10", "4:3", "21:9", "32:9"]   # widescreen target aspect
+
+        def adj_ws_aspect(d):
+            cur = settings.get("widescreen_aspect", "auto")
+            i = _WS_ASPECTS.index(cur) if cur in _WS_ASPECTS else 0
+            settings["widescreen_aspect"] = _WS_ASPECTS[(i + d) % len(_WS_ASPECTS)]
+            save_settings()
+
+        _ws_a = settings.get("widescreen_aspect", "auto")
+        _ws_aspect_label = "Auto" if _ws_a == "auto" else _ws_a
+
         view_tab = [
             {"label": "Interpolation", "value": onoff("interpolation"), "activate": toggle("interpolation")},
-            {"label": "Frame cap", "value": cap_label, "adjust": adj_cap},
-            {"label": "Widescreen", "value": onoff("widescreen"), "activate": toggle("widescreen")},
-            {"label": "Widescreen backdrop", "value": settings["widescreen_bg"].capitalize(),
-             "adjust": adj_bg},
-            {"label": "HUD position", "value": settings["hud_align"].capitalize(),
-             "adjust": adj_hud},
-            {"label": "Fullscreen", "value": onoff("fullscreen"),
-             "activate": lambda: set_fullscreen(not settings["fullscreen"])},
             {"label": "Smooth transitions", "value": onoff("smooth_transitions"),
              "activate": toggle("smooth_transitions")},
+            {"label": "Frame cap", "value": cap_label, "adjust": adj_cap},
+            {"label": "Fullscreen", "value": onoff("fullscreen"),
+             "activate": lambda: set_fullscreen(not settings["fullscreen"])},
             {"label": "Integer scaling", "value": onoff("integer_scale"), "activate": toggle("integer_scale")},
+        ]
+        widescreen_tab = [
+            {"label": "Widescreen", "value": onoff("widescreen"), "activate": toggle("widescreen")},
+            {"label": "Aspect", "value": _ws_aspect_label, "adjust": adj_ws_aspect},
+            {"label": "Pixel aspect", "value": _ASPECT_LABEL.get(settings.get("pixel_aspect", "square"), "Square (1:1)"),
+             "adjust": adj_aspect},
+            {"label": "Backdrop", "value": settings["widescreen_bg"].capitalize(), "adjust": adj_bg},
+            {"label": "HUD position", "value": settings["hud_align"].capitalize(), "adjust": adj_hud},
+        ]
+        overlay_tab = [
             {"label": "FPS overlay", "value": onoff("fps_overlay"), "activate": toggle("fps_overlay")},
             {"label": "Menu scale", "value": menu_scale_label, "adjust": adj_menu_scale},
         ]
@@ -911,13 +1055,15 @@ def main(argv=None) -> int:
         ]
         experimental_tab = [
             {"label": "True widescreen", "value": onoff("true_widescreen"), "activate": toggle("true_widescreen")},
+            {"label": "Active zone", "value": onoff("widescreen_active_zone"),
+             "activate": toggle("widescreen_active_zone")},
             {"label": "Smooth camera", "value": onoff("smooth_camera"), "activate": toggle("smooth_camera")},
             {"label": "", "info": True},
-            {"label": "True widescreen draws objects in the margins; Smooth camera", "info": True},
-            {"label": "eases the view toward the DOS target. Not accurate to the", "info": True},
-            {"label": "original — but game logic is unaffected.", "info": True},
+            {"label": "Experimental enhancements aren't faithful to the original —", "info": True},
+            {"label": "Active zone even changes gameplay.", "info": True},
         ]
-        tabs = [("View", view_tab), ("Audio", audio_tab), ("Experimental", experimental_tab)]
+        tabs = [("View", view_tab), ("Widescreen", widescreen_tab), ("Overlay", overlay_tab),
+                ("Audio", audio_tab), ("Experimental", experimental_tab)]
         if args.debug:
             lvl = ref.get("menu_level", 0)
 
@@ -988,13 +1134,20 @@ def main(argv=None) -> int:
         from pre2.bridge.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
+        from dataclasses import replace as _dc_replace
+        from pre2.enhanced.native_background import TileTextureCache, _HudCache
+        from pre2.enhanced.snow import SnowField
         from pre2.enhanced.sprite_cache import SpriteTextureCache
         from pre2.enhanced.smooth_camera import CROP as _CAM_CROP, smooth_cam_x, world_max_px
         from pre2.native.render import native_render                # for the enhanced-path faithful fallback
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
         tick_dt = 1.0 / TICK_HZ
-        enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None,   # the prev+cur snapshot pair
+        # persistent tile/HUD texture cache (bg) so the per-tick extract reuses baked tile cels instead of
+        # re-baking them every tick -- the extract was passing bg_cache=None (throwaway each call).
+        enh = {"tex": SpriteTextureCache(), "bg": (TileTextureCache(), _HudCache()),
+               "snow": SnowField(), "snow_t": 0.0,   # ENHANCED snow (smooth transitions): wall-clock field
+               "prev": None, "next_tick": None,   # the prev+cur snapshot pair
                "last_cur": None, "scam": None, "scam_t": 0.0}   # smooth-tx fade base + smooth-camera state
 
         def _smooth_cam(cur, alpha):
@@ -1004,8 +1157,8 @@ def main(argv=None) -> int:
             its edges, rate-limited so it GLIDES rather than ever jumping, clamped to the level's real camera
             bounds (the DOS [0x8164] limit). Y = the DOS camera exactly (its per-level centering preserved),
             sub-tick interpolated. Presentation only; a teleport / level load reseeds."""
-            if not settings["smooth_camera"] or enh["prev"] is None:
-                enh["scam"] = None
+            if not settings["smooth_camera"] or enh["prev"] is None or _room_for(state):
+                enh["scam"] = None                                  # (room levels: band-locked camera, no drag)
                 return None
             prev = enh["prev"]
             inv = 1.0 - alpha
@@ -1038,7 +1191,10 @@ def main(argv=None) -> int:
             if s is None:
                 s = enh["scam"] = [float(dosx)]                            # seed at the current view; glide in
             w8164 = state.data[DS + 0x8164] | (state.data[DS + 0x8165] << 8)
-            s[0] = smooth_cam_x(s[0], pwx, pvx, dt, cam0, world_max_px(w8164, pwx))
+            # m_disp = the displayed margin (clamp the whole widescreen window inside the world -> no edge void);
+            # crop = the extracted over-coverage (must cover pinning at the edge). Both live off the window size.
+            s[0] = smooth_cam_x(s[0], pwx, pvx, dt, cam0, world_max_px(w8164, pwx),
+                                m_disp=float(_margin_for(state)), crop=float(_smooth_extra(state)))
             return (s[0] - ml_cur, dosy)                                    # back to WINDOW space for compose
 
         def present_tick_frame(planes, page):
@@ -1068,6 +1224,23 @@ def main(argv=None) -> int:
             fg.page = disp2 & 0xFFFF
             fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
                                           foreground_frame=fg)
+            # ENHANCED SNOW (part of Smooth transitions): replace the tick-rate 320px faithful plot list with
+            # the wall-clock SnowField drawn over the whole (possibly wide) presented frame. The gameplay tick
+            # still ran the real scroll_script_snow (its shared-rng advance is byte-exact-critical); only the
+            # DRAWING is swapped. Off -> the faithful plots render via the overlay exactly as before.
+            _wind = state.data[DS + 0x6BF6] | (state.data[DS + 0x6BF7] << 8)
+            _snow_on = settings["smooth_transitions"] and _wind > 0
+            if _snow_on and fx.snow is not None:
+                fx = _dc_replace(fx, snow=None)
+
+            def _snow_over(frame):
+                """Advance + draw the enhanced snow onto a presented frame (no-op when inactive)."""
+                if _snow_on:
+                    now2 = perf_counter()
+                    enh["snow"].draw(frame, _wind, now2 - enh["snow_t"],
+                                     rgb=tuple(int(v) for v in (dos.vga_palette or [(255,) * 3] * 16)[15]))
+                    enh["snow_t"] = now2
+                return frame
             # Re-apply the one-frame OPAQUE flash bits (cleared during the tick) around the snapshot, exactly
             # like native_render — restore right after so carried-forward state stays byte-exact.
             flash = getattr(state, "flash_slots_last", None)
@@ -1079,20 +1252,25 @@ def main(argv=None) -> int:
             # SMOOTH CAMERA extracts CROP px of extra tile margin each side (the deviation the presentation
             # camera may shift the view by); _crop() cuts it back off after compose, so the DISPLAYED width
             # stays the widescreen width and the shifted-in edges always show real extracted content.
-            m_extra = _CAM_CROP if settings["smooth_camera"] else 0
+            m_extra = _smooth_extra(state)
 
             def _crop(frame):
-                if m_extra:
+                # IDEMPOTENT: compose(crop=m_extra) already returns the display width for the smooth-camera
+                # (present_cam) subframes -> no-op; only the present_cam=None subframes arrive over-extracted.
+                if m_extra and frame.shape[1] > 320 + 2 * _margin_for(state):
                     return np.ascontiguousarray(frame[:, m_extra:frame.shape[1] - m_extra])
                 return frame
             try:
                 # (true widescreen's world-edge margin SLIDE is incompatible with the symmetric smooth-camera
                 # crop, so it's off while the smooth camera drives; margin objects still draw via the margin.)
+                _room = _room_for(state)                        # room level: black margins, no margin content
+                _wc = settings["true_widescreen"] and not _room
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
-                                             tex_cache=enh["tex"], effects=fx, margin=_margin_for(state) + m_extra,
-                                             wide_cull=settings["true_widescreen"] and not m_extra,
+                                             tex_cache=enh["tex"], bg_cache=enh["bg"], effects=fx,
+                                             margin=_margin_for(state) + m_extra,
+                                             wide_cull=_wc, slide_margins=_wc and m_extra == 0,
                                              hud_align=settings["hud_align"],
-                                             bg_mode=settings["widescreen_bg"], bd_pad=m_extra)
+                                             bg_mode=settings["widescreen_bg"], bd_pad=m_extra, room_mode=_room)
             finally:
                 if saved is not None:
                     for off, v in saved:
@@ -1107,7 +1285,7 @@ def main(argv=None) -> int:
             enh["last_cur"] = cur                                # smooth-tx fade base = the last wide gameplay frame
             if not settings["interpolation"] and not settings["smooth_camera"]:
                 n += 1                                          # WIDESCREEN (no interp / smooth cam): one composed
-                present(compose(cur, None, 1.0), args.fps,      #   (wide) frame per tick, faithful pacing
+                present(_snow_over(compose(cur, None, 1.0)), args.fps,   # (wide) frame per tick, faithful pacing
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 enh["prev"] = cur                               # keep the pair warm for a live interp toggle-on
                 enh["next_tick"] = None
@@ -1119,7 +1297,7 @@ def main(argv=None) -> int:
             if enh["next_tick"] is None or enh["next_tick"] < now - 0.25:   # (re)sync after start/pause/menu
                 enh["next_tick"] = now
             if enh["prev"] is None:                             # no pair yet -> the composed frame, unlerped
-                present(_crop(compose(cur, None, 1.0)), args.fps)
+                present(_snow_over(_crop(compose(cur, None, 1.0))), args.fps)
                 enh["prev"] = cur
                 enh["next_tick"] += tick_dt
                 return
@@ -1129,7 +1307,8 @@ def main(argv=None) -> int:
                 alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
                 pcam = _smooth_cam(cur, alpha)
                 ref["last_pcam"] = pcam                          # so a transition can freeze at the eased camera
-                present(_crop(compose(cur, enh["prev"], alpha, present_cam=pcam)), present_hz(),
+                present(_snow_over(_crop(compose(cur, enh["prev"], alpha, present_cam=pcam, crop=m_extra))),
+                        present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:
                     break
@@ -1195,6 +1374,31 @@ def main(argv=None) -> int:
             if args.debug and settings["god"]:                     # Develop tab: keep the energy topped up
                 state.data[DS + 0x27D6] = 3                        # [asm 52a8] full hearts, refreshed pre-tick
             drive_input(state)
+            # WIDESCREEN ZONES: widen the state-level projection culls so entities go LIVE across the margins (one
+            # system, no frozen re-projection + no active<->inactive gap at the 320 edge) instead of only the 320
+            # view. Enabled only when TRUE widescreen actually draws the margin; _margin_for=0 on excluded levels
+            # (auto-faithful there). ITEMS (8922 float pickups/popups) don't affect gameplay -> on with true
+            # widescreen directly. ENEMIES (8022, shared with the object walker) DO -> gated behind the Active-zone
+            # toggle. Both in tiles, per gameplay frame; 0 = faithful for every test + the plain runtime.
+            # The item zone must cover the true-widescreen VISIBLE window, whose margin SLIDES near a world edge
+            # (one side shrinks to 0, the other grows to 2*margin). Mirror the extract's slide (extract.py
+            # _WORLD_W_PX=0x1000) so the zone is asymmetric = the exact visible window -> every visible item is a
+            # live render-slot item (no frozen re-projection) WITHOUT wasting the 20-slot budget on off-screen
+            # over-projection. +1 tile of slack for the mid-tick camera phase.
+            _wm = (_margin_for(state)
+                   if (settings["true_widescreen"] and settings["widescreen"] and not _room_for(state)) else 0)
+            if _wm:
+                _cpx = (state.data[DS + 0x2DE4] | (state.data[DS + 0x2DE5] << 8)) * 16   # camera X in px
+                _ml = min(_wm, _cpx)
+                _ml = max(_ml, 2 * _wm - max(0, 0x1000 - (_cpx + 320)))
+                _ml = min(max(_ml, 0), 2 * _wm)
+                _mr = 2 * _wm - _ml
+                set_item_zone_margins((_ml + 15) // 16 + 1, (_mr + 15) // 16 + 1)
+                # enemies (opt-in): a symmetric 2*margin zone is fine -- the object pool has 64 slots, not 20.
+                set_active_zone_margin(((2 * _wm + 15) // 16 + 1) if settings.get("widescreen_active_zone") else 0)
+            else:
+                set_item_zone_margins(0, 0)
+                set_active_zone_margin(0)
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
 
             def stream_frame(planes, page):
@@ -1370,7 +1574,7 @@ def main(argv=None) -> int:
             # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
             # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
             fps = args.fps if (state.data[DS + 0x2879] == 1 or scene.game_paced) else _FRONT_END_FPS
-            present(front_end_scene_to_rgb(scene), fps, "PRE2 VM-less — cold boot (front-end)")
+            present_front_scene(scene, fps, "PRE2 VM-less — cold boot (front-end)")
             pump()
             # the OLDIES scene-wait (0bbe) reads fire; the mode-select toggles BEGINNER<->EXPERT on UP/DOWN and
             # the carte pans on the arrows; '1'/'2' start / password. drive_input feeds all of these (demo + live).

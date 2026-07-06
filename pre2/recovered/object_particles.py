@@ -44,6 +44,22 @@ FREEZE_FLAG = 0x6BD5  # bit 0 -> skip the bounce animation
 WIN_X = 0x16
 WIN_Y = 0x2B
 
+# WIDESCREEN ITEM ZONE (opt-in): extra tiles the X window widens by so float items (pickups/popups) PROJECT +
+# BOUNCE across the widescreen margins, not just the 320 view -- one live system for every visible item (no
+# frozen re-projection, no active<->inactive gap at the edge). 0 = the FAITHFUL window (every test + the plain
+# runtime). The native runtime sets it per frame from the widescreen margin; items don't affect gameplay, so
+# unlike the enemy zone this is safe to enable with true widescreen directly. (The 20-slot render budget still
+# caps how many project; the far overflow falls back to the frozen re-projection, unchanged.)
+_ITEM_ZONE_X = [0, 0]     # [left, right] extra tiles -- ASYMMETRIC to match the widescreen margin SLIDE exactly
+
+
+def set_item_zone_margins(left: int, right: int) -> None:
+    """Widen :func:`project_particles`' X window by ``left``/``right`` tiles (0,0 = faithful). Asymmetric so it
+    tracks the true-widescreen margin slide near a world edge -> only the VISIBLE window projects, not a wasteful
+    symmetric 2*margin that would burn the 20-slot budget. Runtime-set per frame."""
+    _ITEM_ZONE_X[0] = max(0, int(left))
+    _ITEM_ZONE_X[1] = max(0, int(right))
+
 
 def _s16(v: int) -> int:
     v &= 0xFFFF
@@ -85,12 +101,11 @@ def project_particles(rb, rw):
         if rw(si + 4) == 0xFFFF:  # [asm 8930] empty source entry
             continue
 
-        # [asm 8936] screen-X cull: ax = (X >> 4) - cam_x ; jb / jg out of window
+        # [asm 8936] screen-X cull: ax = (X >> 4) - cam_x ; jb / jg out of window (widened each side by the
+        # widescreen item zone; m=0 is byte-exact with the ASM: sxt<0 == the jb 'axb<cam_x', sxt>WIN_X == the jg)
         axb = (_s16(rw(si)) >> 4) & 0xFFFF
-        if axb < cam_x:  # jb (unsigned borrow)
-            continue
-        sx = (axb - cam_x) & 0xFFFF
-        if _s16(sx) > WIN_X:  # jg (signed)
+        sxt = _s16((axb - cam_x) & 0xFFFF)
+        if sxt < -_ITEM_ZONE_X[0] or sxt > WIN_X + _ITEM_ZONE_X[1]:
             continue
 
         # [asm 8945] screen-Y cull

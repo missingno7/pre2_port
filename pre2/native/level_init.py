@@ -62,6 +62,18 @@ def native_52d2(state) -> None:
     at tick 788 (the reported "camera inaccuracy")."""
     from pre2.bridge.dgroup_view import ProximityView, SegmentBackend
     v = ProximityView(state)
+    # The 41CA bank lives in VOLATILE [0x2875] scratch (the bump-allocator load top, never bumped past the
+    # bank), so the original relies on nothing overwriting it for the life of the level. Its content is a pure
+    # function of the [0x83F3] trigger table (41CA saves one block per LIVE trigger; an all-dead table yields a
+    # bank of just the 0xFFFF terminator), and native_5237 restores [0x83F3] from the pristine [0x9203] backup
+    # at 5251 BEFORE this 5292 call, so the trigger table here is authoritative. When every trigger is dead
+    # there is nothing to restore -> return without reading the scratch at all: byte-identical to walking a
+    # correct empty bank (immediate 0xFFFF), and robust to the scratch being clobbered on a no-trigger level
+    # (observed once under widescreen play on idx 1 -- native_gap_20260706_121819: the 0x6caf bank read 0x0000
+    # while [0x83F3] was correctly all-0xFFFF). Fail loud below only for an unterminated bank on a level that
+    # DOES have live triggers (a genuine loss of real collapsed-block data).
+    if all(t.dead for t in v.triggers):
+        return
     bank = SegmentBackend(state, v.bank_seg)                         # [asm 52d8] ds = [0x2875]
     game_map = SegmentBackend(state, v.map_seg)                      # [asm 52d4] es = [0x2DDA]
     si = 0                                                           # [asm 52dc]
@@ -76,8 +88,9 @@ def native_52d2(state) -> None:
                 game_map.wb(dest + k, bank.rb(si + k))
             si += width
             dest = (dest + 0x100) & 0xFFFF                           # [asm 52f1] next map row
-    raise Pre2HybridGap("52D2 scenery-restore: no 0xFFFF terminator within 15 entries — "
-                        "the [0x2875] trigger bank was not built (41CA) or is corrupt")
+    raise Pre2HybridGap("52D2 scenery-restore: no 0xFFFF terminator within 15 entries on a level WITH live "
+                        "[0x83F3] triggers -- the [0x2875] trigger bank was built (41CA) but got corrupted, "
+                        "so real collapsed-scenery block data is lost")
 
 
 def native_5237(state) -> None:

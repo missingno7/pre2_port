@@ -91,14 +91,19 @@ def _blit(frame, rgba, x: int, y: int) -> None:
     frame[y0:y1, x0:x1][mask] = sub[..., :3][mask]
 
 
-def compose(cur, prev, alpha: float, present_cam=None):
+def compose(cur, prev, alpha: float, present_cam=None, crop=0):
     """Render one display subframe (RGB) from ``cur`` (and ``prev`` for interpolation) at ``alpha``.
 
     ``present_cam`` (x, y) overrides the camera the frame is shown at (the SMOOTH-CAMERA enhancement: an eased
     pixel-exact camera that tracks the DOS camera without its 2px snap / deadzone jumps). When None the camera
     is the alpha-interpolation of prev<->cur (unchanged interpolation behaviour). The WORLD sprite motion is
     always interpolated at ``alpha`` (so objects keep their own DOS sub-tick motion); only the camera the whole
-    scene is glued to changes."""
+    scene is glued to changes.
+
+    ``crop`` (only with ``present_cam``): the px the SMOOTH CAMERA over-extracted each side. compose builds ONLY
+    the displayed ``w - 2*crop`` window directly (a slice of cur at the shifted position), rather than composing
+    the full over-extracted frame for the caller to crop -- much cheaper per display frame. Output is the cropped
+    width; pixel-identical to the old ``crop(compose(...))``. crop=0 -> the original full-frame path, unchanged."""
     interp = prev is not None and alpha < 1.0
     inv = 1.0 - alpha
     # Camera scroll: show the world at the presentation camera. The PARALLAX BACKDROP (sky/mountains) is
@@ -113,26 +118,55 @@ def compose(cur, prev, alpha: float, present_cam=None):
         bg_dy = round(cur.camera[1] - present_cam[1])
     elif interp and abs(cdx) <= _MAX_CAM_SCROLL and abs(cdy) <= _MAX_CAM_SCROLL:
         bg_dx, bg_dy = round(inv * cdx), round(inv * cdy)
-    frame = cur.background_rgb.copy()
-    if bg_dx or bg_dy:
-        h = VIEWPORT_H
-        if prev is not None and cur.tile_mask is not None and prev.tile_mask is not None and cur.backdrop_rgb is not None:
-            # Layered: hold the fixed backdrop still, scroll only the tile layer over it. The tile coverage is
-            # the TRUE (colour-independent) mask from extraction -- a `bg != backdrop` test would miss tile
-            # pixels that share the backdrop colour and leave them static ("see-through" holes during shake).
-            tile_rgb, tile_mask = _scroll_tile_layer(cur.background_rgb[:h], cur.tile_mask[:h],
-                                                     prev.background_rgb[:h], prev.tile_mask[:h],
-                                                     cdx, cdy, bg_dx, bg_dy)
-            vp = cur.backdrop_rgb[:h].copy()
-            vp[tile_mask] = tile_rgb[tile_mask]
+    h = VIEWPORT_H
+    # CROP-AWARE SMOOTH-CAMERA path: the presenter would over-extract ``crop`` px each side and crop them back
+    # off. Instead compose ONLY the displayed window here -- the smooth shift lands the whole window inside cur
+    # (the CROP margin covers it), so the scrolled tile layer is a pure SLICE of cur (no full-frame roll) over
+    # the sliced backdrop, and the frame is the DISPLAYED width, not the ~2x over-extracted width. ~3-4x faster
+    # per display frame, pixel-identical to the old crop(full-compose). Every screen X below subtracts ``crop``.
+    # crop=0 (interpolation / the parity path / present_cam None) -> the original full-frame behaviour, unchanged.
+    c = int(crop) if present_cam is not None else 0
+    # The fast SLICE path handles the HORIZONTAL smooth shift only (its exposed edge lands in the cropped-off
+    # margin). A VERTICAL shift (bg_dy from the Y interpolation, during shake/climb) needs the two-source
+    # prev-fill for its exposed row edge, so route those (rare) frames to the full-frame path + a crop at the end.
+    use_slice = c > 0 and bg_dy == 0
+    inline = c if use_slice else 0                     # crop applied INLINE by the slice path (else at the end)
+    xshift = bg_dx - inline
+    Hf, w_full = cur.background_rgb.shape[:2]
+    dw = w_full - 2 * c
+    if use_slice:
+        # The BACKDROP (parallax sky) is FIXED-SCREEN -> slice it at the crop offset c (no shift). Only the TILE
+        # layer scrolls -> slice cur.background_rgb / tile_mask at the SHIFTED off = c - bg_dx and composite the
+        # tile pixels over the fixed backdrop. (off clamped in case the eased cam briefly exceeds the crop.)
+        off = max(0, min(w_full - dw, c - bg_dx))
+        frame = np.empty((Hf, dw, 3), np.uint8)
+        if cur.tile_mask is not None and cur.backdrop_rgb is not None:
+            vp = cur.backdrop_rgb[:h, c:c + dw].copy()
+            mw = cur.tile_mask[:h, off:off + dw]
+            vp[mw] = cur.background_rgb[:h, off:off + dw][mw]
             frame[:h] = vp
         else:
-            # Fallback (no backdrop layer captured): uniform whole-viewport shift with edge replication.
-            frame[:h] = _scroll_bg(cur.background_rgb[:h], bg_dx, bg_dy)
+            frame[:h] = cur.background_rgb[:h, off:off + dw]
+    else:
+        frame = cur.background_rgb.copy()
+        if bg_dx or bg_dy:
+            if prev is not None and cur.tile_mask is not None and prev.tile_mask is not None and cur.backdrop_rgb is not None:
+                # Layered: hold the fixed backdrop still, scroll only the tile layer over it. The tile coverage is
+                # the TRUE (colour-independent) mask from extraction -- a `bg != backdrop` test would miss tile
+                # pixels that share the backdrop colour and leave them static ("see-through" holes during shake).
+                tile_rgb, tile_mask = _scroll_tile_layer(cur.background_rgb[:h], cur.tile_mask[:h],
+                                                         prev.background_rgb[:h], prev.tile_mask[:h],
+                                                         cdx, cdy, bg_dx, bg_dy)
+                vp = cur.backdrop_rgb[:h].copy()
+                vp[tile_mask] = tile_rgb[tile_mask]
+                frame[:h] = vp
+            else:
+                # Fallback (no backdrop layer captured): uniform whole-viewport shift with edge replication.
+                frame[:h] = _scroll_bg(cur.background_rgb[:h], bg_dx, bg_dy)
     prev_by_handle = {inst.handle: inst for inst in prev.sprites} if interp else {}
     for inst in cur.sprites:
         if inst.interpolate:                          # world sprite -> glued to the scrolled background
-            sx, sy = inst.screen_x + bg_dx, inst.screen_y + bg_dy
+            sx, sy = inst.screen_x + xshift, inst.screen_y + bg_dy
             p = prev_by_handle.get(inst.handle) if interp else None
             if p is not None:
                 wdx, wdy = inst.world_x - p.world_x, inst.world_y - p.world_y
@@ -143,7 +177,7 @@ def compose(cur, prev, alpha: float, present_cam=None):
                     sx -= round(inv * wdx)
                     sy -= round(inv * wdy)
         else:                                         # fixed-screen HUD / boss meter -> no scroll, no interp
-            sx, sy = inst.screen_x, inst.screen_y
+            sx, sy = inst.screen_x - inline, inst.screen_y
         _blit(frame, inst.rgba, sx + inst.tex_off_x, sy + inst.tex_off_y)
 
     # One-shot point particles (spider threads/sparkles) OVER the sprites, UNDER the foreground/firefly overlay
@@ -155,15 +189,17 @@ def compose(cur, prev, alpha: float, present_cam=None):
         pr = cur.particle_rgb
         fh, fw = frame.shape[:2]
         for (sx, sy, vx, vy) in cur.particles:
-            px, py = sx + bg_dx, sy + bg_dy
+            px, py = sx + xshift, sy + bg_dy
             if 0 <= px < fw and 0 <= py < VIEWPORT_H:
                 frame[py, px] = pr
 
     # Effect overlay (foreground tiles + fireflies) drawn OVER the sprites + particles, scrolled with the
     # camera like the tile layer (the effects are world-space). Foreground tiles must be in FRONT of sprites.
     if cur.overlay_mask is not None:
-        h = VIEWPORT_H
-        if prev is not None and (bg_dx or bg_dy):
+        if use_slice:                                 # crop-aware: slice the world overlay like the background
+            off = max(0, min(w_full - dw, c - bg_dx))
+            ov_rgb, ov_mask = cur.overlay_rgb[:h, off:off + dw], cur.overlay_mask[:h, off:off + dw]
+        elif prev is not None and (bg_dx or bg_dy):
             p_rgb = prev.overlay_rgb[:h] if prev.overlay_mask is not None else cur.overlay_rgb[:h]
             p_mask = prev.overlay_mask[:h] if prev.overlay_mask is not None else cur.overlay_mask[:h]
             ov_rgb, ov_mask = _scroll_tile_layer(cur.overlay_rgb[:h], cur.overlay_mask[:h],
@@ -180,7 +216,7 @@ def compose(cur, prev, alpha: float, present_cam=None):
         fh, fw = frame.shape[:2]
         prev_ff = {f[0]: f for f in prev.fireflies} if interp else {}
         for (idx, wx, wy, sx, sy) in cur.fireflies:
-            px, py = sx + bg_dx, sy + bg_dy
+            px, py = sx + xshift, sy + bg_dy
             p = prev_ff.get(idx) if interp else None
             if p is not None:
                 dwx, dwy = wx - p[1], wy - p[2]
@@ -194,5 +230,7 @@ def compose(cur, prev, alpha: float, present_cam=None):
     # (row 176 = SCREEN_H) and draws the status bar over it; our edge-clipping _blit clips sprites only to the
     # full frame, so a tall sprite at the bottom can spill into the HUD rows. Re-stamp the HUD (already present
     # in background_rgb[VIEWPORT_H:], the faithful status bar) over any spill -> HUD always on top.
-    frame[VIEWPORT_H:] = cur.background_rgb[VIEWPORT_H:]
+    frame[VIEWPORT_H:] = cur.background_rgb[VIEWPORT_H:, inline:inline + dw] if inline else cur.background_rgb[VIEWPORT_H:]
+    if c and not use_slice:                           # full-frame path for a vertical smooth shift -> crop now
+        frame = np.ascontiguousarray(frame[:, c:c + dw])
     return frame

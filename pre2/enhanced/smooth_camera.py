@@ -36,13 +36,23 @@ CATCHUP = 240.0
 
 
 def smooth_cam_x(scam_x: float, player_wx: float, player_vx: float, dt: float,
-                 cur_x: float, world_max: float) -> float:
+                 cur_x: float, world_max: float, m_disp: float = 0.0, crop: float = CROP) -> float:
     """One presentation-camera X update (pure). ``player_vx`` px/s; ``dt`` s since the last update; ``cur_x``
     = the CURRENT tick's DOS camera x (the frame the compositor shifts from — extraction-coverage safety);
-    ``world_max`` = the level's right camera limit in px (the DOS [0x8164] clamp)."""
+    ``world_max`` = the level's right camera limit in px (the DOS [0x8164] clamp); ``m_disp`` = the DISPLAYED
+    widescreen margin px/side (0 = no widescreen); ``crop`` = the extracted over-coverage px/side.
+
+    RESPECT THE LEVEL EDGE (like the regular true-widescreen margin slide): the DISPLAYED window is
+    ``[x - m_disp, x + 320 + m_disp]``, so keeping the WHOLE window inside the world (no beyond-the-world black
+    void at the ends) means clamping x to ``[m_disp, world_max - m_disp]`` — one margin narrower each side than
+    the DOS camera's own ``[0, world_max]``. Pinning there costs up to ``m_disp`` of deviation from ``cur_x``,
+    so the caller sizes ``crop = max(CROP, m_disp)`` to keep that shift covered."""
+    lo, hi = m_disp, world_max - m_disp
+    if lo > hi:                                        # world narrower than the display -> centre it (edges void)
+        lo = hi = 0.5 * world_max
     # rigid band target: unchanged inside [X1..X2], clamped into the band by the exact overshoot outside
     t = min(max(scam_x, player_wx - X2), player_wx - X1)
-    t = max(0.0, min(world_max, t))                    # the DOS camera's own world bounds
+    t = max(lo, min(hi, t))                            # the level's world bounds, inset by the display margin
     # glide cap: 1:1 during band-drag (the cap covers the player's own speed), CATCHUP-limited on seed
     lim = (abs(player_vx) + CATCHUP) * max(0.0, dt)
     d = t - scam_x
@@ -50,8 +60,8 @@ def smooth_cam_x(scam_x: float, player_wx: float, player_vx: float, dt: float,
         d = lim
     elif d < -lim:
         d = -lim
-    x = max(0.0, scam_x + d)
-    return max(cur_x - CROP, min(cur_x + CROP, x))     # extraction-coverage safety (structurally inactive)
+    x = max(lo, min(hi, scam_x + d))
+    return max(cur_x - crop, min(cur_x + crop, x))     # extraction-coverage safety
 
 
 def world_max_px(w8164: int, player_wx: float) -> float:

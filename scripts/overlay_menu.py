@@ -245,7 +245,22 @@ class OverlayMenu:
         win_w, win_h = screen.get_size()
         panel_w = min(max(S(340), win_w - S(80)), S(560))
         row_h = S(26)
-        top, footer = S(76), S(44)                   # rows band top / footer help text height
+        footer = S(44)                               # footer help text height
+        # --- lay the tab chips out with WRAPPING: chips flow left-to-right and drop to a new line when the row
+        #     is full, so any number of tabs fits. Widths are measured with the BOLD font (the active-chip face)
+        #     so the layout never reflows as the selection moves. Positions are panel-relative (x/y added below).
+        tab_left, tab_top = S(14), S(40)
+        tab_area_w = panel_w - 2 * S(14)
+        chip_h = bold.get_height() + S(8)
+        line_gap = S(6)
+        tab_layout, cx, cy = [], tab_left, 0
+        for i, name in enumerate(names):
+            cw = bold.size(name)[0] + S(20)
+            if cx > tab_left and cx + cw > tab_left + tab_area_w:     # doesn't fit -> wrap to the next line
+                cx, cy = tab_left, cy + chip_h + line_gap
+            tab_layout.append((cx, cy, cw, i))
+            cx += cw + S(6)
+        top = tab_top + (cy + chip_h) + S(12)        # rows band starts below the (possibly multi-line) tab block
         n_rows = len(items) if items else 1
         # FIXED panel height across all tabs: the rows band is always ``visible`` rows tall (capped at
         # _MAX_VISIBLE_ROWS, or fewer only if the window is short) — so a short tab (Audio/Experimental) is the
@@ -262,17 +277,15 @@ class OverlayMenu:
         pg.draw.rect(screen, _PANEL_BORDER, (x, y, panel_w, panel_h), width=max(1, S(1)))
         screen.blit(bold.render("Settings", True, _TEXT_SELECTED), (x + S(16), y + S(13)))
 
-        # tabs — text centred (both axes) inside each chip
-        tab_x, tab_y = x + S(14), y + S(40)
-        for i, name in enumerate(names):
+        # tabs — text centred (both axes) inside each chip, at the pre-wrapped positions
+        for cx_rel, cy_rel, cw, i in tab_layout:
             active = i == self.tab
-            surf = (bold if active else font).render(name, True, (20, 20, 20) if active else _TEXT)
-            chip = pg.Rect(tab_x, tab_y, surf.get_width() + S(20), surf.get_height() + S(8))
+            surf = (bold if active else font).render(names[i], True, (20, 20, 20) if active else _TEXT)
+            chip = pg.Rect(x + cx_rel, y + tab_top + cy_rel, cw, chip_h)
             pg.draw.rect(screen, _TAB_ACTIVE_BG if active else _TAB_BG, chip)
             pg.draw.rect(screen, _TAB_BORDER, chip, width=max(1, S(1)))
             screen.blit(surf, surf.get_rect(center=chip.center))
             self._hit["tabs"].append((pg.Rect(chip), i))
-            tab_x += chip.width + S(6)
 
         # scroll so the selected row stays in the visible band
         if items and items[self.item].get("info"):

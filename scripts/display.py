@@ -19,6 +19,8 @@ _TITLE = "PRE2 — VM-less native"
 class Display:
     def __init__(self, size, *, title: str = _TITLE):
         self.integer_scale = False
+        self.par = 1.0                     # displayed pixel aspect (height/width). 1.0 = square pixels;
+        #                                    1.2 = the DOS 4:3 look (320x200 shown at 4:3 -> pixels 1.2x tall).
         self.gpu = False
         self._srcsurf = None
         self._texsize = None
@@ -39,12 +41,15 @@ class Display:
         return tuple(self.window.size) if self.gpu else self.screen.get_size()
 
     def letterbox(self, fw: int, fh: int) -> "pygame.Rect":
-        """Aspect-correct destination rect for an fw×fh frame centred in the window (integer-snapped if set)."""
+        """Aspect-correct destination rect for an fw×fh frame centred in the window (integer-snapped if set).
+        ``par`` (pixel aspect, height/width) stretches the frame vertically so square-buffer content displays
+        at the intended pixel shape: par=1.2 shows 320x200 at 4:3 (the DOS CRT look) instead of 1.6:1."""
         sw, sh = self.get_size()
-        f = min(sw / fw, sh / fh)
+        eh = fh * self.par                                   # effective (displayed) frame height in px units
+        f = min(sw / fw, sh / eh)
         if self.integer_scale and f >= 1.0:
             f = float(int(f))
-        tw, th = max(1, int(fw * f)), max(1, int(fh * f))
+        tw, th = max(1, int(fw * f)), max(1, int(eh * f))
         return pygame.Rect((sw - tw) // 2, (sh - th) // 2, tw, th)
 
     # --- drawing --------------------------------------------------------------------------------------

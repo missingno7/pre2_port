@@ -164,7 +164,17 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
     idx0 = np.empty((200, w), dtype=np.uint8)
     idx0[:VIEWPORT_H] = grid[fine:fine + VIEWPORT_H, x0:x0 + w]
     strip = hud_cache.strip(rs, tile_cache.stats)
-    # HUD strip placed by ``hud_align`` (fixed, NOT camera/margin-dependent -> it never slides with scrolling)
+    # HUD strip placed by ``hud_align`` (fixed, NOT camera/margin-dependent -> it never slides with scrolling).
+    # The widescreen margin edge-REPLICATES the strip's edge column -- but the panel's very first/last column
+    # carries a 1px corner-pixel anomaly (a bottom-left border pixel a shade off the rest of the line), which the
+    # replication would smear across the whole margin. So replicate the NEXT column in (col 1 on the left, col -2
+    # on the right) instead: the margin shows the clean border colour, the 1px oddity stays put at the panel edge.
+    # margin 0 (pl=pr=0, the parity path) -> the strip unchanged.
     pl, pr = hud_pad(w, hud_align, hud_inset)
-    idx0[VIEWPORT_H:] = np.pad(strip, ((0, 0), (pl, pr)), mode="edge") if (pl or pr) else strip
+    if pl or pr:
+        left = np.repeat(strip[:, 1:2], pl, axis=1) if pl else strip[:, :0]
+        right = np.repeat(strip[:, -2:-1], pr, axis=1) if pr else strip[:, :0]
+        idx0[VIEWPORT_H:] = np.concatenate([left, strip, right], axis=1)
+    else:
+        idx0[VIEWPORT_H:] = strip
     return idx0

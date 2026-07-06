@@ -70,6 +70,12 @@ class FrontEndScene:
     #                                      44FB -> the 3-retrace 1C6F wait, ~23.33Hz), NOT the 70Hz retrace of
     #                                      the static front-end screens. The attract title animation is such a
     #                                      scene; the runner must pace it at the game rate or it plays 3x fast.
+    enh: tuple | None = None             # ENHANCED-presentation payload for the scrolling map screens (the
+    #                                      faithful raster above stays authoritative; a runner MAY instead render
+    #                                      this wide + display-rate-smooth): ("carte", master_bytes, scroll_x) —
+    #                                      the 640px stamped map master + the reveal position; ("menu",
+    #                                      motif_bytes, cam_x, cam_row) — the 320x200 bg pattern (planes 0,1
+    #                                      source) + the scroll phase (text stays in planes 2|3 of ``planes``).
 
 
 def _expand_palette6(pal6: bytes) -> tuple:
@@ -89,19 +95,20 @@ def _dac_fade_palettes(target_dac, *, into: bool, steps: int = 0x10):
         yield tuple((int(r * f), int(g * f), int(b * f)) for (r, g, b) in tgt) if n else tgt
 
 
-def _planar_fade_out(state, pal6_off: int, planes, page: int, pel: int, wrap: int = 0x1FFF):
+def _planar_fade_out(state, pal6_off: int, planes, page: int, pel: int, wrap: int = 0x1FFF, enh=None):
     """[asm 9286] Fade a 0Dh PLANAR screen (menu-map / carte) OUT to black before the next screen — yields
     :class:`FrontEndScene` frames holding the current planes while the 16-colour DAC dims to black.
 
     The VM runs this DAC fade-out (the byte-exact 9286 ramp, reused from the title screens) between the
     mode-select and the carte, and between the carte and the level load; native snapped instantly. ``pal6_off``
     is the DGROUP offset of the screen's 16-entry 6-bit palette (menu-map 0xB118 / carte 0xB0E8). The planes are
-    frozen (a DAC fade changes only the palette), so we re-yield them with each fading DAC snapshot."""
+    frozen (a DAC fade changes only the palette), so we re-yield them with each fading DAC snapshot. ``enh``
+    carries the caller's frozen enhanced payload so a wide presentation fades wide (not snapping to 320)."""
     pal6 = bytes(state.data[_DS + pal6_off:_DS + pal6_off + 0x10 * 3])   # the screen's 16-colour 6-bit palette
     frozen = tuple(bytes(p) for p in planes)
     for snap in fade_out_frames(pal6, 0x10):                             # [asm 9286] 16-entry DAC ramp to black
         yield FrontEndScene(MODE_PLANAR, palette=_expand_palette6(snap), planes=frozen, page=page, pel=pel,
-                            wrap=wrap)
+                            wrap=wrap, enh=enh)
 
 # scene-wait phases (the ASM's two busy-wait loops at 0bbe)
 WAIT_PRESS = "press"
@@ -452,7 +459,8 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     rb, rw = readers(state)
     native_load_dac_palette(state, dos, 0xB118, 0x10)             # [asm 97A5] the map's 16-colour palette
     page = MenuScenePage()
-    page.seed(unpack_sqz(resolve_game_path(game_root, "MOTIF.SQZ").read_bytes())[:0x3E80])  # [asm 96EC/9718] planes 0,1
+    motif = unpack_sqz(resolve_game_path(game_root, "MOTIF.SQZ").read_bytes())[:0x3E80]
+    page.seed(motif)                                              # [asm 96EC/9718] planes 0,1
     fseg = rw(0x3D)                                               # the font segment ([0x3d])
     font = build_shifted_font(bytes(state.data[(fseg << 4):(fseg << 4) + 0x3000]))          # [asm 972E] shift copies
 
@@ -472,7 +480,8 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
 
     def scene(planes, page_off, pel):
         return FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
-                             page=page_off, pel=pel, wrap=0x1FFF)
+                             page=page_off, pel=pel, wrap=0x1FFF,
+                             enh=("menu", motif, cam.x, cam.row))   # bg pattern + scroll phase (see FrontEndScene)
 
     matched = None                                              # (password) a valid ENTER-CODE accepted -> its level
     if kind == "password":
@@ -508,19 +517,19 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
                 matched = m                                    # confirm) — [0x2D8A]/[0xB197] hold the matched level.
                 state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
-                yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)   # [asm 9286] fade to black
+                yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte + loader for the chosen level
         if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm / leave
             if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
                 state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
                 state.data[_DS + 0x2D8A] = 0                    # BEGINNER/EXPERT both begin at level 1
-                yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)   # [asm 9286] fade to black
+                yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte (its own palette) scrolls in
             # password: FIRE with no valid code EXITS the screen too — [0x2D8A] stays 0xFF (set at entry, 8EE9)
             # and the 8E45 dispatch loops back to the press-1/2 menu ([asm 8EF1-8EF8] jge/jmp — the original
             # "give up on the code" escape; a valid 4-char code instead auto-advanced above with its level).
-            yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel)       # [asm 9286] fade to black
+            yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))       # [asm 9286] fade to black
             return
 
 
@@ -562,13 +571,14 @@ def _native_carte(state, dos, game_root: str):
         # [asm CRTC r01 -> 312px] the carte narrows the H-display to 312 (39 chars) while it pel-pans, hiding the
         # right 8 columns where the not-yet-revealed / wrap seam would otherwise show. Match it so no artifact leaks.
         yield FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
-                            page=ds, pel=pel, wrap=0x1FFF, active_width=312)
+                            page=ds, pel=pel, wrap=0x1FFF, active_width=312,
+                            enh=("carte", master, scroll_x))   # 640px stamped master + reveal (see FrontEndScene)
         apply_ds(state, decode_input(rb, rw))
         fire = (rb(0x27E8) | rb(0x2832)) != 0
         # confirm on a fresh fire press OR when the scroll-in reaches the end (auto-advance) — either way the
         # carte fades to black before the level loads (the VM does not snap from the map straight into gameplay).
         if (fire and not prev_fire) or scroll_x >= 639:
-            yield from _planar_fade_out(state, 0xB0E8, planes, ds, pel)   # [asm 9286] fade to black -> the loader
+            yield from _planar_fade_out(state, 0xB0E8, planes, ds, pel, enh=("carte", master, scroll_x))   # [asm 9286] fade to black -> the loader
             return
         prev_fire = fire
         if scroll_x < 639:                                     # scroll the map in +1/frame (the VM's [0xb19d] rate)
