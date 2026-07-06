@@ -969,13 +969,13 @@ def main(argv=None) -> int:
         FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
         The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
-        import math
         from time import perf_counter
         from pre2.bridge.foreground_tiles import read_foreground_state
         from pre2.bridge.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.sprite_cache import SpriteTextureCache
+        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP, smooth_cam_x
         from pre2.native.render import native_render                # for the enhanced-path faithful fallback
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
@@ -983,27 +983,33 @@ def main(argv=None) -> int:
         enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None,   # the prev+cur snapshot pair
                "last_cur": None, "scam": None, "scam_t": 0.0}   # smooth-tx fade base + smooth-camera state
 
-        def _smooth_cam(cur):
-            """The SMOOTH-CAMERA presentation position, or None when off. Eases (exponential, frame-rate-
-            independent) toward cur's byte-exact DOS camera — which already carries all the per-level centering
-            — so the display follows the player smoothly instead of the DOS 2px snap / deadzone jumps. Clamped
-            to the prev<->cur range so the compositor's two-source tile fill always covers the exposed trailing
-            edge (no extra tile margin needed); a teleport / level load snaps."""
+        def _smooth_cam(cur, alpha):
+            """The SMOOTH-CAMERA presentation position, or None when off. X = pre2_editor-vanilla BAND-DRAG:
+            the camera is dragged by exactly the player's overshoot past the [X1..X2] screen band (continuous,
+            pixel-exact — not the DOS parked-then-pan trigger), clamped to the DOS camera's neighbourhood so
+            scripted modes / recentering still carry the view. Y = the DOS camera exactly (its per-level
+            centering preserved), sub-tick interpolated. Presentation only; a teleport / level load snaps."""
             if not settings["smooth_camera"] or enh["prev"] is None:
                 enh["scam"] = None
                 return None
-            tgt, prevc, now = cur.camera, enh["prev"].camera, perf_counter()
+            prev = enh["prev"]
+            inv = 1.0 - alpha
+            dosx = cur.camera[0] - inv * (cur.camera[0] - prev.camera[0])   # the interpolated DOS camera
+            dosy = cur.camera[1] - inv * (cur.camera[1] - prev.camera[1])
+            pc = next((i for i in cur.sprites if i.handle == ("player",)), None)
             s = enh["scam"]
-            if s is None or abs(tgt[0] - s[0]) > 240 or abs(tgt[1] - s[1]) > 240:   # (re)seed / teleport -> snap
-                enh["scam"], enh["scam_t"] = [float(tgt[0]), float(tgt[1])], now
-                return tuple(tgt)
-            k = 1.0 - math.exp(-min(0.1, max(0.0, now - enh["scam_t"])) / _CAM_TAU)
-            enh["scam_t"] = now
-            for i in (0, 1):
-                s[i] += (tgt[i] - s[i]) * k
-                lo, hi = sorted((prevc[i], tgt[i]))
-                s[i] = max(lo, min(hi, s[i]))
-            return (s[0], s[1])
+            if s is not None and abs(cur.camera[0] - s[0]) > 240:           # teleport / level load -> snap
+                s = enh["scam"] = None
+            if pc is None:                                                  # no player this frame (blink-off is
+                return (s[0], dosy) if s is not None else None              # still drawn; this is rare) -> hold X
+            pp = next((i for i in prev.sprites if i.handle == ("player",)), None)
+            pwx = float(pc.world_x)
+            if pp is not None and abs(pc.world_x - pp.world_x) <= 32:      # the player's sub-tick position
+                pwx -= inv * (pc.world_x - pp.world_x)
+            if s is None:
+                s = enh["scam"] = [float(dosx)]
+            s[0] = smooth_cam_x(s[0], pwx, dosx, float(cur.camera[0]))
+            return (s[0], dosy)
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
@@ -1040,11 +1046,23 @@ def main(argv=None) -> int:
                 saved = [(off, state.data[DS + off + 5]) for off in flash]
                 for off in flash:
                     state.data[DS + off + 5] |= 0x40
+            # SMOOTH CAMERA extracts CROP px of extra tile margin each side (the deviation the presentation
+            # camera may shift the view by); _crop() cuts it back off after compose, so the DISPLAYED width
+            # stays the widescreen width and the shifted-in edges always show real extracted content.
+            m_extra = _CAM_CROP if settings["smooth_camera"] else 0
+
+            def _crop(frame):
+                if m_extra:
+                    return np.ascontiguousarray(frame[:, m_extra:frame.shape[1] - m_extra])
+                return frame
             try:
+                # (true widescreen's world-edge margin SLIDE is incompatible with the symmetric smooth-camera
+                # crop, so it's off while the smooth camera drives; margin objects still draw via the margin.)
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
-                                             tex_cache=enh["tex"], effects=fx, margin=_margin_for(state),
-                                             wide_cull=settings["true_widescreen"], hud_align=settings["hud_align"],
-                                             bg_mode=settings["widescreen_bg"])
+                                             tex_cache=enh["tex"], effects=fx, margin=_margin_for(state) + m_extra,
+                                             wide_cull=settings["true_widescreen"] and not m_extra,
+                                             hud_align=settings["hud_align"],
+                                             bg_mode=settings["widescreen_bg"], bd_pad=m_extra)
             finally:
                 if saved is not None:
                     for off, v in saved:
@@ -1071,7 +1089,7 @@ def main(argv=None) -> int:
             if enh["next_tick"] is None or enh["next_tick"] < now - 0.25:   # (re)sync after start/pause/menu
                 enh["next_tick"] = now
             if enh["prev"] is None:                             # no pair yet -> the composed frame, unlerped
-                present(compose(cur, None, 1.0), args.fps)
+                present(_crop(compose(cur, None, 1.0)), args.fps)
                 enh["prev"] = cur
                 enh["next_tick"] += tick_dt
                 return
@@ -1079,7 +1097,7 @@ def main(argv=None) -> int:
             while True:                                         # >=1 frame per tick, then up to the due time
                 now = perf_counter()
                 alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
-                present(compose(cur, enh["prev"], alpha, present_cam=_smooth_cam(cur)), present_hz(),
+                present(_crop(compose(cur, enh["prev"], alpha, present_cam=_smooth_cam(cur, alpha))), present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:
                     break
@@ -1102,6 +1120,9 @@ def main(argv=None) -> int:
             old = compose(enh["last_cur"], None, 1.0) if enh["last_cur"] is not None else None
             neww = compose_wide_now(state, dos)                 # state is at the arrival/checkpoint now
             new = neww[0] if neww is not None else None
+            if old is not None and new is not None and old.shape[1] > new.shape[1]:
+                d = (old.shape[1] - new.shape[1]) // 2          # smooth-camera stash carries the CROP margin ->
+                old = np.ascontiguousarray(old[:, d:d + new.shape[1]])   # crop the fade base to the display width
             if "fade" in kinds and old is not None:
                 _animate(state, _FADE_S, lambda p: apply_vfade(
                     old.copy(), int(_VFADE_MID * p), int(2 * _VFADE_MID - _VFADE_MID * p)))

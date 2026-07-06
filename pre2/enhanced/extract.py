@@ -200,7 +200,8 @@ def _make_sprite_texture(draw, attr, src_bank):
 
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
                            tex_cache=None, bg_cache=None, margin=0,
-                           wide_cull=False, hud_align="center", bg_mode="stretch") -> EnhancedFrameState | None:
+                           wide_cull=False, hud_align="center", bg_mode="stretch",
+                           bd_pad=0) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -256,7 +257,13 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     backdrop_rgb = _render_backdrop(rs, page, palette)
     wide_w = 320 + m_left + m_right                       # constant across the level (m_left+m_right == 2*margin)
     if margin:
-        backdrop_rgb = _widescreen_backdrop(backdrop_rgb, wide_w, bg_mode)
+        # ``bd_pad`` (the smooth-camera CROP margin): the backdrop is SCREEN-FIXED, and the presenter's crop
+        # always removes exactly bd_pad from each side — so fit the backdrop to the DISPLAY width (keeping the
+        # central image pixel-native for mirror/black and correctly proportioned for stretch) and edge-pad the
+        # never-displayed crop margins.
+        backdrop_rgb = _widescreen_backdrop(backdrop_rgb, wide_w - 2 * bd_pad, bg_mode)
+        if bd_pad:
+            backdrop_rgb = np.pad(backdrop_rgb, ((0, 0), (bd_pad, bd_pad), (0, 0)), mode="edge")
 
     # Background colour INDICES over a zeroed base: every base-showing pixel is index 0, opaque tile/effect
     # pixels keep their (base-independent) colour. So tile_mask = index!=0 is the TRUE tile coverage
@@ -273,7 +280,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     tile_cache, hud_cache = bg_cache
     _t0 = _perf()
     try:
-        idx0 = native_background_indices(rs, tile_cache, hud_cache, m_left, m_right, hud_align)
+        idx0 = native_background_indices(rs, tile_cache, hud_cache, m_left, m_right, hud_align, bd_pad)
     except NativeBackgroundUnsupported:
         tile_cache.stats["fallbacks"] += 1
         bg0_planes = [bytearray(0x10000) for _ in range(4)]
@@ -282,7 +289,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         idx0 = render_planar_rgb_from_planes(bg0_planes, page, _ID_PAL)[:, :, 0]
         if margin:                                       # faithful fallback is 320-wide -> edge-extend the
             vp = np.pad(idx0[:VIEWPORT_H], ((0, 0), (m_left, m_right)), mode="edge")   # viewport by margins,
-            pl, pr = _hud_pad(320 + m_left + m_right, hud_align)                        # the HUD by its own align
+            pl, pr = _hud_pad(320 + m_left + m_right, hud_align, bd_pad)                # the HUD by its own align
             idx0 = np.concatenate([vp, np.pad(idx0[VIEWPORT_H:], ((0, 0), (pl, pr)), mode="edge")], axis=0)
     tile_cache.stats["native_s"] += _perf() - _t0
     tile_mask = idx0 != 0
@@ -476,6 +483,8 @@ def _widescreen_backdrop(backdrop, wide_w: int, mode: str):
       * ``mirror``  — native centred, each margin a MIRROR reflection of the adjacent edge (seamless).
       * ``black``   — native centred, black margins (cinematic).
     ``mirror`` / ``black`` keep the central 320 pixel-native."""
+    if wide_w <= 320:                                         # no margins (smooth-camera bd_pad only) -> native
+        return backdrop
     if mode == "stretch":
         return _fit_backdrop_width(backdrop, wide_w)
     in_h = backdrop.shape[0]
