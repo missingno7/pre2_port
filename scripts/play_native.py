@@ -162,6 +162,59 @@ def main(argv=None) -> int:
     view = {"win_size": (320 * args.scale, 200 * args.scale)}     # remembered windowed size (for exit-fullscreen)
     clock = pygame.time.Clock()
 
+    # ---- GAMEPAD (auto-detected) --------------------------------------------------------------------------
+    # PRE2's own joystick was analog-READ (RC-timed game port 0x201) but immediately DIGITIZED to the same six
+    # on/off flags as the keyboard — up/down/left/right + fire — and OR'd into one shared flag set; the engine
+    # has a single fixed walk speed, so analog magnitude is discarded downstream. So there's nothing to gain from
+    # the (unwired, gated-absent) emulated game port: we feed a host controller straight into the key table just
+    # like the keyboard. Left stick (dead-zoned) + D-pad -> directions; bottom face button (or stick/D-pad up) ->
+    # JUMP (the UP flag [0x27EA]); other face buttons -> ATTACK (fire); Start -> begin the game (the '1' key).
+    pygame.joystick.init()
+    pads = {}                                    # instance_id -> Joystick (supports hot-plug)
+    _PAD_DEADZONE = 0.5                           # analog stick -> 8-way threshold (firm; the game is 8-way anyway)
+    _PAD_JUMP_BTNS = (0,)                         # A / Cross            -> jump (UP)
+    _PAD_FIRE_BTNS = (1, 2, 3)                    # B/X/Y / Circle/Sq/Tri -> attack (fire); also advances scenes
+    _PAD_START_BTNS = (6, 7, 9)                   # Back/Start/Menu (index varies by SDL) -> '1' = start the game
+
+    def _open_pad(index):
+        try:
+            js = pygame.joystick.Joystick(index); js.init()
+            pads[js.get_instance_id()] = js
+            print(f"gamepad connected: {js.get_name()} "
+                  f"({js.get_numaxes()} axes, {js.get_numhats()} hats, {js.get_numbuttons()} buttons)")
+        except Exception as e:                    # noqa: BLE001 — a flaky pad must never stop the game
+            print(f"(gamepad init failed: {type(e).__name__}: {e})")
+
+    for _i in range(pygame.joystick.get_count()):
+        _open_pad(_i)
+
+    def pad_scancodes():
+        """The connected controller(s) as DOS scancodes — the SAME flags the keyboard writes, so the game can't
+        tell them apart. Left stick (dead-zoned) + D-pad -> directions; face buttons -> jump/attack; Start -> '1'."""
+        out = set()
+        for js in list(pads.values()):
+            try:
+                nax = js.get_numaxes()
+                x = js.get_axis(0) if nax > 0 else 0.0
+                y = js.get_axis(1) if nax > 1 else 0.0
+                if x <= -_PAD_DEADZONE: out.add(0x4B)          # left
+                elif x >= _PAD_DEADZONE: out.add(0x4D)         # right
+                if y <= -_PAD_DEADZONE: out.add(0x48)          # up (SDL -Y) = jump
+                elif y >= _PAD_DEADZONE: out.add(0x50)         # down
+                if js.get_numhats() > 0:
+                    hx, hy = js.get_hat(0)
+                    if hx < 0: out.add(0x4B)
+                    elif hx > 0: out.add(0x4D)
+                    if hy > 0: out.add(0x48)                   # SDL hat +Y is up
+                    elif hy < 0: out.add(0x50)
+                nb = js.get_numbuttons()
+                if any(b < nb and js.get_button(b) for b in _PAD_JUMP_BTNS): out.add(0x48)   # jump = UP
+                if any(b < nb and js.get_button(b) for b in _PAD_FIRE_BTNS): out.add(0x39)   # attack = fire
+                if any(b < nb and js.get_button(b) for b in _PAD_START_BTNS): out.add(0x02)  # '1' = start / advance menu
+            except Exception:                     # noqa: BLE001 — pad unplugged mid-poll -> skip it this frame
+                continue
+        return out
+
     def detect_display_hz() -> float:
         """The monitor's REAL current refresh rate. pygame's get_current_refresh_rate is unreliable (often
         reports 60 regardless), so on Windows read the actual mode via GDI VREFRESH first."""
@@ -187,7 +240,14 @@ def main(argv=None) -> int:
     display_hz = detect_display_hz()
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
-           "menu_request": False, "switch_level": None, "tick_count": 0}
+           "menu_request": False, "switch_level": None, "tick_count": 0,
+           "jump_edge": False, "jump_buf": 0}   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
+
+    # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
+    # the keyboard once per ~23 Hz tick, so a tap shorter than a tick (or landed a frame early) can be missed;
+    # holding it a few ticks makes every tap register + gives a small "jump buffer" (a press just before landing
+    # still fires). 4 ticks (~170 ms) is well under a full jump arc, so it can't cause an unintended second jump.
+    _JUMP_BUFFER_TICKS = 4
 
     # --- the end-user settings (the F10 menu edits these; the CLI shrinks to dev flags) -----------------
     import json
@@ -205,7 +265,8 @@ def main(argv=None) -> int:
                 #                                16:9 / 16:10 / 4:3 / 21:9 / 32:9 (letterboxed if the window differs)
                 "widescreen_active_zone": False,   # EXPERIMENTAL: activate enemies/objects across the widescreen
                 #                                    margins (state-mutating, gameplay-affecting) instead of frozen
-                "smooth_camera": False}   # ease the camera toward the DOS target (experimental)
+                "smooth_camera": False,   # ease the camera toward the DOS target (experimental)
+                "responsive_controls": False}   # EXPERIMENTAL: buffer the jump key so fast taps are never dropped
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -355,6 +416,20 @@ def main(argv=None) -> int:
                 ref["menu_request"] = True
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12:
                 save_screenshot()
+            elif (ev.type == pygame.KEYDOWN and ev.key in (pygame.K_UP, pygame.K_KP8)
+                  and settings["responsive_controls"]):
+                ref["jump_edge"] = True                            # RESPONSIVE CONTROLS: catch every jump tap edge,
+                #   even one that goes down+up between two ~23 Hz ticks (invisible to the once-per-tick poll below)
+            elif ev.type == pygame.JOYDEVICEADDED:                 # GAMEPAD hot-plug
+                _open_pad(ev.device_index)
+            elif ev.type == pygame.JOYDEVICEREMOVED:
+                pads.pop(ev.instance_id, None)
+            elif (ev.type == pygame.JOYBUTTONDOWN and ev.button in _PAD_JUMP_BTNS
+                  and settings["responsive_controls"]):
+                ref["jump_edge"] = True                            # buffer a controller jump tap the same way
+            elif (ev.type == pygame.JOYHATMOTION and ev.value[1] > 0
+                  and settings["responsive_controls"]):
+                ref["jump_edge"] = True                            # D-pad up (SDL +Y) = jump -> buffer its edge too
             elif ev.type == pygame.KEYDOWN:                        # latch the hex make code typed THIS frame
                 sc = _SDL_HEX.get(getattr(ev, "scancode", -1)) or _KEYSYM_HEX.get(ev.key)   # physical, keysym fallback
                 if sc:
@@ -488,7 +563,23 @@ def main(argv=None) -> int:
         held = set(demo.held) if demo is not None else set()
         if k[pygame.K_SPACE]:
             held.add(0x39)
-        if k[pygame.K_UP] or k[pygame.K_KP8]:
+        pad = pad_scancodes() if pads else set()                   # GAMEPAD: same scancodes the keyboard writes
+        held |= (pad - {0x48})                                     # dirs / attack / start straight in; jump via buffer
+        jump = bool(k[pygame.K_UP] or k[pygame.K_KP8] or (0x48 in pad))
+        if settings["responsive_controls"]:
+            # Jump = the UP key (scancode 0x48 -> flag [0x27EA] -> FSM anim 2). The FSM reads the *held* state
+            # once per tick, so a fast tap or a slightly-early press falls through the cracks. Re-arm the buffer on
+            # each fresh key-down edge (captured in pump()) and keep UP virtually held for a few ticks. Pure
+            # input-layer: writes only the same key-table flag a real keyboard would, so gameplay stays untouched
+            # when this toggle is off. (Buffering only UP, not fire/direction, keeps movement 1:1.)
+            if ref["jump_edge"]:
+                ref["jump_buf"] = _JUMP_BUFFER_TICKS
+                ref["jump_edge"] = False
+            if jump or ref["jump_buf"] > 0:
+                held.add(0x48)
+            if ref["jump_buf"] > 0:
+                ref["jump_buf"] -= 1
+        elif jump:
             held.add(0x48)
         if k[pygame.K_DOWN] or k[pygame.K_KP2]:
             held.add(0x50)
@@ -929,10 +1020,21 @@ def main(argv=None) -> int:
         native_load_level_palette(state, dos)                      # [asm 0ba0] restore the level palette; resume
 
     def _p_edge():
-        """A rising edge on the P key (scancode 0x19). pump() must have run this frame first."""
-        p = pygame.key.get_pressed()[pygame.K_p]
-        edge = p and not ref["p_prev"]
-        ref["p_prev"] = p
+        """A rising edge on the PAUSE control — the P key (scancode 0x19) OR the gamepad Start button. Only called
+        from pause_check (mid-gameplay), so Start pauses here while still meaning '1'/begin in the front-end menu.
+        pump() must have run this frame first."""
+        held = bool(pygame.key.get_pressed()[pygame.K_p])
+        if not held and pads:                                      # gamepad Start also toggles pause
+            for js in list(pads.values()):
+                try:
+                    nb = js.get_numbuttons()
+                    if any(b < nb and js.get_button(b) for b in _PAD_START_BTNS):
+                        held = True
+                        break
+                except Exception:                                  # noqa: BLE001 — pad unplugged mid-poll
+                    continue
+        edge = held and not ref["p_prev"]
+        ref["p_prev"] = held
         return edge
 
     def pause_check(state):
@@ -942,7 +1044,7 @@ def main(argv=None) -> int:
         original's spin, so music kept playing) until the next P edge."""
         if not _p_edge():
             return
-        pygame.display.set_caption("PRE2 VM-less gameplay — PAUSED (P resumes)")
+        pygame.display.set_caption("PRE2 VM-less gameplay — PAUSED (P or Start resumes)")
         while ref["running"]:
             pump()
             if ref["last"] is not None:
@@ -1058,9 +1160,11 @@ def main(argv=None) -> int:
             {"label": "Active zone", "value": onoff("widescreen_active_zone"),
              "activate": toggle("widescreen_active_zone")},
             {"label": "Smooth camera", "value": onoff("smooth_camera"), "activate": toggle("smooth_camera")},
+            {"label": "Responsive controls", "value": onoff("responsive_controls"),
+             "activate": toggle("responsive_controls")},
             {"label": "", "info": True},
             {"label": "Experimental enhancements aren't faithful to the original —", "info": True},
-            {"label": "Active zone even changes gameplay.", "info": True},
+            {"label": "Active zone changes gameplay; Responsive controls buffer the jump key.", "info": True},
         ]
         tabs = [("View", view_tab), ("Widescreen", widescreen_tab), ("Overlay", overlay_tab),
                 ("Audio", audio_tab), ("Experimental", experimental_tab)]
@@ -1357,6 +1461,7 @@ def main(argv=None) -> int:
                 if base is not None:
                     _animate(state, _REVEAL_S, lambda p: _curtain_frame(base, p))
 
+        ref["p_prev"] = True    # a Start/P still held from the menu-in must not read as an instant pause edge
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
