@@ -55,15 +55,15 @@ def _scroll_bg(bg, dx: int, dy: int):
     return out
 
 
-def _scroll_tile_layer(cur_bg, cur_mask, prev_bg, prev_mask, cdx, cdy, alpha):
-    """Scroll ONLY the foreground tile layer to the interpolated camera, two-source: the bulk comes from the
-    current frame shifted back toward prev by (1-alpha)*delta; pixels exposed at the trailing edge are filled
-    from the PREVIOUS frame (real content, not an edge-replicated smear). Returns (rgb, mask) of the tile
-    layer at the interp camera; the caller composites it over the FIXED backdrop. Inputs are viewport-height
-    slices; ``*_mask`` marks tile (non-backdrop) pixels."""
+def _scroll_tile_layer(cur_bg, cur_mask, prev_bg, prev_mask, cdx, cdy, cx, cy):
+    """Scroll ONLY the foreground tile layer to the presentation camera, two-source: the bulk comes from the
+    current frame shifted by (cx, cy) (cur's DOS camera -> the presentation camera); pixels exposed at the
+    trailing edge are filled from the PREVIOUS frame (real content, not an edge-replicated smear). ``cdx/cdy``
+    is the cur<-prev camera delta, so prev is sampled at the exact complement (cdx-cx, cdy-cy) and the two
+    layers meet seamlessly. Returns (rgb, mask) of the tile layer; the caller composites it over the FIXED
+    backdrop. Inputs are viewport-height slices; ``*_mask`` marks tile (non-backdrop) pixels."""
     h, w = cur_bg.shape[:2]
-    inv = 1.0 - alpha
-    cy, cx = int(round(inv * cdy)), int(round(inv * cdx))     # cur sampled at index - (cy,cx)
+    cx, cy = int(cx), int(cy)                                 # cur sampled at index - (cy,cx)
     # prev's offset is the EXACT integer complement (ay = cdy - cy), so a world point maps to the same
     # output pixel from cur and prev -> the two layers meet seamlessly (no 1px gap showing the backdrop).
     ay, ax = cdy - cy, cdx - cx                                # prev sampled at index + (ay,ax)
@@ -91,28 +91,38 @@ def _blit(frame, rgba, x: int, y: int) -> None:
     frame[y0:y1, x0:x1][mask] = sub[..., :3][mask]
 
 
-def compose(cur, prev, alpha: float):
-    """Render one display subframe (RGB) from ``cur`` (and ``prev`` for interpolation) at ``alpha``."""
+def compose(cur, prev, alpha: float, present_cam=None):
+    """Render one display subframe (RGB) from ``cur`` (and ``prev`` for interpolation) at ``alpha``.
+
+    ``present_cam`` (x, y) overrides the camera the frame is shown at (the SMOOTH-CAMERA enhancement: an eased
+    pixel-exact camera that tracks the DOS camera without its 2px snap / deadzone jumps). When None the camera
+    is the alpha-interpolation of prev<->cur (unchanged interpolation behaviour). The WORLD sprite motion is
+    always interpolated at ``alpha`` (so objects keep their own DOS sub-tick motion); only the camera the whole
+    scene is glued to changes."""
     interp = prev is not None and alpha < 1.0
     inv = 1.0 - alpha
-    # Camera scroll: show the world at the interpolated camera. The PARALLAX BACKDROP (sky/mountains) is
+    # Camera scroll: show the world at the presentation camera. The PARALLAX BACKDROP (sky/mountains) is
     # fixed-screen, so only the scrolling TILE layer is moved; objects are then glued to it by the same
     # camera shift; their own world motion is interpolated on top. (bg_dx/bg_dy glue the world sprites.)
     bg_dx = bg_dy = 0
     cdx = cdy = 0
-    if interp:
+    if prev is not None:
         cdx, cdy = cur.camera[0] - prev.camera[0], cur.camera[1] - prev.camera[1]
-        if abs(cdx) <= _MAX_CAM_SCROLL and abs(cdy) <= _MAX_CAM_SCROLL:
-            bg_dx, bg_dy = round(inv * cdx), round(inv * cdy)
+    if present_cam is not None:                       # SMOOTH camera: shift cur's world from its DOS camera to
+        bg_dx = round(cur.camera[0] - present_cam[0])  # the eased presentation camera
+        bg_dy = round(cur.camera[1] - present_cam[1])
+    elif interp and abs(cdx) <= _MAX_CAM_SCROLL and abs(cdy) <= _MAX_CAM_SCROLL:
+        bg_dx, bg_dy = round(inv * cdx), round(inv * cdy)
     frame = cur.background_rgb.copy()
     if bg_dx or bg_dy:
         h = VIEWPORT_H
-        if cur.tile_mask is not None and prev.tile_mask is not None and cur.backdrop_rgb is not None:
+        if prev is not None and cur.tile_mask is not None and prev.tile_mask is not None and cur.backdrop_rgb is not None:
             # Layered: hold the fixed backdrop still, scroll only the tile layer over it. The tile coverage is
             # the TRUE (colour-independent) mask from extraction -- a `bg != backdrop` test would miss tile
             # pixels that share the backdrop colour and leave them static ("see-through" holes during shake).
             tile_rgb, tile_mask = _scroll_tile_layer(cur.background_rgb[:h], cur.tile_mask[:h],
-                                                     prev.background_rgb[:h], prev.tile_mask[:h], cdx, cdy, alpha)
+                                                     prev.background_rgb[:h], prev.tile_mask[:h],
+                                                     cdx, cdy, bg_dx, bg_dy)
             vp = cur.backdrop_rgb[:h].copy()
             vp[tile_mask] = tile_rgb[tile_mask]
             frame[:h] = vp
@@ -153,11 +163,11 @@ def compose(cur, prev, alpha: float):
     # camera like the tile layer (the effects are world-space). Foreground tiles must be in FRONT of sprites.
     if cur.overlay_mask is not None:
         h = VIEWPORT_H
-        if interp and (bg_dx or bg_dy):
+        if prev is not None and (bg_dx or bg_dy):
             p_rgb = prev.overlay_rgb[:h] if prev.overlay_mask is not None else cur.overlay_rgb[:h]
             p_mask = prev.overlay_mask[:h] if prev.overlay_mask is not None else cur.overlay_mask[:h]
             ov_rgb, ov_mask = _scroll_tile_layer(cur.overlay_rgb[:h], cur.overlay_mask[:h],
-                                                 p_rgb, p_mask, cdx, cdy, alpha)
+                                                 p_rgb, p_mask, cdx, cdy, bg_dx, bg_dy)
         else:
             ov_rgb, ov_mask = cur.overlay_rgb[:h], cur.overlay_mask[:h]
         frame[:h][ov_mask] = ov_rgb[ov_mask]

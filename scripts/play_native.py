@@ -40,6 +40,7 @@ _FRONT_END_FPS = 70           # the front-end runs at the VGA retrace rate (its 
 VIEWPORT_H = 176              # gameplay viewport rows (the HUD strip below never scrolls / fades)
 _VFADE_MID = 88               # the 30C6 vertical fade's two bands meet here (fully closed)
 # Smooth-transition durations in wall-clock SECONDS (present-time driven -> frame-rate-independent).
+_CAM_TAU = 0.07              # smooth-camera easing time constant (s): larger = softer / laggier follow
 _REVEAL_S = 0.45             # level-start / checkpoint / cave center-out curtain reveal
 _IRIS_S = 1.0                # level-end circular iris close
 _FADE_S = 0.35               # cave / death vertical fade-to-black
@@ -197,7 +198,8 @@ def main(argv=None) -> int:
                 "widescreen": False, "fullscreen": False, "true_widescreen": False,
                 "smooth_transitions": False, "hud_align": "center",   # widescreen HUD: left / center / right
                 "overlay_scale": "auto",   # F10 menu size: "auto" (by window) or 100/150/200/300 (%)
-                "widescreen_bg": "stretch"}   # widescreen backdrop margins: stretch / mirror / black
+                "widescreen_bg": "stretch",   # widescreen backdrop margins: stretch / mirror / black
+                "smooth_camera": False}   # ease the camera toward the DOS target (experimental)
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -895,9 +897,11 @@ def main(argv=None) -> int:
         ]
         experimental_tab = [
             {"label": "True widescreen", "value": onoff("true_widescreen"), "activate": toggle("true_widescreen")},
+            {"label": "Smooth camera", "value": onoff("smooth_camera"), "activate": toggle("smooth_camera")},
             {"label": "", "info": True},
-            {"label": "Draws objects in the widescreen margins — not accurate", "info": True},
-            {"label": "to the original. Game logic is unaffected.", "info": True},
+            {"label": "True widescreen draws objects in the margins; Smooth camera", "info": True},
+            {"label": "eases the view toward the DOS target. Not accurate to the", "info": True},
+            {"label": "original — but game logic is unaffected.", "info": True},
         ]
         tabs = [("View", view_tab), ("Audio", audio_tab), ("Experimental", experimental_tab)]
         if args.debug:
@@ -965,6 +969,7 @@ def main(argv=None) -> int:
         FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
         The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
+        import math
         from time import perf_counter
         from pre2.bridge.foreground_tiles import read_foreground_state
         from pre2.bridge.gameplay_effects import capture_gameplay_effects
@@ -976,7 +981,29 @@ def main(argv=None) -> int:
         n = 0
         tick_dt = 1.0 / TICK_HZ
         enh = {"tex": SpriteTextureCache(), "prev": None, "next_tick": None,   # the prev+cur snapshot pair
-               "last_cur": None}   # smooth-tx: the last wide gameplay/bounce frame = the fade base
+               "last_cur": None, "scam": None, "scam_t": 0.0}   # smooth-tx fade base + smooth-camera state
+
+        def _smooth_cam(cur):
+            """The SMOOTH-CAMERA presentation position, or None when off. Eases (exponential, frame-rate-
+            independent) toward cur's byte-exact DOS camera — which already carries all the per-level centering
+            — so the display follows the player smoothly instead of the DOS 2px snap / deadzone jumps. Clamped
+            to the prev<->cur range so the compositor's two-source tile fill always covers the exposed trailing
+            edge (no extra tile margin needed); a teleport / level load snaps."""
+            if not settings["smooth_camera"] or enh["prev"] is None:
+                enh["scam"] = None
+                return None
+            tgt, prevc, now = cur.camera, enh["prev"].camera, perf_counter()
+            s = enh["scam"]
+            if s is None or abs(tgt[0] - s[0]) > 240 or abs(tgt[1] - s[1]) > 240:   # (re)seed / teleport -> snap
+                enh["scam"], enh["scam_t"] = [float(tgt[0]), float(tgt[1])], now
+                return tuple(tgt)
+            k = 1.0 - math.exp(-min(0.1, max(0.0, now - enh["scam_t"])) / _CAM_TAU)
+            enh["scam_t"] = now
+            for i in (0, 1):
+                s[i] += (tgt[i] - s[i]) * k
+                lo, hi = sorted((prevc[i], tgt[i]))
+                s[i] = max(lo, min(hi, s[i]))
+            return (s[0], s[1])
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
@@ -1030,9 +1057,9 @@ def main(argv=None) -> int:
                 enh["next_tick"] = None
                 return
             enh["last_cur"] = cur                                # smooth-tx fade base = the last wide gameplay frame
-            if not settings["interpolation"]:                   # WIDESCREEN without interpolation: one composed
-                n += 1                                          #   (wide) frame per tick, faithful pacing
-                present(compose(cur, None, 1.0), args.fps,
+            if not settings["interpolation"] and not settings["smooth_camera"]:
+                n += 1                                          # WIDESCREEN (no interp / smooth cam): one composed
+                present(compose(cur, None, 1.0), args.fps,      #   (wide) frame per tick, faithful pacing
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 enh["prev"] = cur                               # keep the pair warm for a live interp toggle-on
                 enh["next_tick"] = None
@@ -1052,7 +1079,7 @@ def main(argv=None) -> int:
             while True:                                         # >=1 frame per tick, then up to the due time
                 now = perf_counter()
                 alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
-                present(compose(cur, enh["prev"], alpha), present_hz(),
+                present(compose(cur, enh["prev"], alpha, present_cam=_smooth_cam(cur)), present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:
                     break
@@ -1131,7 +1158,8 @@ def main(argv=None) -> int:
                 # When the enhanced compositor will present the normal tick, its own compose rebuilds the frame,
                 # so native_frame_step_tagged can SKIP the ~7ms faithful raster for that tick (the biggest per-tick
                 # cost). Transitions + the faithful fallback still raster.
-                want_enhanced = enhance_ok and (settings["interpolation"] or settings["widescreen"])
+                want_enhanced = enhance_ok and (settings["interpolation"] or settings["widescreen"]
+                                                or settings["smooth_camera"])
                 _it = iter(native_frame_step_tagged(state, dos, disp, game_root=gr, raster_normal=not want_enhanced))
                 for planes, page, interp_ok, tx in _it:
                     # A SMOOTH transition run: drain the whole transition (state advances to the destination),
@@ -1145,7 +1173,8 @@ def main(argv=None) -> int:
                     # Enhanced present path when interpolation OR widescreen is on (widescreen needs the composed
                     # wide frame even unlerped); a transition frame streams faithful 1:1 (smooth off) and breaks
                     # the lerp pair.
-                    if enhance_ok and (settings["interpolation"] or settings["widescreen"]) and interp_ok:
+                    if enhance_ok and (settings["interpolation"] or settings["widescreen"]
+                                       or settings["smooth_camera"]) and interp_ok:
                         present_interpolated(planes, page)
                         pump()
                         if native_audio is not None:
