@@ -711,6 +711,43 @@ def main(argv=None) -> int:
             return rgb, m, efs, bg_dx - pad, bg_dx
         return compose(efs, None, 1.0), m, efs, 0, 0
 
+    def _cam_bottom_px(state):
+        """The smooth camera's bottom (max cam_y) limit: the DOS [0x2CF5] bottom, tightened by any level-specific
+        virtual edge (level 13's staged under-floor earthquake pillars)."""
+        b = max(0, state.data[DS + 0x2CF5] - 0xB) * 16.0
+        if state.data[DS + 0x2D8A] == 13:
+            b = min(b, 149.0)
+        return b
+
+    def _settled_scam(state, dos):
+        """The smooth camera's band-SETTLED position for a freshly loaded / teleported ``state`` (where it would
+        glide to rest with the player static). Returns ``((present_cam_x_window, present_cam_y), [sx, sy])`` so
+        the level-start / cave curtain composes at the SAME framing gameplay resumes at — no jump when the
+        curtain ends, and the margin/vertical objects are re-admitted — or ``(None, None)`` (smooth off /
+        room-locked / not a gameplay frame). ``[sx, sy]`` (true camera space) seeds ``enh["scam"]``."""
+        if not settings["smooth_camera"] or _room_locked(state):
+            return None, None
+        probe = compose_wide_now(state, dos, present_cam=(0.0, 0.0))   # extract WITH the smooth pad -> efs + m_left
+        if probe is None:
+            return None, None
+        efs = probe[2]
+        from pre2.enhanced.smooth_camera import smooth_cam_x, smooth_cam_y, world_max_px
+        ml = efs.cam_margin_left
+        cam0 = float(efs.camera[0] + ml)                          # true DOS camera x
+        cury = float(efs.camera[1] + efs.row_factor)              # shake-free DOS camera y
+        d = state.data
+        pwx = float(d[DS + 0x4F1C] | (d[DS + 0x4F1D] << 8))
+        pwy = float(d[DS + 0x4F1E] | (d[DS + 0x4F1F] << 8))
+        w8164 = d[DS + 0x8164] | (d[DS + 0x8165] << 8)
+        sx = cam0
+        for _ in range(2):                                        # settle (v=0, big dt -> glides fully to the band)
+            sx = smooth_cam_x(sx, pwx, 0.0, 1.0, cam0, world_max_px(w8164, pwx),
+                              m_disp=float(_margin_for(state)), crop=float(_smooth_extra(state)))
+        sy, look = cury, 0.0
+        for _ in range(2):
+            sy, look = smooth_cam_y(sy, look, pwy, 0.0, 1.0, cury, _cam_bottom_px(state))
+        return (sx - ml, sy), [sx, sy, look]                      # [x, y, look] — matches enh["scam"]'s shape
+
     def _animate(state, duration, render, caption="PRE2 VM-less — transition"):
         """Present ``render(progress 0..1)`` at the DISPLAY rate for ``duration`` wall-clock seconds, so the
         effect is smooth AND frame-rate-INDEPENDENT (progress comes from the clock, not a fixed source step
@@ -740,11 +777,16 @@ def main(argv=None) -> int:
 
     def _present_smooth_reveal(state, dos):
         """The level-start CURTAIN reveal, smooth + full-width + FRAME-RATE-INDEPENDENT: compose the loaded
-        level once, then wipe it in center-out over ``_REVEAL_S`` wall-clock seconds at the display rate.
-        Returns True if it ran (smooth mode + a gameplay frame)."""
-        wide = compose_wide_now(state, dos)
+        level once AT THE SMOOTH CAMERA's settled position (so the curtain shows the exact framing gameplay
+        resumes at — no jump when it ends — and re-admits the margin/vertical objects the DOS-window cull drops),
+        then wipe it in center-out over ``_REVEAL_S`` wall-clock seconds at the display rate. Seeds the gameplay
+        smooth-cam via ref["scam_reseed"] (consumed in _smooth_cam). Returns True if it ran."""
+        pcam, seed = _settled_scam(state, dos)
+        wide = compose_wide_now(state, dos, present_cam=pcam)
         if wide is None:
             return False
+        if seed is not None:
+            ref["scam_reseed"] = seed                            # gameplay resumes from the SAME settled position
         rgb = wide[0]
         _animate(state, _REVEAL_S, lambda p: _curtain_frame(rgb, p), "PRE2 VM-less — level start")
         return True
@@ -1388,6 +1430,8 @@ def main(argv=None) -> int:
             dt = min(0.05, max(0.0, now - enh["scam_t"]))
             enh["scam_t"] = now
             pc = next((i for i in cur.sprites if i.handle == ("player",)), None)
+            if ref.get("scam_reseed") is not None:              # a level-start / cave reveal pre-settled the cam
+                enh["scam"] = ref.pop("scam_reseed")            # -> resume from the SAME framing (no jump)
             s = enh["scam"]                                     # [x, y] presentation-cam state
             if s is not None and (abs(cam0 - s[0]) > 240 or abs(dosy - s[1]) > 240):   # teleport/load -> reseed
                 s = enh["scam"] = None
@@ -1420,13 +1464,11 @@ def main(argv=None) -> int:
             # clamp is vs the CURRENT tick's shake-free cam (cury_free) because the compositor slices the tile
             # layer at cury_free - present_cam_y. A forced-auto-scroll level ([0x8166]&4: the camera moves on
             # its own) follows the interpolated DOS cam instead — a band would fight the auto-scroll.
-            bottom_px = max(0, state.data[DS + 0x2CF5] - 0xB) * 16.0
-            if state.data[DS + 0x2D8A] == 13:              # LEVEL 13 (flat; the earthquake pillars are STAGED
-                # underground, under the floor tiles): a level-specific VIRTUAL bottom edge so the camera never
-                # scrolls down into that black under-level area. The DOS [0x2CF5] limit (432px) is far below the
-                # floor here; the edge is the level's resting DOS cam_y (160) minus 11px = 149 (measured on
-                # native_snap_20260707_220659). Clamps the camera's lowest position, hiding the staged pillars.
-                bottom_px = min(bottom_px, 149.0)
+            # bottom (max cam_y): the DOS [0x2CF5] limit, tightened by any level-specific virtual edge — LEVEL 13
+            # is flat with earthquake pillars STAGED under the floor and a [0x2CF5] limit (432px) far below it, so
+            # _cam_bottom_px caps the camera at 149 (the resting DOS cam_y 160 - 11px, native_snap 220659) to hide
+            # the under-level area. (Shared with the reveal's _settled_scam so both frame the level identically.)
+            bottom_px = _cam_bottom_px(state)
             forced = float(dosy) if (state.data[DS + 0x8166] & 4) else None
             s[1], s[2] = smooth_cam_y(s[1], s[2], pwy, pvy, dt, cury_free, bottom_px, dos_follow=forced,
                                       tau=y_smooth_tau(settings["camera_smoothing"]))
@@ -1569,8 +1611,15 @@ def main(argv=None) -> int:
             # (scam) position, not the DOS camera, so re-composing enh.last_cur (DOS-centred) would JUMP the
             # view as the fade starts. ref["last"] IS the last displayed frame (cropped, at scam, right width)
             # — use it directly. (Non-smooth: keep the recompose; ref["last"] would be an interp subframe.)
-            neww = compose_wide_now(state, dos)                 # state is at the arrival/checkpoint now
+            # Compose the destination room at the smooth camera's SETTLED position (the same framing gameplay
+            # resumes at -> no jump when the reveal curtain ends, + re-admitted objects) and seed the gameplay
+            # smooth-cam (ref["scam_reseed"], consumed in _smooth_cam). Cave/checkpoint arrival relocates the
+            # player, so the eased scam from the OLD area is stale -> a fresh settle is the fix.
+            _pcam, _seed = _settled_scam(state, dos)
+            neww = compose_wide_now(state, dos, present_cam=_pcam)   # state is at the arrival/checkpoint now
             new = neww[0] if neww is not None else None
+            if _seed is not None:
+                ref["scam_reseed"] = _seed
             if settings["smooth_camera"] and ref.get("last") is not None \
                     and new is not None and np.asarray(ref["last"]).shape == new.shape:
                 old = np.asarray(ref["last"], np.uint8)
