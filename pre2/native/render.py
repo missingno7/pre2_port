@@ -108,8 +108,6 @@ def native_apply_palette_fade(state, dos) -> None:
     found by the safe-hooks demo 230900 at tick 382). No-op in the common case (no fade, lights on)."""
     from pre2.bridge.dgroup_view import LightFadeView
     fade = LightFadeView(state)
-    if not fade.active and fade.lights_off == 0:                     # [asm 6779] no fade + lights on -> level pal
-        return
     if fade.active:
         step = fade.step                                             # [asm 677B]'s inc already ran in the tick
         #                                                              (native_light_fade_step — the state half)
@@ -125,8 +123,16 @@ def native_apply_palette_fade(state, dos) -> None:
                 dac.append((s - step) if diff >= 0 else (s + step))
             else:                                                   # [asm 67B7] within a step -> snap to b
                 dac.append(b)
-    else:                                                            # at rest with the lights off -> the dark pal
+    elif fade.lights_off:                                            # at rest with the lights off -> the dark pal
         dac = [fade.palette_byte(_LIGHT_DARK_PAL, k) for k in range(0x30)]
+    else:                                                            # at rest with the lights ON -> the level pal.
+        # NOT an early return: the DAC colours 0..15 must be RESTORED to the level palette here. If a lights-off
+        # period ends WITHOUT a fade-back — a death/respawn resets [0x6C04]=0 with no [0x6C02] fade ([asm 5237]
+        # re-init) — the DAC was last left on the dark palette and nothing else rewrites it, so the screen stays
+        # dark after respawn (user: "die with the lights off and it doesn't undo the light-off"). The VM's respawn
+        # reloads the level DAC; mirror it every at-rest frame — idempotent with native_load_level_palette (same
+        # [0x2D00+level] source), so lights-never-used levels are unchanged.
+        dac = [fade.palette_byte(fade.level_palette, k) for k in range(0x30)]
     for c in range(0x10):
         dos.vga_palette[c] = (_dac8(dac[c * 3]), _dac8(dac[c * 3 + 1]), _dac8(dac[c * 3 + 2]))
 

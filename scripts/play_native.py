@@ -132,7 +132,8 @@ def main(argv=None) -> int:
         raise SystemExit(f"--game-root {gr}: no SPRITES.SQZ here — point it at the Prehistorik 2 data folder")
     demo = None
     if args.play_demo and not (Path(args.play_demo) / "game_tick_demo.bin").exists():
-        # APPROXIMATE scancode fallback only — the deterministic tick replay below doesn't need the input demo.
+        # APPROXIMATE scancode fallback only — the deterministic tick replay below doesn't need the input demo
+        # (it has its own exact per-tick keys, gtd.keys, covering the WHOLE recording — see the loop below).
         # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud here).
         from dos_re.input_demo import InputDemoPlayback
         demo = DemoInput(InputDemoPlayback.load(args.play_demo))
@@ -1584,13 +1585,16 @@ def main(argv=None) -> int:
             dos = NativeVGA()
             native_load_level_palette(state, dos)
             div = None
+            transitions = 0
             i = 0
             while ref["running"] and i < gtd.n_ticks:
                 pump()
                 _inject(state, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
-                disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+                dpage = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)   # display PAGE (int) — NOT the
+                #   `disp` Display object: this block runs in main()'s body, so binding `disp` here would shadow
+                #   the Display and break blit_frame (disp.integer_scale) for the replay AND the live hand-over.
                 try:
-                    for planes, page in native_frame_step(state, dos, disp, game_root=gr):
+                    for planes, page in native_frame_step(state, dos, dpage, game_root=gr):
                         present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), args.fps,
                                 f"PRE2 VM-less — tick replay {i}/{gtd.n_ticks}" if i % 20 == 0 else None)
                         pump()
@@ -1599,19 +1603,38 @@ def main(argv=None) -> int:
                         if not ref["running"]:
                             break
                 except Pre2LevelEndTransition:
-                    print(f"  tick replay: LEVEL END at tick {i} — the compare ends here; continuing live")
+                    # The recording is CONTINUOUS across the transition — record_from_vm captures every gameplay
+                    # tick of the whole session, so gtd.keys[i:] (from THIS SAME index on) are the VM's recorded
+                    # actions for the level it just warped/advanced INTO (e.g. a bonus-level warp), not a
+                    # separate recording. Abandoning them here and handing off to blank live input was the
+                    # actual bug (user: "it just ends in that bonus level") — keep injecting the remaining ticks
+                    # instead.
+                    #
+                    # CRITICAL: the recorder's GAP_SITE hook only appends a (keys, digest) entry once DC1 has
+                    # sampled keys THIS tick (rec["keys"] is not None) — so gtd.keys[i]/gtd.digests[i] are NOT
+                    # "the last tick of the OLD level"; they are the FIRST tick recorded AFTER the load (the
+                    # transition — tally/curtain/carte — runs with no gameplay ticks in between and produces NO
+                    # entry of its own). So index i must be REPLAYED against the new, post-transition state, not
+                    # skipped: do NOT advance i here — the next loop iteration re-injects gtd.keys[i] (unchanged)
+                    # against the level the transition just loaded, which is exactly what produced gtd.digests[i]
+                    # when this was recorded. (Verified: without this, EVERY demo that crosses a transition
+                    # reports a spurious divergence at the very first post-transition tick.)
+                    print(f"  tick replay: LEVEL END at tick {i} — continuing the recording into the next level")
                     between_levels(state, dos)
-                    break
+                    transitions += 1
+                    continue
                 except Pre2GameOverTransition:
-                    print(f"  tick replay: GAME OVER at tick {i} — the compare ends here; restarting live")
+                    print(f"  tick replay: GAME OVER at tick {i} — continuing the recording into the restart")
                     game_over_restart(state, dos)
-                    break
+                    transitions += 1
+                    continue
                 except Pre2GameComplete:
                     print(f"  tick replay: THE END at tick {i} — the game is finished")
                     the_end_restart(state, dos)
                     break
                 except Exception as e:                             # noqa: BLE001
-                    hold_last(f"tick replay gap at tick {i}: {type(e).__name__}: {str(e)[:70]}", state)
+                    hold_last(f"tick replay gap at tick {i}/{gtd.n_ticks}: {type(e).__name__}: {str(e)[:70]}",
+                              state)
                     pygame.quit()
                     return 0
                 if div is None and gameplay_digest(state.data[DS:DS + 0x10000]) != gtd.digests[i]:
@@ -1621,9 +1644,13 @@ def main(argv=None) -> int:
                     native_audio.poll(state)
                 i += 1
             if div is None and i:
-                print(f"  tick replay: {i} ticks reproduced byte-identically (digest matched every tick)")
+                print(f"  tick replay: {i}/{gtd.n_ticks} ticks reproduced byte-identically"
+                      f"{f' across {transitions} level transition(s)' if transitions else ''} "
+                      f"(digest matched every tick)")
+            elif i:
+                print(f"  tick replay: reached tick {i}/{gtd.n_ticks} ({transitions} level transition(s))")
             if ref["running"]:
-                gameplay_loop(state, dos)                          # hand over to live play
+                gameplay_loop(state, dos)                          # hand over to live play once the recording ends
             pygame.quit()
             return 0
         print(f"(no {tick_path.name} in the demo — approximate input replay; run "
