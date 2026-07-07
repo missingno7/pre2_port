@@ -741,16 +741,75 @@ def main(argv=None) -> int:
     # ---- ENHANCED front-end map screens: the CARTE scroll-in + the MODE-SELECT/PASSWORD map render widescreen
     #      and display-rate SMOOTH from the recovered ingredients the scenes carry (FrontEndScene.enh); verified
     #      pixel-exact vs the faithful raster at W=320 (menu 0-diff; carte <=0.03% = the mid-blit frontier col).
-    fe = {"carte": None, "menu": None, "prev": None, "due": None}
+    fe = {"carte": None, "menu": None, "prev": None, "due": None,
+          "fade_shape": None, "fade_disp": None, "fade_due": None, "fade_last": None}
+    _FADE_TAU = 0.07   # seconds — see present_front_scene's DAC-fade branch
+
+    def _fade_shape(scene):
+        """An identity key for a scene's IMAGE content (ignoring its palette) — planes/linear are reused
+        verbatim (same object) across every step of a front-end DAC fade (front_end.py's fade generators
+        decode/freeze the picture ONCE, then only swap `palette` per yield), so `id()` is a cheap, reliable
+        same-picture test."""
+        return (scene.mode, id(scene.planes), id(scene.linear), scene.page, scene.pel, scene.wrap,
+                scene.active_width)
 
     def present_front_scene(scene, fps, caption=None):
         """Present one front-end scene: the scrolling map screens (scene.enh) render ENHANCED — widescreen
         (real 640px map content on the carte; the seamlessly-wrapping bg ring on the menu) + sub-frame smooth
-        pan when Interpolation is on. Everything else presents the faithful raster unchanged."""
+        pan when Interpolation is on. Everything else presents the faithful raster, EXCEPT a Smooth
+        transitions DAC fade (OLDIES/title/menu-entry/game-over/THE END).
+
+        The recovered DAC fade (front_end_fade.py) doesn't move every retrace: a component only advances on
+        the ~1-in-8 retrace where its turn comes up in the pass (256-entry fades retrace every 32 entries, 8
+        of them per pass), so the RAW keyframe sequence is a staircase — ~7 held frames then an 8-9-unit (of
+        255) jump, repeating. Linearly interpolating each keyframe into the NEXT one (an earlier attempt)
+        just spreads that same jump over 14ms and then holds again for ~100ms — a hold that long still reads
+        as a visible step no matter how smoothly the jump itself is drawn. Fix: don't interpolate keyframe to
+        keyframe at all — keep a PERSISTENT displayed palette that continuously chases the latest keyframe
+        (an exponential filter, time-constant `_FADE_TAU`), sampled every presented sub-frame. That low-pass
+        filters the staircase into a genuinely continuous ramp — no dependence on how the discrete algorithm
+        happens to be paced — and it still converges to the exact final colour once the target stops moving
+        (a hold/steady phase yields the SAME palette repeatedly, so the filter fully catches up long before
+        the scene changes; snapped exactly once within half a unit to avoid a perpetual asymptotic tail).
+        Smooth transitions off (or a real picture change — e.g. the title's logo appearing) presents the
+        exact original discrete sequence, byte-for-byte."""
         enh_on = scene.enh is not None and (settings["widescreen"] or settings["interpolation"])
         if not enh_on:
             fe["prev"] = fe["due"] = None
-            present(front_end_scene_to_rgb(scene), fps, caption)
+            shape = _fade_shape(scene)
+            if not settings["smooth_transitions"] or fe["fade_shape"] != shape:
+                fe["fade_shape"] = shape
+                fe["fade_disp"] = None
+                fe["fade_due"] = None
+                present(front_end_scene_to_rgb(scene), fps, caption)
+                return
+            from dataclasses import replace
+            from time import perf_counter
+            target = np.asarray(scene.palette, dtype=np.float32)
+            disp = fe["fade_disp"] if fe["fade_disp"] is not None else target.copy()
+            now = perf_counter()
+            if fe["fade_due"] is None or fe["fade_due"] < now - 0.25:
+                fe["fade_due"] = now
+                fe["fade_last"] = now
+            step = 1.0 / fps
+            while True:
+                now = perf_counter()
+                dt = max(0.0, now - fe["fade_last"])
+                fe["fade_last"] = now
+                k = 1.0 - np.exp(-dt / _FADE_TAU)
+                disp = disp + (target - disp) * k
+                if np.abs(disp - target).max() < 0.5:               # fully caught up -> snap exact (no
+                    disp = target.copy()                             # perpetual asymptotic tail)
+                pal = [tuple(row) for row in np.round(disp).astype(np.uint8).tolist()]
+                mid = replace(scene, palette=pal)
+                present(front_end_scene_to_rgb(mid), present_hz(), caption if now >= fe["fade_due"] else None)
+                if now >= fe["fade_due"]:
+                    break
+                pump()
+                if not ref["running"]:
+                    break
+            fe["fade_disp"] = disp
+            fe["fade_due"] += step
             return
         from pre2.enhanced.front_scenes import CarteEnh, MenuEnh
         from time import perf_counter
