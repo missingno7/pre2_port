@@ -705,7 +705,7 @@ def main(argv=None) -> int:
         if pad:                                                  # freeze at the eased camera; compose crops the pad
             bg_dx = round(efs.camera[0] - present_cam[0])        # world shift compose applied (= DOS - scam)
             rgb = compose(efs, efs, 1.0, present_cam=present_cam, crop=pad,   # crop-aware -> already display width
-                          shake=state.data[DS + 0x6BF8])         # shake-free tile slice (see compose docstring)
+                          shake=efs.row_factor)                  # camera-shake jolt ([0x6BF8]; see compose)
             # sprite_dx: efs sprite screen_x (in the m+pad margin) -> the cropped frame; center_dx: a DOS-screen
             # point (0..320) -> the cropped frame. They differ by the cropped-away pad.
             return rgb, m, efs, bg_dx - pad, bg_dx
@@ -1544,7 +1544,7 @@ def main(argv=None) -> int:
                 pcam = _smooth_cam(cur, alpha)
                 ref["last_pcam"] = pcam                          # so a transition can freeze at the eased camera
                 present(_snow_over(_crop(compose(cur, enh["prev"], alpha, present_cam=pcam, crop=m_extra,
-                                                 shake=state.data[DS + 0x6BF8]))),   # shake-free tile slice
+                                                 shake=cur.row_factor))),   # camera-shake jolt ([0x6BF8])
                         present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:

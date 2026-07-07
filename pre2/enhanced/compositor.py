@@ -260,6 +260,18 @@ def compose(cur, prev, alpha: float, present_cam=None, crop=0, shake=0):
             if 0 <= px < fw and 0 <= py < VIEWPORT_H:
                 frame[py, px] = fr
 
+    # CAMERA SHAKE (row_factor [0x6BF8]): the smooth-camera pipeline is built SHAKE-FREE (tiles + sprites are
+    # both anchored to the shake-free camera so they never jitter against each other — a per-LAYER shake was the
+    # original landing flicker). Re-apply the effect here as ONE uniform vertical jolt of the WHOLE viewport
+    # (tiles + sprites + overlay together = the DOS whole-screen shake). row_factor is small (<=~8px) and >=0
+    # (the {0, magnitude+1} parity jolt; the faithful placement adds it to screen_y -> content moves DOWN), so
+    # shift the viewport down by it and replicate the exposed top edge. HUD excluded. Only on the smooth path.
+    if present_cam is not None and shake:
+        sh = min(int(shake), VIEWPORT_H - 1)
+        if sh > 0:
+            v = frame[:VIEWPORT_H]
+            v[sh:] = v[:VIEWPORT_H - sh].copy()       # shift the whole viewport DOWN by the jolt
+            v[:sh] = v[sh]                             # replicate the top row into the exposed band
     # The HUD strip is ON TOP of everything. The faithful renderer bottom-clips world sprites at the viewport
     # (row 176 = SCREEN_H) and draws the status bar over it; our edge-clipping _blit clips sprites only to the
     # full frame, so a tall sprite at the bottom can spill into the HUD rows. Re-stamp the HUD (already present
