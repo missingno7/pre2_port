@@ -37,6 +37,8 @@ Design (v4, from playtesting + measuring the recovered DOS camera):
 """
 from __future__ import annotations
 
+from math import exp as _exp
+
 # The band in player-record units (player_world_x - camera_x). The record x is ~14px left of the drawn
 # sprite and the sprite is ~24px wide, so the SPRITE CENTRE sits at screen ~(rel - 2): [140..188] rides the
 # player around display centre (160) with 48px of drag slack.
@@ -103,16 +105,22 @@ def world_max_px(w8164: int, player_wx: float) -> float:
 # drag grows the deviation bound (the v_pad/object-re-admission budget) for no felt benefit.
 #
 # The deviation from the DOS camera is STRUCTURALLY bounded: both cameras frame the same player, DOS keeps its
-# baseline on ITS screen in (0..176+sprite] (hard: the planner culls outside), the band keeps it in
-# [Y1..Y2] = [72..104] — so |dev| <= max(176-Y1, Y2-0) ~ 104 < Y_V_PAD-1. Coverage: TILES come from the
-# extract's vertical over-extraction (tile_ext); OBJECTS from the vertical re-admission (extract's
-# _replan_wide v_pad window — the game itself computes objects only for ITS viewport).
-Y_V_PAD = 160            # vertical over-extraction + re-admission px/side; >= the structural bound: player
-#                          presented screen-y in [_Y1-LOOK_DOWN, _Y2+LOOK_UP]=[24,128], DOS baseline in (0,176]
-#                          -> |dev| <= 152 < 159.
-_Y1 = 72.0               # the band in player-BASELINE units (record [0x4F1E] == sprite world_y == cmd.world_y):
-_Y2 = 104.0              # baseline screen-y rides [72..104], straddling the 176-row viewport centre (88) with
-#                          32px of drag slack — the player sits near mid-screen, like X's [140..188] around 160.
+# baseline on ITS screen in (0..176+sprite] (hard: the planner culls outside), the band keeps it near centre —
+# so |dev| stays well under Y_V_PAD-1. Coverage: TILES come from the extract's vertical over-extraction
+# (tile_ext); OBJECTS from the vertical re-admission (extract's _replan_wide v_pad window — the game itself
+# computes objects only for ITS viewport).
+Y_V_PAD = 176            # vertical over-extraction + re-admission px/side; covers the structural band bound +
+#                          the look-ahead bias + the strongest SMOOTHING lag (measured maxDev ~150 at HIGH).
+# The dead-zone band is defined on the player's BODY CENTRE, not the feet BASELINE the record ([0x4F1E]) gives:
+# the sprite is ~36px tall drawn UP from the baseline, so body-centre == baseline - _FEET_OFFSET. Framing the
+# baseline at the viewport centre (the old [72..104]) put the visible BODY ~18px high -> the player rode the top
+# half. Centre the BODY at the viewport middle (88) instead, and widen the zone to a real dead-zone.
+_FEET_OFFSET = 18.0      # feet baseline -> body centre (~half the 36px standing sprite; fixed, so the camera
+#                          does not bob as the sprite's height animates — the feet are the stable anchor)
+_BODY_CENTRE = 88.0      # target body screen-y == the 176-row viewport middle (symmetric framing)
+_BAND_HW = 30.0          # dead-zone half-height (60px zone, was a slim 32) — the player drifts freely within it
+_Y1 = _BODY_CENTRE + _FEET_OFFSET - _BAND_HW   # feet ride [76..136] -> BODY rides [58..118], centred on 88
+_Y2 = _BODY_CENTRE + _FEET_OFFSET + _BAND_HW
 # LOOK-AHEAD: the modern form of the LEVEL's airborne framing signal (the DOS 5663 look-ahead — falling latches
 # target row 3 == a 96px pan; rising row 8). Instead of a latched pan, a velocity-driven BIAS shifts the band:
 # b = pvy * LOOK_K clamped to [-LOOK_UP, +LOOK_DOWN], slew-limited by LOOK_RATE. Positive b slides the band UP
@@ -123,29 +131,40 @@ LOOK_K = 0.12            # s — bias per px/s of player fall speed (terminal ~3
 LOOK_DOWN = 48.0         # px max look-down (falling; DOS pans to row 3 = 40px more than neutral — comparable)
 LOOK_UP = 24.0           # px max look-up (rising; gentler — jumps are brief)
 LOOK_RATE = 140.0        # px/s bias slew (well under CATCHUP so the glide cap always covers bias motion)
+# CAMERA SMOOTHING ("bumping strength", F10 menu): a soft DAMP on the band-drag — the camera eases toward the
+# band edge with an exponential time constant instead of sticking to it rigidly, so it trails the player and
+# settles with a gentle bump. 0 == rigid (the pure band-drag). Level -> tau (s). The damping lag grows the
+# deviation, so HIGH is sized to stay inside Y_V_PAD.
+_Y_SMOOTH_TAU = (0.0, 0.05, 0.09, 0.14)         # Off / Low / Medium / High
+Y_SMOOTH_LABELS = ("Off", "Low", "Medium", "High")
+
+
+def y_smooth_tau(level: int) -> float:
+    """The band-drag damping time-constant (s) for a CAMERA-SMOOTHING menu level (clamped to range)."""
+    return _Y_SMOOTH_TAU[min(max(int(level), 0), len(_Y_SMOOTH_TAU) - 1)]
 
 
 def smooth_cam_y(sy: float, look: float, pwy: float, pvy: float, dt: float, cam_uninterp: float,
-                 bottom_px: float, dos_follow: float | None = None,
+                 bottom_px: float, dos_follow: float | None = None, tau: float = 0.0,
                  v_pad: float = Y_V_PAD) -> tuple[float, float]:
-    """One presentation-camera Y update (pure): the X band-drag, vertical, + velocity look-ahead bias.
-    Returns ``(new_sy, new_look)``.
+    """One presentation-camera Y update (pure): the X band-drag, vertical, on the player's BODY CENTRE, +
+    velocity look-ahead bias + optional smoothing damp. Returns ``(new_sy, new_look)``.
 
     ``sy``/``look`` = the presentation cam_y and the current look-ahead bias (state); ``pwy`` = the player's
     sub-tick interpolated world-y BASELINE (the record [0x4F1E]); ``pvy`` px/s (+ = falling); ``dt`` s since
     the last update; ``cam_uninterp`` = the CURRENT tick's shake-free DOS cam_y (``cam_y*16 + fine``, no
     [0x6BF8] jolt — the compositor slices the tile layer at ``cam_uninterp - present_cam_y``, so the
     extraction-coverage clamp is taken against it); ``bottom_px`` = the DOS bottom camera limit
-    ([0x2CF5]-0xB tiles, px).
+    ([0x2CF5]-0xB tiles, px). ``tau`` = the CAMERA-SMOOTHING damping (s; 0 = rigid band-drag).
 
     ``dos_follow``: the FORCED-SCROLL escape — on a level whose camera header sets [0x8166]&4 the DOS camera
     auto-scrolls regardless of the player, and a band would fight it into the coverage clamp (stair-stepping);
     pass the interpolated shake-free DOS cam_y to follow it directly instead (smooth: it is interpolated).
 
-    Rigid band target (identical shape to :func:`smooth_cam_x`): unchanged while the player's presented
-    baseline sits inside the (bias-shifted) band, dragged by the exact overshoot outside — inherently smooth
-    because the player position is sub-tick interpolated. GLIDE cap on seed/recovery; the DOS camera's own
-    world bounds [0, bottom]; the coverage clamp is a pure safety (structural bound ~152 < v_pad-1)."""
+    Rigid band target (identical shape to :func:`smooth_cam_x`): unchanged while the player's presented body
+    sits inside the (bias-shifted) band, dragged by the exact overshoot outside — inherently smooth because
+    the player position is sub-tick interpolated. GLIDE cap on seed/recovery; the DOS camera's own world
+    bounds [0, bottom]; the coverage clamp is a pure safety (structural bound < v_pad-1)."""
     if dos_follow is not None:                         # forced auto-scroll level: follow the DOS cam directly
         sy, look = float(dos_follow), 0.0
         sy = min(max(sy, 0.0), max(0.0, bottom_px))
@@ -155,16 +174,18 @@ def smooth_cam_y(sy: float, look: float, pwy: float, pvy: float, dt: float, cam_
     db = want - look                                    # slew-limited engage/release (framerate-independent)
     lim = LOOK_RATE * max(0.0, dt)
     look += min(max(db, -lim), lim)
-    # rigid band, shifted by the bias: player screen-y rides [_Y1 - look, _Y2 - look] (falling: higher on
-    # screen -> more visible below). A clamp, so bias motion alone never moves the camera.
+    # rigid band on the BODY (feet band shifted by the bias): the camera holds while the body stays inside it,
+    # dragged by the overshoot past either edge. A clamp, so bias motion alone never moves the camera.
     t = min(max(sy, pwy - _Y2 + look), pwy - _Y1 + look)
     t = min(max(t, 0.0), max(0.0, bottom_px))           # the DOS camera's own world bounds
-    lim = (abs(pvy) + CATCHUP) * max(0.0, dt)           # glide: 1:1 during drag (covers bias<=LOOK_RATE too)
+    glide = (abs(pvy) + CATCHUP) * max(0.0, dt)         # glide cap: 1:1 during drag / CATCHUP-limited on seed
     d = t - sy
-    if d > lim:
-        d = lim
-    elif d < -lim:
-        d = -lim
+    if tau > 0.0 and dt > 0.0:                          # SMOOTHING: ease toward the band edge (soft trailing)
+        d *= 1.0 - _exp(-dt / tau)
+    if d > glide:                                       # never exceed the glide cap (no snap on a big seed jump)
+        d = glide
+    elif d < -glide:
+        d = -glide
     sy = min(max(sy + d, 0.0), max(0.0, bottom_px))
     lim = max(0.0, v_pad - 1.0)                         # extraction/re-admission coverage safety
     return min(max(sy, cam_uninterp - lim), cam_uninterp + lim), look

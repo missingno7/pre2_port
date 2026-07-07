@@ -268,6 +268,7 @@ def main(argv=None) -> int:
                 "widescreen_active_zone": False,   # EXPERIMENTAL: activate enemies/objects across the widescreen
                 #                                    margins (state-mutating, gameplay-affecting) instead of frozen
                 "smooth_camera": False,   # X+Y band-drag presentation camera (experimental)
+                "camera_smoothing": 0,   # EXPERIMENTAL "bumping strength": 0=Off..3=High vertical band-drag damp
                 "responsive_controls": False}   # EXPERIMENTAL: buffer the jump key so fast taps are never dropped
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
@@ -1193,6 +1194,15 @@ def main(argv=None) -> int:
             settings["widescreen_bg"] = _BG_MODES[(i + d) % len(_BG_MODES)]
             save_settings()
 
+        from pre2.enhanced.smooth_camera import Y_SMOOTH_LABELS as _CS_LABELS
+
+        def _cs_level():
+            return min(max(int(settings.get("camera_smoothing", 0)), 0), len(_CS_LABELS) - 1)
+
+        def adj_camera_smoothing(d):
+            settings["camera_smoothing"] = (_cs_level() + d) % len(_CS_LABELS)
+            save_settings()
+
         _ASPECTS = ["square", "4:3"]                   # displayed pixel aspect
 
         def adj_aspect(d):
@@ -1245,6 +1255,7 @@ def main(argv=None) -> int:
             {"label": "Active zone", "value": onoff("widescreen_active_zone"),
              "activate": toggle("widescreen_active_zone")},
             {"label": "Smooth camera", "value": onoff("smooth_camera"), "activate": toggle("smooth_camera")},
+            {"label": "Camera smoothing", "value": _CS_LABELS[_cs_level()], "adjust": adj_camera_smoothing},
             {"label": "Responsive controls", "value": onoff("responsive_controls"),
              "activate": toggle("responsive_controls")},
             {"label": "", "info": True},
@@ -1331,7 +1342,7 @@ def main(argv=None) -> int:
         from pre2.enhanced.snow import SnowField
         from pre2.enhanced.sprite_cache import SpriteTextureCache
         from pre2.enhanced.smooth_camera import (CROP as _CAM_CROP, Y_V_PAD, smooth_cam_x, smooth_cam_y,
-                                                 world_max_px)
+                                                 world_max_px, y_smooth_tau)
         from pre2.native.render import native_render                # for the enhanced-path faithful fallback
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
@@ -1407,7 +1418,8 @@ def main(argv=None) -> int:
             # its own) follows the interpolated DOS cam instead — a band would fight the auto-scroll.
             bottom_px = max(0, state.data[DS + 0x2CF5] - 0xB) * 16.0
             forced = float(dosy) if (state.data[DS + 0x8166] & 4) else None
-            s[1], s[2] = smooth_cam_y(s[1], s[2], pwy, pvy, dt, cury_free, bottom_px, dos_follow=forced)
+            s[1], s[2] = smooth_cam_y(s[1], s[2], pwy, pvy, dt, cury_free, bottom_px, dos_follow=forced,
+                                      tau=y_smooth_tau(settings["camera_smoothing"]))
             return (s[0] - ml_cur, s[1])                                    # back to WINDOW space for compose
 
         def present_tick_frame(planes, page):
