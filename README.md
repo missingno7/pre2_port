@@ -241,3 +241,11 @@ python scripts/deploy_native.py --exe             # + PyInstaller (needs `pip in
 
 > `dos_re/` stays game-agnostic on purpose — anything that knows Prehistorik 2 filenames, addresses, or
 > formats lives under `pre2/`. That boundary is what makes the VM a reusable oracle instead of part of the game.
+
+## Support
+
+If you enjoy this project and want to support work like it, you can buy me a coffee:
+
+**☕ [ko-fi.com/missingno7](https://ko-fi.com/missingno7)**
+
+Every bit is appreciated and helps keep projects like this going. Thank you!
