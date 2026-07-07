@@ -365,7 +365,7 @@ def main(argv=None) -> int:
 
     from pre2.enhanced.smooth_camera import CROP as _CAM_CROP        # the band-drag over-coverage baseline
     from pre2.recovered.object_update import set_active_zone_margin   # widescreen active-zone cull widener (enemies)
-    from pre2.recovered.object_particles import set_item_zone_margins  # widescreen item-zone cull widener (pickups)
+    from pre2.recovered.object_particles import set_item_zone_margins, set_item_zone_y_margins  # item-zone cull wideners
 
     def _smooth_extra(state) -> int:
         """Extraction over-coverage (px/side) the SMOOTH CAMERA extracts then crops: enough for BOTH the
@@ -1575,7 +1575,18 @@ def main(argv=None) -> int:
             if enh["next_tick"] is None or enh["next_tick"] < now - 0.25:   # (re)sync after start/pause/menu
                 enh["next_tick"] = now
             if enh["prev"] is None:                             # no pair yet -> the composed frame, unlerped
-                present(_snow_over(_crop(compose(cur, None, 1.0))), args.fps)
+                # Present this first frame at the smooth camera's SETTLED position (the reveal/transition
+                # pre-seeded it via ref["scam_reseed"]) so the frame right after a curtain matches the framing
+                # the reveal ended at. Without this the unlerped frame fell back to the DOS camera for ONE frame
+                # -> the "camera jump when the curtain ends" (reveal@scam -> frame1@DOS -> frame2@scam). Peek the
+                # seed (it's consumed by _smooth_cam next frame); None (no seed / smooth off / room) -> DOS frame.
+                seed0 = ref.get("scam_reseed")
+                pcam0 = ((seed0[0] - cur.cam_margin_left, seed0[1])
+                         if seed0 is not None and settings["smooth_camera"] and not _room_locked(state)
+                         else None)
+                present(_snow_over(_crop(compose(cur, None, 1.0, present_cam=pcam0,
+                                                 crop=m_extra if pcam0 is not None else 0,
+                                                 shake=cur.row_factor))), args.fps)
                 enh["prev"] = cur
                 enh["next_tick"] += tick_dt
                 return
@@ -1686,6 +1697,12 @@ def main(argv=None) -> int:
             else:
                 set_item_zone_margins(0, 0)
                 set_active_zone_margin(0)
+            # VERTICAL item zone: the SMOOTH CAMERA drags pickups into the top/bottom widescreen CORNERS where the
+            # faithful projector never bounced them (top cull is tight). Widen the 8922 Y window by the v_pad band
+            # so they project + bounce LIVE (like the X margins) instead of freezing as re-projected records. Sized
+            # from Y_V_PAD (the smooth-cam vertical coverage), only while the smooth camera drives (else 0 = faithful).
+            _vz = (Y_V_PAD // 16 + 1) if _smooth_extra(state) else 0
+            set_item_zone_y_margins(_vz, _vz)
             disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
 
             def stream_frame(planes, page):

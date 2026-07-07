@@ -20,7 +20,7 @@ class NativeGameState:
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
     __slots__ = ("data", "sfx_queue", "particle_capture", "flash_slots", "song_request", "boss_glyph",
-                 "snow_plots", "particle_capture_last", "flash_slots_last")
+                 "snow_plots", "particle_capture_last", "flash_slots_last", "_hud_frozen_predeath")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -58,6 +58,7 @@ class NativeGameState:
         #: when the tick had none), so they can never go stale across ticks.
         self.particle_capture_last = None
         self.flash_slots_last: list[int] | None = None
+        self._hud_frozen_predeath = None    # last HUD state drawn before a death (frozen through the death-bounce)
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":

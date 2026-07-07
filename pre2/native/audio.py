@@ -172,16 +172,25 @@ class NativeAudio:
         #     order table once per change (the request repeats every boss frame, exactly like the ASM re-calling
         #     02CC; the fingerprint below then emits StartSong once) ---
         req = getattr(state, "song_request", None)
+        loaded_by_req = False
         if req is not None:
             state.song_request = None
             name = _SONG_INDEX_TO_FILE.get(req)
-            if name is not None and name != self._req_file:
+            if name is not None and name != self._req_file:     # the per-frame boss-request de-dup (load once)
                 self._req_file = name
                 native_load_song(state, name, self._game_root)
+                loaded_by_req = True
         # --- music: the recovered loader wrote the order table; emit StartSong once it changes ---
         fp = song_load_fingerprint(state)                       # uses state.data (NativeGameState)
         if fp != self._song:
             self._song = fp
+            if not loaded_by_req:
+                # An EXTERNAL song load (native_load_song at a level start / tally / carte) overwrote the order
+                # table — the "already loaded this request" latch (_req_file) is now STALE. Clear it, else a
+                # LATER boss re-request of the SAME index (e.g. MONSTER again after an intervening level song)
+                # is wrongly suppressed and the boss music never switches back (verified: boss2 stayed on the
+                # level song). Not cleared for our own req load (that would re-load the .TRK every boss frame).
+                self._req_file = None
             if fp is not None:
                 cmd = make_start_song(state, self._game_root)
                 if cmd is not None:

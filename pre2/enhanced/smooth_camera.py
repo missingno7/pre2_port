@@ -109,8 +109,11 @@ def world_max_px(w8164: int, player_wx: float) -> float:
 # so |dev| stays well under Y_V_PAD-1. Coverage: TILES come from the extract's vertical over-extraction
 # (tile_ext); OBJECTS from the vertical re-admission (extract's _replan_wide v_pad window — the game itself
 # computes objects only for ITS viewport).
-Y_V_PAD = 176            # vertical over-extraction + re-admission px/side; covers the structural band bound +
-#                          the look-ahead bias + the strongest SMOOTHING lag (measured maxDev ~150 at HIGH).
+Y_V_PAD = 112            # vertical over-extraction + re-admission px/side; covers the structural band bound +
+#                          the look-ahead bias + the SMOOTHING lag. Measured worst |sy - DOS cam_y| across the
+#                          captured caves/falls = 63px rigid / 76px at HIGH; 112 gives ~35px headroom over that
+#                          while keeping the extract's tile-row count (per-tick cost) down — 176 was ~2.4x the
+#                          real need and tripled the vertical tile render for no coverage benefit.
 # The dead-zone band is defined on the player's BODY CENTRE, not the feet BASELINE the record ([0x4F1E]) gives:
 # the sprite is ~36px tall drawn UP from the baseline, so body-centre == baseline - _FEET_OFFSET. Framing the
 # baseline at the viewport centre (the old [72..104]) put the visible BODY ~18px high -> the player rode the top
@@ -137,6 +140,11 @@ LOOK_RATE = 140.0        # px/s bias slew (well under CATCHUP so the glide cap a
 # deviation, so HIGH is sized to stay inside Y_V_PAD.
 _Y_SMOOTH_TAU = (0.0, 0.05, 0.09, 0.14)         # Off / Low / Medium / High
 Y_SMOOTH_LABELS = ("Off", "Low", "Medium", "High")
+# Soft RE-CENTER time-constant (s): with the 1:1 velocity FOLLOW below, the dead-zone is no longer a hard hold
+# (which let the player DRIFT across a static background during a slow platform ride — the judder) but a gentle
+# pull that eases the player back toward the [_Y1,_Y2] band ONLY when they leave it, slowly enough never to
+# judder. The "camera smoothing" dial makes it gentler still (max with the user tau).
+_RECENTER_TAU = 0.35
 
 
 def y_smooth_tau(level: int) -> float:
@@ -170,22 +178,53 @@ def smooth_cam_y(sy: float, look: float, pwy: float, pvy: float, dt: float, cam_
         sy = min(max(sy, 0.0), max(0.0, bottom_px))
         lim = max(0.0, v_pad - 1.0)
         return min(max(sy, cam_uninterp - lim), cam_uninterp + lim), look
-    want = min(max(pvy * LOOK_K, -LOOK_UP), LOOK_DOWN)  # the level's airborne framing signal, velocity form
+    # The level's airborne framing signal (DOS 5663 look-ahead), POSITION-gated like the original: the DOS only
+    # LEADS (target row 3 falling / 8 rising) once the player REACHES the trigger row (dxs>=9 / <=2) — a small
+    # jump that never leaves the dead-zone scrolls NOTHING (in a viewport-tall cave jumping never moves the DOS
+    # camera at all). A pure VELOCITY bias instead engaged on any fall and dipped the view ~30px on every cave
+    # jump. Gate the bias on the player's presented FEET passing the band EDGE (== the band-drag's own trigger),
+    # so a jump WITHIN the band adds no look-ahead; only a real fall/rise past the band leads the view.
+    feet = pwy - sy                                     # the player's presented feet screen-y
+    if pvy > 0.0 and feet >= _Y2:                       # falling AND at/below the band bottom (DOS dxs>=9)
+        want = min(pvy * LOOK_K, LOOK_DOWN)
+    elif pvy < 0.0 and feet <= _Y1:                     # rising AND at/above the band top (DOS dxs<=2)
+        want = max(pvy * LOOK_K, -LOOK_UP)
+    else:
+        want = 0.0
     db = want - look                                    # slew-limited engage/release (framerate-independent)
     lim = LOOK_RATE * max(0.0, dt)
     look += min(max(db, -lim), lim)
-    # rigid band on the BODY (feet band shifted by the bias): the camera holds while the body stays inside it,
-    # dragged by the overshoot past either edge. A clamp, so bias motion alone never moves the camera.
+    # 1:1 VELOCITY FOLLOW (feed-forward): move the camera BY the player's own vertical displacement, so during
+    # any sustained vertical motion — a platform ride, a fall — the player holds a FIXED screen row and the
+    # BACKGROUND scrolls (coherent, smooth), instead of the player DRIFTING across a static background. That
+    # slow isolated-sprite drift is the judder: the DOS camera's vertical DEAD-ZONE lets the player creep ~4px
+    # /tick through 60px of screen before it scrolls (measured native_snap 005847: player screen-y 81->29 while
+    # the DOS cam sat still) — a fast fall felt smooth only because it BLEW PAST the dead-zone and the DOS cam
+    # tracked 1:1 (screen-y a constant 53). Feed-forward gives every sustained motion that same 1:1 lock.
+    sy += pvy * dt
+    # The band is now a SOFT RE-CENTER bound, not the tracker: only when the player's presented feet leave the
+    # (bias-shifted) [_Y1,_Y2] dead-zone does the camera ease them back toward the edge — gently (_RECENTER_TAU,
+    # or gentler under the smoothing dial) so re-centering itself never judders. Inside the zone the feed-forward
+    # alone holds them steady, so a walk over gentle terrain or a platform ride shows NO drift.
     t = min(max(sy, pwy - _Y2 + look), pwy - _Y1 + look)
     t = min(max(t, 0.0), max(0.0, bottom_px))           # the DOS camera's own world bounds
-    glide = (abs(pvy) + CATCHUP) * max(0.0, dt)         # glide cap: 1:1 during drag / CATCHUP-limited on seed
+    glide = (abs(pvy) + CATCHUP) * max(0.0, dt)         # glide cap: covers feed-forward + a CATCHUP-limited seed
     d = t - sy
-    if tau > 0.0 and dt > 0.0:                          # SMOOTHING: ease toward the band edge (soft trailing)
-        d *= 1.0 - _exp(-dt / tau)
+    if dt > 0.0:                                        # gentle soft re-center (never instant -> no snap judder)
+        d *= 1.0 - _exp(-dt / max(_RECENTER_TAU, tau))
     if d > glide:                                       # never exceed the glide cap (no snap on a big seed jump)
         d = glide
     elif d < -glide:
         d = -glide
     sy = min(max(sy + d, 0.0), max(0.0, bottom_px))
     lim = max(0.0, v_pad - 1.0)                         # extraction/re-admission coverage safety
-    return min(max(sy, cam_uninterp - lim), cam_uninterp + lim), look
+    sy = min(max(sy, cam_uninterp - lim), cam_uninterp + lim)
+    # INTEGER screen-offset LOCK — the reason X is pixel-perfect and Y was not. The compositor rounds the CAMERA
+    # (bg_dy = round(cam - sy)) and each object's sub-tick INTERPOLATION (round(inv*wdy)) SEPARATELY; the two
+    # roundings only CANCEL when the player's screen offset (pwy - sy) is an INTEGER — then every object that
+    # moves with the player is pixel-static and the background still scrolls in smooth 1px steps (round(pwy)).
+    # X gets this for free: its camera is player_x - X1 (X1 an integer band edge) and the horizontal camera is
+    # tile-granular. Y's float feed-forward left the offset fractional, so the roundings beat by ±1px on EVERY
+    # object (the platform shimmer), worse the faster the fractional part swept. Snapping the offset to an
+    # integer removes the beat entirely. (sy stays smooth: it keeps pwy's fractional part, tracking it exactly.)
+    return pwy - round(pwy - sy), look

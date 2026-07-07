@@ -31,6 +31,8 @@ _ROW_FACTOR = 0x6BF8       # [0x6BF8] = render row-stride factor; the shake appl
 _SCORE = 0x6C0E            # [0x6C0E]/[0x6C10] = 32-bit internal score (HUD shows it *10)
 _LIVES = 0x27D8            # [0x27D8] = lives count
 _ENERGY = 0x27D6           # [0x27D6] = energy (hearts)
+_RESPAWN_ARM = 0x6BE4      # 4C69 death dispatch: ==1 respawn-to-checkpoint (death-bounce armed), ==2 boss-hit flash
+_GAMEOVER_ARM = 0x6BE5     # 4C69 death dispatch: !=0 game-over
 _IRIS_RADIUS = 0x2DD0      # iris radius (low byte; shrinks each frame) — see bridge.transition
 _IRIS_X = 0x2DC6           # iris circle centre X (player)
 _IRIS_Y = 0x2DC8           # iris circle centre Y (player)
@@ -104,7 +106,22 @@ def _hud_state(mem) -> HudState:
     score = (_rw(mem, _SCORE) | (_rw(mem, _SCORE + 2) << 16)) * 10
     bonus = effective_bonus_mask(_rb(mem, _BONUS_MASK), _rb(mem, _BONUS_FLASH) != 0,
                                  _rb(mem, _FRAME_CTR_B))
-    return HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY), bonus_mask=bonus)
+    hs = HudState(score=score, lives=_rb(mem, _LIVES), energy=_rb(mem, _ENERGY), bonus_mask=bonus)
+    # DEATH-BOUNCE HUD FREEZE. On a life loss the engine clears the energy ([0x27D6], which doubles as the
+    # respawn scratch — asm 65C5) and decrements lives, but it does NOT redraw the status bar until the respawn
+    # re-inits the level — so the VM's HUD keeps the PRE-DEATH hearts/lives frozen through the 60-frame
+    # death-bounce. Native rebuilds the whole HUD every frame from live state (render_frame rebuild=True), so it
+    # would flash 0 hearts through the bounce (the reported divergence: native shows 0, hybrid stays full). Mirror
+    # the VM: while a death/respawn is armed ([0x6be4]==1 respawn / game-over [0x6be5]!=0 — NOT the boss-hit flash
+    # [0x6be4]==2, where the player is alive and the energy is real), reuse the last HUD state drawn before it.
+    dying = _rb(mem, _RESPAWN_ARM) == 1 or _rb(mem, _GAMEOVER_ARM) != 0
+    if dying:
+        return getattr(mem, "_hud_frozen_predeath", None) or hs
+    try:
+        mem._hud_frozen_predeath = hs                          # cache the last live HUD (per-mem)
+    except (AttributeError, TypeError):
+        pass
+    return hs
 
 
 def _asset_planes(mem) -> tuple:

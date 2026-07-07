@@ -51,6 +51,11 @@ WIN_Y = 0x2B
 # unlike the enemy zone this is safe to enable with true widescreen directly. (The 20-slot render budget still
 # caps how many project; the far overflow falls back to the frozen re-projection, unchanged.)
 _ITEM_ZONE_X = [0, 0]     # [left, right] extra tiles -- ASYMMETRIC to match the widescreen margin SLIDE exactly
+# VERTICAL item zone (SMOOTH CAMERA): the Y window's TOP edge is tight (``ayb < cam_y`` drops anything above the
+# camera; the bottom WIN_Y is already loose). The smooth camera's vertical drag (v_pad) brings above/below-camera
+# items into the widescreen CORNERS, where the faithful projector never bounced them (not projected -> frozen Y).
+# Widen the Y cull by these tiles so those items PROJECT + BOUNCE live, exactly like the X margins. 0 = faithful.
+_ITEM_ZONE_Y = [0, 0]     # [top, bottom] extra tiles
 
 
 def set_item_zone_margins(left: int, right: int) -> None:
@@ -59,6 +64,14 @@ def set_item_zone_margins(left: int, right: int) -> None:
     symmetric 2*margin that would burn the 20-slot budget. Runtime-set per frame."""
     _ITEM_ZONE_X[0] = max(0, int(left))
     _ITEM_ZONE_X[1] = max(0, int(right))
+
+
+def set_item_zone_y_margins(top: int, bottom: int) -> None:
+    """Widen :func:`project_particles`' Y window by ``top``/``bottom`` tiles (0,0 = faithful). Sized from the
+    smooth camera's vertical deviation band (v_pad) so a pickup the camera drags into a top/bottom CORNER keeps
+    bouncing (projected live) instead of freezing as a re-projected margin record. Runtime-set per frame."""
+    _ITEM_ZONE_Y[0] = max(0, int(top))
+    _ITEM_ZONE_Y[1] = max(0, int(bottom))
 
 
 def _s16(v: int) -> int:
@@ -153,12 +166,11 @@ def project_particles(rb, rw):
                 if 0 <= sxt <= WIN_X or sxt < -_ITEM_ZONE_X[0] or sxt > WIN_X + _ITEM_ZONE_X[1]:
                     continue
 
-            # [asm 8945] screen-Y cull
+            # [asm 8945] screen-Y cull (top/bottom widened by the smooth-camera vertical item zone; [0,0] is
+            # byte-exact: sy<0 == the 'jb ayb<cam_y', sy>WIN_Y == the jg)
             ayb = (_s16(rw(si + 2)) >> 4) & 0xFFFF
-            if ayb < cam_y:
-                continue
-            sy = (ayb - cam_y) & 0xFFFF
-            if _s16(sy) > WIN_Y:
+            sy = _s16((ayb - cam_y) & 0xFFFF)
+            if sy < -_ITEM_ZONE_Y[0] or sy > WIN_Y + _ITEM_ZONE_Y[1]:
                 continue
 
             _project(si)
