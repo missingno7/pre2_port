@@ -1391,7 +1391,11 @@ def main(argv=None) -> int:
             s = enh["scam"]                                     # [x, y] presentation-cam state
             if s is not None and (abs(cam0 - s[0]) > 240 or abs(dosy - s[1]) > 240):   # teleport/load -> reseed
                 s = enh["scam"] = None
-            if pc is None:                                                  # no player this frame (rare) ->
+            # DEATH: while a death-bounce is armed ([0x6be4]==1 respawn / [0x6be5]!=0 game-over — NOT the boss-hit
+            # counter [0x6be4]==2, where the player is alive + flashing), FREEZE the camera. The dying player arcs
+            # up then falls THROUGH the floor; the band would chase the corpse off-screen. Hold the pre-death view.
+            dying = state.data[DS + 0x6BE4] == 1 or state.data[DS + 0x6BE5] != 0
+            if pc is None or dying:                                        # no player this frame (rare) / dying ->
                 return (s[0] - ml_cur, s[1]) if s is not None else None     # hold X+Y (back in window space)
             pp = next((i for i in prev.sprites if i.handle == ("player",)), None)
             pwx, pvx = float(pc.world_x), 0.0
@@ -1417,6 +1421,12 @@ def main(argv=None) -> int:
             # layer at cury_free - present_cam_y. A forced-auto-scroll level ([0x8166]&4: the camera moves on
             # its own) follows the interpolated DOS cam instead — a band would fight the auto-scroll.
             bottom_px = max(0, state.data[DS + 0x2CF5] - 0xB) * 16.0
+            if state.data[DS + 0x2D8A] == 13:              # LEVEL 13 (flat; the earthquake pillars are STAGED
+                # underground, under the floor tiles): a level-specific VIRTUAL bottom edge so the camera never
+                # scrolls down into that black under-level area. The DOS [0x2CF5] limit (432px) is far below the
+                # floor here; the edge is the level's resting DOS cam_y (160) minus 11px = 149 (measured on
+                # native_snap_20260707_220659). Clamps the camera's lowest position, hiding the staged pillars.
+                bottom_px = min(bottom_px, 149.0)
             forced = float(dosy) if (state.data[DS + 0x8166] & 4) else None
             s[1], s[2] = smooth_cam_y(s[1], s[2], pwy, pvy, dt, cury_free, bottom_px, dos_follow=forced,
                                       tau=y_smooth_tau(settings["camera_smoothing"]))
