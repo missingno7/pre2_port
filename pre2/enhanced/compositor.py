@@ -91,7 +91,7 @@ def _blit(frame, rgba, x: int, y: int) -> None:
     frame[y0:y1, x0:x1][mask] = sub[..., :3][mask]
 
 
-def compose(cur, prev, alpha: float, present_cam=None, crop=0):
+def compose(cur, prev, alpha: float, present_cam=None, crop=0, shake=0):
     """Render one display subframe (RGB) from ``cur`` (and ``prev`` for interpolation) at ``alpha``.
 
     ``present_cam`` (x, y) overrides the camera the frame is shown at (the SMOOTH-CAMERA enhancement: an eased
@@ -103,7 +103,16 @@ def compose(cur, prev, alpha: float, present_cam=None, crop=0):
     ``crop`` (only with ``present_cam``): the px the SMOOTH CAMERA over-extracted each side. compose builds ONLY
     the displayed ``w - 2*crop`` window directly (a slice of cur at the shifted position), rather than composing
     the full over-extracted frame for the caller to crop -- much cheaper per display frame. Output is the cropped
-    width; pixel-identical to the old ``crop(compose(...))``. crop=0 -> the original full-frame path, unchanged."""
+    width; pixel-identical to the old ``crop(compose(...))``. crop=0 -> the original full-frame path, unchanged.
+
+    ``shake`` (only with ``present_cam``): the current tick's CAMERA-SHAKE row_factor ([0x6BF8]). ``cur.camera[1]``
+    has the shake FOLDED IN (``cam_y*16 + fine - row_factor``), and so do the sprites' ``screen_y`` (``+row_factor``)
+    — so a sprite drawn at ``screen_y + bg_dy`` cancels the shake and sits shake-free. But the TILE layer
+    (``tile_ext``/``background``) is rendered SHAKE-FREE (at ``cam_y*16 + fine``, no row_factor), so slicing it at
+    ``bg_dy`` re-injects the shake and jitters the whole tile field against the still sprites (the landing-jolt
+    "flicker"). The fix: slice the tile + world-overlay layers at ``bg_dy + shake`` (== the shake-free camera
+    delta ``cam_y*16+fine - present_cam_y``) so the ENTIRE smooth-camera view is shake-free and internally
+    consistent. shake=0 (default / non-shaking frame / parity path) -> unchanged."""
     interp = prev is not None and alpha < 1.0
     inv = 1.0 - alpha
     # Camera scroll: show the world at the presentation camera. The PARALLAX BACKDROP (sky/mountains) is
@@ -126,10 +135,19 @@ def compose(cur, prev, alpha: float, present_cam=None, crop=0):
     # per display frame, pixel-identical to the old crop(full-compose). Every screen X below subtracts ``crop``.
     # crop=0 (interpolation / the parity path / present_cam None) -> the original full-frame behaviour, unchanged.
     c = int(crop) if present_cam is not None else 0
-    # The fast SLICE path handles the HORIZONTAL smooth shift only (its exposed edge lands in the cropped-off
-    # margin). A VERTICAL shift (bg_dy from the Y interpolation, during shake/climb) needs the two-source
-    # prev-fill for its exposed row edge, so route those (rare) frames to the full-frame path + a crop at the end.
-    use_slice = c > 0 and bg_dy == 0
+    # The fast SLICE path handles the HORIZONTAL smooth shift (its exposed edge lands in the cropped-off
+    # margin) and, when the extract carried the VERTICALLY over-extracted tile layer (tile_ext_*, the smooth
+    # camera's Y drag), the VERTICAL shift too — sliced from REAL map rows, so no exposed edge ever shows
+    # rows no frame covers (the old prev-fill fallback ran out right after a scroll stopped -> a black band /
+    # vanishing tiles at the edge). Without tile_ext a vertical shift still routes to the full-frame
+    # prev-fill path + a crop at the end (the graceful fallback).
+    # SHAKE-FREE tile vertical delta: cur.camera[1] carries -row_factor, the tile layer is rendered without it,
+    # so the tile/world-overlay slice must add ``shake`` back to land on the shake-free camera (see docstring).
+    # Sprites keep bg_dy (their screen_y already has +row_factor, cancelling to shake-free). shake=0 -> bg_dy.
+    bg_dy_t = bg_dy + int(shake) if present_cam is not None else bg_dy
+    ext_ok = (cur.tile_ext_rgb is not None and abs(bg_dy_t) <= cur.v_pad
+              and cur.tile_mask is not None and cur.backdrop_rgb is not None)
+    use_slice = c > 0 and (bg_dy_t == 0 or ext_ok)
     inline = c if use_slice else 0                     # crop applied INLINE by the slice path (else at the end)
     xshift = bg_dx - inline
     Hf, w_full = cur.background_rgb.shape[:2]
@@ -138,12 +156,18 @@ def compose(cur, prev, alpha: float, present_cam=None, crop=0):
         # The BACKDROP (parallax sky) is FIXED-SCREEN -> slice it at the crop offset c (no shift). Only the TILE
         # layer scrolls -> slice cur.background_rgb / tile_mask at the SHIFTED off = c - bg_dx and composite the
         # tile pixels over the fixed backdrop. (off clamped in case the eased cam briefly exceeds the crop.)
+        # A vertical shift slices the tile layer from tile_ext at row v_pad - bg_dy (real over-extracted rows).
         off = max(0, min(w_full - dw, c - bg_dx))
         frame = np.empty((Hf, dw, 3), np.uint8)
         if cur.tile_mask is not None and cur.backdrop_rgb is not None:
             vp = cur.backdrop_rgb[:h, c:c + dw].copy()
-            mw = cur.tile_mask[:h, off:off + dw]
-            vp[mw] = cur.background_rgb[:h, off:off + dw][mw]
+            if bg_dy_t and ext_ok:                     # tile layer sliced SHAKE-FREE at v_pad - (bg_dy + shake)
+                r0 = cur.v_pad - bg_dy_t
+                mw = cur.tile_ext_mask[r0:r0 + h, off:off + dw]
+                vp[mw] = cur.tile_ext_rgb[r0:r0 + h, off:off + dw][mw]
+            else:
+                mw = cur.tile_mask[:h, off:off + dw]
+                vp[mw] = cur.background_rgb[:h, off:off + dw][mw]
             frame[:h] = vp
         else:
             frame[:h] = cur.background_rgb[:h, off:off + dw]
@@ -199,6 +223,16 @@ def compose(cur, prev, alpha: float, present_cam=None, crop=0):
         if use_slice:                                 # crop-aware: slice the world overlay like the background
             off = max(0, min(w_full - dw, c - bg_dx))
             ov_rgb, ov_mask = cur.overlay_rgb[:h, off:off + dw], cur.overlay_mask[:h, off:off + dw]
+            if bg_dy_t:                               # vertical smooth shift (SHAKE-FREE, like the tile layer):
+                ov2 = np.zeros_like(ov_rgb)           # the overlay has no over-extracted source, so shift with
+                om2 = np.zeros_like(ov_mask)          # EMPTY edges (foreground tiles are sparse; the sliver at
+                s0 = max(0, -bg_dy_t)                 # the moving edge is transient)
+                n = h - abs(bg_dy_t)
+                if n > 0:
+                    d0 = max(0, bg_dy_t)
+                    ov2[d0:d0 + n] = ov_rgb[s0:s0 + n]
+                    om2[d0:d0 + n] = ov_mask[s0:s0 + n]
+                ov_rgb, ov_mask = ov2, om2
         elif prev is not None and (bg_dx or bg_dy):
             p_rgb = prev.overlay_rgb[:h] if prev.overlay_mask is not None else cur.overlay_rgb[:h]
             p_mask = prev.overlay_mask[:h] if prev.overlay_mask is not None else cur.overlay_mask[:h]

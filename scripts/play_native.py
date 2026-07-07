@@ -241,8 +241,9 @@ def main(argv=None) -> int:
     display_hz = detect_display_hz()
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
-           "menu_request": False, "switch_level": None, "tick_count": 0,
+           "menu_request": False, "switch_level": None, "tick_count": 0, "state": None, "snap_request": False,
            "jump_edge": False, "jump_buf": 0}   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
+    #   ref["state"] = the live NativeGameState (set once gameplay starts); ref["snap_request"] = F11 debug dump.
 
     # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
     # the keyboard once per ~23 Hz tick, so a tap shorter than a tick (or landed a frame early) can be missed;
@@ -266,7 +267,7 @@ def main(argv=None) -> int:
                 #                                16:9 / 16:10 / 4:3 / 21:9 / 32:9 (letterboxed if the window differs)
                 "widescreen_active_zone": False,   # EXPERIMENTAL: activate enemies/objects across the widescreen
                 #                                    margins (state-mutating, gameplay-affecting) instead of frozen
-                "smooth_camera": False,   # ease the camera toward the DOS target (experimental)
+                "smooth_camera": False,   # X+Y band-drag presentation camera (experimental)
                 "responsive_controls": False}   # EXPERIMENTAL: buffer the jump key so fast taps are never dropped
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
@@ -341,6 +342,20 @@ def main(argv=None) -> int:
         """Widescreen ROOM mode for the current level (centred 320, black margins, no margin content)."""
         return state.data[DS + 0x2D8A] in _WS_ROOM_LEVELS
 
+    def _room_locked(state) -> bool:
+        """True when the widescreen view must black its margins (room_mode): a whole-room LEVEL (LEVEL6/F), OR a
+        FIXED-CAMERA spot — a cave / bonus room the game flags so its camera never scrolls, which is exactly
+        where the ultrawide margins would wrongly reveal the tilemap past the room's edge. Uses the game's OWN
+        camera-follow gate (native_camera_follow, 1030:5643): the horizontal follow (57A8) is skipped when
+        ``[0x6BD9]!=0`` (the whole follow is off — set to the per-room flag by the cave-teleport, [asm 564E]) or
+        the ``[0x8166]&2`` horizontal-follow-off mode bit ([asm 5655]). That flag is 0 in every normal
+        scrolling-gameplay spot (including standing still), so a fixed camera is authoritatively distinguished
+        from a merely-parked one — no heuristic, no false positives, and it catches death-pit rooms a wall-jam
+        test never could (the whole point: it's the flag the game itself uses to stop scrolling)."""
+        return (state.data[DS + 0x2D8A] in _WS_ROOM_LEVELS
+                or state.data[DS + 0x6BD9] != 0
+                or (state.data[DS + 0x8166] & 2) != 0)
+
     def _margin_for(state) -> int:
         """wide_margin(), but forced to 0 on levels that can't be widescreened at all (LEVEL A boss)."""
         if state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
@@ -357,7 +372,7 @@ def main(argv=None) -> int:
         no beyond-the-world void shows at the level ends. 0 when the smooth camera is off. Equals CROP for every
         window up to ~21:9; only super-ultrawide (m_disp > CROP) widens it. 0 on ROOM levels — their camera is
         band-locked (the tower jumps between sections), so band-drag has nothing meaningful to follow there."""
-        return max(_CAM_CROP, _margin_for(state)) if settings["smooth_camera"] and not _room_for(state) else 0
+        return max(_CAM_CROP, _margin_for(state)) if settings["smooth_camera"] and not _room_locked(state) else 0
 
     def _widehud_frame(rgb, margin: int):
         """A 4:3-gameplay-with-WIDE-HUD frame: centre the faithful 320 gameplay in a ``320+2*margin`` frame with
@@ -417,6 +432,8 @@ def main(argv=None) -> int:
                 ref["menu_request"] = True
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12:
                 save_screenshot()
+            elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_F11 and args.debug:
+                ref["snap_request"] = True                         # DEBUG: dump a --snapshot-loadable native savestate
             elif (ev.type == pygame.KEYDOWN and ev.key in (pygame.K_UP, pygame.K_KP8)
                   and settings["responsive_controls"]):
                 ref["jump_edge"] = True                            # RESPONSIVE CONTROLS: catch every jump tap edge,
@@ -439,6 +456,12 @@ def main(argv=None) -> int:
             ref["menu_request"] = False
             menu_modal()                                          # EVERY loop pumps -> the F10 menu opens anywhere
             #   (late-bound: defined below in main(); no loop runs before it exists)
+        if ref["snap_request"]:                                   # DEBUG (F11): dump the live state as a snapshot
+            ref["snap_request"] = False
+            if ref["state"] is not None:
+                dump_gap_snapshot(ref["state"], "F11 debug snapshot", prefix="native_snap")  # late-bound like menu_modal
+            else:
+                print("  (F11: no live game state to snapshot yet)")
 
     def blit_frame(rgb):
         """Draw + letterbox one game frame via the GPU (or software fallback); no present yet. Returns its
@@ -511,16 +534,17 @@ def main(argv=None) -> int:
             pygame.display.set_caption(caption)
         ref["last"] = rgb
 
-    def dump_gap_snapshot(state, msg: str) -> str | None:
+    def dump_gap_snapshot(state, msg: str, prefix: str = "native_gap") -> str | None:
         """Write the CURRENT native state as a repro snapshot the workbench loads directly:
         ``<dir>/memory_1mb.bin`` (the full 1.25 MB image — ``--snapshot <dir>`` re-seeds from it, and every
         probe/oracle does ``NativeGameState(bytearray(read_bytes()))``) + ``state.json`` (the gap message +
-        the key game state for triage). Frozen exe -> next to the game data (discoverable); repo -> artifacts/."""
+        the key game state for triage). Frozen exe -> next to the game data (discoverable); repo -> artifacts/.
+        ``prefix`` names the dir: ``native_gap`` for a real gap, ``native_snap`` for a deliberate F11 dump."""
         import datetime
         import json
         try:
             base = Path(gr) if getattr(sys, "frozen", False) else ROOT / "artifacts"
-            out = base / f"native_gap_{datetime.datetime.now():%Y%m%d_%H%M%S}"
+            out = base / f"{prefix}_{datetime.datetime.now():%Y%m%d_%H%M%S}"
             out.mkdir(parents=True, exist_ok=True)
             (out / "memory_1mb.bin").write_bytes(bytes(state.data))
             d = state.data
@@ -656,7 +680,7 @@ def main(argv=None) -> int:
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.native_background import TileTextureCache, _HudCache
-        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP
+        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP, Y_V_PAD as _Y_V_PAD
         from pre2.enhanced.sprite_cache import SpriteTextureCache
         if _tx["tex"] is None:
             _tx["tex"] = SpriteTextureCache()
@@ -668,18 +692,19 @@ def main(argv=None) -> int:
                                       foreground_frame=fg)
         m = _margin_for(state)
         pad = _smooth_extra(state) if present_cam is not None else 0    # match the gameplay smooth-cam coverage
-        _room = _room_for(state)
+        _room = _room_locked(state)
         _wc = settings["true_widescreen"] and not _room
         efs = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False, tex_cache=_tx["tex"],
                                      bg_cache=_tx["bg"], effects=fx, margin=m + pad,
                                      wide_cull=_wc, slide_margins=_wc and pad == 0,
                                      hud_align=settings["hud_align"], bg_mode=settings["widescreen_bg"],
-                                     bd_pad=pad, room_mode=_room)
+                                     bd_pad=pad, room_mode=_room, v_pad=_Y_V_PAD if pad else 0)
         if efs is None:
             return None
         if pad:                                                  # freeze at the eased camera; compose crops the pad
             bg_dx = round(efs.camera[0] - present_cam[0])        # world shift compose applied (= DOS - scam)
-            rgb = compose(efs, efs, 1.0, present_cam=present_cam, crop=pad)   # crop-aware -> already display width
+            rgb = compose(efs, efs, 1.0, present_cam=present_cam, crop=pad,   # crop-aware -> already display width
+                          shake=state.data[DS + 0x6BF8])         # shake-free tile slice (see compose docstring)
             # sprite_dx: efs sprite screen_x (in the m+pad margin) -> the cropped frame; center_dx: a DOS-screen
             # point (0..320) -> the cropped frame. They differ by the cropped-away pad.
             return rgb, m, efs, bg_dx - pad, bg_dx
@@ -1293,6 +1318,9 @@ def main(argv=None) -> int:
         FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
         The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
+        if args.debug:
+            print("  [debug] F11 = dump a native snapshot (--snapshot-loadable) for repro.")
+        ref["state"] = state          # register the live state so the F11 debug hotkey (in pump) can snapshot it
         from time import perf_counter
         from pre2.bridge.foreground_tiles import read_foreground_state
         from pre2.bridge.gameplay_effects import capture_gameplay_effects
@@ -1302,7 +1330,8 @@ def main(argv=None) -> int:
         from pre2.enhanced.native_background import TileTextureCache, _HudCache
         from pre2.enhanced.snow import SnowField
         from pre2.enhanced.sprite_cache import SpriteTextureCache
-        from pre2.enhanced.smooth_camera import CROP as _CAM_CROP, smooth_cam_x, world_max_px
+        from pre2.enhanced.smooth_camera import (CROP as _CAM_CROP, Y_V_PAD, smooth_cam_x, smooth_cam_y,
+                                                 world_max_px)
         from pre2.native.render import native_render                # for the enhanced-path faithful fallback
         from pre2.gaps import Pre2CheatCredits, Pre2GameComplete, Pre2GameOverTransition, Pre2LevelEndTransition
         n = 0
@@ -1315,14 +1344,18 @@ def main(argv=None) -> int:
                "last_cur": None, "scam": None, "scam_t": 0.0}   # smooth-tx fade base + smooth-camera state
 
         def _smooth_cam(cur, alpha):
-            """The SMOOTH-CAMERA presentation position, or None when off. X = pre2_editor-vanilla BAND-DRAG
-            (pure — no DOS-camera glue, whose park-then-pan/overshoot motion is exactly what this replaces):
-            the camera holds inside the screen band and is dragged by the (sub-tick interpolated) player past
-            its edges, rate-limited so it GLIDES rather than ever jumping, clamped to the level's real camera
-            bounds (the DOS [0x8164] limit). Y = the DOS camera exactly (its per-level centering preserved),
-            sub-tick interpolated. Presentation only; a teleport / level load reseeds."""
-            if not settings["smooth_camera"] or enh["prev"] is None or _room_for(state):
-                enh["scam"] = None                                  # (room levels: band-locked camera, no drag)
+            """The SMOOTH-CAMERA presentation position, or None when off. X AND Y = the same rigid BAND-DRAG
+            (pure — fully decoupled from the DOS camera, whose park-then-pan X / park-then-recenter Y motion is
+            exactly what this replaces): the camera holds inside a centered screen band and is dragged by the
+            (sub-tick interpolated) player past its edges, rate-limited so it GLIDES rather than ever jumping,
+            clamped to the level's real camera bounds (the DOS [0x8164] X limit / [0x2CF5] bottom). Coverage
+            for the Y deviation: tile over-extraction + vertical sprite re-admission (extract v_pad). OFF
+            (returns None — the faithful FIXED camera is presented + the widescreen margins blacked) in a
+            `_room_locked` fixed-camera cave / room level: there is nothing to smooth (the camera never scrolls
+            there), and the band would otherwise drag with the player past the room's edge.
+            Presentation only; a teleport / level load reseeds."""
+            if not settings["smooth_camera"] or enh["prev"] is None or _room_locked(state):
+                enh["scam"] = None                                  # (fixed camera: no drag; present the room)
                 return None
             prev = enh["prev"]
             inv = 1.0 - alpha
@@ -1336,30 +1369,46 @@ def main(argv=None) -> int:
             cam0 = float(cur.camera[0] + ml_cur)                            # TRUE DOS camera x (this tick)
             prev0 = float(prev.camera[0] + prev.cam_margin_left)
             dosx = cam0 - inv * (cam0 - prev0)                              # the interpolated TRUE DOS camera
-            dosy = cur.camera[1] - inv * (cur.camera[1] - prev.camera[1])
+            # SHAKE-FREE DOS cam_y (== cam_y*16+fine; camera[1] folds in -row_factor, the [0x6BF8] landing jolt).
+            # The smooth view is shake-free (so is the tile slice), so follow the shake-free cam, interpolated.
+            cury_free = float(cur.camera[1] + cur.row_factor)
+            dosy = cury_free - inv * (cury_free - float(prev.camera[1] + prev.row_factor))
             now = perf_counter()
             dt = min(0.05, max(0.0, now - enh["scam_t"]))
             enh["scam_t"] = now
             pc = next((i for i in cur.sprites if i.handle == ("player",)), None)
-            s = enh["scam"]
-            if s is not None and abs(cam0 - s[0]) > 240:                    # teleport / level load -> reseed
+            s = enh["scam"]                                     # [x, y] presentation-cam state
+            if s is not None and (abs(cam0 - s[0]) > 240 or abs(dosy - s[1]) > 240):   # teleport/load -> reseed
                 s = enh["scam"] = None
             if pc is None:                                                  # no player this frame (rare) ->
-                return (s[0] - ml_cur, dosy) if s is not None else None     # hold X (back in window space)
+                return (s[0] - ml_cur, s[1]) if s is not None else None     # hold X+Y (back in window space)
             pp = next((i for i in prev.sprites if i.handle == ("player",)), None)
             pwx, pvx = float(pc.world_x), 0.0
+            pwy, pvy = float(pc.world_y), 0.0                              # baseline == the record [0x4F1E]
             if pp is not None and abs(pc.world_x - pp.world_x) <= 32:      # the player's sub-tick position +
                 dx_t = float(pc.world_x - pp.world_x)                      # velocity (px/s) for the rate limit
                 pwx -= inv * dx_t
                 pvx = dx_t * TICK_HZ
+            if pp is not None and abs(pc.world_y - pp.world_y) <= 32:      # sub-tick Y (the Y band-drag input)
+                dy_t = float(pc.world_y - pp.world_y)
+                pwy -= inv * dy_t
+                pvy = dy_t * TICK_HZ
             if s is None:
-                s = enh["scam"] = [float(dosx)]                            # seed at the current view; glide in
+                s = enh["scam"] = [float(dosx), float(dosy), 0.0]         # seed at the current view; glide in
             w8164 = state.data[DS + 0x8164] | (state.data[DS + 0x8165] << 8)
             # m_disp = the displayed margin (clamp the whole widescreen window inside the world -> no edge void);
             # crop = the extracted over-coverage (must cover pinning at the edge). Both live off the window size.
             s[0] = smooth_cam_x(s[0], pwx, pvx, dt, cam0, world_max_px(w8164, pwx),
                                 m_disp=float(_margin_for(state)), crop=float(_smooth_extra(state)))
-            return (s[0] - ml_cur, dosy)                                    # back to WINDOW space for compose
+            # Y: the SAME band-drag, vertical, + the level's airborne look-ahead as a smooth velocity bias
+            # (see smooth_camera.py) — decoupled from the DOS camera's park-then-recenter bands. The coverage
+            # clamp is vs the CURRENT tick's shake-free cam (cury_free) because the compositor slices the tile
+            # layer at cury_free - present_cam_y. A forced-auto-scroll level ([0x8166]&4: the camera moves on
+            # its own) follows the interpolated DOS cam instead — a band would fight the auto-scroll.
+            bottom_px = max(0, state.data[DS + 0x2CF5] - 0xB) * 16.0
+            forced = float(dosy) if (state.data[DS + 0x8166] & 4) else None
+            s[1], s[2] = smooth_cam_y(s[1], s[2], pwy, pvy, dt, cury_free, bottom_px, dos_follow=forced)
+            return (s[0] - ml_cur, s[1])                                    # back to WINDOW space for compose
 
         def present_tick_frame(planes, page):
             """Present one faithful gameplay frame, paced at the tick rate (the enhancement seam)."""
@@ -1427,14 +1476,15 @@ def main(argv=None) -> int:
             try:
                 # (true widescreen's world-edge margin SLIDE is incompatible with the symmetric smooth-camera
                 # crop, so it's off while the smooth camera drives; margin objects still draw via the margin.)
-                _room = _room_for(state)                        # room level: black margins, no margin content
+                _room = _room_locked(state)                     # room level OR a bounded room here: black margins
                 _wc = settings["true_widescreen"] and not _room
                 cur = extract_enhanced_frame(state, dos, game_root=gr, with_faithful=False,
                                              tex_cache=enh["tex"], bg_cache=enh["bg"], effects=fx,
                                              margin=_margin_for(state) + m_extra,
                                              wide_cull=_wc, slide_margins=_wc and m_extra == 0,
                                              hud_align=settings["hud_align"],
-                                             bg_mode=settings["widescreen_bg"], bd_pad=m_extra, room_mode=_room)
+                                             bg_mode=settings["widescreen_bg"], bd_pad=m_extra, room_mode=_room,
+                                             v_pad=Y_V_PAD if m_extra else 0)
             finally:
                 if saved is not None:
                     for off, v in saved:
@@ -1471,7 +1521,8 @@ def main(argv=None) -> int:
                 alpha = min(1.0, max(0.0, 1.0 - (enh["next_tick"] - now) * TICK_HZ))
                 pcam = _smooth_cam(cur, alpha)
                 ref["last_pcam"] = pcam                          # so a transition can freeze at the eased camera
-                present(_snow_over(_crop(compose(cur, enh["prev"], alpha, present_cam=pcam, crop=m_extra))),
+                present(_snow_over(_crop(compose(cur, enh["prev"], alpha, present_cam=pcam, crop=m_extra,
+                                                 shake=state.data[DS + 0x6BF8]))),   # shake-free tile slice
                         present_hz(),
                         None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
                 if perf_counter() >= enh["next_tick"]:
@@ -1551,7 +1602,7 @@ def main(argv=None) -> int:
             # live render-slot item (no frozen re-projection) WITHOUT wasting the 20-slot budget on off-screen
             # over-projection. +1 tile of slack for the mid-tick camera phase.
             _wm = (_margin_for(state)
-                   if (settings["true_widescreen"] and settings["widescreen"] and not _room_for(state)) else 0)
+                   if (settings["true_widescreen"] and settings["widescreen"] and not _room_locked(state)) else 0)
             if _wm:
                 _cpx = (state.data[DS + 0x2DE4] | (state.data[DS + 0x2DE5] << 8)) * 16   # camera X in px
                 _ml = min(_wm, _cpx)

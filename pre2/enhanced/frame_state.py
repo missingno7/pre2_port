@@ -57,6 +57,9 @@ class EnhancedFrameState:
     unsupported: list = field(default_factory=list)   # [(base_id, mode_name)] sprites not interpolated (OPAQUE/ERASE)
     cam_margin_left: int = 0            # px of left margin folded into camera[0]: TRUE DOS camera x =
                             # camera[0] + cam_margin_left (the smooth camera does its band math in TRUE space)
+    row_factor: int = 0     # the camera-SHAKE row_factor ([0x6BF8]) folded into camera[1] (= cam_y*16+fine
+                            # − row_factor). The SHAKE-FREE cam_y is camera[1] + row_factor; the smooth camera
+                            # follows that (shake-free), and the compositor slices the tile layer shake-free too.
     backdrop_rgb: "np.ndarray | None" = None   # the FIXED-screen parallax base layer (sky/mountains). The
                             # compositor holds it still and scrolls only the tile layer over it (so the backdrop
                             # does NOT shake). None -> compositor falls back to a uniform whole-bg shift.
@@ -64,6 +67,12 @@ class EnhancedFrameState:
                             # opaque tile/effect actually drew, found by rendering over a ZEROED base (index!=0)
                             # — colour-independent, unlike `background_rgb != backdrop_rgb` which misses tile
                             # pixels that share the backdrop's colour (they'd be left static -> "see-through").
+    tile_ext_rgb: "np.ndarray | None" = None   # VERTICALLY over-extracted tile layer ((176+2*v_pad) x w RGB,
+                            # no HUD) for the smooth camera's Y drag: a vertical camera shift slices REAL map
+                            # rows from here instead of exposing rows no frame covers (the black band /
+                            # vanishing tiles at the edges). None off the smooth camera / faithful fallback.
+    tile_ext_mask: "np.ndarray | None" = None  # its tile coverage (index != 0), like tile_mask
+    v_pad: int = 0                             # the vertical over-extraction px per side in tile_ext_*
     overlay_rgb: "np.ndarray | None" = None    # the effect OVERLAY (foreground tiles + fireflies), drawn over
     overlay_mask: "np.ndarray | None" = None   # an empty buffer (both colour-0-keyed / OR-white) so
                             # overlay_mask=index!=0 is exact. Composited OVER the sprites (foreground tiles must

@@ -123,7 +123,7 @@ def hud_pad(wide_w: int, align: str, inset: int = 0) -> tuple[int, int]:
 
 def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudCache,
                               margin_left: int = 0, margin_right: int = 0,
-                              hud_align: str = "center", hud_inset: int = 0) -> np.ndarray:
+                              hud_align: str = "center", hud_inset: int = 0, v_pad: int = 0):
     """The full 200x(320+margin_left+margin_right) background colour-index image (``idx0``), built natively
     from ``rs`` -- the drop-in replacement for ``render_frame(rebuild) -> deplanarize`` over a zeroed base.
     Raises :class:`NativeBackgroundUnsupported` for anything the native path doesn't cover (-> explicit
@@ -133,7 +133,15 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
     (row stride 0x100), so extra columns beyond the faithful 20-column window are sampled straight from the
     map -- real level content the original camera never showed. The sampled map column is clamped to [0, 255]
     (never wraps into the adjacent row); the caller paints beyond-the-world pixels black over this. The HUD
-    strip has no wider source, so it extends by edge-pixel replication."""
+    strip has no wider source, so it extends by edge-pixel replication.
+
+    ``v_pad`` (px, a multiple of 16) is the VERTICAL over-extraction for the smooth camera's Y drag: extra
+    tile rows above+below the viewport, sampled from the same map (row index clamped to [0, 255]). When set,
+    returns ``(idx0, idx_ext)`` where ``idx_ext`` is the ``(176 + 2*v_pad) x w`` extended TILE-layer index
+    image (no HUD) the compositor slices vertical camera shifts from. Pad rows the smooth camera can actually
+    show are real map rows (its Y clamps mirror the DOS camera's own [0, bottom] limits); rows clamped at the
+    map's edge are never displayed. Pad rows never RAISE on an unsupported animated tile (they draw the raw
+    tile instead) -- only the faithful 176 viewport rows keep the strict fall-back-to-faithful contract."""
     fine = rs.fine_scroll & 0xFF
     if fine > GRID_H - VIEWPORT_H:                        # fine scroll beyond one tile -> not steady gameplay
         raise NativeBackgroundUnsupported(f"fine_scroll {fine} out of range")
@@ -143,26 +151,33 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
     mcols_l = (margin_left + TILE - 1) // TILE            # whole extra tile columns per side
     mcols_r = (margin_right + TILE - 1) // TILE
     gcols = VISIBLE_COLS + mcols_l + mcols_r
-    grid = np.zeros((GRID_H, gcols * TILE), dtype=np.uint8)
+    vt = v_pad // TILE                                    # extra tile rows each side (v_pad % 16 == 0)
+    grid = np.zeros((GRID_H + 2 * vt * TILE, gcols * TILE), dtype=np.uint8)
     tiles, flag_tbl, anim_xlat, blit_type = rs.tiles, rs.flag_tbl, rs.anim_xlat, rs.blit_type
     cy, cx = rs.camera_y, rs.camera_x
-    for r in range(VISIBLE_ROWS):
-        row_base = ((cy + r) * 0x100) & 0xFFFF
-        y = r * TILE
+    for r in range(-vt, VISIBLE_ROWS + vt):
+        pad_row = r < 0 or r >= VISIBLE_ROWS              # an over-extraction row (lenient anim contract)
+        row_base = ((min(max(cy + r, 0), 0xFF)) * 0x100) & 0xFFFF   # clamp: stay within the map's rows
+        y = (r + vt) * TILE
         for c in range(gcols):
             col = min(max(cx + c - mcols_l, 0), 0xFF)     # clamp: stay within THIS map row
             tid = tiles[(row_base + col) & 0xFFFF]
             if flag_tbl[tid] != 0:                       # animated tile -> current-frame remap
                 gid = anim_xlat[tid]
                 if blit_type[gid] != 0:                  # the faithful anim grid only blits opaque (type 0)
-                    raise NativeBackgroundUnsupported(f"animated tile {tid}->{gid} type {blit_type[gid]}")
+                    if not pad_row:
+                        raise NativeBackgroundUnsupported(f"animated tile {tid}->{gid} type {blit_type[gid]}")
+                    gid = tid                             # pad row: draw the raw tile rather than fail the frame
             else:
                 gid = tid
             grid[y:y + TILE, c * TILE:c * TILE + TILE] = tile_cache.get(gid, ver, rs.asset_planes)
     w = 320 + margin_left + margin_right
     x0 = mcols_l * TILE - margin_left                     # crop the tile-aligned grid to the pixel margins
+    idx_ext = None
+    if v_pad:                                             # the extended tile layer: viewport + v_pad each side
+        idx_ext = np.ascontiguousarray(grid[fine:fine + VIEWPORT_H + 2 * v_pad, x0:x0 + w])
     idx0 = np.empty((200, w), dtype=np.uint8)
-    idx0[:VIEWPORT_H] = grid[fine:fine + VIEWPORT_H, x0:x0 + w]
+    idx0[:VIEWPORT_H] = grid[vt * TILE + fine:vt * TILE + fine + VIEWPORT_H, x0:x0 + w]
     strip = hud_cache.strip(rs, tile_cache.stats)
     # HUD strip placed by ``hud_align`` (fixed, NOT camera/margin-dependent -> it never slides with scrolling).
     # The widescreen margin edge-REPLICATES the strip's edge column -- but the panel's very first/last column
@@ -177,4 +192,4 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
         idx0[VIEWPORT_H:] = np.concatenate([left, strip, right], axis=1)
     else:
         idx0[VIEWPORT_H:] = strip
-    return idx0
+    return (idx0, idx_ext) if v_pad else idx0

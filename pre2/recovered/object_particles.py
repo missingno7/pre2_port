@@ -85,38 +85,27 @@ def project_particles(rb, rw):
     Returns a dict {ds_offset: (value, width)} of every DS byte/word the routine
     writes (source-list bounce updates + the render-slot fields), in the order the
     ASM emits them (the dict is the full side-effect contract).
-    """
+
+    Two X-culled PASSES, not one: items within the FAITHFUL window (``0 <= sxt <= WIN_X`` — what the ORIGINAL
+    game already shows, at most 20 of them by the original's own design) always get a slot first; only once
+    those are all placed does a second pass spend any REMAINING slots on widescreen-MARGIN-only items (``sxt``
+    outside [0, WIN_X] but inside the zone widened by :func:`set_item_zone_margins`). At the faithful zone
+    ([0, 0]) the margin-only set is empty by construction, so this is a no-op — byte-identical single pass, in
+    list order, exactly as the ASM's own one-pass loop. But once a dense item cluster sits in the WIDESCREEN
+    margin (its own X range never faithfully visible together with a far-off item), a single list-order pass
+    let it exhaust the 20-slot budget before reaching a later, faithfully-visible item further down the list
+    — e.g. LEVEL1's exit semaphore (list index 69, the very last entry) losing its slot to margin-only clutter
+    near the player. Prioritizing the faithful set first means an item the ORIGINAL game would show is never
+    starved by one only the widescreen enhancement added."""
     cam_x = rw(CAM_X)
     cam_y = rw(CAM_Y)
     no_anim = (rb(FREEZE_FLAG) & 1) != 0
 
     be = WidthContractBackend(rb, rw)   # accumulates the {offset: (value, width)} contract
-    di = DST_SLOTS
-    bx = DST_COUNT
-    filled_all = False
+    state = {"di": DST_SLOTS, "bx": DST_COUNT, "filled_all": False}
 
-    for k in range(SRC_COUNT):
-        si = SRC_LIST + k * SRC_STRIDE
-
-        if rw(si + 4) == 0xFFFF:  # [asm 8930] empty source entry
-            continue
-
-        # [asm 8936] screen-X cull: ax = (X >> 4) - cam_x ; jb / jg out of window (widened each side by the
-        # widescreen item zone; m=0 is byte-exact with the ASM: sxt<0 == the jb 'axb<cam_x', sxt>WIN_X == the jg)
-        axb = (_s16(rw(si)) >> 4) & 0xFFFF
-        sxt = _s16((axb - cam_x) & 0xFFFF)
-        if sxt < -_ITEM_ZONE_X[0] or sxt > WIN_X + _ITEM_ZONE_X[1]:
-            continue
-
-        # [asm 8945] screen-Y cull
-        ayb = (_s16(rw(si + 2)) >> 4) & 0xFFFF
-        if ayb < cam_y:
-            continue
-        sy = (ayb - cam_y) & 0xFFFF
-        if _s16(sy) > WIN_Y:
-            continue
-
-        slot = RenderSlot(be, di)
+    def _project(si) -> None:
+        slot = RenderSlot(be, state["di"])
         slot.x = rw(si)                              # [asm 8955] on-screen: copy raw X into the render slot
 
         # [asm 8959..8974] bounce animation -> ax (added to Y)
@@ -136,14 +125,51 @@ def project_particles(rb, rw):
         slot.sprite = rw(si + 4)                     # [asm 897D] sprite id ...
         slot.source = si                             # ... + back-reference to the source entry
 
-        di += DST_STRIDE
-        bx -= 1
-        if bx == 0:  # [asm 8989] all slots filled -> done, no clearing
-            filled_all = True
-            break
+        state["di"] += DST_STRIDE
+        state["bx"] -= 1
+        if state["bx"] == 0:  # [asm 8989] all slots filled -> done, no clearing
+            state["filled_all"] = True
+
+    def _pass(faithful: bool) -> bool:
+        """One sweep over the source list; ``faithful`` selects [0,WIN_X] vs margin-only. Returns True if the
+        slot budget ran out (caller should stop)."""
+        for k in range(SRC_COUNT):
+            if state["filled_all"]:
+                return True
+            si = SRC_LIST + k * SRC_STRIDE
+
+            if rw(si + 4) == 0xFFFF:  # [asm 8930] empty source entry
+                continue
+
+            # [asm 8936] screen-X cull: ax = (X >> 4) - cam_x ; jb / jg out of window (widened each side by
+            # the widescreen item zone; m=0 is byte-exact with the ASM: sxt<0 == the jb 'axb<cam_x', sxt>WIN_X
+            # == the jg)
+            axb = (_s16(rw(si)) >> 4) & 0xFFFF
+            sxt = _s16((axb - cam_x) & 0xFFFF)
+            if faithful:
+                if sxt < 0 or sxt > WIN_X:
+                    continue
+            else:
+                if 0 <= sxt <= WIN_X or sxt < -_ITEM_ZONE_X[0] or sxt > WIN_X + _ITEM_ZONE_X[1]:
+                    continue
+
+            # [asm 8945] screen-Y cull
+            ayb = (_s16(rw(si + 2)) >> 4) & 0xFFFF
+            if ayb < cam_y:
+                continue
+            sy = (ayb - cam_y) & 0xFFFF
+            if _s16(sy) > WIN_Y:
+                continue
+
+            _project(si)
+        return state["filled_all"]
+
+    if not _pass(faithful=True):
+        _pass(faithful=False)
 
     # [asm 8992] clear the unused tail slots
-    if not filled_all:
+    if not state["filled_all"]:
+        di, bx = state["di"], state["bx"]
         while bx > 0:
             RenderSlot(be, di).sprite = 0xFFFF
             di += DST_STRIDE

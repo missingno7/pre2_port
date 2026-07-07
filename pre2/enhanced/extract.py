@@ -26,7 +26,7 @@ from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance
 from pre2.enhanced.native_background import (NativeBackgroundUnsupported, TileTextureCache, _HudCache, hud_pad as _hud_pad,
                                              native_background_indices)
 from pre2.enhanced.sprite_cache import SpriteTexture, SpriteTextureCache, palette_version
-from pre2.recovered.object_render import (LIST_TOP, MODE_ERASE, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, _s16,
+from pre2.recovered.object_render import (LIST_TOP, MODE_ERASE, MODE_NORMAL, MODE_OPAQUE, RECORD_BYTES, _s8, _s16,
                                           paint_sprite, plan_sprite, plan_sprite_command)
 from pre2.recovered.fireflies import _sar
 from pre2.recovered.particles import advance_particle
@@ -141,15 +141,20 @@ def _indices_window(planes, page, x0, y0, w, h, stride=_STRIDE):
     return color.reshape(h, nbc * 8)[:, sx:sx + w]
 
 
-def _replan_wide(spr, attr, cam, m_left, m_right):
-    """TRUE-WIDESCREEN re-admission (Experimental): the faithful planner culls a record whose sprite lies
-    outside the original 320px window; when the record exists in the render list but only fails the X-window
-    cull, replan it as if it were on-screen and give back its real placement. READ-ONLY — the game's state
-    (including the render list) is never touched; this only widens the presentation cull, so record/state
-    digests stay byte-exact. The trick: shift the camera by WHOLE TILES (16px, preserving ``screen_x & 7``)
-    to bring the sprite into the faithful window, plan there (mode/blink/flip/Y-cull all evaluated by the
-    UNMODIFIED recovered planner), then shift the resulting placement back. Returns ``(cmd, k_tiles)`` or
-    None (record empty / outside the wide window too / Y-culled)."""
+def _replan_wide(spr, attr, cam, m_left, m_right, v_pad=0):
+    """WIDE-WINDOW re-admission (Experimental — true widescreen X margins + the smooth camera's vertical
+    ``v_pad`` band): the faithful planner culls a record whose sprite lies outside the original 320x176 window;
+    when the record exists in the render list but only fails the window cull, replan it as if it were on-screen
+    and give back its real placement. READ-ONLY — the game's state (including the render list) is never
+    touched; this only widens the presentation cull, so record/state digests stay byte-exact. The trick: shift
+    the camera by WHOLE TILES (preserving ``screen_x & 7``; Y has no sub-tile raster dependency) to bring the
+    sprite into the faithful window, plan there (mode/blink/flip all evaluated by the UNMODIFIED recovered
+    planner), then shift the resulting placement back. Returns ``(cmd, k_tiles, ky_tiles)`` or None (record
+    empty / outside the wide+tall window too).
+
+    ``v_pad`` extends the Y window by that many px each side (the smooth camera's vertical deviation band,
+    == the tile over-extraction): the faithful Y cull drops baseline<=0 / top>=176, the extended window keeps
+    everything with baseline > -v_pad and top < 176+v_pad. v_pad=0 -> the faithful Y cull, unchanged."""
     if spr.sprite_id == 0xFFFF:
         return None
     x_off = attr.width - attr.x_off if (spr.sprite_id & 0x8000) else attr.x_off
@@ -157,10 +162,18 @@ def _replan_wide(spr, attr, cam, m_left, m_right):
     if not (-(attr.width + m_left) < sx < 320 + m_right):   # outside even the WIDE window
         return None
     k = (sx - 152) // 16                                    # tile shift landing sx' in [152,167] (mid-window)
-    cmd = plan_sprite_command(spr, attr, replace(cam, cam_x=cam.cam_x + k))
-    if cmd is None:                                          # Y-baseline culled (or empty) even mid-window
+    ky = 0
+    if v_pad:
+        # the pre-cull screen Y BASELINE [asm 27B8..27D9]; cull rules: baseline <= 0 (off top) or
+        # baseline - height >= 176 (off bottom). Extended by v_pad each side:
+        sy = _s16(spr.y + _s8(attr.y_off) + cam.row_factor - (cam.cam_y * 16 + cam.fine_scroll))
+        if sy <= -v_pad or sy - attr.height >= 176 + v_pad:  # outside even the TALL window
+            return None
+        ky = (sy - 96) // 16                                # tile shift landing sy' in [96,111] (mid-viewport)
+    cmd = plan_sprite_command(spr, attr, replace(cam, cam_x=cam.cam_x + k, cam_y=cam.cam_y + ky))
+    if cmd is None:                                          # Y-culled (v_pad=0) or empty even mid-window
         return None
-    return replace(cmd, screen_x=cmd.screen_x + 16 * k), k
+    return replace(cmd, screen_x=cmd.screen_x + 16 * k, screen_y=cmd.screen_y + 16 * ky), k, ky
 
 
 from pre2.recovered.object_render import Sprite as _Sprite
@@ -313,7 +326,7 @@ def _make_sprite_texture(draw, attr, src_bank):
 def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=None,
                            tex_cache=None, bg_cache=None, margin=0,
                            wide_cull=False, hud_align="center", bg_mode="stretch",
-                           bd_pad=0, slide_margins=None, room_mode=False) -> EnhancedFrameState | None:
+                           bd_pad=0, slide_margins=None, room_mode=False, v_pad=0) -> EnhancedFrameState | None:
     """Build the modern source-frame snapshot for a GAMEPLAY frame, or None if there is no object camera
     (i.e. not a gameplay frame -> the caller passes through faithful).
 
@@ -399,8 +412,12 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         bg_cache = (TileTextureCache(), _HudCache())
     tile_cache, hud_cache = bg_cache
     _t0 = _perf()
+    idx_ext = None
     try:
-        idx0 = native_background_indices(rs, tile_cache, hud_cache, m_left, m_right, hud_align, bd_pad)
+        idx0 = native_background_indices(rs, tile_cache, hud_cache, m_left, m_right, hud_align, bd_pad,
+                                         v_pad=v_pad)
+        if v_pad:
+            idx0, idx_ext = idx0
     except NativeBackgroundUnsupported:
         tile_cache.stats["fallbacks"] += 1
         bg0_planes = [bytearray(0x10000) for _ in range(4)]
@@ -416,6 +433,10 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     backdrop_full = backdrop_rgb.copy()
     backdrop_full[VIEWPORT_H:] = pal_rgb[0]                   # HUD rows: base-showing == palette[0] (panel bg)
     background_rgb = np.where(tile_mask[..., None], pal_rgb[idx0], backdrop_full)
+    tile_ext_rgb = tile_ext_mask = None
+    if idx_ext is not None:                                   # the smooth camera's vertical over-extraction
+        tile_ext_mask = idx_ext != 0
+        tile_ext_rgb = pal_rgb[idx_ext]
     if margin:
         # BEYOND-THE-WORLD void: wide pixels mapping outside the 256-tile world render BLACK (not tilemap
         # edge repeats, not backdrop). Marked as tile coverage so the compositor scrolls the void with the
@@ -430,6 +451,9 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         if void.any():
             background_rgb[:VIEWPORT_H, void] = 0
             tile_mask[:VIEWPORT_H, void] = True
+            if tile_ext_rgb is not None:                      # keep the ext layer's void identical (all rows)
+                tile_ext_rgb[:, void] = 0
+                tile_ext_mask[:, void] = True
 
     # Effect OVERLAY (foreground tiles + fireflies) — drawn over an EMPTY buffer (both colour-0-keyed /
     # OR-white, so index!=0 is exact coverage). Composited OVER the sprites. One-shot point particles are
@@ -484,7 +508,7 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
     # record offset); attrs/banks are extended for any id the culled entities reference. margin 0 / no wide_cull
     # -> the list is empty and the loop is byte-identical to before.
     extra_sprites = []
-    if wide_cull and margin:
+    if (wide_cull and margin) or v_pad:                      # X margins (true widescreen) / Y band (smooth cam)
         reproj = _reproject_wide_entities(mem, cam)
         if reproj:
             attrs = dict(attrs)                                  # copy: never mutate the shared render-state dicts
@@ -520,13 +544,14 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         if attr is None:
             continue
         cmd = plan_sprite_command(spr, attr, cam)
-        kshift = 0
+        kshift = kyshift = 0
         if cmd is None:
-            if wide_cull and margin:                        # TRUE WIDESCREEN: re-admit an X-culled record
-                res = _replan_wide(spr, attr, cam, m_left, m_right)
+            if (wide_cull and margin) or v_pad:             # re-admit a window-culled record: the widescreen X
+                #   margins and/or the smooth camera's vertical deviation band (both presentation-only widenings)
+                res = _replan_wide(spr, attr, cam, m_left, m_right, v_pad)
                 if res is None:
                     continue
-                cmd, kshift = res
+                cmd, kshift, kyshift = res
             else:
                 continue
         elif ext_handle is not None:
@@ -550,9 +575,10 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
         # (0px over-draw at shift 0, growing to a ~9px black fringe at shift 7 = screen_x & 7). Pure over-draw, so
         # no holes; the blink reads as a slightly-oversized black silhouette. An exact fix needs a per-shift /
         # background-dependent erase paint (also handling the player+club dual blink + edge clip); deferred.
-        # For a re-admitted (true-widescreen) record, plan the raster geometry at the SHIFTED camera (the
+        # For a re-admitted (wide/tall-window) record, plan the raster geometry at the SHIFTED camera (the
         # sprite is mid-window there -> unclipped); the texture key/bake are position-independent.
-        draw = plan_sprite(spr, attr, cam if kshift == 0 else replace(cam, cam_x=cam.cam_x + kshift))
+        draw = plan_sprite(spr, attr, cam if kshift == 0 and kyshift == 0
+                           else replace(cam, cam_x=cam.cam_x + kshift, cam_y=cam.cam_y + kyshift))
         if draw is None:
             continue
         key = _texture_key(draw, attr)
@@ -605,9 +631,11 @@ def extract_enhanced_frame(mem, dos, *, game_root, with_faithful=True, effects=N
                                       tex_off_x=tex.off_x, tex_off_y=tex.off_y,
                                       rgba=rgba, interpolate=not cmd.is_hud))
     return EnhancedFrameState(background_rgb=background_rgb, camera=camera_px,
-                              cam_margin_left=m_left,
+                              cam_margin_left=m_left, row_factor=cam.row_factor,
                               sprites=sprites, faithful_rgb=faithful_rgb, unsupported=unsupported,
                               backdrop_rgb=backdrop_rgb, tile_mask=tile_mask,
+                              tile_ext_rgb=tile_ext_rgb, tile_ext_mask=tile_ext_mask,
+                              v_pad=v_pad if tile_ext_rgb is not None else 0,
                               overlay_rgb=overlay_rgb, overlay_mask=overlay_mask,
                               particles=particles, particle_rgb=particle_rgb,
                               fireflies=fireflies, firefly_rgb=firefly_rgb,
