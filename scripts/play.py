@@ -650,9 +650,16 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
     try:
         while running and (args.steps is None or steps_done < args.steps):
             if replaying and playback.finished(frame):
-                status = "demo replay complete"
-                running = False
-                break
+                if args.demo_continue:
+                    # Hand the game over to the player: `realtime` flips next
+                    # iteration and the clock re-anchor below does the rest.
+                    replaying = False
+                    status = "demo finished — live play"
+                    print(status)
+                else:
+                    status = "demo replay complete"
+                    running = False
+                    break
 
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
@@ -1045,6 +1052,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--headless", action="store_true", help="skip the live pygame VGA/text viewer + digital audio (default: viewer on)")
     p.add_argument("--record-demo", metavar="NAME", help="(viewer) start recording an input demo immediately")
     p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (viewer unless --headless)")
+    p.add_argument("--demo-continue", action="store_true",
+                   help="(with --play-demo, in the viewer) when the demo ends, hand the game over to "
+                        "live player input instead of stopping")
     p.add_argument("--fast-song-load", dest="fast_song_load", action="store_true", default=None,
                    help="fast-forward the MOD song loader (byte-exact; removes the ~1s boss-music-load freeze). "
                         "Default ON for the fresh viewer, OFF for --play-demo (so existing demos "
