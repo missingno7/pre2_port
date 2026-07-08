@@ -1,0 +1,3 @@
+[submodule "dos_re"]
+	path = dos_re
+	url = https://github.com/missingno7/dos_re.git

@@ -7,7 +7,11 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_ROOTS = (ROOT / "dos_re", ROOT / "pre2", ROOT / "scripts")
+# dos_re/ is now the framework submodule's repo root; the actual package
+# (the only thing this lint's game-boundary check cares about) is one level
+# deeper, at dos_re/dos_re/ -- scanning the submodule root would also sweep
+# in its own tests/tools/examples, which dos_re's own lint already covers.
+PACKAGE_ROOTS = (ROOT / "dos_re" / "dos_re", ROOT / "pre2", ROOT / "scripts")
 
 
 def iter_py_files():

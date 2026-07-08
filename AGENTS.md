@@ -149,8 +149,10 @@ routine/controller/compositor). **Never** collapse to a modern invented design.
   rules, phase status, recovered-island roadmap.
 - [`docs/pre2/symbol_ledger.md`](docs/pre2/symbol_ledger.md): original addresses,
   continuation points, allocator state, decode boundaries (candidate → verified).
-- [`dos_re/AI_PORTING_CHARTER.md`](dos_re/AI_PORTING_CHARTER.md): the full
-  reusable porting method — proof spine, determinism trap, phased roadmap.
+- The generalized porting method (proof spine, determinism trap, phased
+  roadmap) now lives in [`template_dos_port`](https://github.com/missingno7/template_dos_port)'s
+  `docs/ai_porting_charter.md` — `dos_re` is now a submodule here (see
+  `docs/dos_re/source_port_methodology.md` below for this repo's own take).
 - [`docs/dos_re/source_port_methodology.md`](docs/dos_re/source_port_methodology.md):
   naming/altitude discipline, evidence ladder, status ladder, hook lifecycle.
 - `tests/`: executable proof for CPU behaviour and replacement equivalence.

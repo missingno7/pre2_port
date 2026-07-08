@@ -44,24 +44,11 @@ artifacts/repros/
 .mypy_cache/
 .ruff_cache/
 
-# Local Nuked-OPL3 build products
-nuked_opl3/_opl3_cffi*.pyd
-nuked_opl3/_opl3_cffi*.so
-nuked_opl3/_opl3_cffi*.dylib
-nuked_opl3/_opl3_cffi*.dll
-
 # Python package/build outputs
 build/
 dist/
 *.egg-info/
 frame.png
-
-# Local Nuked-OPL3 CFFI/build products
-nuked_opl3/_opl3_cffi*.c
-nuked_opl3/*.obj
-nuked_opl3/*.o
-nuked_opl3/*.exp
-nuked_opl3/*.lib
 
 # JetBrains IDE config
 .idea/
