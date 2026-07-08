@@ -8,7 +8,7 @@
 > snapshot identical end-to-end; identical `--full-verify` divergence set), ~6–15× faster on wait-heavy
 > scenes (~2× end-to-end on a mixed demo). It falls back to the pure interpreted loops under
 > `--no-replacements` (pure oracle) or `--no-fast-retrace-waits` (keeps the ASM timing path available for
-> comparison). **Live `--view` is intentionally untouched** (§7). The canonical timing model is the existing
+> comparison). **Live view is intentionally untouched** (§7). The canonical timing model is the existing
 > `sub_batch` cadence (§8) — deliberately *not* a new exact-tick model, so no second timing model exists and
 > nothing is reinterpreted. The contract recovered here is **emulated time**, not pixels: the game must not
 > run faster, the emulated timeline must not advance differently, and demo/replay/full-verify determinism
@@ -71,7 +71,7 @@ So the retrace phase is a pure function of `time_source()`, and `time_source` di
 
 | Mode | `dos.time_source` | What drives phase | Frame budget | IRQ delivery cadence |
 |---|---|---|---|---|
-| **live `--view`** (`realtime`) | `perf_counter` (WALL clock) | real wall time | `while perf_counter() < now+present_period` (no fixed budget) stepping `live_irq_batch`=256 | per 256-step batch, IRQs raised on wall clock |
+| **live view** (`realtime`) | `perf_counter` (WALL clock) | real wall time | `while perf_counter() < now+present_period` (no fixed budget) stepping `live_irq_batch`=256 | per 256-step batch, IRQs raised on wall clock |
 | **demo replay / record** (`_run_view`, not realtime) | `det_now = base + instruction_count/det_speed` | **instruction_count** | `chunk_steps` **cpu.step() calls** (`_advance_demo_frame`) | per `sub_batch`=2000 step() batch (`_pump_and_step`, `now=clock()` sampled once per batch) |
 | **headless demo** (`_run_replay_headless`) | `det_now = instruction_count/det_speed` | **instruction_count** | `chunk_steps` cpu.step() calls | per `sub_batch`=2000 step() batch |
 | **`--verify-hooks`** (contract oracle) | the det clock of whatever run hosts it | instruction_count | step()-count (host run) | per sub_batch; the ASM spin RUNS as the oracle (hooks pass through at the wait loops — they are not in the verify set) |
@@ -84,7 +84,7 @@ advances the clock purely by **incrementing instruction_count** as it iterates.
 Key consequences:
 - **Deterministic modes:** the spin's only job is to advance `instruction_count` until the phase crosses;
   the host cost is the interpreted polls. The clock and the spin are the SAME thing.
-- **Live `--view`:** the spin polls `perf_counter`; it burns host CPU until real wall time crosses the phase
+- **Live view:** the spin polls `perf_counter`; it burns host CPU until real wall time crosses the phase
   — the spin IS the wall-clock pacing within a frame.
 
 ## 2. Why a naive skip is wrong (the load-bearing facts)
@@ -204,7 +204,7 @@ hook (Stage D) calls it repeatedly between ISR deliveries.
 - **Stage E:** full verification — pure ASM vs hooked primitive: same memory at checkpoints, same frame
   outputs, same demo trajectory, same audio/timer-visible state, no faster pacing, no full-verify
   divergence.
-- **Stage F:** only then default-enable for deterministic/headless/verify modes. Live `--view` is separate
+- **Stage F:** only then default-enable for deterministic/headless/verify modes. Live view is separate
   (§7).
 
 **Stop and report (do not code further) if:** instruction_count equivalence is unclear; the step budget must
@@ -212,12 +212,12 @@ be redesigned (it must — that is itself a reported decision point); mid-spin I
 isolated; live wall-clock pacing needs a rewrite; full-verify diverges; or the work starts spreading into
 renderer/audio code. No silent fallback, no approximate timing, no shims.
 
-## 7. Live `--view` is separate — design required before any code
+## 7. Live view is separate — design required before any code
 
 In live mode the spin is the wall-clock pacing *within* a frame, and the outer loop already busy-waits to the
 present deadline. Fast-forwarding the retrace polls there would make the game run **faster in game time**
 (the opposite of the invariant) — so the deterministic fast-forward is, correctly, NOT applied to live
-`--view` (the realtime branch never routes through `_advance_frame_deterministic`). The live goal is
+view (the realtime branch never routes through `_advance_frame_deterministic`). The live goal is
 different: *don't burn a core while waiting*, without changing pacing. That needs an **outer-loop** change,
 not a wait-loop replacement:
 
@@ -311,10 +311,10 @@ uses `advance_frame_fast` (the recovered primitive) when the hybrid runtime is a
 falls back to the interpreted `_advance_demo_frame` (pure-ASM retrace loops) under `--no-replacements` (pure
 oracle) or `--no-fast-retrace-waits` (keeps the original timing path available for comparison, like every
 other recovered island keeps its ASM oracle). There is **no experimental flag**; the feature is on by
-default and proven. Live `--view` realtime is the one path that never routes through this dispatcher (§7).
+default and proven. Live view realtime is the one path that never routes through this dispatcher (§7).
 
 **Scope held.** All *deterministic* stepping paths (headless replay `_run_replay_headless`, the in-view demo
-replay/record branch, verify/oracle) — routed through `_advance_frame_deterministic`. Live `--view` realtime
+replay/record branch, verify/oracle) — routed through `_advance_frame_deterministic`. Live view realtime
 is untouched (§7 still applies — it would need the outer-loop pacing rewrite). No renderer / audio-mixer /
 gameplay logic changed; the only side effects are the very instructions the interpreted loop runs. `44CD` is
 encoded for the COLOR (`0x3DA`) path only; the mono `0x3BA` path is deliberately not fast-forwarded.

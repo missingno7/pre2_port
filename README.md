@@ -224,9 +224,9 @@ data files in place:
 
 ```bash
 # the workbench — hybrid runtime over the ASM oracle  (needs numpy + pygame, as in Getting started)
-python scripts/play.py --view                     # live viewer: recovered hooks over the VM
-python scripts/play.py --view --verify-hooks      # lockstep contract check vs the ASM
-python scripts/play.py --view --record-demo run1  # record a regression demo
+python scripts/play.py                     # live viewer: recovered hooks over the VM
+python scripts/play.py --verify-hooks      # lockstep contract check vs the ASM
+python scripts/play.py --record-demo run1  # record a regression demo
 pip install pytest && python -m pytest -q         # the byte-exact test suite
 
 # ship the native game as a standalone folder (+ optional PyInstaller exe) — no VM, no EXE

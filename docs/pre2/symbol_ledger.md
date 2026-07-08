@@ -51,7 +51,7 @@ which is done in `dos_re`). A clean DSP island, NOT gameplay logic.
 (×64, six shifts — a truncated disasm earlier showed five).
 
 **WIRED LIVE 2026-06-21** (`pre2/checkpoints/audio.py`): the per-channel mixer `218F` is replaced by the
-recovered `mix_channel` in hybrid play, so the audio you hear in `--view` is mixed by recovered code (it
+recovered `mix_channel` in hybrid play, so the audio you hear in the viewer is mixed by recovered code (it
 reads the channel state via the bridge, mixes into the live DMA block, writes the channel state back, near-
 rets; the caller reloads its regs and 218F's SP-scratch is its own). Smoke-tested: cold-boot streams audio
 with the live mixer (10192 mix calls, 428 KB PCM), no crash; each block byte-exact vs ASM (verify probes).

@@ -125,7 +125,7 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
     """Drive an already-loaded VM ``rt`` and capture the game-tick timeline.
 
     ``advance_one_frame()`` is a no-arg callback that advances the VM one present-frame (the caller owns the
-    demo/input pacing — e.g. ``play._advance_demo_frame`` over an old input demo, or a live --view step). We
+    demo/input pacing — e.g. ``play._advance_demo_frame`` over an old input demo, or a live-view step). We
     hook ``cpu.step`` only to observe the tick seams: snapshot the native seed at the first ``FRAME_TOP``,
     capture the sampled keys at ``DECODE``, and the post-tick gameplay digest at ``GAP_SITE``. Audio is left
     to the caller (record without the SB so the audio state stays static — it is excluded from the digest

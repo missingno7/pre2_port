@@ -1,6 +1,6 @@
-# Live `--view` wait timing — design + as-built
+# Live view wait timing — design + as-built
 
-> Status: **IMPLEMENTED** and on by default in live `--view` (`--no-live-cheap-waits` disables), for BOTH
+> Status: **IMPLEMENTED** and on by default in live view (`--no-live-cheap-waits` disables), for BOTH
 > wait families: the three VGA retrace waits (9900/990D/44CD, retrace-phase waits) AND the PIT-tick delay
 > `1C6F` (a `[0x27ee]` timer-counter wait). Sections 1–6 are the original report-first design (written for the
 > retrace waits); **§11 is the as-built** for both, with measurements. The deterministic/headless fast-forward
@@ -9,7 +9,7 @@
 The deterministic and live paths share the same *symptom* (the VGA retrace busy-waits 9900/990D/44CD burn
 host CPU) but need **opposite** solutions. Conflating them is the trap this note exists to prevent.
 
-| | deterministic / headless (replay, record, verify, oracle) | live `--view` (realtime) |
+| | deterministic / headless (replay, record, verify, oracle) | live view (realtime) |
 |---|---|---|
 | Emulated clock | `instruction_count / det_speed` (instructions *are* time) | `perf_counter()` (the wall clock *is* time) |
 | What "cheaper waiting" means | execute fewer host instructions for the **same emulated time** | burn less host CPU for the **same wall-clock wait** |
@@ -19,7 +19,7 @@ host CPU) but need **opposite** solutions. Conflating them is the trap this note
 
 ---
 
-## 1. Why deterministic fast-forward does not apply to live `--view`
+## 1. Why deterministic fast-forward does not apply to live view
 
 In the deterministic paths the emulated clock is `instruction_count / det_speed`, so **advancing
 `instruction_count` advances emulated time**. Fast-forwarding the poll run (jumping `instruction_count` past
@@ -28,7 +28,7 @@ retrace bit — a pure function of `instruction_count` — flips at the same pla
 re-emitted at the same `instruction_count` so audio/`[0x27ee]` are byte-identical (see `timing_hook_design.md`
 §8).
 
-In live `--view` the emulated clock is `perf_counter()` (wall time) — `rt.dos.time_source = perf_counter`
+In live view the emulated clock is `perf_counter()` (wall time) — `rt.dos.time_source = perf_counter`
 (play.py, the realtime branch). Here `instruction_count` is **not** time; it is just how much work the host
 chose to do this wall-frame. If we "fast-forwarded" by jumping `instruction_count` we would change *nothing*
 about wall time, and the retrace bit (sampled from `perf_counter`) would not have moved — the wait would not
@@ -139,7 +139,7 @@ Key properties (the careful part):
 
 ## 5. Why this is a CPU/battery/noise win, not a smoothness win
 
-Live `--view` is **already** wall-clock paced and presents at `present_hz`; the picture is as smooth as it is
+Live view is **already** wall-clock paced and presents at `present_hz`; the picture is as smooth as it is
 going to get. The retrace wait already ends at the correct instant, so gameplay timing is already correct.
 Parking changes **none** of that — it only stops the CPU from executing thousands of useless `in al,dx` polls
 while it waits. The visible result is identical frames at identical times; the invisible result is a cooler,
@@ -161,11 +161,11 @@ native-rate default — see `timing_hook_design.md` §10.)
 - **Game pacing changes.** If the game advances even slightly earlier or later in wall time (a wait that ends
   before/after the real retrace phase; more instructions executed after waking to "catch up"; the frame
   deadline shifting), stop — the wall-clock contract is broken.
-- **Live mode diverges from intended wall-clock behavior.** If parking makes live `--view` behave differently
+- **Live mode diverges from intended wall-clock behavior.** If parking makes live view behave differently
   from a full-spin run in anything a player can perceive (timing, audio, input, visuals), stop and report.
 - **The win is marginal.** If, with the deterministic spin already gone from the tooling paths, the measured
   live CPU saving does not justify the added scheduling complexity and risk, it is fine to *not* implement and
-  leave live `--view` as the honest full-spin reference.
+  leave live view as the honest full-spin reference.
 
 ---
 
@@ -189,7 +189,7 @@ wrap). The 1.5 ms margin + busy-poll of the final approach guarantees we never s
 waits for (which would skip a frame → slow). Toggle: `--live-cheap-waits` / `--no-live-cheap-waits` (default
 on). Diagnostics printed at exit: parks, total slept, % of wall yielded, avg/max wait, `unsafe_skipped`.
 
-**Measured (headless, dummy SDL, `pre2/probes/measure_live_park_speed.py` + `--view` smokes):**
+**Measured (headless, dummy SDL, `pre2/probes/measure_live_park_speed.py` + viewer smokes):**
 - Menu (9900) and carte/map (990D): **~63–76 % of wall-clock time yielded** (the core sleeps instead of
   spinning), `unsafe_skipped=0`, wait avg ≈ one 70 Hz period (~14 ms) — i.e. waits are **not** stretched.
 - **Pacing preserved:** retrace-frame rate park-vs-spin drift **+0.8 %** (noise) at equal poll granularity.
@@ -231,7 +231,7 @@ on schedule because `tick_state["next"]` advances by exactly one period per deli
 it fell >0.25 s behind), so there is no drift and no catch-up.
 
 **Measured:**
-- Live gameplay yields ~26–45 % of wall (`--view` smoke vs the isolated `measure_live_park_speed.py` probe;
+- Live gameplay yields ~26–45 % of wall (viewer smoke vs the isolated `measure_live_park_speed.py` probe;
   gameplay also does ~48 % real work, so the wait is the only part that can be yielded). `unsafe_skipped=0`.
 - **Pacing exact:** PIT-wait completion rate park-vs-spin drift **+0.0 %** (identical) — the timer-IRQ
   schedule is wall-clock-driven and untouched by parking, so the loop exits at the same instant either way.
@@ -243,6 +243,6 @@ disables **both** families. Diagnostics report retrace vs pit parks separately p
 completes the live cheap-wait timing branch.
 
 **Not verifiable headless (needs a real display):** visual smoothness, audio underrun, and input latency
-under the park are inherent to live `--view`. The design keeps audio pumping every ~4 ms and input at the
+under the park are inherent to live view. The design keeps audio pumping every ~4 ms and input at the
 existing per-frame cadence (bounded by the frame deadline), but a human check on a real display is the final
-gate — same as the user's own earlier `--view` testing.
+gate — same as the user's own earlier viewer testing.

@@ -70,7 +70,7 @@ that hands the whole identified `.TRK` module to **SDL_mixer's MOD player**
   It never touches the recovered tracker/mixer, the Sound Blaster, DMA, IRQ, or original PCM
   — those stay on the faithful oracle path. This is what `pre2_editor`'s runtime does.
 
-## Live wiring  (`play.py --view --audio enhanced`)
+## Live wiring  (`play.py --audio enhanced`)
 
 The game runs under the VM with a **detection-only Sound Blaster**
 (`enable_sound_blaster(detection_only=True)`): it detects a digital device and runs its
@@ -98,7 +98,7 @@ tool. The live enhanced sound is produced by SDL_mixer in the viewer, not here.
 * **No OPL3/AdLib.** This GOG PRE2 detects the Sound Blaster and is digital-only;
   the vendored `nuked_opl3` FM backend and its viewer wiring were removed (0 OPL writes
   observed). `dos_re` keeps the generic `set_adlib_callback` capability (game-agnostic).
-* Live viewer audio: `play.py --view --audio adlib` plays the faithful SB-DMA stream;
+* Live viewer audio: `play.py --audio adlib` plays the faithful SB-DMA stream;
   `--audio enhanced` is the SDL_mixer MOD player driven by `install_command_observers`.
 * **Faithful-from-standard gap (deepest root, deferred):** the faithful backend plays the
   PRE2 in-memory capture; making it consume `StartSong(.TRK)` byte-exact would require

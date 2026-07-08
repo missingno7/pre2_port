@@ -162,5 +162,5 @@ everywhere else):
 - Enhanced is NOT byte-exact (different presentation). It is *grounded*: positions/identity/graphics come
   from the byte-verified recovered leaves; only the pixel projection is new. Faithful stays the byte baseline.
 - Verification: interpolation **math** + endpoints (alpha=0→prev, alpha=1→cur) are unit-testable headlessly;
-  **smoothness** is a live-`--view` eyeball check (no headless high-refresh witness). Source cadence is
+  **smoothness** is a live-view eyeball check (no headless high-refresh witness). Source cadence is
   measured (`measure_source_cadence.py`).

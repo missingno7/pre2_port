@@ -14,7 +14,7 @@ This is a recovered timing hook like any other island: ``scripts/play._advance_f
 by default with the hybrid runtime, and falls back to the interpreted ASM loops under ``--no-replacements``
 or ``--no-fast-retrace-waits`` (the original timing path kept available for comparison).
 
-Scope: deterministic clock only (``time_source(ic) = base + ic/det_speed``). Live ``--view`` wall-clock
+Scope: deterministic clock only (``time_source(ic) = base + ic/det_speed``). Live view wall-clock
 pacing is OUT of scope (it would need an outer-loop scheduler change — see the design note §7). Pure timing —
 no renderer/audio-mixer logic; the only side effects are the very instructions the interpreted loop runs.
 """

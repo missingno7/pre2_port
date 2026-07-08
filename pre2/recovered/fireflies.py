@@ -28,7 +28,7 @@ firefly flicker. Writes are OR (GC function-select 0x10, [asm 54BA]), so an exis
 IMPORTANT (faithful vs hardware): the dos_re EGA emulation (``memory._ega_wb``) does **not** implement
 the Set/Reset / Enable-Set/Reset registers (GC index 0/1) — it writes the CPU data byte to every
 map-masked plane. So under the VM oracle the even-timer color-14 path collapses and **every** firefly is
-drawn color **15** (all four planes). The faithful renderer's oracle is the VM (what ``--view`` shows),
+drawn color **15** (all four planes). The faithful renderer's oracle is the VM (what the viewer shows),
 so this leaf OR's all four planes to match it byte-exact. The true 14/15 flicker is recovered in
 ``firefly_color(timer)`` for the ENHANCED renderer (which should restore the flicker), and is the right
 fix-site if dos_re ever grows Set/Reset emulation.

@@ -8,7 +8,7 @@
 The module is captured as a neutral asset and played **from the top** with no VM and no
 Sound Blaster, reproducing the original byte-exact 8-bit / ~8.4 kHz output (then band-limit
 resampled to 44.1 kHz for the WAV). This is the offline oracle/debug tool; the live, modern
-audio is the SDL_mixer path (``play.py --view --audio enhanced``).
+audio is the SDL_mixer path (``play.py --audio enhanced``).
 
 Run:  python scripts/render_music.py <snapshot_dir> [--seconds N] [--out file.wav]
 """

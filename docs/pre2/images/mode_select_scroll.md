@@ -76,7 +76,7 @@ from DOSBox, so the menu advances more steps/second here (user-measured ≈17 vs
 in 15 s). The scroll *geometry* is correct; only its *speed* depends on the retrace model. **Not an
 original-game oversight** — the game just uses a timing-sensitive half-vsync-wait.
 
-**Tuning knobs (live `--view`, opt-in, defaults unchanged):**
+**Tuning knobs (live view, opt-in, defaults unchanged):**
 * `--retrace-pulse F` — fraction of each refresh the retrace status bit reads active
   (`dos.vga_retrace_active_fraction`, default `0.28` = legacy). A realistic narrow pulse
   (~`0.05`–`0.08`) gates the half-wait to **one frame per 70 Hz retrace** → correct menu speed.

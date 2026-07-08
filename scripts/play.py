@@ -10,7 +10,7 @@ Unrecovered behaviour fails LOUD (`Pre2HybridGap`) — never a silent fall-throu
 Two independent axes — EXECUTION MODE and VIDEO BACKEND.
 
 Execution mode (no silent fallbacks):
-  * ``--view`` (default = HYBRID)  hybrid runtime: recovered native replacements run in place of
+  * ``(no flags)`` (default = HYBRID)  hybrid runtime: recovered native replacements run in place of
                                    the ASM. Live VGA/text viewer + digital audio.
   * ``--no-replacements``          ORACLE mode: pure original ASM, no recovered hooks.
   * ``--verify-hooks``             VERIFY mode: the ASM oracle runs and each recovered replacement is
@@ -25,7 +25,7 @@ backends were retired with the hybrid faithful/enhanced experiment.)
 PRE2 uses BIOS text, linear VGA, and a 320x200 16-colour planar path; the viewer renders those
 and plays the digital audio (MOD music + PCM SFX) via the emulated Sound Blaster DMA path (PRE2
 GOG is digital-only, never OPL3/AdLib). F11 records an input demo, F12 saves a snapshot;
-``--play-demo DIR`` replays a recorded demo (headless + deterministic, add ``--view`` to watch).
+``--play-demo DIR`` replays a recorded demo (viewer + deterministic by default, add ``--headless`` to skip the viewer).
 """
 from __future__ import annotations
 
@@ -371,7 +371,7 @@ def _advance_frame_deterministic(rt, args, *, chunk_steps, sub_batch, clock, pic
                             input_irq_steps=input_irq_steps, tick_state=tick_state)
 
 
-# --- Live --view scheduler-friendly retrace waits ------------------------------------------------------
+# --- Live view scheduler-friendly retrace waits ------------------------------------------------------
 # Live mode is wall-clock paced (time_source = perf_counter), so the deterministic instruction-count
 # fast-forward does NOT apply — fast-forwarding would advance game time early. Instead, while the VM is parked
 # in a classified retrace wait (1030:9900/990D/44CD), we YIELD the core (sleep) during the *safe interior* of
@@ -1016,7 +1016,7 @@ def _maybe_install_song_load_ff(rt, args) -> None:
     replay/verify (which must run the ASM loader to match the demo's recorded multi-frame song load)."""
     want = getattr(args, "fast_song_load", None)
     if want is None:
-        want = bool(args.view) and not args.play_demo
+        want = not bool(args.headless) and not args.play_demo
     if want:
         from pre2.bridge.song_load_fastforward import install_song_load_fastforward
         install_song_load_fastforward(rt.cpu)
@@ -1037,17 +1037,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--game-root", default=str(ROOT / "assets"), help="directory containing PRE2 assets")
     p.add_argument("--dos-args", default="", help="raw DOS command tail to pass to PRE2.EXE")
     p.add_argument("--snapshot", help="continue from an existing snapshot directory, or a DOSBox-X .sav save state")
-    p.add_argument("--steps", type=int, default=None, help="max VM instructions to execute (default: unbounded in --view, 1,000,000 headless)")
+    p.add_argument("--steps", type=int, default=None, help="max VM instructions to execute (default: unbounded with the viewer, 1,000,000 in --headless)")
     p.add_argument("--stop-at", type=parse_addr, help="stop before executing CS:IP, e.g. 1030:0100")
     p.add_argument("--trace-tail", type=int, default=40, help="number of recent trace lines to keep/print")
     p.add_argument("--save-snapshot", nargs="?", const="auto", help="save a VM snapshot; optional directory path")
     p.add_argument("--inventory", action="store_true", help="print PRE2 executable/asset inventory and exit")
-    p.add_argument("--view", action="store_true", help="open the live pygame VGA/text viewer with digital audio")
+    p.add_argument("--headless", action="store_true", help="skip the live pygame VGA/text viewer + digital audio (default: viewer on)")
     p.add_argument("--record-demo", metavar="NAME", help="(viewer) start recording an input demo immediately")
-    p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (headless unless --view)")
+    p.add_argument("--play-demo", metavar="DIR", help="replay a recorded demo dir (viewer unless --headless)")
     p.add_argument("--fast-song-load", dest="fast_song_load", action="store_true", default=None,
                    help="fast-forward the MOD song loader (byte-exact; removes the ~1s boss-music-load freeze). "
-                        "Default ON for the fresh --view viewer, OFF for --play-demo (so existing demos "
+                        "Default ON for the fresh viewer, OFF for --play-demo (so existing demos "
                         "replay/verify against the ASM). Pass this to replay a demo recorded with it.")
     p.add_argument("--no-fast-song-load", dest="fast_song_load", action="store_false",
                    help="disable the MOD song-load fast-forward")
@@ -1057,12 +1057,12 @@ def main(argv: list[str] | None = None) -> int:
                         "(the recovered mixer's output); 'enhanced' = modern float mixer playing "
                         "the standard .TRK songs + SFX driven by the recovered audio commands; 'off'")
     p.add_argument("--scale", type=int, default=2, help="initial live viewer scale")
-    p.add_argument("--speed", type=int, default=150_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Default 150k ~= PRE2's native rate: its per-frame game work is only ~1.3-1.9k instr (measure_frame_work.py), so ~132k (p90 work x 70Hz) fills one retrace frame with minimal spin; higher values just inflate idle retrace spin (a 450k frame is ~99% spin) and overrun the host interpreter (~270k instr/s) so the demo loop falls behind real time and drops to the 4Hz render fallback. Live --view ignores this and self-paces on the wall clock")
+    p.add_argument("--speed", type=int, default=150_000, help="emulated CPU steps/sec for the demo record/replay clock (steps-per-frame = speed/present-hz); the PIT/SB/retrace run at their true rates within that budget. Default 150k ~= PRE2's native rate: its per-frame game work is only ~1.3-1.9k instr (measure_frame_work.py), so ~132k (p90 work x 70Hz) fills one retrace frame with minimal spin; higher values just inflate idle retrace spin (a 450k frame is ~99% spin) and overrun the host interpreter (~270k instr/s) so the demo loop falls behind real time and drops to the 4Hz render fallback. Live view ignores this and self-paces on the wall clock")
     p.add_argument("--chunk-steps", type=int, default=None, help="override VM steps per frame / demo clock (else derived from --speed and --present-hz)")
     p.add_argument("--present-hz", type=int, default=70, help="live presents per second (also paces the VM to real time); 70 matches the VGA refresh for a smooth present (demos replay at their recorded value)")
     p.add_argument("--retrace-pulse", type=float, default=0.06, help="(live) fraction of each refresh the VGA vertical-retrace status bit reads active. ~0.06 = realistic narrow VGA pulse that gates PRE2's mode-select scroll half-wait to one frame per 70Hz retrace (matches DOSBox); 0.28 = legacy wide window (~2x fast scroll). Demos replay at their recorded value")
     p.add_argument("--cpu-hz", type=int, default=0, help="(live) cap VM instructions/sec as an era-style ceiling (0 = unlimited, today's behavior). Caps ungated busy-loops + sets overall feel; tune by eye against DOSBox (our 'instruction' is not a real CPU cycle)")
-    p.add_argument("--live-cheap-waits", action=argparse.BooleanOptionalAction, default=True, help="(live --view) yield the CPU while the VM is parked in a classified VGA retrace busy-wait (9900/990D/44CD): sleep through the safe interior of each retrace phase and busy-poll only the last ~1.5ms before an edge, so the wait still exits at the same wall-clock instant. Same pacing/game timing, less CPU burn/fan/battery. --no-live-cheap-waits forces the original full-spin (safety/debug). Does NOT affect deterministic/headless/verify timing")
+    p.add_argument("--live-cheap-waits", action=argparse.BooleanOptionalAction, default=True, help="(live view) yield the CPU while the VM is parked in a classified VGA retrace busy-wait (9900/990D/44CD): sleep through the safe interior of each retrace phase and busy-poll only the last ~1.5ms before an edge, so the wait still exits at the same wall-clock instant. Same pacing/game timing, less CPU burn/fan/battery. --no-live-cheap-waits forces the original full-spin (safety/debug). Does NOT affect deterministic/headless/verify timing")
     p.add_argument("--fast-adlib", action="store_true", help="mute/skip the hot PRE2 AdLib service thunk: reaches the game fastest, but mutes music")
     p.add_argument("--timer-irq", action=argparse.BooleanOptionalAction, default=True, help="deliver PRE2's INT 08h timer ISR each frame")
     p.add_argument("--input-irq-steps", type=int, default=2_000_000, help="maximum VM steps for one keyboard/timer interrupt")
@@ -1072,7 +1072,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--verify-verbose", action="store_true", help="(with --verify-hooks) print a line for every OK result, not just divergences + the periodic summary")
     p.add_argument("--full-verify", action="store_true", help="foolproof variant of --verify-hooks: diff the WHOLE machine state (all memory + return cs:ip:sp) after each recovered routine vs the ASM, so nothing can leak outside a hand-picked contract. ~10x slower; for offline snapshot/demo audits, not live play")
     p.add_argument("--trace-hooks", action="store_true", help="run the LIVE hybrid runtime (hooks replacing ASM, NOT the oracle) and show which recovered hooks fire — a live coverage view in the title bar + a periodic/final per-hook tally. Hooks absent = that screen is still pure ASM")
-    p.add_argument("--fast-retrace-waits", action=argparse.BooleanOptionalAction, default=None, help="recovered timing primitive (deterministic paths: headless replay, in-view demo replay, verify/oracle): collapse the classified VGA retrace busy-waits (9900/990D/44CD) in closed form, byte-equivalent to the interpreted stepper (~6-15x faster on wait-heavy scenes). Default auto: on with the hybrid runtime, off under --no-replacements. Pass --fast-retrace-waits EXPLICITLY to enable it under --no-replacements too (byte-equivalent — only wall-clock speed changes); --no-fast-retrace-waits forces the interpreted ASM loops in any mode. Does NOT affect live --view wall-clock pacing")
+    p.add_argument("--fast-retrace-waits", action=argparse.BooleanOptionalAction, default=None, help="recovered timing primitive (deterministic paths: headless replay, in-view demo replay, verify/oracle): collapse the classified VGA retrace busy-waits (9900/990D/44CD) in closed form, byte-equivalent to the interpreted stepper (~6-15x faster on wait-heavy scenes). Default auto: on with the hybrid runtime, off under --no-replacements. Pass --fast-retrace-waits EXPLICITLY to enable it under --no-replacements too (byte-equivalent — only wall-clock speed changes); --no-fast-retrace-waits forces the interpreted ASM loops in any mode. Does NOT affect live view wall-clock pacing")
     args = p.parse_args(argv)
 
     # VM steps per frame: explicit override, else derived so that
@@ -1108,7 +1108,7 @@ def main(argv: list[str] | None = None) -> int:
         _install_verification_hooks(rt, args)
         _install_hook_trace(rt, args)
         _maybe_install_song_load_ff(rt, args)
-        if args.view:
+        if not args.headless:
             return _run_view(rt, args, playback=playback)
         return _run_replay_headless(rt, args, playback)
 
@@ -1116,7 +1116,7 @@ def main(argv: list[str] | None = None) -> int:
     _install_verification_hooks(rt, args)
     _install_hook_trace(rt, args)
     _maybe_install_song_load_ff(rt, args)
-    if args.view:
+    if not args.headless:
         return _run_view(rt, args)
 
     status, steps, trace_tail = run_until(

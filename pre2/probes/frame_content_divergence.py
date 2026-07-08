@@ -130,7 +130,7 @@ def _run_pass(demo_dir: str, *, native: bool, fast: bool, max_frames: int | None
 
 
 _CONFIGS = {
-    "hybrid-fast":   dict(native=True, fast=True),     # what --view runs by default (fast-retrace timing)
+    "hybrid-fast":   dict(native=True, fast=True),     # what the viewer runs by default (fast-retrace timing)
     "hybrid-interp": dict(native=True, fast=False),    # hooks + interpreted timing == pure ASM whole-memory
 }                                                      # (proven 0-byte vs --no-replacements); the oracle here
 

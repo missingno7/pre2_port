@@ -53,7 +53,7 @@ map marker draw primitives (8900/8980/8600/83C0); the scene/attract + menu (991F
 physics / collision / AI. The VGA retrace busy-waits (9900/990D/44CD) are now a **recovered timing
 primitive** — `pre2/bridge/timing_fastforward.advance_frame_fast`, the default deterministic stepper
 (headless replay / in-view demo / verify/oracle), collapses their poll spins in closed form byte-equivalently
-(~6-15x faster; off under `--no-replacements` / `--no-fast-retrace-waits`; live `--view` untouched). See
+(~6-15x faster; off under `--no-replacements` / `--no-fast-retrace-waits`; live view untouched). See
 `docs/pre2/timing_hook_design.md` §8-9.
 
 ## ★ CURRENT STATUS (2026-06-24) — authoritative; everything under the ARCHIVE divider is historical
@@ -61,7 +61,7 @@ primitive** — `pre2/bridge/timing_fastforward.advance_frame_fast`, the default
 **Phase:** hybrid recovered-source runtime + renderer recovery complete for gameplay/scenes;
 **next phase = state ownership**.
 
-- **Runtime:** `play.py --view` is the **HYBRID runtime by default** — recovered native replacements run
+- **Runtime:** `play.py` is the **HYBRID runtime by default** — recovered native replacements run
   in place of the ASM. The original ASM runs ONLY in `--no-replacements` (oracle) or `--verify-hooks`
   (verify) modes. Unrecovered behaviour fails loud (`Pre2HybridGap`), never a silent ASM fallback.
 - **Rendering — recovered + live-grounded:** SQZ asset decode; sprite/object decode + classify + blit;
@@ -122,7 +122,7 @@ native code is now part of the normal runtime.
 
 - **Hybrid runtime is the default.** `create_pre2_runtime()` installs native
   **replacement** hooks (`pre2/checkpoints/`) that run in place of the original
-  ASM. `play.py --view` is the hybrid runtime, not pure ASM. The earlier
+  ASM. `play.py` is the hybrid runtime, not pure ASM. The earlier
   VM-correctness fixes (BIOS ROM write-protect, ADC/SBB + shift/rotate flags, CRTC
   display-start reset, EGA read-mode-1 colour compare) made gameplay render correctly.
 - **First recovered-native island: SQZ asset decompression** (`pre2/codecs/sqz.py`).
@@ -173,7 +173,7 @@ native code is now part of the normal runtime.
   diverge from code. The frame **adapters** (`pre2/checkpoints/frame.py`) are thin:
   they read VM state through the bridge dataclasses, call the recovered function, and
   write the contract back — no raw segment:offsets and no renderer logic live there.
-- **Real-time pacing (live `--view`):** the VM now models **PIT channel 0** (the
+- **Real-time pacing (live view):** the VM now models **PIT channel 0** (the
   program programs ch0 reload `0x4000` → 72.83 Hz itself; we read it, never
   hardcode) and advances the **70 Hz VGA-retrace** bit on the wall clock, so PRE2's
   own timer/vsync waits set the speed. Live play self-paces to its native **~21.8
@@ -236,7 +236,7 @@ What works now:
   - EGA/VGA planar map-mask, read-plane, latch, data-rotate, and logical-op behaviour needed by the probe.
 - DOS multiplex `INT 2Fh AX=4300h` reports XMS absent instead of killing the boot.
 - The VM implements `CMPSB/CMPSW`, including `REP` semantics, which PRE2 uses after the Titus presentation.
-- `scripts/play.py --view` now has a simple live VGA/text/EGA presenter and delivers keyboard scan codes through PRE2's own ISR.
+- `scripts/play.py` now has a simple live VGA/text/EGA presenter and delivers keyboard scan codes through PRE2's own ISR.
 
 Proof artifacts produced during bring-up:
 
@@ -251,7 +251,7 @@ Useful commands:
 ```bash
 python scripts/play.py --inventory
 python scripts/play.py --steps 1000000 --trace-tail 40 --fast-adlib
-python scripts/play.py --view --fast-adlib --steps 50000000
+python scripts/play.py --fast-adlib --steps 50000000
 python scripts/render_frame.py artifacts/after_sprites_04 --video vga --out title.png
 ```
 

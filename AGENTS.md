@@ -53,7 +53,7 @@ lifted into the native core.
 
 - **native (product)** — recovered source only, NO VM (`play_native.py`); the standalone game.
 - **oracle / original** — pure original ASM (`create_pre2_runtime(..., native_replacements=False)`); reference and observation.
-- **hybrid (workbench)** — recovered native replacements over the VM, no per-step verification (`play.py --view`); prepare/record new islands vs the live ASM.
+- **hybrid (workbench)** — recovered native replacements over the VM, no per-step verification (`play.py`, the default); prepare/record new islands vs the live ASM.
 - **verify** — ASM oracle vs recovered logic, diffed at contract boundaries (`play.py --verify-hooks`); offline proof against demos/snapshots.
 
 The original ASM runs **only** in oracle/verify modes. In hybrid mode, unrecovered
@@ -284,21 +284,21 @@ for larger paths.
 
 ## Standard commands
 
-`play.py --view` runs the **hybrid runtime** (recovered native replacements run in
-place of the ASM). Add `--verify-hooks` for verify mode (lockstep ASM oracle
-check). Rendering covers BIOS text, linear VGA, and the 320x200 16-colour planar
+`play.py` runs the **hybrid runtime** by default (recovered native replacements run in
+place of the ASM, live viewer + audio). Add `--verify-hooks` for verify mode (lockstep ASM oracle
+check); add `--headless` to skip the live viewer. Rendering covers BIOS text, linear VGA, and the 320x200 16-colour planar
 path; audio is the vendored Nuked-OPL3 backend driven by the original AdLib stream.
 
 ```bash
 python scripts/run_tests.py                                   # test suite
 python scripts/play.py --inventory                            # inspect original files
-python scripts/play.py --view                                 # hybrid runtime + OPL3 audio
-python scripts/play.py --view --verify-hooks                  # verify mode (lockstep vs ASM)
-python scripts/play.py --steps 1000000 --save-snapshot        # headless snapshot for study
+python scripts/play.py                                        # hybrid runtime + OPL3 audio (viewer)
+python scripts/play.py --verify-hooks                         # verify mode (lockstep vs ASM)
+python scripts/play.py --headless --steps 1000000 --save-snapshot   # headless snapshot for study
 python scripts/render_frame.py artifacts/<snapshot> --out frame.png   # VGA PNG dump
 ```
 
-`--view` runs **unbounded** (until the window closes); `F10` screenshots, `F11`
+The viewer runs **unbounded** (until the window closes); `F10` screenshots, `F11`
 toggles demo recording, `F12` saves a snapshot. `--speed N` (default 120000
 steps/sec) sets the game+music tempo; `--fast-adlib` reaches graphics fastest but
 mutes music.
@@ -307,9 +307,9 @@ Snapshots and demos (the evidence the source-port work is verified against):
 
 ```bash
 # In the viewer: F12 saves a snapshot, F11 toggles input-demo recording.
-python scripts/play.py --view --record-demo menu_nav        # record from launch
-python scripts/play.py --play-demo artifacts/demo_menu_nav_<ts>            # replay (headless, deterministic)
-python scripts/play.py --play-demo artifacts/demo_menu_nav_<ts> --view     # watch the replay
+python scripts/play.py --record-demo menu_nav                # record from launch
+python scripts/play.py --play-demo artifacts/demo_menu_nav_<ts> --headless  # replay (headless, deterministic)
+python scripts/play.py --play-demo artifacts/demo_menu_nav_<ts>             # watch the replay
 ```
 
 A demo stores a start snapshot plus VM-visible input keyed to a per-frame clock;

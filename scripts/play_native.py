@@ -3,7 +3,7 @@
 The standalone runner, with NO emulator anywhere: from the BOOT CONSTANTS (pre2/native/boot_data.py — the game's
 initialized data segment, no EXE needed) + the GOG ``*.SQZ`` assets, it drives the recovered FRONT-END flow (OLDIES credits ->
 TITUS title -> PREHISTORIK-2 title -> menu -> world map -> level) and then the recovered GAMEPLAY — no x86 is
-interpreted and ``PRE2.EXE`` is never executed at runtime. This is the VM-less counterpart of ``play.py --view``:
+interpreted and ``PRE2.EXE`` is never executed at runtime. This is the VM-less counterpart of ``play.py``'s viewer:
 it starts at the very first screen, exactly like the real game, and runs forward until it hits a not-yet-recovered
 gap (where it stops and reports, rather than silently faking anything).
 
