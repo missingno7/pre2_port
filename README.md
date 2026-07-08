@@ -187,6 +187,13 @@ Everything above is about **playing** the game, and needs no `.EXE`. This sectio
 the port** — recovering new behaviour and proving it byte-for-byte against the original ASM. If you just
 want to play, you can stop here.
 
+`dos_re` (the VM/oracle) is a git submodule, not vendored code — clone with `git clone
+--recurse-submodules`, or run `git submodule update --init --recursive` afterwards. It's also a real
+package (not just importable via `sys.path`): the pytest suite resolves it automatically, but the
+standalone scripts under `pre2/probes/` and `scripts/` need it on `sys.path` explicitly, so run
+`pip install -e dos_re/` once per environment (editable install — no copying, just makes `import dos_re`
+work from anywhere).
+
 There are two runtimes:
 
 | | Entry point | Emulator? | Needs `PRE2.EXE`? | For |

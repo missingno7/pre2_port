@@ -164,20 +164,20 @@ Keep durable policy here in `AGENTS.md`. Keep time-sensitive status in
 ## Repository layout
 
 ```text
-dos_re/                 reusable, game-independent DOS RE environment
-  cpu.py                dependency-free 8086 interpreter core
-  memory.py             20-bit real-mode memory model (+ EGA planar aperture)
-  mz.py                 MZ EXE parser/loader helpers
-  dos.py                narrow DOS/BIOS/port services
-  hooks.py              generic replacement-hook registry
-  interrupts.py         generic interrupt/scancode delivery helpers
-  keyboard.py           host input -> emulated keyboard state
-  runtime.py            generic DOS-program runtime wiring
-  snapshot.py           generic memory/state snapshot helpers
-  verification.py       reusable differential hook-verifier engine
-  frame_verify.py       reusable frame comparison/diff artifact engine
-  bootstrap_lzexe.py    target-neutral LZEXE 0.91 loop accelerator
-  AI_PORTING_CHARTER.md the reusable porting charter
+dos_re/                 git submodule: the reusable, game-independent DOS RE
+                         environment (https://github.com/missingno7/dos_re).
+                         Not vendored code -- clone with --recurse-submodules,
+                         or `git submodule update --init --recursive`. The
+                         actual package is one level deeper, at dos_re/dos_re/
+                         (cpu.py, memory.py, mz.py, dos.py, hooks.py,
+                         interrupts.py, keyboard.py, runtime.py, snapshot.py,
+                         verification.py, frame_verify.py, bootstrap_lzexe.py,
+                         ...); dos_re/docs/ is its own reference manual.
+                         `pip install -e dos_re/` once per environment makes
+                         it importable from anywhere (pytest resolves it via
+                         this repo's pyproject.toml `pythonpath` regardless).
+                         The generalized porting charter now lives in
+                         template_dos_port, not here.
 
 pre2/                   Prehistorik 2-specific recovery layer
   runtime.py            PRE2 launch/snapshot wiring; installs hybrid replacements
@@ -189,8 +189,10 @@ pre2/                   Prehistorik 2-specific recovery layer
   probes/               temporary observation/diagnostic tools    [as needed]
   launch.py / cli.py    PRE2 entry points
   analysis.py           PRE2 inspection helpers
+  gaps.py, islands.py   PRE2's own game-specific gap/island registries (predate
+                         and are separate from dos_re's generic dos_re.gaps /
+                         dos_re.islands -- not the same modules, not shared)
 
-nuked_opl3/             vendored optional Nuked-OPL3 OPL/AdLib backend
 docs/                   methodology (dos_re), architecture, and PRE2 findings
 scripts/                runners and RE helpers (play.py, render_frame.py, ...)
 assets/                 original Prehistorik 2 files (pre2.exe, *.sqz, *.trk)
