@@ -24,6 +24,7 @@ viewer = [
 ]
 test = [
     "pytest>=8",
+    "pytest-xdist>=3",  # parallel suites: python -m pytest tests -q -n auto
 ]
 adlib = [
     "cffi>=1.15",
