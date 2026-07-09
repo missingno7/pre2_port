@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "dos_re"))  # submodule repo root (no editable install under PyPy)
 
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode

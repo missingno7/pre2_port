@@ -38,6 +38,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
+# dos_re submodule repo root (the package is one level deeper). Needed by any
+# interpreter without a pip-editable dos_re install (e.g. PyPy).
+sys.path.insert(0, str(ROOT / "dos_re"))
 
 _FRAME_HASH = bool(os.environ.get("PRE2_FRAME_HASH"))  # extraction-equivalence harness (deterministic replay)
 
