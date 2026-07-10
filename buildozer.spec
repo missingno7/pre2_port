@@ -21,10 +21,11 @@ icon.filename = %(source.dir)s/icon.png
 
 source.dir = .
 # p4a's entry point is always main.py at the source root (which this repo has) — there is no spec key for it.
-# Only Python sources + the game data get packaged (no pyc, no oracle VM, no tests/artifacts).
-source.include_exts = py
-source.include_patterns = assets/*.SQZ,assets/*.TRK,assets/*.sqz,assets/*.trk
-source.exclude_dirs = tests,dos_re,artifacts,docs,dist,.git,.github,.idea,.pytest_cache,pre2/probes,venv,.venv
+# Python sources + the game data + the icon. The *.SQZ/*.TRK data MUST be listed as include_exts (not just
+# include_patterns, which the py-only filter ignored) or the game ships with no data. Both cases, since the
+# GOG files are upper-case.
+source.include_exts = py,SQZ,TRK,sqz,trk,png
+source.exclude_dirs = tests,dos_re,artifacts,docs,dist,bin,.git,.github,.idea,.pytest_cache,pre2/probes,venv,.venv
 
 version = 0.1.0
 
