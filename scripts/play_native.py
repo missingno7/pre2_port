@@ -645,6 +645,15 @@ def main(argv=None) -> int:
             held.add(0x39)
         pad = pad_scancodes() if pads else set()                   # GAMEPAD: same scancodes the keyboard writes
         tsc = touch.scancodes() if touch is not None else set()    # TOUCH: joystick dirs + JUMP(0x48)/BASH(0x39)
+        if touch is not None:
+            # BASH is EDGE-triggered for touch: a finger-hold spans many ticks, so a level fire cascades the
+            # front-end (one tap enters mode-select AND accepts it). Fire only on a fresh press; suppress while
+            # held, re-arm on release — so you tap to enter, release, tap again to accept (a quick keyboard tap).
+            # Directions + JUMP stay level/buffered.
+            _bash = 0x39 in tsc
+            if _bash and not ref.get("touch_bash_ready", True):
+                tsc = tsc - {0x39}                                 # still held from a prior tick -> not a new press
+            ref["touch_bash_ready"] = not _bash                    # a fresh press can fire again only after release
         held |= ((pad | tsc) - {0x48})                             # dirs / attack / start straight in; jump via buffer
         jump = bool(k[pygame.K_UP] or k[pygame.K_KP8] or (0x48 in pad) or (0x48 in tsc))
         if settings["responsive_controls"]:
