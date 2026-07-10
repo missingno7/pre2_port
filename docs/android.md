@@ -8,13 +8,15 @@ flags in). The only game-facing addition is an on-screen control layer.
 
 - ✅ On-screen touch controls — pure resolver + pygame renderer, wired into `play_native.py`, unit-tested,
   and runnable on desktop with `--touch` (mouse = one finger).
-- ✅ APK build path — `buildozer.spec` + `main.py` entry + a GitHub Actions workflow that builds the debug
-  APK on a Linux runner. The **app half** is proven (running `main.py` with `ANDROID_ARGUMENT` set boots
-  the whole game with touch on); the **toolchain half** (buildozer on Linux) runs in CI — not yet executed
-  on a real runner from here, but ready to trigger.
-- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, perf profiling.
+- ✅ APK **built** — a working debug APK (`org.pre2port.pre2`, arm64-v8a, minSdk 26) was produced in WSL
+  with the caveman-head launcher icon, the touch controls, and the game data bundled. See the build recipe
+  below.
+- ✅ Project icon — the extra-life caveman head (sprite 227, cream-outlined on transparent). Master at
+  [`icon.png`](../icon.png); used for the native window and the APK launcher.
+- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, perf profiling, a clean
+  arm64-only repackage (the first APK carries stray armeabi-v7a SDL `.so`s — harmless on 64-bit phones).
 
-> buildozer does **not** run on Windows. Build the APK either in CI (below) or on a Linux/WSL host.
+> buildozer does **not** run on Windows. Build the APK on a Linux/WSL host (recipe below) or in CI.
 
 ## Controls
 
@@ -82,6 +84,30 @@ pip install buildozer
 buildozer -v android debug
 buildozer android deploy run logcat
 ```
+
+The APK lands in `bin/`. `buildozer.spec` already pins the combo that works on a modern toolchain (see the
+recipe notes below); a bleeding-edge python-for-android with default versions will **not** build as-is.
+
+#### Build recipe / gotchas (what it took on Ubuntu 26.04 + NDK r28c)
+
+The `buildozer.spec` captures the reproducible parts:
+
+- `requirements = python3==3.11.9,numpy,pygame==2.6.1` — p4a's defaults (Python 3.14 + pygame 2.1.0) fail
+  to compile (`longintrepr.h` is gone after 3.11). 3.11.9 + pygame 2.6.1 is the proven combo.
+- `android.minapi = 26` — Bionic only declares `setgrent/getgrent/endgrent` at API ≥ 26, and NDK r28c's
+  clang makes implicit declarations a hard error (CPython `grpmodule.c`).
+- `android.archs = arm64-v8a` — 64-bit only (armeabi-v7a's numpy cross-build needs extra care).
+
+Two fixes still live in the p4a checkout (`.buildozer/.../python-for-android/`) and are **not** captured by
+the spec — redo them on a clean build (or pin p4a / use `p4a.local_recipes`):
+
+1. `recipes/hostpython3/__init__.py`: set `version = "3.11.9"` (must match the target `python3`).
+2. Install Cython into the built hostpython so pygame 2.6.1 can cythonise:
+   `.../other_builds/hostpython3/desktop/hostpython3/native-build/root/usr/local/bin/python -m pip install "cython<3.1"`.
+
+Also accept the SDK licenses non-interactively before the first build (buildozer's legacy `sdkmanager`
+mis-parses `--licenses` under Java 17): write the canonical hash files into
+`~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license`.
 
 ### First-launch behaviour without data
 

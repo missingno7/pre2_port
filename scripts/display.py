@@ -17,7 +17,7 @@ _TITLE = "PRE2 — VM-less native"
 
 
 class Display:
-    def __init__(self, size, *, title: str = _TITLE):
+    def __init__(self, size, *, title: str = _TITLE, icon=None):
         self.integer_scale = False
         self.par = 1.0                     # displayed pixel aspect (height/width). 1.0 = square pixels;
         #                                    1.2 = the DOS 4:3 look (320x200 shown at 4:3 -> pixels 1.2x tall).
@@ -30,6 +30,11 @@ class Display:
             from pygame._sdl2 import video as sdl2
             self._sdl2 = sdl2
             self.window = sdl2.Window(title, size=size, resizable=True)
+            if icon is not None:
+                try:
+                    self.window.set_icon(icon)          # SDL2 window's own icon (titlebar / taskbar)
+                except Exception:                       # noqa: BLE001 — older pygame lacks Window.set_icon
+                    pass
             self.renderer = sdl2.Renderer(self.window, accelerated=-1, vsync=False)
             self.renderer.draw_color = (0, 0, 0, 255)
             self.gpu = True

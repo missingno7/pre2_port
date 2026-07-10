@@ -168,10 +168,18 @@ def main(argv=None) -> int:
     _os.environ.setdefault("SDL_HINT_RENDER_SCALE_QUALITY", "0")          # crisp nearest-neighbour GPU upscale
     pygame.init()
     from display import Display
+    # Window / taskbar icon: the extra-life caveman head. set_icon BEFORE the window is created so the software
+    # path picks it up; also passed to Display for the SDL2 window. Best-effort (frozen/deployed builds may omit).
+    _icon = None
+    try:
+        _icon = pygame.image.load(str(ROOT / "icon.png"))
+        pygame.display.set_icon(_icon)
+    except Exception:                                            # noqa: BLE001 — icon is cosmetic, never fatal
+        _icon = None
     # GPU-accelerated present (SDL2 renderer): uploads the small game frame and lets the GPU scale it to the
     # window, so fps no longer collapses as the window grows (the old software path scaled + flipped the whole
     # window surface every frame). Falls back to a software surface where the renderer is unavailable.
-    disp = Display((320 * args.scale, 200 * args.scale))
+    disp = Display((320 * args.scale, 200 * args.scale), icon=_icon)
     view = {"win_size": (320 * args.scale, 200 * args.scale)}     # remembered windowed size (for exit-fullscreen)
     clock = pygame.time.Clock()
 
