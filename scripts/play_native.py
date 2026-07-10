@@ -210,8 +210,16 @@ def main(argv=None) -> int:
     def _open_pad(index):
         try:
             js = pygame.joystick.Joystick(index); js.init()
+            # On Android SDL surfaces the accelerometer/other motion sensors as buttonless "joysticks"; their
+            # tilt axes would inject phantom movement. A real controller has buttons — skip anything with none
+            # (or an obvious sensor name), so the on-screen touch controls stay the only input.
+            name = js.get_name()
+            if js.get_numbuttons() == 0 or any(s in name.lower() for s in ("accelerometer", "sensor", "gyro")):
+                print(f"(ignoring non-controller input device: {name})")
+                js.quit()
+                return
             pads[js.get_instance_id()] = js
-            print(f"gamepad connected: {js.get_name()} "
+            print(f"gamepad connected: {name} "
                   f"({js.get_numaxes()} axes, {js.get_numhats()} hats, {js.get_numbuttons()} buttons)")
         except Exception as e:                    # noqa: BLE001 — a flaky pad must never stop the game
             print(f"(gamepad init failed: {type(e).__name__}: {e})")

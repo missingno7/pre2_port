@@ -108,11 +108,25 @@ Also accept the SDK licenses non-interactively before the first build (buildozer
 mis-parses `--licenses` under Java 17): write the canonical hash files into
 `~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license`.
 
-If you change the Python version **after** a build has already run, delete `build/bootstrap_builds/` and
-`dists/` before rebuilding — `libmain.so` is linked against `libpython<ver>.so` at bootstrap-build time, and
-a stale bootstrap makes the app crash on launch with `dlopen failed: library "libpython3.14.so" not found`
-even though the APK ships `libpython3.11.so`. (Don't reuse a build dir across arch changes either, for the
-same reason.)
+**Do a clean rebuild after any version/arch change — do not reuse a build dir.** Every incremental shortcut
+here caused a stale-artifact crash on device that only `adb logcat` revealed:
+
+- `libmain.so` links `libpython<ver>.so` at bootstrap-build time → stale bootstrap ⇒ `dlopen failed: library
+  "libpython3.14.so" not found` even though the APK ships `libpython3.11.so`.
+- `rm other_builds/<pkg>` does **not** remove the installed copy in `python-installs/…/<pkg>` — p4a then keeps
+  the old (3.14-linked) numpy/pygame `.so` and never rebuilds it.
+- Renaming the platform build dir (e.g. dropping an arch) leaves the **old absolute path baked into
+  hostpython's `pip3` shebang**, so later meson/pip steps fail with `exec: …/python: not found`.
+
+The reliable recipe: `rm -rf .buildozer/android/platform/build-*` (keep `android-sdk`, `android-ndk-*`, and
+the `python-for-android` clone) and rebuild from scratch. Verify before shipping — `llvm-readelf -d` on
+`lib/arm64-v8a/libmain.so`, `numpy/_core/_multiarray_umath.so`, and `pygame/*.so` should all show
+`NEEDED  libpython3.11.so` and no unresolved symbols.
+
+The `python-for-android` clone still carries two hand-edits that a clean checkout needs (not yet moved to a
+committed `p4a.local_recipes`): `hostpython3` recipe `version = "3.11.9"`, and the `pygame` recipe patched to
+`install_hostpython_prerequisites(["Cython<3.1"])` in `prebuild_arch` (pygame 2.6.1 needs Cython at build
+time). These are the reproducibility gap to close next.
 
 ### First-launch behaviour without data
 
