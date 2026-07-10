@@ -123,10 +123,22 @@ the `python-for-android` clone) and rebuild from scratch. Verify before shipping
 `lib/arm64-v8a/libmain.so`, `numpy/_core/_multiarray_umath.so`, and `pygame/*.so` should all show
 `NEEDED  libpython3.11.so` and no unresolved symbols.
 
-The `python-for-android` clone still carries two hand-edits that a clean checkout needs (not yet moved to a
-committed `p4a.local_recipes`): `hostpython3` recipe `version = "3.11.9"`, and the `pygame` recipe patched to
-`install_hostpython_prerequisites(["Cython<3.1"])` in `prebuild_arch` (pygame 2.6.1 needs Cython at build
-time). These are the reproducibility gap to close next.
+The `python-for-android` clone / build tree still carries hand-edits that a clean checkout needs (not yet
+moved to a committed `p4a.local_recipes`) — the reproducibility gap to close next:
+
+1. `recipes/hostpython3/__init__.py`: `version = "3.11.9"` (must match target `python3`).
+2. `recipes/pygame/__init__.py`: install Cython in `build_arch` (`install_hostpython_prerequisites(["Cython<3.1"])`,
+   pygame 2.6.1 needs it) **and** add `src_c/simd_blitters_sse2.c` + `src_c/simd_blitters_avx2.c` to the
+   `surface` module's Setup line (the Android Setup omits them → undefined SSE2/AVX2 symbols on ARM; the
+   files self-gate to NEON via `sse2neon.h`, no extra `-D` needed).
+3. **Music decoder**: SDL2_mixer ships with no MOD/tracker decoder, so the `.TRK` modules are silent. In the
+   SDL2 bootstrap's `jni/SDL2_mixer`: clone `github.com/libsdl-org/libmodplug` (branch `v0.8.9.0-SDL`, which
+   carries the `Android.mk`) into `external/libmodplug`, set `SUPPORT_MOD_MODPLUG ?= true` in `Android.mk`,
+   and force the bootstrap to recompile. The existing enhanced `mixer.music` path then plays the modules.
+
+Mobile presentation: the touch build defaults the enhancements ON (widescreen, true-widescreen,
+interpolation, smooth transitions, stereo SFX, responsive controls) since there's no F10 menu on a phone —
+see the `args.touch` block in `play_native.py`.
 
 ### First-launch behaviour without data
 

@@ -308,6 +308,11 @@ def main(argv=None) -> int:
                 "smooth_camera": False,   # X+Y band-drag presentation camera (experimental)
                 "camera_smoothing": 0,   # EXPERIMENTAL "bumping strength": 0=Off..3=High vertical band-drag damp
                 "responsive_controls": False}   # EXPERIMENTAL: buffer the jump key so fast taps are never dropped
+    # Mobile (touch) defaults the presentation enhancements ON — there's no F10 menu to toggle them on a phone,
+    # and they're pure presentation (no gameplay effect). A persisted settings file below still overrides these.
+    if args.touch:
+        settings.update({"interpolation": True, "widescreen": True, "true_widescreen": True,
+                         "smooth_transitions": True, "stereo_sfx": True, "responsive_controls": True})
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
