@@ -16,11 +16,11 @@ package.name = pre2
 package.domain = org.pre2port
 
 source.dir = .
-source.main = main.py
+# p4a's entry point is always main.py at the source root (which this repo has) — there is no spec key for it.
 # Only Python sources + the game data get packaged (no pyc, no oracle VM, no tests/artifacts).
 source.include_exts = py
 source.include_patterns = assets/*.SQZ,assets/*.TRK,assets/*.sqz,assets/*.trk
-source.exclude_dirs = tests,dos_re,artifacts,docs,dist,.git,.idea,.pytest_cache,scripts/__pycache__,pre2/probes
+source.exclude_dirs = tests,dos_re,artifacts,docs,dist,.git,.github,.idea,.pytest_cache,pre2/probes,venv,.venv
 
 version = 0.1.0
 

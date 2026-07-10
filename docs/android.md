@@ -8,9 +8,13 @@ flags in). The only game-facing addition is an on-screen control layer.
 
 - ✅ On-screen touch controls — pure resolver + pygame renderer, wired into `play_native.py`, unit-tested,
   and runnable on desktop with `--touch` (mouse = one finger).
-- 🚧 APK build — `buildozer.spec` + `main.py` entry point are scaffolded but **not yet built** end-to-end
-  (buildozer needs a Linux/WSL host with the Android SDK/NDK).
+- ✅ APK build path — `buildozer.spec` + `main.py` entry + a GitHub Actions workflow that builds the debug
+  APK on a Linux runner. The **app half** is proven (running `main.py` with `ANDROID_ARGUMENT` set boots
+  the whole game with touch on); the **toolchain half** (buildozer on Linux) runs in CI — not yet executed
+  on a real runner from here, but ready to trigger.
 - ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, perf profiling.
+
+> buildozer does **not** run on Windows. Build the APK either in CI (below) or on a Linux/WSL host.
 
 ## Controls
 
@@ -55,9 +59,22 @@ python scripts/play_native.py --touch      # the mouse acts as a single finger
 The joystick + JUMP/BASH draw over the game; click-drag the left half to move, click a button to act.
 `--no-touch` forces them off. On Android the controls are on by default (no flag needed).
 
-## Building the APK (untested scaffold)
+## Building the APK
 
-Needs a Linux or WSL host:
+### In CI (recommended — no local Linux needed)
+
+[`.github/workflows/android.yml`](../.github/workflows/android.yml) builds the debug APK on `ubuntu-latest`:
+
+1. A fast **validate** gate — the touch unit tests + an import-check of the mobile entry (fails in seconds
+   if the app code is broken).
+2. A **build** job — buildozer / python-for-android downloads the SDK/NDK and cross-compiles numpy + pygame
+   (tens of minutes cold), then uploads the `.apk` as a workflow artifact.
+
+Trigger it from the repo's **Actions → Android APK → Run workflow**, or on push to `android-touch-port`.
+The CI APK ships **no game data** (the `*.SQZ/*.TRK` aren't in git), so it launches to the "no data" screen
+until you add data — its job is to prove the toolchain.
+
+### Locally (Linux / WSL, with your data)
 
 ```bash
 pip install buildozer
@@ -66,12 +83,20 @@ buildozer -v android debug
 buildozer android deploy run logcat
 ```
 
-Things to verify on the first build:
+### First-launch behaviour without data
+
+`main.py` catches `play_native`'s missing-data fail-loud and shows a fullscreen "copy your *.SQZ/*.TRK
+files" message instead of instant-exiting — so the app always launches to *something*. Proper first-run
+import (a Storage-Access-Framework picker) is the next milestone.
+
+### Things to verify on the first real build
 
 - Whether the p4a `pygame` recipe includes `pygame._sdl2.video`. If not, `display.py`'s software fallback
   carries the present path (fine at 320×200).
 - Per-tick Python performance on a real device (no PyPy on Android). The tick is light (~23 Hz, 320×200)
   but must be profiled, especially on low-end phones.
+- The `ArtemSBulgakov/buildozer_action` pin in the workflow — if it has drifted, swap in a maintained
+  buildozer action or a manual `pip install buildozer && buildozer android debug` step.
 
 ## Next milestones
 

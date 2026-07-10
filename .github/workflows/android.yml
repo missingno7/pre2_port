@@ -1,0 +1,59 @@
+# Build the Android debug APK on a Linux runner.
+#
+# buildozer does not run on Windows, so this is the supported way to produce a green APK without a local
+# Linux/WSL box. The build has TWO jobs: a fast `validate` gate (unit tests + import check) that fails in
+# seconds if the app code is broken, then the slow `build` job (python-for-android downloads the SDK/NDK
+# and cross-compiles numpy + pygame — tens of minutes on a cold cache).
+#
+# NOTE: the repo ships no game data (*.SQZ/*.TRK are user-owned), so the produced APK builds and launches
+# but has nothing to play until the data is added (bundle it into assets/ for a local build, or wait for
+# the first-run SAF importer milestone). This job's purpose is to prove the toolchain — the "first green
+# APK" de-risker.
+
+name: Android APK
+
+on:
+  workflow_dispatch: {}          # build on demand from the Actions tab
+  push:
+    branches: [android-touch-port]
+    paths:
+      - "pre2/**"
+      - "scripts/**"
+      - "main.py"
+      - "buildozer.spec"
+      - ".github/workflows/android.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4          # no submodules: dos_re is oracle-only and not packaged
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime deps
+        run: python -m pip install --upgrade pip numpy pygame pytest
+      - name: Touch-controls unit tests
+        run: python -m pytest tests/test_touch_controls.py -q
+      - name: Import-check the mobile entry path
+        run: |
+          python -c "import sys; sys.path.insert(0, 'scripts'); import play_native; import touch_overlay; print('entry imports OK')"
+          python -c "from pre2.native import touch; print('resolver OK')"
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build debug APK (buildozer / python-for-android)
+        uses: ArtemSBulgakov/buildozer_action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          buildozer_version: stable
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre2-debug-apk
+          path: ${{ steps.buildozer.outputs.filename }}
+          if-no-files-found: error
