@@ -107,10 +107,21 @@ def main(argv=None) -> int:
                     help="gameplay tick-rate cap; default = the faithful 70/3 Hz (~23.33 — the original's "
                          "main loop waits 3 VGA retraces per tick)")
     ap.add_argument("--scale", type=int, default=2)
+    ap.add_argument("--touch", dest="touch", action="store_true", default=None,
+                    help="draw + drive the on-screen touch controls (left virtual joystick, right JUMP/BASH "
+                         "buttons). Auto-enabled on Android; on desktop the mouse acts as a single finger.")
+    ap.add_argument("--no-touch", dest="touch", action="store_false",
+                    help="force the touch controls off even on Android")
     ap.add_argument("--debug", action="store_true",
                     help="show the Develop tab in the F10 overlay menu (level select, god mode — cheats; "
                          "hidden from the end-user product by default)")
     args = ap.parse_args(argv)
+    # Android (python-for-android sets ANDROID_ARGUMENT) plays touch-first: default the controls on.
+    # --no-touch still wins. hasattr(sys, "getandroidapilevel") is the CPython/p4a signal.
+    import os as _os_early
+    _on_android = "ANDROID_ARGUMENT" in _os_early.environ or hasattr(sys, "getandroidapilevel")
+    if args.touch is None:
+        args.touch = _on_android
     if args.fps is None:
         args.fps = TICK_HZ                              # faithful pacing unless the user overrides
 
@@ -163,6 +174,16 @@ def main(argv=None) -> int:
     disp = Display((320 * args.scale, 200 * args.scale))
     view = {"win_size": (320 * args.scale, 200 * args.scale)}     # remembered windowed size (for exit-fullscreen)
     clock = pygame.time.Clock()
+
+    # ---- TOUCH CONTROLS (Android / --touch) ---------------------------------------------------------------
+    # On-screen controls for a phone: a left virtual joystick (movement) + right JUMP/BASH buttons. Pure host
+    # layer — it only writes the same DC1 key-table flags the keyboard would, so gameplay stays byte-identical.
+    # Mouse doubles as a single finger on desktop for testing; real multitouch drives it on Android.
+    touch = None
+    if args.touch:
+        pygame.font.init()
+        from touch_overlay import TouchOverlay
+        touch = TouchOverlay(mouse_emulation=not _on_android)
 
     # ---- GAMEPAD (auto-detected) --------------------------------------------------------------------------
     # PRE2's own joystick was analog-READ (RC-timed game port 0x201) but immediately DIGITIZED to the same six
@@ -422,7 +443,10 @@ def main(argv=None) -> int:
             print(f"(screenshot failed: {type(e).__name__}: {e})")
 
     def pump():
+        _tsize = disp.get_size()
         for ev in pygame.event.get():
+            if touch is not None:
+                touch.handle_event(ev, _tsize)               # FINGER*/mouse -> the virtual controls
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
                 ref["running"] = False
             elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
@@ -454,6 +478,10 @@ def main(argv=None) -> int:
                 sc = _SDL_HEX.get(getattr(ev, "scancode", -1)) or _KEYSYM_HEX.get(ev.key)   # physical, keysym fallback
                 if sc:
                     ref["last_scan"] = sc
+        if touch is not None:
+            touch.tick(_tsize)                                # resolve the active touches into flags this poll
+            if touch.jump_edge and settings["responsive_controls"]:
+                ref["jump_edge"] = True                       # a JUMP tap edge, buffered like a keyboard/pad tap
         if ref["menu_request"]:
             ref["menu_request"] = False
             menu_modal()                                          # EVERY loop pumps -> the F10 menu opens anywhere
@@ -530,6 +558,10 @@ def main(argv=None) -> int:
                 surf.blit(text, (px, py))                        # self-erasing over the letterbox (no ghosting,
                 _hud["surf"] = surf                              #  which the fill-once letterbox left behind)
             disp.draw_overlay(surf, (int(round(8 * us)), int(round(14 * us))))
+        if touch is not None and touch.enabled:
+            tsurf = touch.surface(disp.get_size())            # cached; only re-rendered when the controls change
+            if tsurf is not None:
+                disp.draw_overlay(tsurf, (0, 0))
         disp.flip()
         pace(fps)
         if caption:
@@ -591,8 +623,9 @@ def main(argv=None) -> int:
         if k[pygame.K_SPACE]:
             held.add(0x39)
         pad = pad_scancodes() if pads else set()                   # GAMEPAD: same scancodes the keyboard writes
-        held |= (pad - {0x48})                                     # dirs / attack / start straight in; jump via buffer
-        jump = bool(k[pygame.K_UP] or k[pygame.K_KP8] or (0x48 in pad))
+        tsc = touch.scancodes() if touch is not None else set()    # TOUCH: joystick dirs + JUMP(0x48)/BASH(0x39)
+        held |= ((pad | tsc) - {0x48})                             # dirs / attack / start straight in; jump via buffer
+        jump = bool(k[pygame.K_UP] or k[pygame.K_KP8] or (0x48 in pad) or (0x48 in tsc))
         if settings["responsive_controls"]:
             # Jump = the UP key (scancode 0x48 -> flag [0x27EA] -> FSM anim 2). The FSM reads the *held* state
             # once per tick, so a fast tap or a slightly-early press falls through the cracks. Re-arm the buffer on
