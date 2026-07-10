@@ -13,8 +13,7 @@ flags in). The only game-facing addition is an on-screen control layer.
   below.
 - ✅ Project icon — the extra-life caveman head (sprite 227, cream-outlined on transparent). Master at
   [`icon.png`](../icon.png); used for the native window and the APK launcher.
-- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, perf profiling, a clean
-  arm64-only repackage (the first APK carries stray armeabi-v7a SDL `.so`s — harmless on 64-bit phones).
+- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, perf profiling.
 
 > buildozer does **not** run on Windows. Build the APK on a Linux/WSL host (recipe below) or in CI.
 
@@ -108,6 +107,12 @@ the spec — redo them on a clean build (or pin p4a / use `p4a.local_recipes`):
 Also accept the SDK licenses non-interactively before the first build (buildozer's legacy `sdkmanager`
 mis-parses `--licenses` under Java 17): write the canonical hash files into
 `~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license`.
+
+If you change the Python version **after** a build has already run, delete `build/bootstrap_builds/` and
+`dists/` before rebuilding — `libmain.so` is linked against `libpython<ver>.so` at bootstrap-build time, and
+a stale bootstrap makes the app crash on launch with `dlopen failed: library "libpython3.14.so" not found`
+even though the APK ships `libpython3.11.so`. (Don't reuse a build dir across arch changes either, for the
+same reason.)
 
 ### First-launch behaviour without data
 
