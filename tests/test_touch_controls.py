@@ -153,6 +153,19 @@ def test_menu_swipe_up_is_up_arrow():
     assert g.poll() == (False, touch.SCAN_UP)
 
 
+def test_menu_swipe_disabled_makes_drag_a_tap():
+    # OLDIES / intro / main-menu / carte are tap-only: with swipe_enabled False a vertical drag is NOT a swipe,
+    # so it emits no arrow and the lift still FIRES (a stray drag must not swallow the tap).
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    g.swipe_enabled = False
+    g.on_down(1, (600, 280))
+    g.on_move(1, (600, 280 + 120), SIZE)                   # a big drag — would be a swipe if enabled
+    assert g.poll() == (False, 0)                          # no arrow
+    g.on_up(1)
+    assert g.poll() == (True, 0)                           # the drag still counts as a tap -> fire
+
+
 def test_menu_swipe_emits_one_arrow_per_gesture():
     # a single drag toggles the mode ONCE; dragging further doesn't re-toggle (a second swipe needs a lift).
     from pre2.native.touch import MenuGestures

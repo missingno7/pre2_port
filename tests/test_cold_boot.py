@@ -215,7 +215,7 @@ def test_touch_front_end_screen_mapping_menu_and_mode_select():
     b197_after_swipe = None
     for i, scene in enumerate(gen):
         keys = set()
-        on_mode_select = scene.enh is not None and scene.enh[0] == "menu" and scene.screen != "menu"
+        on_mode_select = scene.screen == "mode_select"
         if scene.screen == "menu":
             saw_menu_tag = True
         if on_mode_select:

@@ -518,9 +518,11 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     sine = bytes(state.data[_DS + 0x6F90:_DS + 0x6F90 + 0x100])  # [asm 9B00] the row-bounce sine table (DGROUP 0x6f90)
     pal = tuple(dos.vga_palette)
 
+    scr = "mode_select" if kind == "mode_select" else ""           # the ONLY screen the touch host reads swipes on
+
     def scene(planes, page_off, pel):
         return FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
-                             page=page_off, pel=pel, wrap=0x1FFF,
+                             page=page_off, pel=pel, wrap=0x1FFF, screen=scr,
                              enh=("menu", motif, cam.x, cam.row))   # bg pattern + scroll phase (see FrontEndScene)
 
     matched = None                                              # (password) a valid ENTER-CODE accepted -> its level

@@ -232,6 +232,9 @@ class MenuGestures:
     ALSO fire. A lift with no swipe is a tap. Pure -> unit-testable with no device."""
 
     SWIPE_FRAC: float = 0.06        # vertical travel (fraction of min(w, h)) that turns a drag into a swipe
+    swipe_enabled: bool = True      # when False, a drag is NOT a swipe -> every touch is a tap (fire). The host
+    #                                 sets this per frame: only the mode-select screen wants up/down gestures;
+    #                                 OLDIES / intro / main-menu / carte are tap-only (a stray drag still fires).
 
     _owner: Hashable | None = field(default=None, init=False)
     _start_y: float = field(default=0.0, init=False)
@@ -257,8 +260,9 @@ class MenuGestures:
         self._swiped = False
 
     def on_move(self, fid: Hashable, pos: tuple[float, float], size: tuple[float, float]) -> None:
-        """The owning finger moved to ``pos``. Crossing the vertical swipe threshold records the arrow once."""
-        if fid != self._owner or self._swiped:
+        """The owning finger moved to ``pos``. Crossing the vertical swipe threshold records the arrow once —
+        but only when :attr:`swipe_enabled` (the mode-select screen); otherwise a drag stays a tap."""
+        if fid != self._owner or self._swiped or not self.swipe_enabled:
             return
         dy = pos[1] - self._start_y
         if abs(dy) >= self.SWIPE_FRAC * min(size):

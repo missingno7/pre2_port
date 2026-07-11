@@ -90,6 +90,12 @@ class TouchController:
         self.menu_arrow = 0           # front-end: a swipe crossed this poll -> latch this arrow scancode (0x48/0x50)
         self._prev_frontend = None    # last context, to detect a switch and reset stale finger ownership
 
+    def set_screen(self, screen: str) -> None:
+        """Tell the menu recogniser which front-end screen is showing, BEFORE the frame's events are fed. Only
+        the mode-select screen wants swipe gestures; everywhere else a drag stays a tap (fire). Call once per
+        frame in ``pump()`` (before ``handle_event``), since the swipe is classified on the touch-move edge."""
+        self._menu.swipe_enabled = (screen == "mode_select")
+
     # -- event intake / per-poll tick ------------------------------------------------------------------
     def handle_event(self, ev, size) -> None:
         """Feed one pygame event. It drives BOTH the gameplay overlay (finger tracking + joystick) and the

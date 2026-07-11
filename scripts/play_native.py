@@ -474,6 +474,8 @@ def main(argv=None) -> int:
 
     def pump():
         _tsize = disp.get_size()
+        if touch is not None:
+            touch.set_screen(ref["fe_screen"] if ref["frontend"] else "")   # swipe gestures only on mode-select
         for ev in pygame.event.get():
             if touch is not None:
                 touch.handle_event(ev, _tsize)               # FINGER*/mouse -> the virtual controls
