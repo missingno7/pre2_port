@@ -318,7 +318,7 @@ def main(argv=None) -> int:
                 "smooth_camera": False,   # X+Y band-drag presentation camera (experimental)
                 "camera_smoothing": 0,   # EXPERIMENTAL "bumping strength": 0=Off..3=High vertical band-drag damp
                 "responsive_controls": False,   # EXPERIMENTAL: buffer the jump key so fast taps are never dropped
-                "skip_intro": False}   # OPT-IN (breaks boot accuracy): jump straight to the menu, no OLDIES/TITUS/PRESENT titles
+                "intro_skippable": False}   # OPT-IN (breaks boot accuracy): let a key skip the TITUS/PREHISTORIK titles to the menu
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
@@ -328,7 +328,7 @@ def main(argv=None) -> int:
     if args.touch:
         settings.update({"interpolation": True, "widescreen": True, "true_widescreen": True,
                          "smooth_transitions": True, "stereo_sfx": True, "responsive_controls": True,
-                         "skip_intro": True})   # phones skip the long intro straight to the menu by default
+                         "intro_skippable": True})   # phones: a tap skips the long intro titles to the menu by default
     settings["god"] = False                                              # a cheat never persists across runs
 
     def save_settings():
@@ -1374,10 +1374,10 @@ def main(argv=None) -> int:
             {"label": "Camera smoothing", "value": _CS_LABELS[_cs_level()], "adjust": adj_camera_smoothing},
             {"label": "Responsive controls", "value": onoff("responsive_controls"),
              "activate": toggle("responsive_controls")},
-            {"label": "Skip intro", "value": onoff("skip_intro"), "activate": toggle("skip_intro")},
+            {"label": "Skippable intro", "value": onoff("intro_skippable"), "activate": toggle("intro_skippable")},
             {"label": "", "info": True},
             {"label": "Experimental enhancements aren't faithful to the original —", "info": True},
-            {"label": "Active zone changes gameplay; Responsive buffers jump; Skip intro jumps to the menu.", "info": True},
+            {"label": "Active zone changes gameplay; Responsive buffers jump; Skippable intro lets a key skip the titles.", "info": True},
         ]
         tabs = [("View", view_tab), ("Widescreen", widescreen_tab), ("Overlay", overlay_tab),
                 ("Audio", audio_tab), ("Experimental", experimental_tab)]
@@ -1976,7 +1976,7 @@ def main(argv=None) -> int:
     reached_gameplay = False
     ref["frontend"] = True; ref["touch_bash_ready"] = True         # titles/menu/carte -> edge-triggered touch BASH
     try:
-        for scene in native_front_end(state, dos, 0, game_root=gr, skip_intro=settings["skip_intro"]):
+        for scene in native_front_end(state, dos, 0, game_root=gr, intro_skippable=settings["intro_skippable"]):
             # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
             # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
             # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).

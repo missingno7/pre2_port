@@ -19,9 +19,10 @@ flags in). The only game-facing addition is an on-screen control layer.
 - ✅ Floating hidden joystick — the stick is invisible until you touch the left zone, then it appears under your
   thumb. It's a full analog circle; stick-**up** only registers as UP while **BASH** is also held (an upward
   bash), so walking up a slope never triggers a stray jump. JUMP is the dedicated button.
-- ✅ Skippable intro — touch/Android boots straight to the menu (skips the OLDIES credits + TITUS/PREHISTORIK
-  titles). It's an opt-in `skip_intro` setting (breaks boot accuracy) so the desktop default keeps the faithful
-  intro; the `--touch` build forces it on.
+- ✅ Skippable intro — the intro titles (TITUS, then the PREHISTORIK-2 logo) play normally, but a tap/fire-key
+  press during them skips straight to the menu (a skip during TITUS drops the logo too; the OLDIES credits are
+  always fire-skippable). It's an opt-in `intro_skippable` setting (breaks boot accuracy — the titles never poll
+  input in the VM) so the desktop default keeps the uninterruptible intro; the `--touch` build forces it on.
 - ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, request 120 Hz mode +
   further `extract` optimization (the remaining ~15 ms/tick limiter), a clean arm64-only repackage.
 

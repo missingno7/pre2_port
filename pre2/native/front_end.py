@@ -143,6 +143,30 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
     return phase, fire == 0                                    # [asm 0bd9] jne: loop until released -> RET 0bdb
 
 
+def _skippable_intro(scenes, state, *, enabled: bool):
+    """Wrap an intro title generator so a fire-key press can skip it (jumping the flow straight to the menu).
+
+    Not in the VM: the real TITUS / PRESENT titles play uninterruptibly. So when ``enabled`` is False this just
+    re-``yield``s the scenes with NO input polling — byte-exact. When on (the touch default), it decodes DC1 once
+    per displayed frame and stops early on a FRESH fire press; the key must be seen released first, so a fire held
+    over from the OLDIES skip doesn't instantly abort the title. Returns True if it was skipped, so the caller can
+    drop the remaining intro screens too (``skipped = yield from _skippable_intro(...)``)."""
+    if not enabled:
+        yield from scenes
+        return False
+    rb, rw = readers(state)
+    armed = False                                              # only skip on a fresh press (wait for a release first)
+    for scene in scenes:
+        yield scene
+        apply_ds(state, decode_input(rb, rw))                 # DC1 input decode (same read as native_scene_wait)
+        fire = (rb(0x27E8) | rb(0x2832)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
+        if not fire:
+            armed = True
+        elif armed:
+            return True                                        # fresh fire press -> skip the rest of the intro
+    return False
+
+
 def _native_attract(state, dos, game_root: str):
     """[asm 8E98] The menu-idle ATTRACT: show the PREHISTORIK-2 title (the VM's resource-0xC blit), then the CARTE
     (as a normal level load does), then play the demo's level ([0x83E]) in DEMO-PLAYBACK input mode ([0x2879]=1).
@@ -206,20 +230,24 @@ def _native_attract(state, dos, game_root: str):
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
 
 
-def native_front_end(state, dos, display_page: int, *, game_root: str, skip_intro: bool = False):
+def native_front_end(state, dos, display_page: int, *, game_root: str, intro_skippable: bool = False):
     """Drive the whole VM-less front-end, advancing the wall-clock idle counter ``[0x27F0]`` by one 70Hz timer
     tick per displayed frame. The front-end runs the timer exactly as the VM does (its scenes spin on the retrace),
     so gameplay starts with ``[0x27F0]`` at a lived-in value rather than 0 — a value the VM never has (its timer
     has run since boot). Without it the idle player at level start picks the wrong fidget pose (a crouch instead of
     the upright stand, since the idle-fidget selector 5DC9 reads ``[0x27F0] & 0x1FF``). The inner generator
-    (:func:`_native_front_end_frames`) loads the level after its last displayed frame."""
+    (:func:`_native_front_end_frames`) loads the level after its last displayed frame.
+
+    ``intro_skippable`` (an opt-in; default for touch): let a fire-key press during the TITUS / PREHISTORIK-2
+    title screens skip straight to the menu. OFF = byte-accurate (the titles play with no input polling)."""
     from pre2.native.loop import native_idle_timer_tick
-    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root, skip_intro=skip_intro):
+    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root,
+                                          intro_skippable=intro_skippable):
         native_idle_timer_tick(state, ticks=1)                 # 1 timer tick per front-end retrace (70Hz)
         yield scene
 
 
-def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, skip_intro: bool = False):
+def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, intro_skippable: bool = False):
     """Drive the front-end scene state machine from the entry state, ``yield``ing each displayed scene frame, until
     a level starts — then the caller switches to ``native_frame_step`` for gameplay.
 
@@ -233,12 +261,8 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, s
     # table at 0x287e (int10 AX=1012) — without it the runner shows the default EGA palette (wrong colours).
     from pre2.native.render import native_load_dac_palette
     native_load_dac_palette(state, dos, 0x287E)
-    # skip_intro (an OPT-IN; on by default for touch): jump straight to the menu, showing none of the OLDIES
-    # credits or the TITUS/PREHISTORIK title screens. The non-visual SETUP below (SFX bank, FRONT.SQZ, the sprite
-    # bank, the load-top) still runs — it establishes the memory layout the menu + gameplay need. This is NOT
-    # byte-accurate to the VM's boot (which always plays the full intro), hence the option.
     phase = WAIT_PRESS
-    while not skip_intro:
+    while True:
         planes, _ = build_oldies_scene(state, page=display_page)        # [asm 240a] credits over black
         yield FrontEndScene(MODE_PLANAR, palette=tuple(dos.vga_palette),
                             planes=tuple(bytes(p) for p in planes), page=display_page)
@@ -254,9 +278,14 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, s
     # --- TITUS screen (912b): the first 13h title, TIMED (main 00FE-0104). Composition of three VERIFIED leaves:
     #     render_image_scene (the image, Δ=0 vs the framebuffer) + front_end_fade (the DAC fade, byte-exact vs the
     #     VM DAC) at the measured cadence: fade-IN 31 + hold 70 ([asm 9146 cx=0x46]) + fade-OUT 16. ---
-    if not skip_intro:
-        yield from _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70)
+    # The intro titles (TITUS, then the PREHISTORIK-2 logo) play through normally, but when ``intro_skippable``
+    # is on (default for touch/Android; OFF for the byte-accurate default) a fire-key press during either title
+    # skips straight to the menu. A skip during TITUS drops the PRESENT title too. When OFF the titles play with
+    # NO input polling at all — byte-exact to the VM, which never checks for a skip here.
+    skipped = yield from _skippable_intro(
+        _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70), state, enabled=intro_skippable)
 
+    if not skipped:
         # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
         #     audio-command state write so the runner's NativeAudio plays it; then the "PREHISTORIK 2" title — fade-IN
         #     256 over the background, then the 911D palette MORPH 234 over the background+logo (the title's colour
@@ -264,7 +293,8 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, s
         from pre2.native.audio import native_load_song
         native_load_song(state, "PRESENTA.TRK", game_root)       # [asm 02cc] the PRESENT title song (first music)
         morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
-        yield from _native_present_screen(game_root, morph_target)
+        yield from _skippable_intro(
+            _native_present_screen(game_root, morph_target), state, enabled=intro_skippable)
 
     # --- FRONT.SQZ (the HUD front-panel) is stacked permanently before the sprite bank ([0x2875] 0x27be -> 0x2cd7),
     #     exactly as main() does between the titles and 2dfa. Without it the level later lands 0x519 paragraphs too

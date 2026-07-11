@@ -155,25 +155,27 @@ def test_native_front_end_cold_start_reaches_gameplay():
     assert (state.data[_DS + 0x4F1C] | (state.data[_DS + 0x4F1D] << 8)) == 0x2A            # player X = level start
 
 
-def test_native_front_end_skip_intro_reaches_menu_faster():
-    # skip_intro (the touch/Android default; an OPT-IN that breaks boot accuracy) jumps straight to the "press 1/2"
-    # menu, showing none of the OLDIES credits or the TITUS/PRESENT title screens -- but it must still reach the
-    # SAME level-init handoff as the faithful boot, byte-identical, because the non-visual setup (SFX bank, FRONT.SQZ,
-    # sprite bank, load-top) is untouched. This guards the `if not skip_intro:` gating in _native_front_end_frames.
+def test_native_front_end_intro_skippable_reaches_menu_faster():
+    # intro_skippable (the touch/Android default; an OPT-IN that breaks boot accuracy) lets a fire-key press during
+    # the TITUS / PREHISTORIK-2 title screens skip straight to the "press 1/2" menu (a skip during TITUS drops the
+    # PRESENT title too). It must still reach the SAME level-init handoff as the faithful boot, byte-identical,
+    # because the non-visual setup (SFX bank, FRONT.SQZ, sprite bank, load-top) is untouched, and because a skip
+    # only fast-forwards past the title FRAMES -- it perturbs no gameplay memory. Guards _skippable_intro's gating.
     from dos_re.dos import DOSMachine
     from pre2.native.cold_boot import native_cold_boot
     from pre2.native.front_end import native_front_end
     from pre2.native.input import apply_input, init_keyboard_input, set_key
     from pre2.native.state import NativeGameState
 
-    def _run(skip_intro):
+    def _run(intro_skippable):
         state = NativeGameState(build_boot_memory())
         init_keyboard_input(state)
-        gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS), skip_intro=skip_intro)
+        gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS),
+                               intro_skippable=intro_skippable)
         n = 0
         for i, _scene in enumerate(gen):
             set_key(state, 0x02, True)                 # hold '1' -> mode-select map
-            apply_input(state, fire=(i % 2 == 0))      # pulse fire: advances the menu/scene-waits
+            apply_input(state, fire=(i % 2 == 0))      # pulse fire: advances the scene-waits AND triggers the skip
             n += 1
             if i > 4000:
                 raise AssertionError("front-end never reached the handoff")
@@ -182,8 +184,8 @@ def test_native_front_end_skip_intro_reaches_menu_faster():
     full_state, full_scenes = _run(False)
     skip_state, skip_scenes = _run(True)
 
-    assert skip_scenes < full_scenes                   # the intro scenes really were skipped
-    # both boots land on the byte-identical level state (skip_intro perturbs no gameplay memory)
+    assert skip_scenes < full_scenes                   # the title frames really were skipped
+    # both boots land on the byte-identical level state (skipping the titles perturbs no gameplay memory)
     assert skip_state.data[_DS + 0x4F0A:_DS + 0x5732] == full_state.data[_DS + 0x4F0A:_DS + 0x5732]
     ref = native_cold_boot(str(ASSETS), level=0)
     assert skip_state.data[_DS + 0x4F0A:_DS + 0x5732] == ref.data[_DS + 0x4F0A:_DS + 0x5732]
