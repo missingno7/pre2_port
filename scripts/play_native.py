@@ -120,7 +120,7 @@ def main(argv=None) -> int:
     # lives in android_host (detection, touch-first defaults, the enhancement forcing, the panel-refresh probe,
     # and the context-aware TouchController) so this desktop path stays clean.
     from android_host import (TouchController, android_refresh_hz, force_touch_settings, hide_system_bars,
-                              on_android, resolve_touch_enabled)
+                              load_progress, on_android, record_reached, resolve_touch_enabled)
     _on_android = on_android()
     args.touch = resolve_touch_enabled(args.touch, android=_on_android)
     if args.fps is None:
@@ -132,7 +132,7 @@ def main(argv=None) -> int:
     from pre2.gaps import Pre2HybridGap
     from pre2.native.boot_data import build_boot_memory
     from pre2.native.cold_boot import native_cold_boot
-    from pre2.native.front_end import native_front_end
+    from pre2.native.front_end import native_carte_and_load, native_front_end
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
     from pre2.native.runtime import (native_exit_anim, native_frame_step, native_frame_step_tagged,
@@ -286,7 +286,8 @@ def main(argv=None) -> int:
            "menu_request": False, "switch_level": None, "tick_count": 0, "state": None, "snap_request": False,
            "jump_edge": False, "jump_buf": 0,   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
            "frontend": False,   # True during titles/menu/carte -> touch is whole-screen gestures (see drive_input)
-           "fe_screen": ""}     # the current front-end screen id (FrontEndScene.screen); "menu" -> a tap presses '1'
+           "fe_screen": "",     # the current front-end screen id (FrontEndScene.screen); "menu" -> a tap presses '1'
+           "continue_requested": False}   # the mobile CONTINUE button was tapped -> open the level picker
     #   ref["state"] = the live NativeGameState (set once gameplay starts); ref["snap_request"] = F11 debug dump.
 
     # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
@@ -327,6 +328,7 @@ def main(argv=None) -> int:
         settings["fullscreen"] = True    # a phone app is always fullscreen (SDL fullscreen-desktop = immersive,
         #                                  hides the system status/nav bars). Desktop --touch stays windowed for testing.
     settings["god"] = False                                              # a cheat never persists across runs
+    progress = load_progress(gr)             # furthest level reached per path -> what the CONTINUE screen unlocks
 
     def save_settings():
         try:
@@ -670,9 +672,19 @@ def main(argv=None) -> int:
                 #    a TAP anywhere else is fire (0x39): advance the titles, confirm the mode, load the level.
                 #  * a vertical SWIPE (only the mode-select screen) is a real up/down ARROW key (0x48/0x50) — the
                 #    map toggles BEGINNER<->EXPERT off the FSM up/down flags the key table drives (NOT [0x2874]).
-                menu_fire, menu_arrow = touch.consume_menu()
+                menu_fire, menu_arrow, tap_pos = touch.consume_menu()
                 if menu_fire:
-                    menu_keys.add(0x02 if ref["fe_screen"] == "menu" else 0x39)
+                    if ref["fe_screen"] == "menu":
+                        # the press-1/2 screen shows NEW GAME / CONTINUE buttons: NEW GAME presses '1' (the
+                        # byte-exact beginner mode-select); CONTINUE opens the graphical level picker (below);
+                        # a tap that misses both buttons is ignored (explicit buttons, not whole-screen).
+                        btn = touch.menu_button_at(tap_pos, disp.get_size())
+                        if btn == "continue":
+                            ref["continue_requested"] = True
+                        elif btn == "new":
+                            menu_keys.add(0x02)
+                    else:
+                        menu_keys.add(0x39)                       # every other screen: a tap is fire (space/enter)
                 if menu_arrow:
                     menu_keys.add(menu_arrow)                      # 0x48 (up) / 0x50 (down)
             else:
@@ -1762,6 +1774,8 @@ def main(argv=None) -> int:
                 reveal_level(state, dos)
             if args.debug and settings["god"]:                     # Develop tab: keep the energy topped up
                 state.data[DS + 0x27D6] = 3                        # [asm 52a8] full hearts, refreshed pre-tick
+            record_reached(progress, state.data[DS + 0x2D8A], bool(state.data[DS + 0xB197]), gr)  # unlock this
+            #    checkpoint on the CONTINUE screen (cheap no-op unless it advanced the furthest level on this path)
             drive_input(state)
             # WIDESCREEN ZONES: widen the state-level projection culls so entities go LIVE across the margins (one
             # system, no frozen re-projection + no active<->inactive gap at the 320 edge) instead of only the 320
@@ -1990,8 +2004,12 @@ def main(argv=None) -> int:
     dos = NativeVGA()
     reached_gameplay = False
     ref["frontend"] = True                                         # titles/menu/carte -> whole-screen touch gestures
-    try:
-        for scene in native_front_end(state, dos, 0, game_root=gr, intro_skippable=settings["intro_skippable"]):
+
+    def run_front_end(gen):
+        """Present + drive a front-end scene generator to completion. Returns 'done' (it finished -> a level is
+        loaded), 'continue' (the mobile CONTINUE button was tapped -> pause here so the picker can run; the SAME
+        generator resumes on the next call), or 'quit'. Shared by the cold-boot flow AND the CONTINUE carte+load."""
+        for scene in gen:
             # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
             # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
             # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
@@ -2004,9 +2022,56 @@ def main(argv=None) -> int:
             drive_input(state)
             if native_audio is not None:
                 native_audio.poll(state)                           # front-end music (PRESENTA title song, menu, carte)
+            if ref["continue_requested"]:
+                return "continue"                                  # leave gen paused at the menu; the picker runs next
             if not ref["running"]:
-                break
-        reached_gameplay = ref["running"]                          # the generator finished -> a level started
+                return "quit"
+        return "done"
+
+    def run_continue_screen():
+        """Modal mobile CONTINUE level picker. Choosing an unlocked checkpoint commits [0x2D8A]/[0xB197] (exactly
+        what a valid password writes) and returns True; BACK / ESC returns False; the window closing returns
+        False after clearing ref['running']."""
+        from android_menu import ContinueScreen
+        cs = ContinueScreen(progress)
+        while ref["running"]:
+            size = disp.get_size()
+            result = None
+            for ev in pygame.event.get():
+                t = ev.type
+                if t == pygame.QUIT:
+                    ref["running"] = False
+                elif t == pygame.VIDEORESIZE and not view.get("fs"):
+                    disp.resize(ev.w, ev.h)
+                elif t == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                    return False
+                elif t == pygame.FINGERUP:
+                    result = cs.hit((ev.x * size[0], ev.y * size[1]), size)
+                elif t == pygame.MOUSEBUTTONUP and ev.button == 1:
+                    result = cs.hit(ev.pos, size)
+            if result == "back":
+                return False
+            if isinstance(result, tuple):
+                level, expert = result
+                state.data[DS + 0x2D8A] = level & 0xFF             # the chosen checkpoint (a valid password's [0x2D8A])
+                state.data[DS + 0xB197] = 1 if expert else 0       # beginner / expert path
+                return True
+            cs.draw(disp)
+            pace(_FRONT_END_FPS)
+        return False
+
+    try:
+        menu_gen = native_front_end(state, dos, 0, game_root=gr, intro_skippable=settings["intro_skippable"])
+        result = run_front_end(menu_gen)
+        while result == "continue":                                # CONTINUE tapped on the press-1/2 menu
+            ref["continue_requested"] = False
+            if touch is not None:
+                touch.reset()                                      # drop the tap so it can't leak into the picker
+            if run_continue_screen():                              # a checkpoint chosen -> carte + load it, then play
+                result = run_front_end(native_carte_and_load(state, dos, gr))
+            else:
+                result = run_front_end(menu_gen)                   # backed out -> resume the menu where it paused
+        reached_gameplay = ref["running"] and result == "done"     # a level finished loading -> play it
     except Pre2HybridGap as e:
         hold_last(f"front-end reached a not-yet-recovered gap: {str(e)[:110]}", state)
     except Exception as e:                                         # noqa: BLE001

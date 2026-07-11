@@ -131,6 +131,18 @@ class Display:
         """A transparent window-size surface to draw the modal F10 menu onto (then draw_overlay it)."""
         return pygame.Surface(self.get_size(), pygame.SRCALPHA)
 
+    def present_ui(self, surf, *, changed: bool = True) -> None:
+        """Present a full-window, OPAQUE host-UI surface as its own screen (the Android NEW GAME / CONTINUE
+        menus) — clear, draw, flip. ``changed=False`` reuses the last-uploaded texture (the menu is static
+        between resizes), so the modal loop redraws with a single quad instead of re-uploading each frame."""
+        if self.gpu:
+            self.renderer.clear()
+            self.draw_overlay(surf, (0, 0), slot="ui", changed=changed)
+            self.renderer.present()
+        else:
+            self.screen.blit(surf, (0, 0))
+            pygame.display.flip()
+
     def flip(self) -> None:
         if self.gpu:
             self.renderer.present()

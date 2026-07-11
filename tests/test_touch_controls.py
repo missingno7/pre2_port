@@ -84,6 +84,19 @@ def test_jump_button_sets_up_with_edge_once():
     assert not flags.up and not edge
 
 
+def test_jump_suppresses_down_so_a_stray_crouch_cant_null_the_jump():
+    # moving right while the stick has drifted DOWN (an easy accidental crouch), then pressing JUMP: the jump
+    # must win — up set, down cleared, right preserved (else up+down cancel and you fall into the pit).
+    tc = TouchControls()
+    base = (LAY.stick_rest[0], LAY.stick_rest[1])
+    tc.update({1: base}, SIZE)
+    d = LAY.stick_radius
+    fingers = {1: _drag(base, d, d), 2: LAY.jump_center}   # stick down-right + JUMP
+    flags, _, _ = tc.update(fingers, SIZE)
+    assert flags.up and flags.right and not flags.down    # jump wins; no deadly up+down cancel
+    assert not flags.left
+
+
 def test_bash_button_sets_fire():
     tc = TouchControls()
     flags, rm, _ = tc.update({3: LAY.bash_center}, SIZE)
@@ -209,13 +222,13 @@ def test_touchcontroller_tap_survives_many_ticks_until_consumed():
     def fev(kind, x, y):
         return pygame.event.Event(kind, finger_id=1, x=x / S[0], y=y / S[1], dx=0, dy=0, pressure=1.0)
 
-    tc.set_screen("")                                       # a tap-only screen (oldies / menu)
+    tc.set_screen("")                                       # a tap-only screen (oldies / carte)
     tc.handle_event(fev(pygame.FINGERDOWN, 640, 360), S)
     tc.handle_event(fev(pygame.FINGERUP, 640, 360), S)
     for _ in range(10):
         tc.tick(S, frontend=True)                           # 10 internal pumps must NOT drain the tap
-    assert tc.consume_menu() == (True, 0)                   # the once-per-frame drain still sees it
-    assert tc.consume_menu() == (False, 0)                  # and it's a single pulse
+    assert tc.consume_menu() == (True, 0, (640.0, 360.0))   # the once-per-frame drain still sees it (with tap pos)
+    assert tc.consume_menu() == (False, 0, None)            # and it's a single pulse
 
 
 def test_scancodes_match_input_layer():

@@ -31,6 +31,12 @@ flags in). The only game-facing addition is an on-screen control layer.
   press during them skips straight to the menu (a skip during TITUS drops the logo too; the OLDIES credits are
   always fire-skippable). It's an opt-in `intro_skippable` setting (breaks boot accuracy — the titles never poll
   input in the VM) so the desktop default keeps the uninterruptible intro; the `--touch` build forces it on.
+- ✅ Phone-native front door — the press-1/2 menu shows two touch buttons: **NEW GAME** (presses '1' → the
+  byte-exact beginner mode-select) and **CONTINUE** (a graphical level picker). CONTINUE is a 2-column
+  BEGINNER | EXPERT grid of the game's own password checkpoints (10 beginner + 9 expert); a cell unlocks once
+  you have *reached* that level on that path, and picking one jumps straight in. It writes the SAME
+  `[0x2D8A]`/`[0xB197]` a valid password does — so it's the proven password-entry code path with a thumb-friendly
+  front end, not new game logic. Progress is saved to `pre2native_progress.json` beside the settings.
 - ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, request 120 Hz mode +
   further `extract` optimization (the remaining ~15 ms/tick limiter), a clean arm64-only repackage.
 
@@ -93,8 +99,9 @@ byte-exact oracle are all unaffected — exactly like the gamepad path.
 |---|---|---|
 | [`pre2/native/touch.py`](../pre2/native/touch.py) | Pure math: `TouchControls` (gameplay finger dict → 5 flags + render model) **and** `MenuGestures` (front-end tap → fire / swipe → arrow). Stateful, no pygame. | no |
 | [`scripts/touch_overlay.py`](../scripts/touch_overlay.py) | Gameplay host: translates `FINGER*` / mouse events → finger dict, ticks the resolver, paints the joystick + buttons (cached sprites). | yes |
-| [`scripts/android_host.py`](../scripts/android_host.py) | **All the Android/touch glue in one place**: platform detection, touch-first defaults, forcing the enhancements on, the panel-refresh probe, and `TouchController` — the context-aware wrapper that runs the joystick in gameplay and the menu gestures in the front-end. | yes |
-| [`scripts/play_native.py`](../scripts/play_native.py) | Wires it in behind `--touch`: events in `pump()`, `TouchController.tick(frontend=…)`, flags OR'd into `drive_input()`, `draw(frontend=…)` in `present()`. | yes |
+| [`scripts/android_host.py`](../scripts/android_host.py) | **All the Android/touch glue in one place**: platform detection, touch-first defaults, forcing the enhancements on, immersive fullscreen, the panel-refresh probe, the CONTINUE **progress save** (`load_progress`/`record_reached`), and `TouchController` — the context-aware wrapper (gameplay joystick / front-end gestures / press-1/2 buttons). | yes |
+| [`scripts/android_menu.py`](../scripts/android_menu.py) | The mobile front-end menus: the NEW GAME / CONTINUE buttons over the press-1/2 screen (`MenuButtons`) and the 2-column CONTINUE level picker (`ContinueScreen`) — layout, hit-testing, and rendering. | yes |
+| [`scripts/play_native.py`](../scripts/play_native.py) | Wires it in behind `--touch`: events in `pump()`, `TouchController.tick(frontend=…)`, flags OR'd into `drive_input()`, `draw(frontend=…)` in `present()`; the CONTINUE modal loop → `native_carte_and_load`. | yes |
 | [`main.py`](../main.py) | p4a entry point → `play_native.main([])`. | — |
 | [`buildozer.spec`](../buildozer.spec) | APK build config (numpy + pygame; landscape; fullscreen). | — |
 

@@ -367,6 +367,18 @@ def native_menu_flow(state, dos, game_root: str):
         yield from _native_menu_map(state, dos, game_root, "mode_select")
         break
 
+    yield from native_carte_and_load(state, dos, game_root)
+    return                                                     # the level is loaded -> the caller runs native_frame_step
+
+
+def native_carte_and_load(state, dos, game_root: str):
+    """[asm 9520 CARTE + main 01A5..01D2] Show the world-map scroll-in for the CHOSEN level, then load and start it.
+
+    The level ([0x2d8a]) and mode ([0xB197]) must already be committed — by the mode-select map, a password match,
+    or the mobile CONTINUE screen, which all write the SAME two bytes a valid password does. Yields the carte
+    FrontEndScene frames; on return the level is loaded and ready for ``native_frame_step``. Factored out of
+    :func:`native_menu_flow` so a host that picks a level directly (the CONTINUE screen) reaches the loader without
+    re-driving the press-1/2 menu."""
     # --- 9520 CARTE: the world-map scroll-in the real flow shows between the mode-select and the loader (main 0x01A8).
     #     Loads MAP.SQZ (the map master), stamps the per-level 'you are here' marker (the player's position) onto it =
     #     the de-planarize [0x667a]:[0x62da] (byte-exact vs the VM master), then scrolls the map in via the recovered +
@@ -375,12 +387,11 @@ def native_menu_flow(state, dos, game_root: str):
 
     # --- the map selected a level ([0x2d8a]); the loader (main 01A5..01D2). native_level_start is VERIFIED byte-exact
     #     vs the pure-ASM oracle's gameplay-entry seed (every core gameplay table identical; see [[pre2-level-init-island]]). ---
-    from pre2.native.audio import native_level_song_name
+    from pre2.native.audio import native_level_song_name, native_load_song
     from pre2.native.level_init import native_level_start
     native_load_song(state, native_level_song_name(state), game_root)   # [asm 01B7] the level song (plays at start)
     native_level_start(state, game_root=game_root)            # [asm 013e..0155] load + init + level-start (lives, etc.)
     state.data[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)  # clear the residual key table (the DC1 raw keys)
-    return                                                     # the level is loaded -> the caller runs native_frame_step
 
 
 

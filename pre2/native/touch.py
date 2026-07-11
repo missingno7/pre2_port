@@ -200,6 +200,9 @@ class TouchControls:
 
         if jump:
             flags.up = True                                # JUMP button == up flag (also reachable via stick-up)
+            flags.down = False                             # JUMP cancels a simultaneous crouch: an accidental
+            #     joystick-DOWN mid-move otherwise pairs up+down into a no-op, so you crouch instead of jumping and
+            #     fall into the pit. Jump must always win -> deliver only left/right + up, never down, while held.
         if bash:
             flags.fire = True                              # BASH button == fire flag (the club attack)
 
@@ -238,9 +241,13 @@ class MenuGestures:
 
     _owner: Hashable | None = field(default=None, init=False)
     _start_y: float = field(default=0.0, init=False)
+    _down_pos: tuple[float, float] = field(default=(0.0, 0.0), init=False)   # where the owning finger went down
     _swiped: bool = field(default=False, init=False)
     _fire: bool = field(default=False, init=False)         # accumulated tap, drained by poll()
     _arrow: int = field(default=0, init=False)             # accumulated swipe arrow, drained by poll()
+    _tap_pos: tuple[float, float] | None = field(default=None, init=False)   # accumulated tap position
+    tap_pos: tuple[float, float] | None = field(default=None, init=False)    # last DRAINED tap position (host reads
+    #                                                                          it after poll() to hit-test menu buttons)
 
     def reset(self) -> None:
         """Drop the in-flight gesture AND any un-drained result (call on a context switch / focus loss so a
@@ -249,6 +256,8 @@ class MenuGestures:
         self._swiped = False
         self._fire = False
         self._arrow = 0
+        self._tap_pos = None
+        self.tap_pos = None
 
     def on_down(self, fid: Hashable, pos: tuple[float, float]) -> None:
         """A touch went down at ``pos``. The first finger owns the gesture; later fingers are ignored until it
@@ -257,6 +266,7 @@ class MenuGestures:
             return
         self._owner = fid
         self._start_y = pos[1]
+        self._down_pos = pos
         self._swiped = False
 
     def on_move(self, fid: Hashable, pos: tuple[float, float], size: tuple[float, float]) -> None:
@@ -275,12 +285,15 @@ class MenuGestures:
             return
         if not self._swiped:
             self._fire = True
+            self._tap_pos = self._down_pos                     # remember WHERE, so the host can hit-test buttons
         self._owner = None
         self._swiped = False
 
     def poll(self) -> tuple[bool, int]:
         """Drain the gesture outputs accumulated since the last poll: ``(fire, arrow)`` — ``fire`` True if a tap
-        completed, ``arrow`` = ``0x48`` / ``0x50`` if a swipe crossed, else ``0``. Call once per input poll."""
+        completed, ``arrow`` = ``0x48`` / ``0x50`` if a swipe crossed, else ``0``. Call once per input poll. The
+        tap's position (for menu-button hit-testing) is left in :attr:`tap_pos` (None when no tap this poll)."""
         fire, arrow = self._fire, self._arrow
-        self._fire, self._arrow = False, 0
+        self.tap_pos = self._tap_pos if fire else None
+        self._fire, self._arrow, self._tap_pos = False, 0, None
         return fire, arrow

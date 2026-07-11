@@ -21,8 +21,10 @@ top-level ``android`` package on ``sys.path``.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 
 
 def on_android() -> bool:
@@ -99,6 +101,63 @@ def hide_system_bars() -> None:
         pass
 
 
+# ---------------------------------------------------------------------------------------------------
+# Progress save — the furthest level reached on each path, so the mobile CONTINUE screen can offer a
+# level to resume from (the graphical stand-in for the original ENTER-CODE password screen). This is
+# host-side player convenience, NOT game state: it only records what the byte-exact runtime reached, and
+# only ever WRITES the game's own [0x2D8A]/[0xB197] the same values a valid password would, so it can't
+# affect accuracy. Levels are the 0-based [0x2D8A] index; the path is [0xB197] (0 beginner / 1 expert).
+# ---------------------------------------------------------------------------------------------------
+_PROGRESS_FILE = "pre2native_progress.json"
+# The 10 real main levels are [0x2D8A] 0..9 (the password checkpoints the CONTINUE grid shows). BONUS / special
+# levels carry HIGHER ids (>= 0x0A, e.g. the warp-table bonuses 0x0A..0x0E) yet are reachable FROM a main level —
+# so they must NOT count toward "furthest reached", or entering one bonus would wrongly unlock the whole column.
+_REAL_LEVELS = 0x0A
+
+
+def progress_path(game_root: str) -> Path:
+    return Path(game_root) / _PROGRESS_FILE
+
+
+def load_progress(game_root: str) -> dict:
+    """Load ``{"beginner": idx, "expert": idx}`` — the furthest 0-based level reached per path (``-1`` = none
+    reached yet). Missing/unreadable file (first run) yields the empty default."""
+    prog = {"beginner": -1, "expert": -1}
+    try:
+        data = json.loads(progress_path(game_root).read_text())
+        for k in ("beginner", "expert"):
+            v = data.get(k)
+            if isinstance(v, int):
+                prog[k] = max(-1, min(int(v), 0x3F))          # clamp to a sane range (defends a hand-edited file)
+    except Exception:                                          # noqa: BLE001 — first run / unreadable
+        pass
+    return prog
+
+
+def save_progress(game_root: str, prog: dict) -> None:
+    try:
+        progress_path(game_root).write_text(json.dumps({"beginner": prog.get("beginner", -1),
+                                                         "expert": prog.get("expert", -1)}, indent=1))
+    except Exception as e:                                     # noqa: BLE001 — read-only game dir
+        print(f"(progress not saved: {e})")
+
+
+def record_reached(prog: dict, level: int, expert: bool, game_root: str) -> bool:
+    """Note that ``[0x2D8A]==level`` was reached on the beginner/expert path. Advances (and persists) the stored
+    furthest only when it grows — so it is a cheap no-op to call every gameplay frame. Returns True if it grew.
+
+    Bonus / special levels (id ``>= _REAL_LEVELS``) are IGNORED: they have higher ids than the main levels but are
+    reached FROM one, so counting them would over-unlock the CONTINUE grid (see :data:`_REAL_LEVELS`)."""
+    if not (0 <= level < _REAL_LEVELS):
+        return False
+    key = "expert" if expert else "beginner"
+    if level > prog.get(key, -1):
+        prog[key] = int(level)
+        save_progress(game_root, prog)
+        return True
+    return False
+
+
 class TouchController:
     """Context-aware on-screen touch input.
 
@@ -116,19 +175,29 @@ class TouchController:
 
     def __init__(self, *, android: bool) -> None:
         from touch_overlay import TouchOverlay
+        from android_menu import MenuButtons
         from pre2.native.touch import MenuGestures
         self._overlay = TouchOverlay(mouse_emulation=not android)   # gameplay joystick + JUMP/BASH buttons
         self._menu = MenuGestures()                                 # front-end whole-screen tap / swipe
+        self._buttons = MenuButtons()                               # NEW GAME / CONTINUE on the press-1/2 screen
         self._mouse_emulation = not android                         # desktop: drive the menu gestures with the mouse
         self.enabled = True
         self.jump_edge = False        # a gameplay JUMP tap edge (for the responsive-controls jump buffer)
         self._prev_frontend = None    # last context, to detect a switch and reset stale finger ownership
+        self._screen = ""             # the current front-end screen (drives button drawing + swipe gating)
 
     def set_screen(self, screen: str) -> None:
         """Tell the menu recogniser which front-end screen is showing, BEFORE the frame's events are fed. Only
         the mode-select screen wants swipe gestures; everywhere else a drag stays a tap (fire). Call once per
         frame in ``pump()`` (before ``handle_event``), since the swipe is classified on the touch-move edge."""
+        self._screen = screen
         self._menu.swipe_enabled = (screen == "mode_select")
+
+    def menu_button_at(self, pos, size) -> str | None:
+        """Which press-1/2 front-door button ('new' / 'continue') a tap at ``pos`` hit, or None. Used by
+        ``drive_input`` on the ``"menu"`` screen to route a tap to NEW GAME ('1') or the CONTINUE screen."""
+        from android_menu import menu_button_at
+        return menu_button_at(pos, size)
 
     # -- event intake / per-poll tick ------------------------------------------------------------------
     def handle_event(self, ev, size) -> None:
@@ -170,11 +239,13 @@ class TouchController:
         self._overlay.tick(size)                                    # always track fingers + the gameplay flags
         self.jump_edge = self._overlay.jump_edge and not frontend   # menus don't jump
 
-    def consume_menu(self) -> tuple[bool, int]:
-        """Drain the front-end tap/swipe accumulated since the last call: ``(fire, arrow)``. Called ONCE per
-        frame by ``drive_input`` — so it survives the several ``pump()``/``tick()`` calls one presented frame
-        makes, instead of a sub-frame pump eating the tap (the 'menu barely responds to taps' bug)."""
-        return self._menu.poll()
+    def consume_menu(self) -> tuple[bool, int, object]:
+        """Drain the front-end tap/swipe accumulated since the last call: ``(fire, arrow, tap_pos)``. Called ONCE
+        per frame by ``drive_input`` — so it survives the several ``pump()``/``tick()`` calls one presented frame
+        makes, instead of a sub-frame pump eating the tap (the 'menu barely responds to taps' bug). ``tap_pos`` is
+        the window-pixel position of the tap (for menu-button hit-testing), or None when there was no tap."""
+        fire, arrow = self._menu.poll()
+        return fire, arrow, self._menu.tap_pos
 
     # -- outputs ---------------------------------------------------------------------------------------
     def scancodes(self) -> set[int]:
@@ -183,10 +254,13 @@ class TouchController:
         return self._overlay.scancodes()
 
     def draw(self, disp, *, frontend: bool) -> None:
-        """Draw the on-screen controls — only in gameplay; the menus are driven by whole-screen gestures with
-        nothing to draw."""
+        """Draw the on-screen controls. Gameplay: the joystick + JUMP/BASH. Front-end: nothing EXCEPT the
+        press-1/2 ``"menu"`` screen, which shows the NEW GAME / CONTINUE buttons (every other menu is driven by
+        whole-screen gestures with nothing to draw)."""
         if not frontend:
             self._overlay.draw(disp)
+        elif self._screen == "menu":
+            self._buttons.draw(disp, disp.get_size())
 
     def reset(self) -> None:
         """Clear all held finger state (call on focus loss / app pause, or a context switch)."""
