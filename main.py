@@ -24,6 +24,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "scripts")):
         sys.path.insert(0, _p)
 
 os.environ.setdefault("SDL_HINT_ORIENTATIONS", "LandscapeLeft LandscapeRight")
+os.environ.setdefault("SDL_ANDROID_TRAP_BACK_BUTTON", "1")   # deliver Back as K_AC_BACK (the pause dialog)
+#   instead of letting the OS finish the activity — play_native opens the Resume/Main-menu/Exit dialog on it.
 
 
 def _external_dir():

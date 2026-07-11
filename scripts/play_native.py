@@ -282,12 +282,16 @@ def main(argv=None) -> int:
     # TICK stays locked at TICK_HZ regardless; only how many presented frames per tick depend on this.
     display_hz = detect_display_hz()
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
+    _K_BACK = getattr(pygame, "K_AC_BACK", -1)   # the Android system Back button (SDL AC_BACK; -1 = not this pygame)
+
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
            "menu_request": False, "switch_level": None, "tick_count": 0, "state": None, "snap_request": False,
            "jump_edge": False, "jump_buf": 0,   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
            "frontend": False,   # True during titles/menu/carte -> touch is whole-screen gestures (see drive_input)
            "fe_screen": "",     # the current front-end screen id (FrontEndScene.screen); "menu" -> a tap presses '1'
-           "continue_requested": False}   # the mobile CONTINUE button was tapped -> open the level picker
+           "continue_requested": False,   # the mobile CONTINUE button was tapped -> open the level picker
+           "pause_request": False,   # Android Back (or Esc in touch mode) -> open the pause dialog
+           "exit_to_menu": False}    # pause dialog chose MAIN MENU -> gameplay unwinds to the menu flow
     #   ref["state"] = the live NativeGameState (set once gameplay starts); ref["snap_request"] = F11 debug dump.
 
     # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
@@ -483,8 +487,15 @@ def main(argv=None) -> int:
         for ev in pygame.event.get():
             if touch is not None:
                 touch.handle_event(ev, _tsize)               # FINGER*/mouse -> the virtual controls
-            if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
+            if ev.type == pygame.QUIT:
                 ref["running"] = False
+            elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                if touch is not None and touch.enabled:
+                    ref["pause_request"] = True                    # touch build: Esc = the Back dialog (PC parity)
+                else:
+                    ref["running"] = False
+            elif ev.type == pygame.KEYDOWN and ev.key == _K_BACK:
+                ref["pause_request"] = True                        # Android system Back -> pause dialog
             elif _on_android and ev.type == getattr(pygame, "APP_DIDENTERFOREGROUND", -1):
                 hide_system_bars()                                 # resume: re-assert immersive fullscreen (Android
                 #                                                    may have restored the status/nav bars)
@@ -525,6 +536,9 @@ def main(argv=None) -> int:
             ref["menu_request"] = False
             menu_modal()                                          # EVERY loop pumps -> the F10 menu opens anywhere
             #   (late-bound: defined below in main(); no loop runs before it exists)
+        if ref["pause_request"]:
+            ref["pause_request"] = False
+            pause_modal()                                         # Back/Esc dialog (late-bound like menu_modal)
         if ref["snap_request"]:                                   # DEBUG (F11): dump the live state as a snapshot
             ref["snap_request"] = False
             if ref["state"] is not None:
@@ -1027,6 +1041,90 @@ def main(argv=None) -> int:
                 break
         fe["due"] += step
 
+    def run_front_end(gen, state, caption):
+        """Present + drive a front-end scene generator to completion. Returns 'done' (it finished -> a level is
+        loaded), 'continue' (the mobile CONTINUE button was tapped -> pause here so the picker can run; the SAME
+        generator resumes on the next call), or 'quit'. Shared by the cold boot, the game-over / THE-END restarts,
+        and the CONTINUE carte+load."""
+        for scene in gen:
+            # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
+            # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
+            # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
+            fps = args.fps if (state.data[DS + 0x2879] == 1 or scene.game_paced) else _FRONT_END_FPS
+            ref["fe_screen"] = scene.screen                        # per-screen touch mapping (see drive_input)
+            present_front_scene(scene, fps, caption)
+            pump()
+            # the OLDIES scene-wait (0bbe) reads fire; the mode-select toggles BEGINNER<->EXPERT on UP/DOWN and
+            # the carte pans on the arrows; '1'/'2' start / password. drive_input feeds all of these (demo + live).
+            drive_input(state)
+            if native_audio is not None:
+                native_audio.poll(state)                           # front-end music (PRESENTA title song, menu, carte)
+            if ref["continue_requested"]:
+                return "continue"                                  # leave gen paused at the menu; the picker runs next
+            if not ref["running"]:
+                return "quit"
+        return "done"
+
+    def run_continue_screen(state):
+        """Modal mobile CONTINUE level picker. Choosing an unlocked checkpoint commits [0x2D8A]/[0xB197] (exactly
+        what a valid password writes) and returns True; BACK / ESC / Android Back returns False; the window
+        closing returns False after clearing ref['running']."""
+        from android_menu import ContinueScreen
+        cs = ContinueScreen(progress)
+        while ref["running"]:
+            size = disp.get_size()
+            result = None
+            for ev in pygame.event.get():
+                t = ev.type
+                if t == pygame.QUIT:
+                    ref["running"] = False
+                elif t == pygame.VIDEORESIZE and not view.get("fs"):
+                    disp.resize(ev.w, ev.h)
+                elif t == pygame.KEYDOWN and (ev.key == pygame.K_ESCAPE or ev.key == _K_BACK):
+                    return False
+                elif t == pygame.FINGERUP:
+                    result = cs.hit((ev.x * size[0], ev.y * size[1]), size)
+                elif t == pygame.MOUSEBUTTONUP and ev.button == 1:
+                    result = cs.hit(ev.pos, size)
+            if result == "back":
+                return False
+            if isinstance(result, tuple):
+                level, expert = result
+                state.data[DS + 0x2D8A] = level & 0xFF             # the chosen checkpoint (a valid password's [0x2D8A])
+                state.data[DS + 0xB197] = 1 if expert else 0       # beginner / expert path
+                return True
+            cs.draw(disp)
+            pace(_FRONT_END_FPS)
+        return False
+
+    def run_menu_flow(state, dos, caption, gen=None):
+        """Drive a front-end generator (default: ``native_menu_flow`` — the press-1/2 MENU through the loader)
+        with FULL touch support: frontend gestures, the per-screen mapping, the NEW GAME / CONTINUE buttons, and
+        the CONTINUE picker. Shared by the cold boot (which passes its ``native_front_end`` generator), the
+        game-over / THE-END restarts, and the Back-dialog quit-to-menu — the restarts previously drove
+        ``native_menu_flow`` with bare loops that never flipped ``ref['frontend']``/``fe_screen``, so the
+        game-over menu had no buttons and taps acted as the gameplay joystick. Returns True when a level
+        finished loading; False on quit."""
+        if gen is None:
+            from pre2.native.front_end import native_menu_flow
+            gen = native_menu_flow(state, dos, gr)
+        prev_frontend = ref["frontend"]
+        ref["frontend"] = True                                     # menus: whole-screen gestures + buttons
+        try:
+            result = run_front_end(gen, state, caption)
+            while result == "continue":                            # CONTINUE tapped on the press-1/2 menu
+                ref["continue_requested"] = False
+                if touch is not None:
+                    touch.reset()                                  # drop the tap so it can't leak into the picker
+                if run_continue_screen(state):                     # a checkpoint chosen -> carte + load it
+                    result = run_front_end(native_carte_and_load(state, dos, gr), state, caption)
+                else:
+                    result = run_front_end(gen, state, caption)    # backed out -> resume the menu where it paused
+            return result == "done"
+        finally:
+            ref["frontend"] = prev_frontend
+            ref["fe_screen"] = ""
+
     def between_levels(state, dos):
         """The between-levels flow (the VM's 4F65 -> BRAVO tally -> CARTE world map -> next-level load): show the
         level-end TALLY (SCORE / LEVEL COMPLETED %), advance + load the next level (byte-exact), then drive the
@@ -1157,7 +1255,7 @@ def main(argv=None) -> int:
         native_gameover_scene (setup+tick byte-exact vs the ASM, 60-frame lockstep) + native_menu_flow (the
         same generator the cold boot runs from the menu on)."""
         from pre2.native.audio import native_load_song
-        from pre2.native.front_end import native_creators_screen, native_menu_flow
+        from pre2.native.front_end import native_creators_screen
         from pre2.native.gameover_scene import native_gameover_scene
         from pre2.native.player import ecombo_confirmed
         print("  GAME OVER -> the 9B23 scene -> menu -> carte -> restart")
@@ -1182,14 +1280,8 @@ def main(argv=None) -> int:
                 native_audio.poll(state)                           # BOULA.TRK
             if not ref["running"]:
                 return
-        for scene in native_menu_flow(state, dos, gr):             # [main 011C] menu -> map -> carte -> loader
-            fps = args.fps if state.data[DS + 0x2879] == 1 else _FRONT_END_FPS
-            present_front_scene(scene, fps, "PRE2 VM-less — restart")
-            pump(); drive_input(state)
-            if native_audio is not None:
-                native_audio.poll(state)
-            if not ref["running"]:
-                return
+        if not run_menu_flow(state, dos, "PRE2 VM-less — restart"):   # [main 011C] menu -> map -> carte -> loader
+            return                                                 # (full touch support: buttons + CONTINUE picker)
         native_load_level_palette(state, dos)                      # the level palette after the carte DAC
         reveal_level(state, dos)                                    # 3054 center-out curtain into the level
 
@@ -1198,7 +1290,7 @@ def main(argv=None) -> int:
         THEEND.SQZ screen (FINAL.TRK, fade-in, wait-for-fire, fade-out), then re-enter the front-end MENU (like
         the game-over restart) -> map -> carte -> the LEVEL loader = level 1 started again."""
         from pre2.native.audio import native_load_song
-        from pre2.native.front_end import native_menu_flow, native_the_end
+        from pre2.native.front_end import native_the_end
         print("  THE END -> THEEND.SQZ screen -> menu -> restart at level 1")
         try:
             native_load_song(state, "FINAL.TRK", gr)               # [asm 5034 region] the ending song
@@ -1213,14 +1305,26 @@ def main(argv=None) -> int:
                 return
         for sel in (0x6BE4, 0x6BE5, 0x6BE6):                       # clear the death/end selectors before the menu
             state.data[DS + sel] = 0
-        for scene in native_menu_flow(state, dos, gr):             # [main 0x12f] menu -> map -> carte -> loader (L1)
-            fps = args.fps if state.data[DS + 0x2879] == 1 else _FRONT_END_FPS
-            present_front_scene(scene, fps, "PRE2 VM-less — restart")
-            pump(); drive_input(state)
-            if native_audio is not None:
-                native_audio.poll(state)
-            if not ref["running"]:
-                return
+        if not run_menu_flow(state, dos, "PRE2 VM-less — restart"):   # [main 0x12f] menu -> map -> carte -> loader (L1)
+            return
+        native_load_level_palette(state, dos)
+        reveal_level(state, dos)
+
+    def quit_to_menu(state, dos):
+        """HOST action (the Back-dialog's MAIN MENU): abandon the current level and return to the press-1/2
+        MENU. Writes exactly the fresh-session bytes the game-over reset writes — level [0x2D8A]=0 [asm 507e]
+        and the 32-bit score zeroed [asm 5083-508f] — minus the death scene, then re-enters the same menu flow
+        the restarts use (the loader's FRESH-start block resets lives). Presentation-layer convenience: it only
+        writes bytes the game's own game-over path writes; nothing here is reachable during a demo replay."""
+        print("  BACK dialog -> main menu (host action; game-over-style fresh-session reset)")
+        d = state.data
+        for sel in (0x6BE4, 0x6BE5, 0x6BE6):                       # clear the death/end/level-change selectors
+            d[DS + sel] = 0
+        for o in (0x6C0E, 0x6C0F, 0x6C10, 0x6C11, 0x6C0C, 0x6C0D):  # [asm 5083-508f] score = 0
+            d[DS + o] = 0
+        d[DS + 0x2D8A] = 0                                         # [asm 507e] back to level 1
+        if not run_menu_flow(state, dos, "PRE2 VM-less — menu"):
+            return
         native_load_level_palette(state, dos)
         reveal_level(state, dos)
 
@@ -1463,6 +1567,54 @@ def main(argv=None) -> int:
             disp.draw_overlay(canvas, (0, 0))
             disp.flip()
             clock.tick(60)
+
+    def pause_modal():
+        """The Android Back-button (or touch-mode Esc) pause dialog — MODAL like the F10 menu: the game/scene
+        is frozen while open (this loop owns the events; nothing reaches the game's input cells). Resume just
+        returns; Exit clears ref['running']; Main menu arms ref['exit_to_menu'] for the gameplay loop (the
+        option is hidden while the front-end is already showing). Music keeps playing (the SDL sink streams
+        autonomously). No-op on non-touch builds — desktop Esc still quits directly."""
+        if touch is None:
+            return
+        from android_menu import PauseDialog
+        dlg = PauseDialog(include_menu=not ref["frontend"])
+        touch.reset()                                             # a held finger must not leak into the dialog
+        dim = {"surf": None, "size": None, "fresh": False}
+        while ref["running"]:
+            size = disp.get_size()
+            action = None
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    ref["running"] = False
+                elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
+                    disp.resize(ev.w, ev.h)
+                elif ev.type == pygame.KEYDOWN and (ev.key == pygame.K_ESCAPE or ev.key == _K_BACK):
+                    action = "resume"                             # Back/Esc again -> back to the game
+                elif ev.type == pygame.FINGERUP:
+                    action = dlg.hit((ev.x * size[0], ev.y * size[1]), size)
+                elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                    action = dlg.hit(ev.pos, size)
+            if action == "resume":
+                break
+            if action == "exit":
+                ref["running"] = False
+                break
+            if action == "menu":
+                ref["exit_to_menu"] = True                        # consumed by gameplay_loop's next iteration
+                break
+            if ref["last"] is not None:
+                blit_frame(ref["last"])                           # the frozen frame UNDER the dim + dialog
+            else:
+                disp.draw_game(np.zeros((200, 320, 3), np.uint8))
+            if dim["size"] != size:                               # cached window-size dim (re-upload only on resize)
+                s = pygame.Surface(size, pygame.SRCALPHA)
+                s.fill((8, 10, 14, 150))
+                dim.update(surf=s, size=size, fresh=True)
+            disp.draw_overlay(dim["surf"], (0, 0), slot="pausedim", changed=dim.pop("fresh", False))
+            dlg.draw(disp)
+            disp.flip()
+            clock.tick(60)
+        touch.reset()                                             # the closing tap must not fire into the game
 
     def gameplay_loop(state, dos):
         """Run the recovered gameplay VM-less: host input -> native_frame_step -> present, until a gap.
@@ -1761,6 +1913,12 @@ def main(argv=None) -> int:
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
+            if ref["exit_to_menu"]:                                # Back dialog: abandon the level -> main menu
+                ref["exit_to_menu"] = False
+                quit_to_menu(state, dos)                           # menu -> map -> carte -> fresh level loaded
+                if not ref["running"]:
+                    break
+                continue
             if ref["switch_level"] is not None:                    # Develop tab: jump/restart (a --debug cheat)
                 lvl = ref["switch_level"]
                 ref["switch_level"] = None
@@ -2005,73 +2163,10 @@ def main(argv=None) -> int:
     reached_gameplay = False
     ref["frontend"] = True                                         # titles/menu/carte -> whole-screen touch gestures
 
-    def run_front_end(gen):
-        """Present + drive a front-end scene generator to completion. Returns 'done' (it finished -> a level is
-        loaded), 'continue' (the mobile CONTINUE button was tapped -> pause here so the picker can run; the SAME
-        generator resumes on the next call), or 'quit'. Shared by the cold-boot flow AND the CONTINUE carte+load."""
-        for scene in gen:
-            # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
-            # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
-            # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
-            fps = args.fps if (state.data[DS + 0x2879] == 1 or scene.game_paced) else _FRONT_END_FPS
-            ref["fe_screen"] = scene.screen                        # per-screen touch mapping (see drive_input)
-            present_front_scene(scene, fps, "PRE2 VM-less — cold boot (front-end)")
-            pump()
-            # the OLDIES scene-wait (0bbe) reads fire; the mode-select toggles BEGINNER<->EXPERT on UP/DOWN and
-            # the carte pans on the arrows; '1'/'2' start / password. drive_input feeds all of these (demo + live).
-            drive_input(state)
-            if native_audio is not None:
-                native_audio.poll(state)                           # front-end music (PRESENTA title song, menu, carte)
-            if ref["continue_requested"]:
-                return "continue"                                  # leave gen paused at the menu; the picker runs next
-            if not ref["running"]:
-                return "quit"
-        return "done"
-
-    def run_continue_screen():
-        """Modal mobile CONTINUE level picker. Choosing an unlocked checkpoint commits [0x2D8A]/[0xB197] (exactly
-        what a valid password writes) and returns True; BACK / ESC returns False; the window closing returns
-        False after clearing ref['running']."""
-        from android_menu import ContinueScreen
-        cs = ContinueScreen(progress)
-        while ref["running"]:
-            size = disp.get_size()
-            result = None
-            for ev in pygame.event.get():
-                t = ev.type
-                if t == pygame.QUIT:
-                    ref["running"] = False
-                elif t == pygame.VIDEORESIZE and not view.get("fs"):
-                    disp.resize(ev.w, ev.h)
-                elif t == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                    return False
-                elif t == pygame.FINGERUP:
-                    result = cs.hit((ev.x * size[0], ev.y * size[1]), size)
-                elif t == pygame.MOUSEBUTTONUP and ev.button == 1:
-                    result = cs.hit(ev.pos, size)
-            if result == "back":
-                return False
-            if isinstance(result, tuple):
-                level, expert = result
-                state.data[DS + 0x2D8A] = level & 0xFF             # the chosen checkpoint (a valid password's [0x2D8A])
-                state.data[DS + 0xB197] = 1 if expert else 0       # beginner / expert path
-                return True
-            cs.draw(disp)
-            pace(_FRONT_END_FPS)
-        return False
-
     try:
-        menu_gen = native_front_end(state, dos, 0, game_root=gr, intro_skippable=settings["intro_skippable"])
-        result = run_front_end(menu_gen)
-        while result == "continue":                                # CONTINUE tapped on the press-1/2 menu
-            ref["continue_requested"] = False
-            if touch is not None:
-                touch.reset()                                      # drop the tap so it can't leak into the picker
-            if run_continue_screen():                              # a checkpoint chosen -> carte + load it, then play
-                result = run_front_end(native_carte_and_load(state, dos, gr))
-            else:
-                result = run_front_end(menu_gen)                   # backed out -> resume the menu where it paused
-        reached_gameplay = ref["running"] and result == "done"     # a level finished loading -> play it
+        reached_gameplay = run_menu_flow(
+            state, dos, "PRE2 VM-less — cold boot (front-end)",
+            gen=native_front_end(state, dos, 0, game_root=gr, intro_skippable=settings["intro_skippable"]))
     except Pre2HybridGap as e:
         hold_last(f"front-end reached a not-yet-recovered gap: {str(e)[:110]}", state)
     except Exception as e:                                         # noqa: BLE001

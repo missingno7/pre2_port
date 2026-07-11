@@ -66,6 +66,26 @@ def _cell_center(cs, level, *, expert):
     raise AssertionError(f"no cell for level={level} expert={expert}")
 
 
+# -- Back-button pause dialog --------------------------------------------------------------------------
+def test_pause_dialog_hits_and_menu_gating():
+    from android_menu import PauseDialog
+    dlg = PauseDialog(include_menu=True)
+    rects = dlg.rects(SIZE)
+    assert set(rects) == {"resume", "menu", "exit"}
+    assert dlg.hit(rects["resume"].center, SIZE) == "resume"
+    assert dlg.hit(rects["menu"].center, SIZE) == "menu"
+    assert dlg.hit(rects["exit"].center, SIZE) == "exit"
+    assert dlg.hit((5, 5), SIZE) is None                     # outside taps keep the dialog open (no accidental resume)
+    assert dlg.hit(None, SIZE) is None
+    # buttons never overlap
+    rl = list(rects.values())
+    assert not any(a.colliderect(b) for i, a in enumerate(rl) for b in rl[i + 1:])
+    # in the front-end the Main-menu option is dropped (menu-to-menu is meaningless)
+    fe = PauseDialog(include_menu=False)
+    assert set(fe.rects(SIZE)) == {"resume", "exit"}
+    assert fe.hit(fe.rects(SIZE)["exit"].center, SIZE) == "exit"
+
+
 # -- progress save -----------------------------------------------------------------------------------
 def test_progress_record_and_persist(tmp_path):
     import android_host

@@ -106,6 +106,80 @@ class MenuButtons:
 
 
 # ---------------------------------------------------------------------------------------------------
+# Back-button pause dialog — Resume / Main menu / Exit, over the dimmed frozen frame.
+# ---------------------------------------------------------------------------------------------------
+class PauseDialog:
+    """The Android Back-button dialog. MODAL like the F10 menu: the caller freezes the game while it is
+    open and routes every event here, so opening it can never perturb gameplay or a demo. ``include_menu``
+    drops the 'Main menu' option when the front-end is already showing (menu-to-menu is meaningless).
+
+    ``hit`` returns ``"resume"`` / ``"menu"`` / ``"exit"`` or ``None`` (a tap outside the buttons keeps the
+    dialog open — an accidental palm must not resume into a running game)."""
+
+    def __init__(self, *, include_menu: bool = True) -> None:
+        self.include_menu = include_menu
+        self._spr = None                                          # cached sprites per (size, include_menu)
+
+    def _entries(self):
+        entries = [("resume", "RESUME")]
+        if self.include_menu:
+            entries.append(("menu", "MAIN MENU"))
+        entries.append(("exit", "EXIT GAME"))
+        return entries
+
+    def rects(self, size) -> dict:
+        """Window-pixel button rects keyed by action, stacked and centred."""
+        w, h = size
+        entries = self._entries()
+        bw = max(140, int(w * 0.30))
+        bh = max(40, int(h * 0.12))
+        gap = int(bh * 0.35)
+        total = len(entries) * bh + (len(entries) - 1) * gap
+        y0 = (h - total) // 2 + int(h * 0.03)                     # nudged down to clear the PAUSED title
+        cx = w // 2
+        return {action: pygame.Rect(cx - bw // 2, y0 + i * (bh + gap), bw, bh)
+                for i, (action, _label) in enumerate(entries)}
+
+    def hit(self, pos, size) -> str | None:
+        if pos is None:
+            return None
+        for action, rect in self.rects(size).items():
+            if rect.collidepoint(pos):
+                return action
+        return None
+
+    def _build(self, disp, size):
+        rects = self.rects(size)
+        labels = dict(self._entries())
+        spr = {"size": size, "include_menu": self.include_menu, "buttons": []}
+        for action, rect in rects.items():
+            s = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            r = rect.h // 2
+            pygame.draw.rect(s, _BTN_FILL, s.get_rect(), border_radius=r)
+            pygame.draw.rect(s, _BTN_EDGE, s.get_rect(), width=max(2, rect.h // 22), border_radius=r)
+            t = _font(rect.h * 0.45).render(labels[action], True, _BTN_TEXT[:3])
+            s.blit(t, t.get_rect(center=(rect.w // 2, rect.h // 2)))
+            spr["buttons"].append((disp.make_sprite(s), rect.topleft))
+        title = _font(int(size[1] * 0.075)).render("PAUSED", True, _TITLE[:3])
+        ts = pygame.Surface(title.get_size(), pygame.SRCALPHA)
+        ts.blit(title, (0, 0))
+        first_top = min(r.top for r in rects.values())
+        spr["title"] = (disp.make_sprite(ts), ((size[0] - title.get_width()) // 2,
+                                               max(8, first_top - int(size[1] * 0.13))))
+        self._spr = spr
+
+    def draw(self, disp) -> None:
+        """Draw the title + buttons as cached sprites (the caller draws the frozen frame + dim first)."""
+        size = disp.get_size()
+        if self._spr is None or self._spr["size"] != size or self._spr["include_menu"] != self.include_menu:
+            self._build(disp, size)
+        sprite, topleft = self._spr["title"]
+        disp.draw_sprite(sprite, topleft)
+        for sprite, topleft in self._spr["buttons"]:
+            disp.draw_sprite(sprite, topleft)
+
+
+# ---------------------------------------------------------------------------------------------------
 # CONTINUE level-select — a full-screen 2-column BEGINNER | EXPERT checkpoint grid.
 # ---------------------------------------------------------------------------------------------------
 class ContinueScreen:

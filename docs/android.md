@@ -37,7 +37,18 @@ flags in). The only game-facing addition is an on-screen control layer.
   you have *reached* that level on that path, and picking one jumps straight in. It writes the SAME
   `[0x2D8A]`/`[0xB197]` a valid password does — so it's the proven password-entry code path with a thumb-friendly
   front end, not new game logic. Progress is saved to `pre2native_progress.json` beside the settings.
-- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, request 120 Hz mode +
+- ✅ Back button — trapped via `SDL_ANDROID_TRAP_BACK_BUTTON` (delivered as `K_AC_BACK` instead of
+  finishing the activity) and opens a modal PAUSE dialog: **Resume / Main menu / Exit game** (Main menu is
+  hidden while a menu is already showing; taps outside the buttons keep the dialog open). The game tick is
+  frozen while it is open — nothing the dialog consumes can reach the game's input cells. Main menu performs
+  the game-over-style fresh-session reset (level 0, score 0 — the same bytes [asm 507e/5083] writes) without
+  the death scene, then re-enters the shared menu flow. On desktop `--touch`, Esc opens the same dialog (PC
+  parity); the plain desktop build keeps Esc = quit. The APK is landscape-locked (`orientation = landscape`).
+- ✅ Menus after game-over / THE END — the restart handlers now drive the menu through the same
+  `run_menu_flow` wrapper as the cold boot (frontend gestures, per-screen tap mapping, the NEW GAME /
+  CONTINUE buttons and picker). Previously they ran bare loops that never flipped the touch context, so the
+  game-over menu drew no buttons and taps acted as the gameplay joystick.
+- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, request 120 Hz mode +
   further `extract` optimization (the remaining ~15 ms/tick limiter), a clean arm64-only repackage.
 
 > buildozer does **not** run on Windows. Build the APK on a Linux/WSL host (recipe below) or in CI.
