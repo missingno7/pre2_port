@@ -131,18 +131,16 @@ The joystick + JUMP/BASH draw over the game; click-drag the left half to move, c
 
 ## Building the APK
 
-### In CI (recommended — no local Linux needed)
+### In CI (validate gate only — the APK is built locally)
 
-[`.github/workflows/android.yml`](../.github/workflows/android.yml) builds the debug APK on `ubuntu-latest`:
+[`.github/workflows/android.yml`](../.github/workflows/android.yml) runs a fast **validate** gate on every
+push: the touch-resolver + Android-menu unit tests, the vendored-overlay drift guard, and an import-check
+of the mobile entry (fails in seconds if the app code is broken).
 
-1. A fast **validate** gate — the touch unit tests + an import-check of the mobile entry (fails in seconds
-   if the app code is broken).
-2. A **build** job — buildozer / python-for-android downloads the SDK/NDK and cross-compiles numpy + pygame
-   (tens of minutes cold), then uploads the `.apk` as a workflow artifact.
-
-Trigger it from the repo's **Actions → Android APK → Run workflow**, or on push to `android-touch-port`.
-The CI APK ships **no game data** (the `*.SQZ/*.TRK` aren't in git), so it launches to the "no data" screen
-until you add data — its job is to prove the toolchain.
+The former CI **build** job is retired: its GitHub action vanished upstream, and — more fundamentally — a
+stock python-for-android cannot build this app anyway (the working build needs the p4a hand-edits below,
+which live in the local WSL checkout and are not yet captured as committed `p4a.local_recipes`). Until that
+reproducibility gap is closed, the supported APK path is the local recipe below.
 
 ### Locally (Linux / WSL, with your data)
 
@@ -221,8 +219,9 @@ import (a Storage-Access-Framework picker) is the next milestone.
   carries the present path (fine at 320×200).
 - Per-tick Python performance on a real device (no PyPy on Android). The tick is light (~23 Hz, 320×200)
   but must be profiled, especially on low-end phones.
-- The `ArtemSBulgakov/buildozer_action` pin in the workflow — if it has drifted, swap in a maintained
-  buildozer action or a manual `pip install buildozer && buildozer android debug` step.
+- ~~The `ArtemSBulgakov/buildozer_action` pin in the workflow~~ — it DID drift (repository deleted
+  upstream, 2026-07); the CI build job is retired until the p4a hand-edits are captured as
+  `p4a.local_recipes` (see "In CI" above).
 
 ## Next milestones
 
