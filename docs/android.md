@@ -15,8 +15,13 @@ flags in). The only game-facing addition is an on-screen control layer.
   [`icon.png`](../icon.png); used for the native window and the APK launcher.
 - ✅ Runs smoothly on device — after fixing the touch overlay (a full-window ~18 MB surface was re-uploaded to
   the GPU every frame the knob moved; now small static sprites via `Display.make_sprite`) and caching the
-  background tile grid, gameplay went ~22 → ~52 fps with interpolation actually adding frames. The joystick is
-  a lower half-circle (left/right/down; jump is the JUMP button).
+  background tile grid, gameplay went ~22 → ~52 fps with interpolation actually adding frames.
+- ✅ Floating hidden joystick — the stick is invisible until you touch the left zone, then it appears under your
+  thumb. It's a full analog circle; stick-**up** only registers as UP while **BASH** is also held (an upward
+  bash), so walking up a slope never triggers a stray jump. JUMP is the dedicated button.
+- ✅ Skippable intro — touch/Android boots straight to the menu (skips the OLDIES credits + TITUS/PREHISTORIK
+  titles). It's an opt-in `skip_intro` setting (breaks boot accuracy) so the desktop default keeps the faithful
+  intro; the `--touch` build forces it on.
 - ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, request 120 Hz mode +
   further `extract` optimization (the remaining ~15 ms/tick limiter), a clean arm64-only repackage.
 
@@ -28,14 +33,15 @@ Landscape, thumbs on the bottom corners:
 
 | Control | Location | Maps to | DOS scancode |
 |---|---|---|---|
-| **Virtual joystick** | left half (floating — plants under your thumb) | left / right / up / down | `0x4B` `0x4D` `0x48` `0x50` |
+| **Virtual joystick** | left half (floating — hidden until you touch, plants under your thumb) | left / right / down (+ up only while BASH held) | `0x4B` `0x4D` `0x50` (`0x48`) |
 | **JUMP** button | right, upper-left of the pair | up flag (the jump) | `0x48` |
 | **BASH** button | right, lower-right of the pair | fire flag (the club attack) | `0x39` |
 
-The joystick is a *floating* analog stick: touch anywhere in the left zone to set its base, then drag — a
-dead-zone plus a per-axis threshold turns the vector into clean 4/8-way directions. JUMP is also reachable
-by pushing the stick up; the dedicated button just makes platforming precise. A JUMP tap feeds the same
-responsive-controls jump buffer a keyboard/gamepad tap does.
+The joystick is a *floating, hidden* analog stick: it's invisible until you touch the left zone, which sets
+its base under your thumb; then drag — a dead-zone plus a per-axis threshold turns the vector into clean
+4/8-way directions. Pushing the stick **up** only emits UP *while BASH is held* (an upward bash) — so climbing
+an up-diagonal never fires a stray jump. To actually jump, use the dedicated **JUMP** button; a JUMP tap feeds
+the same responsive-controls jump buffer a keyboard/gamepad tap does.
 
 ### Why this stays byte-exact
 

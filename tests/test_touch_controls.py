@@ -57,17 +57,20 @@ def test_stick_diagonal_down_right():
     assert flags.right and flags.down and not flags.left and not flags.up
 
 
-def test_stick_has_no_up():
-    # the stick is left/right/down only (jump is the JUMP button); dragging up registers nothing and the knob
-    # is clamped to the base line (a lower half-circle).
+def test_stick_up_only_with_bash():
+    # the stick emits UP only WHILE BASH is held (an upward bash); up-alone never registers, so walking
+    # up-diagonal can't trigger a stray jump.
     tc = TouchControls()
     base = (LAY.stick_rest[0], LAY.stick_rest[1])
     tc.update({1: base}, SIZE)
-    flags, rm, _ = tc.update({1: _drag(base, 0, -LAY.stick_radius)}, SIZE)   # straight up
-    assert not flags.up and not flags.down
-    assert abs(rm.knob[1] - rm.stick_base[1]) < 1.0                          # knob does not rise above the base
-    flags, _, _ = tc.update({1: _drag(base, LAY.stick_radius, -LAY.stick_radius)}, SIZE)   # up-right
-    assert flags.right and not flags.up
+    flags, rm, _ = tc.update({1: _drag(base, 0, -LAY.stick_radius)}, SIZE)   # stick up, no bash
+    assert not flags.up
+    assert rm.knob[1] < rm.stick_base[1]                                     # full circle: the knob DOES rise
+    # stick up + BASH held -> up + fire (bash upward)
+    tc2 = TouchControls()
+    tc2.update({1: base}, SIZE)
+    flags, _, _ = tc2.update({1: _drag(base, 0, -LAY.stick_radius), 2: LAY.bash_center}, SIZE)
+    assert flags.up and flags.fire
 
 
 def test_jump_button_sets_up_with_edge_once():

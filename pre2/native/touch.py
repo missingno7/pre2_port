@@ -168,6 +168,9 @@ class TouchControls:
                 continue
             owned.add(fid)
 
+        jump = self._jump_finger is not None
+        bash = self._bash_finger is not None
+
         flags = Flags()
         base = lay.stick_rest
         knob = base
@@ -176,11 +179,9 @@ class TouchControls:
             base = self._stick_base
             fx, fy = fingers[self._stick_finger]
             dx, dy = fx - base[0], fy - base[1]
-            dy = max(0.0, dy)                              # NO UP: left/right/down only — jump is the JUMP button,
-            #                                               so the stick is a lower half-circle (easier to control).
             dist = hypot(dx, dy)
             r = lay.stick_radius
-            if dist > r and dist > 0.0:                    # clamp the knob to the ring
+            if dist > r and dist > 0.0:                    # clamp the knob to the ring (full circle)
                 dx *= r / dist
                 dy *= r / dist
                 dist = r
@@ -192,11 +193,11 @@ class TouchControls:
                     flags.left = True
                 elif dx >= k:
                     flags.right = True
-                if dy >= k:                                # down only (up is removed above)
+                if dy >= k:
                     flags.down = True
+                elif dy <= -k and bash:                    # stick UP only registers WHILE BASH is held (an upward
+                    flags.up = True                        # bash) — so walking up-diagonal never triggers a jump
 
-        jump = self._jump_finger is not None
-        bash = self._bash_finger is not None
         if jump:
             flags.up = True                                # JUMP button == up flag (also reachable via stick-up)
         if bash:

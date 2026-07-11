@@ -206,7 +206,7 @@ def _native_attract(state, dos, game_root: str):
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
 
 
-def native_front_end(state, dos, display_page: int, *, game_root: str):
+def native_front_end(state, dos, display_page: int, *, game_root: str, skip_intro: bool = False):
     """Drive the whole VM-less front-end, advancing the wall-clock idle counter ``[0x27F0]`` by one 70Hz timer
     tick per displayed frame. The front-end runs the timer exactly as the VM does (its scenes spin on the retrace),
     so gameplay starts with ``[0x27F0]`` at a lived-in value rather than 0 — a value the VM never has (its timer
@@ -214,12 +214,12 @@ def native_front_end(state, dos, display_page: int, *, game_root: str):
     the upright stand, since the idle-fidget selector 5DC9 reads ``[0x27F0] & 0x1FF``). The inner generator
     (:func:`_native_front_end_frames`) loads the level after its last displayed frame."""
     from pre2.native.loop import native_idle_timer_tick
-    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root):
+    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root, skip_intro=skip_intro):
         native_idle_timer_tick(state, ticks=1)                 # 1 timer tick per front-end retrace (70Hz)
         yield scene
 
 
-def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
+def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, skip_intro: bool = False):
     """Drive the front-end scene state machine from the entry state, ``yield``ing each displayed scene frame, until
     a level starts — then the caller switches to ``native_frame_step`` for gameplay.
 
@@ -233,8 +233,12 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
     # table at 0x287e (int10 AX=1012) — without it the runner shows the default EGA palette (wrong colours).
     from pre2.native.render import native_load_dac_palette
     native_load_dac_palette(state, dos, 0x287E)
+    # skip_intro (an OPT-IN; on by default for touch): jump straight to the menu, showing none of the OLDIES
+    # credits or the TITUS/PREHISTORIK title screens. The non-visual SETUP below (SFX bank, FRONT.SQZ, the sprite
+    # bank, the load-top) still runs — it establishes the memory layout the menu + gameplay need. This is NOT
+    # byte-accurate to the VM's boot (which always plays the full intro), hence the option.
     phase = WAIT_PRESS
-    while True:
+    while not skip_intro:
         planes, _ = build_oldies_scene(state, page=display_page)        # [asm 240a] credits over black
         yield FrontEndScene(MODE_PLANAR, palette=tuple(dos.vga_palette),
                             planes=tuple(bytes(p) for p in planes), page=display_page)
@@ -250,16 +254,17 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
     # --- TITUS screen (912b): the first 13h title, TIMED (main 00FE-0104). Composition of three VERIFIED leaves:
     #     render_image_scene (the image, Δ=0 vs the framebuffer) + front_end_fade (the DAC fade, byte-exact vs the
     #     VM DAC) at the measured cadence: fade-IN 31 + hold 70 ([asm 9146 cx=0x46]) + fade-OUT 16. ---
-    yield from _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70)
+    if not skip_intro:
+        yield from _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70)
 
-    # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
-    #     audio-command state write so the runner's NativeAudio plays it; then the "PREHISTORIK 2" title — fade-IN
-    #     256 over the background, then the 911D palette MORPH 234 over the background+logo (the title's colour
-    #     reveal). The morph target is the static palette at DGROUP 0xACE7. ---
-    from pre2.native.audio import native_load_song
-    native_load_song(state, "PRESENTA.TRK", game_root)           # [asm 02cc] the PRESENT title song (first music)
-    morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
-    yield from _native_present_screen(game_root, morph_target)
+        # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
+        #     audio-command state write so the runner's NativeAudio plays it; then the "PREHISTORIK 2" title — fade-IN
+        #     256 over the background, then the 911D palette MORPH 234 over the background+logo (the title's colour
+        #     reveal). The morph target is the static palette at DGROUP 0xACE7. (native_menu_flow reloads the song.) ---
+        from pre2.native.audio import native_load_song
+        native_load_song(state, "PRESENTA.TRK", game_root)       # [asm 02cc] the PRESENT title song (first music)
+        morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
+        yield from _native_present_screen(game_root, morph_target)
 
     # --- FRONT.SQZ (the HUD front-panel) is stacked permanently before the sprite bank ([0x2875] 0x27be -> 0x2cd7),
     #     exactly as main() does between the titles and 2dfa. Without it the level later lands 0x519 paragraphs too

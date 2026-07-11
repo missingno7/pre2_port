@@ -155,6 +155,40 @@ def test_native_front_end_cold_start_reaches_gameplay():
     assert (state.data[_DS + 0x4F1C] | (state.data[_DS + 0x4F1D] << 8)) == 0x2A            # player X = level start
 
 
+def test_native_front_end_skip_intro_reaches_menu_faster():
+    # skip_intro (the touch/Android default; an OPT-IN that breaks boot accuracy) jumps straight to the "press 1/2"
+    # menu, showing none of the OLDIES credits or the TITUS/PRESENT title screens -- but it must still reach the
+    # SAME level-init handoff as the faithful boot, byte-identical, because the non-visual setup (SFX bank, FRONT.SQZ,
+    # sprite bank, load-top) is untouched. This guards the `if not skip_intro:` gating in _native_front_end_frames.
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.front_end import native_front_end
+    from pre2.native.input import apply_input, init_keyboard_input, set_key
+    from pre2.native.state import NativeGameState
+
+    def _run(skip_intro):
+        state = NativeGameState(build_boot_memory())
+        init_keyboard_input(state)
+        gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS), skip_intro=skip_intro)
+        n = 0
+        for i, _scene in enumerate(gen):
+            set_key(state, 0x02, True)                 # hold '1' -> mode-select map
+            apply_input(state, fire=(i % 2 == 0))      # pulse fire: advances the menu/scene-waits
+            n += 1
+            if i > 4000:
+                raise AssertionError("front-end never reached the handoff")
+        return state, n
+
+    full_state, full_scenes = _run(False)
+    skip_state, skip_scenes = _run(True)
+
+    assert skip_scenes < full_scenes                   # the intro scenes really were skipped
+    # both boots land on the byte-identical level state (skip_intro perturbs no gameplay memory)
+    assert skip_state.data[_DS + 0x4F0A:_DS + 0x5732] == full_state.data[_DS + 0x4F0A:_DS + 0x5732]
+    ref = native_cold_boot(str(ASSETS), level=0)
+    assert skip_state.data[_DS + 0x4F0A:_DS + 0x5732] == ref.data[_DS + 0x4F0A:_DS + 0x5732]
+
+
 def test_native_front_end_oldies_palette():
     # The OLDIES credits screen loads its OWN 16-colour palette (the green/yellow look) from the DGROUP table at
     # 0x287e (0b92 -> int10 AX=1012), NOT the default EGA palette. This guards native_load_dac_palette being wired

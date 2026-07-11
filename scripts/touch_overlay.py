@@ -105,17 +105,6 @@ class TouchOverlay:
             s.blit(t, t.get_rect(center=c))
         return s
 
-    def _half_ring(self, r, fill, edge_col, edge):
-        """The joystick ring as a BOTTOM half-circle (the stick has no UP — jump is a separate button). The flat
-        top edge sits at the sprite's vertical centre, so drawing it centred on the (floating) base puts the
-        semicircle below the thumb, matching the knob which is clamped to the lower half."""
-        s = self._disc(r, fill, edge_col, edge)
-        d = s.get_width()
-        c = d // 2
-        s.fill((0, 0, 0, 0), (0, 0, d, c))                             # clear the top half -> transparent
-        pygame.draw.line(s, edge_col, (c - int(r), c), (c + int(r), c), edge)   # flat top (diameter) edge
-        return s
-
     def _build_sprites(self, disp, size):
         """Build the control TEXTURES once (uploaded to the GPU a single time). The joystick ring, the knob
         (idle/active), and each button (idle/pressed) become small static sprites; drawing them each frame is
@@ -124,7 +113,7 @@ class TouchOverlay:
         lay = layout_for(size)
         edge = max(2, int(lay.unit * 0.006))
         rr = lay.stick_radius
-        ring = self._half_ring(rr, _RING, _RING_EDGE, edge)           # bottom half-circle (no UP on the stick)
+        ring = self._disc(rr, _RING, _RING_EDGE, edge)                # full ring (UP registers only while BASH held)
         self._spr = {
             "size": size, "lay": lay,
             "ring": disp.make_sprite(ring),
