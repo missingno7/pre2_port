@@ -58,6 +58,11 @@ during **gameplay**; the front-end **menus** are driven by whole-screen gestures
 | **Mode-select map** | **Tap** | fire — confirm the difficulty | `0x39` |
 | **Mode-select map** | Vertical **swipe** | up / down arrow — toggle BEGINNER↔EXPERT | `0x48` / `0x50` |
 
+The **mode-select map is the only screen that reads swipes** — everywhere else (OLDIES, the intro titles, the
+press-1/2 menu, the carte) is tap-only, so a stray vertical drag there is treated as a tap (it still fires)
+rather than being swallowed as a gesture. `TouchController.set_screen()` (called each frame before the events)
+enables the swipe only on `screen == "mode_select"`.
+
 The press-1/2 tap presses `1` (not fire) on purpose: it matches the real key, and it keeps the tap's fire from
 carrying into the mode-select screen and instantly confirming it. The swipe presses a **real** arrow key — the
 mode-select map toggles off the FSM up/down flags the key table drives, not the `[0x2874]` scancode latch.
