@@ -33,8 +33,12 @@ os.environ.setdefault("SDL_ANDROID_TRAP_BACK_BUTTON", "1")   # deliver Back as K
 #   instead of letting the OS finish the activity — play_native opens the Resume/Main-menu/Exit dialog on it.
 
 
+_PKG = "org.pre2port.pre2"
+
+
 def _external_dir():
-    """The app's external files dir (user-reachable via a file manager). None if unavailable."""
+    """The app's external files dir (user-reachable, the on-screen 'put your files here' path). None if
+    the platform API is unavailable — the caller also tries explicit fallbacks."""
     try:
         from jnius import autoclass
         act = autoclass("org.kivy.android.PythonActivity").mActivity
@@ -43,8 +47,23 @@ def _external_dir():
             return f.getAbsolutePath()
     except Exception:
         pass
-    guess = "/sdcard/Android/data/org.pre2port.pre2/files"
-    return guess if os.path.isdir("/sdcard") else os.environ.get("ANDROID_PRIVATE")
+    return f"/sdcard/Android/data/{_PKG}/files"
+
+
+def _data_roots():
+    """Ordered candidate dirs to look for the game data in — the external files dir, its explicit sdcard /
+    emulated-storage spellings (getExternalFilesDir can hand back a path a straight ``os.path.exists`` on
+    another spelling wouldn't match, and adb-pushed files land under whichever the shell used), then the
+    app-private dir. De-duplicated, order-preserving."""
+    roots, seen = [], set()
+    for r in (_external_dir(),
+              f"/sdcard/Android/data/{_PKG}/files",
+              f"/storage/emulated/0/Android/data/{_PKG}/files",
+              os.environ.get("ANDROID_PRIVATE")):
+        if r and r not in seen:
+            seen.add(r)
+            roots.append(r)
+    return roots
 
 
 def _write_log(text):
@@ -86,11 +105,19 @@ def _message_screen(lines):
 
 
 def _run():
-    # Prefer user-supplied data in the external dir; else the bundled assets/ (play_native's default).
+    # Find the user-supplied data among the candidate roots (logged to logcat for diagnosis); the APK ships
+    # none, so without it play_native fails loud and we show the 'copy your files' screen.
     argv = []
-    ext = _external_dir()
-    if ext and os.path.exists(os.path.join(ext, "SPRITES.SQZ")):
-        argv = ["--game-root", ext]
+    for root in _data_roots():
+        try:
+            has = os.path.exists(os.path.join(root, "SPRITES.SQZ"))
+        except Exception as e:                                    # noqa: BLE001
+            sys.stderr.write(f"[pre2] data root check failed for {root}: {e}\n")
+            continue
+        sys.stderr.write(f"[pre2] data root {root}: SPRITES.SQZ {'FOUND' if has else 'missing'}\n")
+        if has:
+            argv = ["--game-root", root]
+            break
 
     from play_native import main
     return main(argv)

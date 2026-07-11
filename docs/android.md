@@ -214,6 +214,30 @@ Mobile presentation: the touch build defaults the enhancements ON (widescreen, t
 interpolation, smooth transitions, stereo SFX, responsive controls) since there's no F10 menu on a phone —
 see the `args.touch` block in `play_native.py`.
 
+### Where the data actually has to go (Android 11+ scoped storage)
+
+The runner checks several roots for `SPRITES.SQZ`, first match wins (each logged to logcat as
+`[pre2] data root <path>: SPRITES.SQZ FOUND/missing`): the app's external files dir, the explicit
+`/sdcard/Android/data/org.pre2port.pre2/files` and `/storage/emulated/0/...` spellings, then the app's
+INTERNAL dir (`$ANDROID_PRIVATE` = `/data/user/0/org.pre2port.pre2/files`).
+
+The catch, verified on a Galaxy S24 (Android 14): a file `adb push`ed into `Android/data/<pkg>/files` is
+**invisible to the app's own process** — the app runs in a FUSE mount namespace that doesn't show files
+placed there by the shell — and that folder is hidden from file managers/MTP entirely since Android 13. So
+the only root a real user can populate today is the internal dir, which needs `run-as` (debug builds) or
+the planned SAF importer. To provision a debug build for testing:
+
+```bash
+adb shell rm -rf /data/local/tmp/pre2 && adb shell mkdir /data/local/tmp/pre2
+adb push assets/*.SQZ assets/*.TRK /data/local/tmp/pre2/
+adb shell chmod -R 777 /data/local/tmp/pre2
+adb shell run-as org.pre2port.pre2 sh -c 'mkdir -p files && cp /data/local/tmp/pre2/*.SQZ /data/local/tmp/pre2/*.TRK files/'
+```
+
+The **first-run SAF importer** (an "Import game files" screen → `ACTION_OPEN_DOCUMENT_TREE` → copy the
+picked folder's `*.SQZ/*.TRK` into that internal dir) is the real end-user mechanism and the next milestone
+— the loader above is already importer-ready (the internal dir is a first-class data root).
+
 ### First-launch behaviour without data
 
 `main.py` catches `play_native`'s missing-data fail-loud and shows a fullscreen "copy your *.SQZ/*.TRK
