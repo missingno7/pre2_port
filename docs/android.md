@@ -13,7 +13,12 @@ flags in). The only game-facing addition is an on-screen control layer.
   below.
 - ✅ Project icon — the extra-life caveman head (sprite 227, cream-outlined on transparent). Master at
   [`icon.png`](../icon.png); used for the native window and the APK launcher.
-- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, perf profiling.
+- ✅ Runs smoothly on device — after fixing the touch overlay (a full-window ~18 MB surface was re-uploaded to
+  the GPU every frame the knob moved; now small static sprites via `Display.make_sprite`) and caching the
+  background tile grid, gameplay went ~22 → ~52 fps with interpolation actually adding frames. The joystick is
+  a lower half-circle (left/right/down; jump is the JUMP button).
+- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, Back button, request 120 Hz mode +
+  further `extract` optimization (the remaining ~15 ms/tick limiter), a clean arm64-only repackage.
 
 > buildozer does **not** run on Windows. Build the APK on a Linux/WSL host (recipe below) or in CI.
 
