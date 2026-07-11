@@ -57,6 +57,19 @@ def test_stick_diagonal_down_right():
     assert flags.right and flags.down and not flags.left and not flags.up
 
 
+def test_stick_has_no_up():
+    # the stick is left/right/down only (jump is the JUMP button); dragging up registers nothing and the knob
+    # is clamped to the base line (a lower half-circle).
+    tc = TouchControls()
+    base = (LAY.stick_rest[0], LAY.stick_rest[1])
+    tc.update({1: base}, SIZE)
+    flags, rm, _ = tc.update({1: _drag(base, 0, -LAY.stick_radius)}, SIZE)   # straight up
+    assert not flags.up and not flags.down
+    assert abs(rm.knob[1] - rm.stick_base[1]) < 1.0                          # knob does not rise above the base
+    flags, _, _ = tc.update({1: _drag(base, LAY.stick_radius, -LAY.stick_radius)}, SIZE)   # up-right
+    assert flags.right and not flags.up
+
+
 def test_jump_button_sets_up_with_edge_once():
     tc = TouchControls()
     flags, _, edge = tc.update({7: LAY.jump_center}, SIZE)

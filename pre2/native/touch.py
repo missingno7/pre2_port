@@ -176,6 +176,8 @@ class TouchControls:
             base = self._stick_base
             fx, fy = fingers[self._stick_finger]
             dx, dy = fx - base[0], fy - base[1]
+            dy = max(0.0, dy)                              # NO UP: left/right/down only — jump is the JUMP button,
+            #                                               so the stick is a lower half-circle (easier to control).
             dist = hypot(dx, dy)
             r = lay.stick_radius
             if dist > r and dist > 0.0:                    # clamp the knob to the ring
@@ -190,9 +192,7 @@ class TouchControls:
                     flags.left = True
                 elif dx >= k:
                     flags.right = True
-                if dy <= -k:
-                    flags.up = True
-                elif dy >= k:
+                if dy >= k:                                # down only (up is removed above)
                     flags.down = True
 
         jump = self._jump_finger is not None
