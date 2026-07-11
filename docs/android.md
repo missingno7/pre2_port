@@ -9,8 +9,14 @@ flags in). The only game-facing addition is an on-screen control layer.
 - ✅ On-screen touch controls — pure resolver + pygame renderer, wired into `play_native.py`, unit-tested,
   and runnable on desktop with `--touch` (mouse = one finger).
 - ✅ APK **built** — a working debug APK (`org.pre2port.pre2`, arm64-v8a, minSdk 26) was produced in WSL
-  with the caveman-head launcher icon, the touch controls, and the game data bundled. See the build recipe
-  below.
+  with the caveman-head launcher icon and the touch controls. See the build recipe below.
+- ✅ **No game data in the APK** — the spec excludes `*.SQZ/*.TRK` by construction (`include_exts = py,png`,
+  `assets/` excluded), so a built APK can never ship the user-owned files even when a local checkout has a
+  legal copy in `assets/` for desktop play. On the phone the app loads data from its external files dir —
+  copy your files to `/sdcard/Android/data/org.pre2port.pre2/files/` (e.g.
+  `adb push assets/*.SQZ assets/*.TRK /sdcard/Android/data/org.pre2port.pre2/files/`; note Android 13+
+  file managers can't browse `Android/data`, so adb — or a PC-mode file transfer — is the practical route).
+  First launch without data shows exactly that path on screen.
 - ✅ Project icon — the extra-life caveman head (sprite 227, cream-outlined on transparent). Master at
   [`icon.png`](../icon.png); used for the native window and the APK launcher.
 - ✅ Runs smoothly on device — after fixing the touch overlay (a full-window ~18 MB surface was re-uploaded to
@@ -146,9 +152,10 @@ reproducibility gap is closed, the supported APK path is the local recipe below.
 
 ```bash
 pip install buildozer
-# put your legal *.SQZ / *.TRK into assets/ first (bundled into your private APK)
-buildozer -v android debug
+buildozer -v android debug          # the APK never bundles game data (spec excludes *.SQZ/*.TRK)
 buildozer android deploy run logcat
+# then put your legal data on the phone:
+#   adb push assets/*.SQZ assets/*.TRK /sdcard/Android/data/org.pre2port.pre2/files/
 ```
 
 The APK lands in `bin/`. `buildozer.spec` already pins the combo that works on a modern toolchain (see the

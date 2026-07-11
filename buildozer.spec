@@ -6,9 +6,12 @@
 #   Build:   pip install buildozer  &&  buildozer -v android debug
 #   Deploy:  buildozer android deploy run logcat
 #
-# Game data: the *.SQZ / *.TRK files are user-owned and NOT in git. To bundle YOUR legal copy into YOUR
-# private APK, drop them in assets/ (source.include_patterns picks them up). A later milestone replaces
-# this with a first-run Storage-Access-Framework importer so the APK ships no game data.
+# Game data: the *.SQZ / *.TRK files are user-owned and are NEVER bundled into the APK (this spec excludes
+# them by construction — include_exts has no SQZ/TRK and assets/ is excluded). The app loads the data from
+# its external files dir on the phone: copy your legal GOG/original files to
+#   /sdcard/Android/data/org.pre2port.pre2/files/        (adb push assets/*.SQZ assets/*.TRK <that dir>)
+# On first launch without data the app shows exactly that path on screen. A first-run Storage-Access-
+# Framework importer is the planned convenience on top.
 
 [app]
 title = Prehistorik 2
@@ -21,11 +24,10 @@ icon.filename = %(source.dir)s/icon.png
 
 source.dir = .
 # p4a's entry point is always main.py at the source root (which this repo has) — there is no spec key for it.
-# Python sources + the game data + the icon. The *.SQZ/*.TRK data MUST be listed as include_exts (not just
-# include_patterns, which the py-only filter ignored) or the game ships with no data. Both cases, since the
-# GOG files are upper-case.
-source.include_exts = py,SQZ,TRK,sqz,trk,png
-source.exclude_dirs = tests,dos_re,artifacts,docs,dist,bin,.git,.github,.idea,.pytest_cache,pre2/probes,venv,.venv
+# Python sources + the icon ONLY — deliberately NO SQZ/TRK extensions and assets/ excluded, so a built APK
+# can never ship game data even when a local checkout has a legal copy in assets/ for desktop play.
+source.include_exts = py,png
+source.exclude_dirs = assets,tests,dos_re,artifacts,docs,dist,bin,.git,.github,.idea,.pytest_cache,pre2/probes,venv,.venv
 
 version = 0.1.0
 
@@ -48,7 +50,9 @@ android.api = 34
 android.minapi = 26
 android.allow_backup = 1
 
-# No special permissions needed to play from bundled data. (A SAF importer would add READ access later.)
+# No permissions needed: the game data lives in the app's OWN external files dir (app-specific storage is
+# readable/writable by the owning app without any permission; users reach it via adb push or a file manager
+# that can enter Android/data). A SAF importer would not need permissions either.
 android.permissions =
 
 [buildozer]
