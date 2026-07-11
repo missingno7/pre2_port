@@ -153,7 +153,8 @@ class TouchOverlay:
             disp.draw_sprite(sprite, (cx - w / 2, cy - h / 2))
 
         lay = rm.layout
-        at(spr["ring"], rm.stick_base[0], rm.stick_base[1])
-        at(spr["knob_a"] if rm.stick_active else spr["knob"], rm.knob[0], rm.knob[1])
+        if rm.stick_active:                               # HIDDEN until touched: the stick appears at the thumb
+            at(spr["ring"], rm.stick_base[0], rm.stick_base[1])
+            at(spr["knob_a"], rm.knob[0], rm.knob[1])
         at(spr["jump_p"] if rm.jump_pressed else spr["jump"], lay.jump_center[0], lay.jump_center[1])
         at(spr["bash_p"] if rm.bash_pressed else spr["bash"], lay.bash_center[0], lay.bash_center[1])
