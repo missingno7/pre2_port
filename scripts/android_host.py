@@ -86,8 +86,6 @@ class TouchController:
         self._mouse_emulation = not android                         # desktop: drive the menu gestures with the mouse
         self.enabled = True
         self.jump_edge = False        # a gameplay JUMP tap edge (for the responsive-controls jump buffer)
-        self.menu_fire = False        # front-end: a tap completed this poll -> inject fire (0x39)
-        self.menu_arrow = 0           # front-end: a swipe crossed this poll -> latch this arrow scancode (0x48/0x50)
         self._prev_frontend = None    # last context, to detect a switch and reset stale finger ownership
 
     def set_screen(self, screen: str) -> None:
@@ -124,24 +122,28 @@ class TouchController:
                 self._menu.on_up(self._MENU_MOUSE)
 
     def tick(self, size, *, frontend: bool) -> None:
-        """Resolve the active touches for the current context. Call once per input poll (in ``pump()``)."""
+        """Resolve the active touches for the current context. Call once per input poll (in ``pump()``).
+
+        Does NOT drain the menu gesture here: a single presented frame calls ``pump()`` (hence ``tick()``)
+        MANY times — the interpolation / smooth-fade sub-frame loops in ``present_front_scene`` — so draining
+        per tick would consume a tap in an internal pump and lose it before ``drive_input`` reads it. The
+        gesture accumulates in ``MenuGestures`` and is drained once per frame by :meth:`consume_menu`."""
         if self._prev_frontend is not None and frontend != self._prev_frontend:
             self.reset()                                            # clear stale finger ownership across a switch
         self._prev_frontend = frontend
         self._overlay.tick(size)                                    # always track fingers + the gameplay flags
-        fire, arrow = self._menu.poll()                             # always drain (accumulated from the events)
-        if frontend:
-            self.menu_fire, self.menu_arrow = fire, arrow
-            self.jump_edge = False                                  # menus don't jump
-        else:
-            self.menu_fire, self.menu_arrow = False, 0             # gestures ignored in gameplay (drained above)
-            self.jump_edge = self._overlay.jump_edge
+        self.jump_edge = self._overlay.jump_edge and not frontend   # menus don't jump
+
+    def consume_menu(self) -> tuple[bool, int]:
+        """Drain the front-end tap/swipe accumulated since the last call: ``(fire, arrow)``. Called ONCE per
+        frame by ``drive_input`` — so it survives the several ``pump()``/``tick()`` calls one presented frame
+        makes, instead of a sub-frame pump eating the tap (the 'menu barely responds to taps' bug)."""
+        return self._menu.poll()
 
     # -- outputs ---------------------------------------------------------------------------------------
     def scancodes(self) -> set[int]:
         """The GAMEPLAY movement/fire scancodes (joystick dirs + JUMP 0x48 / BASH 0x39). Only meaningful when
-        NOT in the front-end — the caller branches on ``frontend`` and uses :attr:`menu_fire` /
-        :attr:`menu_arrow` there instead."""
+        NOT in the front-end — the caller branches on ``frontend`` and uses :meth:`consume_menu` there instead."""
         return self._overlay.scancodes()
 
     def draw(self, disp, *, frontend: bool) -> None:

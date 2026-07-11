@@ -187,6 +187,37 @@ def test_menu_second_finger_ignored_until_owner_lifts():
     assert g.poll() == (True, 0)
 
 
+def test_touchcontroller_tap_survives_many_ticks_until_consumed():
+    # REGRESSION: present_front_scene calls pump() (hence TouchController.tick()) MANY times per presented frame
+    # (the interpolation / smooth-fade sub-frames). The gesture must ACCUMULATE and be drained once per frame by
+    # consume_menu -- NOT by tick -- or an internal pump eats the tap and the menu "barely responds to taps".
+    import os
+    import sys
+    from pathlib import Path
+
+    import pytest
+    pygame = pytest.importorskip("pygame")
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    pygame.init()
+    from android_host import TouchController
+
+    tc = TouchController(android=False)
+    S = (1280, 720)
+
+    def fev(kind, x, y):
+        return pygame.event.Event(kind, finger_id=1, x=x / S[0], y=y / S[1], dx=0, dy=0, pressure=1.0)
+
+    tc.set_screen("")                                       # a tap-only screen (oldies / menu)
+    tc.handle_event(fev(pygame.FINGERDOWN, 640, 360), S)
+    tc.handle_event(fev(pygame.FINGERUP, 640, 360), S)
+    for _ in range(10):
+        tc.tick(S, frontend=True)                           # 10 internal pumps must NOT drain the tap
+    assert tc.consume_menu() == (True, 0)                   # the once-per-frame drain still sees it
+    assert tc.consume_menu() == (False, 0)                  # and it's a single pulse
+
+
 def test_scancodes_match_input_layer():
     from pre2.native import input as native_input
     assert touch.SCAN_LEFT == native_input.SCAN_LEFT

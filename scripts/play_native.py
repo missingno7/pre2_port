@@ -657,17 +657,19 @@ def main(argv=None) -> int:
         menu_keys = set()                                          # FRONT-END touch keys, added raw (bypass jump-strip)
         if touch is not None:
             if ref["frontend"]:
-                # FRONT-END: the whole screen is the input, mapped per screen (FrontEndScene.screen).
+                # FRONT-END: the whole screen is the input, mapped per screen (FrontEndScene.screen). consume_menu
+                # drains the tap/swipe accumulated across ALL of this frame's pumps (the fade/scroll sub-frames),
+                # so a tap isn't eaten by an internal pump before we read it.
                 #  * a TAP on the press-1/2 MENU presses '1' (0x02) -> the beginner mode-select (matches the real
                 #    key, and keeps the tap's fire from carrying into the mode-select and auto-confirming it);
                 #    a TAP anywhere else is fire (0x39): advance the titles, confirm the mode, load the level.
-                #  * a vertical SWIPE is a real up/down ARROW key (0x48/0x50) — the mode-select map toggles
-                #    BEGINNER<->EXPERT off the FSM up/down flags the key table drives (NOT the [0x2874] latch).
-                # MenuGestures edge-shapes both (one pulse per tap / per swipe), so nothing cascades or repeats.
-                if touch.menu_fire:
+                #  * a vertical SWIPE (only the mode-select screen) is a real up/down ARROW key (0x48/0x50) — the
+                #    map toggles BEGINNER<->EXPERT off the FSM up/down flags the key table drives (NOT [0x2874]).
+                menu_fire, menu_arrow = touch.consume_menu()
+                if menu_fire:
                     menu_keys.add(0x02 if ref["fe_screen"] == "menu" else 0x39)
-                if touch.menu_arrow:
-                    menu_keys.add(touch.menu_arrow)                # 0x48 (up) / 0x50 (down)
+                if menu_arrow:
+                    menu_keys.add(menu_arrow)                      # 0x48 (up) / 0x50 (down)
             else:
                 tsc = touch.scancodes()                            # GAMEPLAY: joystick dirs + JUMP(0x48)/BASH(0x39)
         held |= ((pad | tsc) - {0x48})                             # dirs / attack / start straight in; jump via buffer
