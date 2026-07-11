@@ -48,12 +48,19 @@ during **gameplay**; the front-end **menus** are driven by whole-screen gestures
 | **JUMP** button | right, upper-left of the pair | up flag (the jump) | `0x48` |
 | **BASH** button | right, lower-right of the pair | fire flag (the club attack) | `0x39` |
 
-**Front-end menus** (titles / press-1-2 / mode-select / carte):
+**Front-end menus** — the tap is mapped per screen (the runtime knows which front-end screen is showing via
+`FrontEndScene.screen`):
 
-| Gesture | Maps to | DOS scancode |
-|---|---|---|
-| **Tap** anywhere | fire — advance / pick / confirm / load | `0x39` |
-| Vertical **swipe** | up / down arrow — mode-select BEGINNER↔EXPERT toggle | `0x48` / `0x50` |
+| Screen | Gesture | Maps to | DOS scancode |
+|---|---|---|---|
+| Titles / carte | **Tap** | fire — advance / skip / load | `0x39` |
+| **Press-1/2 menu** | **Tap** | press **`1`** → beginner mode-select | `0x02` |
+| **Mode-select map** | **Tap** | fire — confirm the difficulty | `0x39` |
+| **Mode-select map** | Vertical **swipe** | up / down arrow — toggle BEGINNER↔EXPERT | `0x48` / `0x50` |
+
+The press-1/2 tap presses `1` (not fire) on purpose: it matches the real key, and it keeps the tap's fire from
+carrying into the mode-select screen and instantly confirming it. The swipe presses a **real** arrow key — the
+mode-select map toggles off the FSM up/down flags the key table drives, not the `[0x2874]` scancode latch.
 
 The joystick is a *floating, hidden* analog stick: it's invisible until you touch the left zone, which sets
 its base under your thumb; then drag — a dead-zone plus a per-axis threshold turns the vector into clean

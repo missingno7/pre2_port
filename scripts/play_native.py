@@ -285,7 +285,8 @@ def main(argv=None) -> int:
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
            "menu_request": False, "switch_level": None, "tick_count": 0, "state": None, "snap_request": False,
            "jump_edge": False, "jump_buf": 0,   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
-           "frontend": False}   # True during titles/menu/carte -> touch is whole-screen gestures (see drive_input)
+           "frontend": False,   # True during titles/menu/carte -> touch is whole-screen gestures (see drive_input)
+           "fe_screen": ""}     # the current front-end screen id (FrontEndScene.screen); "menu" -> a tap presses '1'
     #   ref["state"] = the live NativeGameState (set once gameplay starts); ref["snap_request"] = F11 debug dump.
 
     # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
@@ -651,19 +652,25 @@ def main(argv=None) -> int:
             held.add(0x39)
         pad = pad_scancodes() if pads else set()                   # GAMEPAD: same scancodes the keyboard writes
         tsc = set()
+        menu_keys = set()                                          # FRONT-END touch keys, added raw (bypass jump-strip)
         if touch is not None:
             if ref["frontend"]:
-                # FRONT-END: the whole screen is the input. A TAP is fire (advance the titles, pick the
-                # difficulty, confirm the mode, load the level); a vertical SWIPE is an up/down arrow (the
-                # mode-select toggle). MenuGestures already edge-shapes the tap (one pulse per finger-lift), so a
-                # held finger can't cascade the menu, and a swipe never also fires.
+                # FRONT-END: the whole screen is the input, mapped per screen (FrontEndScene.screen).
+                #  * a TAP on the press-1/2 MENU presses '1' (0x02) -> the beginner mode-select (matches the real
+                #    key, and keeps the tap's fire from carrying into the mode-select and auto-confirming it);
+                #    a TAP anywhere else is fire (0x39): advance the titles, confirm the mode, load the level.
+                #  * a vertical SWIPE is a real up/down ARROW key (0x48/0x50) — the mode-select map toggles
+                #    BEGINNER<->EXPERT off the FSM up/down flags the key table drives (NOT the [0x2874] latch).
+                # MenuGestures edge-shapes both (one pulse per tap / per swipe), so nothing cascades or repeats.
                 if touch.menu_fire:
-                    tsc.add(0x39)
+                    menu_keys.add(0x02 if ref["fe_screen"] == "menu" else 0x39)
                 if touch.menu_arrow:
-                    ref["last_scan"] = touch.menu_arrow            # -> [0x2874] below (the arrow the mode-select reads)
+                    menu_keys.add(touch.menu_arrow)                # 0x48 (up) / 0x50 (down)
             else:
                 tsc = touch.scancodes()                            # GAMEPLAY: joystick dirs + JUMP(0x48)/BASH(0x39)
         held |= ((pad | tsc) - {0x48})                             # dirs / attack / start straight in; jump via buffer
+        held |= menu_keys                                          # front-end touch keys added AFTER the 0x48 strip
+        #                                                            (so a swipe-UP = 0x48 survives to press the key)
         jump = bool(k[pygame.K_UP] or k[pygame.K_KP8] or (0x48 in pad) or (0x48 in tsc))
         if settings["responsive_controls"]:
             # Jump = the UP key (scancode 0x48 -> flag [0x27EA] -> FSM anim 2). The FSM reads the *held* state
@@ -1980,6 +1987,7 @@ def main(argv=None) -> int:
             # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
             # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
             fps = args.fps if (state.data[DS + 0x2879] == 1 or scene.game_paced) else _FRONT_END_FPS
+            ref["fe_screen"] = scene.screen                        # per-screen touch mapping (see drive_input)
             present_front_scene(scene, fps, "PRE2 VM-less — cold boot (front-end)")
             pump()
             # the OLDIES scene-wait (0bbe) reads fire; the mode-select toggles BEGINNER<->EXPERT on UP/DOWN and

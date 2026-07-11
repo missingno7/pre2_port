@@ -66,6 +66,9 @@ class FrontEndScene:
     pel: int = 0                         # MODE_PLANAR pan: fine pel-pan 0..7 (attr 0x33)
     wrap: int = 0xFFFF                   # MODE_PLANAR pan: display-start wrap (0x1FFF for the menu window)
     active_width: int = 320              # MODE_PLANAR pan: CRTC H-display width (carte narrows to 312)
+    screen: str = ""                     # front-end screen id for the touch host's per-screen input mapping
+    #                                      ("menu" = the press-1/2 difficulty screen -> a tap presses '1'). Empty
+    #                                      elsewhere (a tap is fire). Presentation metadata only; game-logic-free.
     game_paced: bool = False             # True = this frame is a game-TICK-rate scene (the VM presents it via
     #                                      44FB -> the 3-retrace 1C6F wait, ~23.33Hz), NOT the 70Hz retrace of
     #                                      the static front-end screens. The attract title animation is such a
@@ -337,7 +340,7 @@ def native_menu_flow(state, dos, game_root: str):
     rb, _ = readers(state)
     while True:                                                             # the MENU <-> ATTRACT <-> CODE loop [asm 8e45]
         for p6 in menu_fade:                                                # fade the menu in (first entry + after each return)
-            yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img)
+            yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img, screen="menu")
         held8 = _expand_palette6(menu_fade[-1])
         wait = 0
         choice = LS_WAIT
@@ -345,7 +348,9 @@ def native_menu_flow(state, dos, game_root: str):
             choice = level_select_dispatch(rb(0x27F6), rb(0x27F7), rb(0x282D) | rb(0x2810), wait)  # 1/2/fire/timeout
             if choice != LS_WAIT:
                 break
-            yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img)   # hold the screen, poll again next frame
+            # screen="menu": the touch host maps a TAP here to '1' (beginner mode-select), not fire — matches the
+            # real key AND keeps the tap's fire from carrying into the mode-select map and auto-confirming it.
+            yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img, screen="menu")
             wait += 1
         if choice == LS_AUTO_ADVANCE:
             yield from _native_attract(state, dos, game_root)              # [asm 8E98] idle timeout -> attract, then re-loop
