@@ -120,7 +120,7 @@ def main(argv=None) -> int:
     # lives in android_host (detection, touch-first defaults, the enhancement forcing, the panel-refresh probe,
     # and the context-aware TouchController) so this desktop path stays clean.
     from android_host import (TouchController, android_refresh_hz, force_touch_settings, hide_system_bars,
-                              load_progress, on_android, record_reached, resolve_touch_enabled)
+                              load_progress, lock_landscape, on_android, record_reached, resolve_touch_enabled)
     _on_android = on_android()
     args.touch = resolve_touch_enabled(args.touch, android=_on_android)
     if args.fps is None:
@@ -356,6 +356,8 @@ def main(argv=None) -> int:
         set_fullscreen(True)
     if _on_android:
         hide_system_bars()                                                # immersive fullscreen: hide status + nav bars
+        lock_landscape()                                                  # never portrait (SDL re-requests FULL_SENSOR
+        #                                                                   at window creation, overriding the manifest)
 
     _WIDE_MAX = 272                                       # widescreen margin cap (px/side): fills 32:9 in BOTH
     #                                                        aspect modes (4:3 super-ultrawide wants ~267/side).
@@ -499,6 +501,7 @@ def main(argv=None) -> int:
             elif _on_android and ev.type == getattr(pygame, "APP_DIDENTERFOREGROUND", -1):
                 hide_system_bars()                                 # resume: re-assert immersive fullscreen (Android
                 #                                                    may have restored the status/nav bars)
+                lock_landscape()                                   # ...and the landscape lock, same reason
             elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
                 disp.resize(ev.w, ev.h)
             elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN

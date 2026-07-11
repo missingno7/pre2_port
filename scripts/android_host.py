@@ -65,6 +65,35 @@ def android_refresh_hz() -> float:
         return 0.0
 
 
+def lock_landscape() -> None:
+    """Hard-lock the activity to LANDSCAPE (both directions, never portrait) at the Android level.
+
+    The manifest already says ``screenOrientation="landscape"``, but SDL's ``SDLActivity`` calls
+    ``setRequestedOrientation`` itself at window creation — and with no orientations hint it requests
+    FULL_SENSOR for fullscreen/resizable windows, silently re-enabling portrait over the manifest. The env
+    hint (``SDL_IOS_ORIENTATIONS``, set in ``main.py``) fixes the request; this jnius call is the
+    belt-and-braces that wins regardless of SDL version/behaviour. SENSOR_LANDSCAPE (=6) allows both
+    landscape rotations so the phone can be held either way. No-op off Android."""
+    try:
+        from android.runnable import run_on_ui_thread                # p4a's UI-thread hop
+    except Exception:                                                # noqa: BLE001 — not on Android
+        return
+
+    @run_on_ui_thread
+    def _apply():
+        try:
+            from jnius import autoclass
+            act = autoclass("org.kivy.android.PythonActivity").mActivity
+            act.setRequestedOrientation(6)                           # ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        except Exception:                                            # noqa: BLE001 — jnius/activity unavailable
+            pass
+
+    try:
+        _apply()
+    except Exception:                                                # noqa: BLE001 — scheduling failed
+        pass
+
+
 def hide_system_bars() -> None:
     """Put the app in IMMERSIVE-STICKY fullscreen — hide BOTH the Android status bar and the navigation bar so
     the game fills the whole panel (SDL's own fullscreen flag hides the status bar at best, not the nav bar).

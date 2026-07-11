@@ -23,7 +23,12 @@ for _p in (_ROOT, os.path.join(_ROOT, "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-os.environ.setdefault("SDL_HINT_ORIENTATIONS", "LandscapeLeft LandscapeRight")
+# SDL's orientations hint: the real hint STRING is "SDL_IOS_ORIENTATIONS" (the SDL_HINT_ORIENTATIONS C
+# constant's value — iOS-named for historical reasons, but SDLActivity honors it on Android). Without it,
+# SDLActivity's own setRequestedOrientation call at window creation requests FULL_SENSOR for fullscreen
+# windows — overriding the manifest's landscape lock and re-enabling portrait (which makes the game ugly).
+# android_host.lock_landscape() re-asserts it Java-side as belt-and-braces.
+os.environ.setdefault("SDL_IOS_ORIENTATIONS", "LandscapeLeft LandscapeRight")
 os.environ.setdefault("SDL_ANDROID_TRAP_BACK_BUTTON", "1")   # deliver Back as K_AC_BACK (the pause dialog)
 #   instead of letting the OS finish the activity — play_native opens the Resume/Main-menu/Exit dialog on it.
 
