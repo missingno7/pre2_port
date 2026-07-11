@@ -63,6 +63,42 @@ def android_refresh_hz() -> float:
         return 0.0
 
 
+def hide_system_bars() -> None:
+    """Put the app in IMMERSIVE-STICKY fullscreen — hide BOTH the Android status bar and the navigation bar so
+    the game fills the whole panel (SDL's own fullscreen flag hides the status bar at best, not the nav bar).
+
+    No-op off Android. The View.setSystemUiVisibility flags must be set on the UI thread (via p4a's
+    ``android.runnable.run_on_ui_thread``); immersive-STICKY means a swipe only reveals the bars transiently and
+    they re-hide themselves, so this needs re-applying only on resume (see the caller), not every frame.
+    """
+    try:
+        from android.runnable import run_on_ui_thread                # p4a's UI-thread hop (its own `android` pkg)
+    except Exception:                                                # noqa: BLE001 — not on Android / pkg absent
+        return
+
+    @run_on_ui_thread
+    def _apply():
+        try:
+            from jnius import autoclass
+            act = autoclass("org.kivy.android.PythonActivity").mActivity
+            View = autoclass("android.view.View")
+            decor = act.getWindow().getDecorView()
+            decor.setSystemUiVisibility(                             # the pre-30 immersive-sticky flag set (still
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE                    # honoured on API 30+, just deprecated); minSdk 26
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION               # hide the nav bar
+                | View.SYSTEM_UI_FLAG_FULLSCREEN                    # hide the status bar
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)            # a swipe reveals them transiently, then re-hides
+        except Exception:                                            # noqa: BLE001 — jnius/window unavailable
+            pass
+
+    try:
+        _apply()
+    except Exception:                                                # noqa: BLE001 — run_on_ui_thread scheduling failed
+        pass
+
+
 class TouchController:
     """Context-aware on-screen touch input.
 

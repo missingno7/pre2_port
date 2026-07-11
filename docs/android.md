@@ -24,8 +24,9 @@ flags in). The only game-facing addition is an on-screen control layer.
   difficulty, confirm the mode, load the level), and a vertical **swipe** = up/down arrow (the mode-select
   BEGINNER↔EXPERT toggle). Much more phone-native than hunting for a tiny button on a title screen. Menu taps
   are event-driven so even a fast same-frame tap registers.
-- ✅ Immersive fullscreen — on Android the runtime forces SDL fullscreen-desktop at boot (hides the status / nav
-  bars); desktop `--touch` stays windowed for testing.
+- ✅ Immersive fullscreen — on Android the runtime hides BOTH system bars: SDL fullscreen-desktop plus an
+  explicit immersive-STICKY `setSystemUiVisibility` (via jnius on the UI thread), re-asserted on resume. SDL's
+  flag alone hides only the status bar, not the navigation bar. Desktop `--touch` stays windowed for testing.
 - ✅ Skippable intro — the intro titles (TITUS, then the PREHISTORIK-2 logo) play normally, but a tap/fire-key
   press during them skips straight to the menu (a skip during TITUS drops the logo too; the OLDIES credits are
   always fire-skippable). It's an opt-in `intro_skippable` setting (breaks boot accuracy — the titles never poll

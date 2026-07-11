@@ -119,8 +119,8 @@ def main(argv=None) -> int:
     # Android plays touch-first: default the controls on (--no-touch still wins). All the mobile-specific glue
     # lives in android_host (detection, touch-first defaults, the enhancement forcing, the panel-refresh probe,
     # and the context-aware TouchController) so this desktop path stays clean.
-    from android_host import (TouchController, android_refresh_hz, force_touch_settings, on_android,
-                              resolve_touch_enabled)
+    from android_host import (TouchController, android_refresh_hz, force_touch_settings, hide_system_bars,
+                              on_android, resolve_touch_enabled)
     _on_android = on_android()
     args.touch = resolve_touch_enabled(args.touch, android=_on_android)
     if args.fps is None:
@@ -348,6 +348,8 @@ def main(argv=None) -> int:
 
     if settings["fullscreen"]:                                            # persisted preference -> apply at boot
         set_fullscreen(True)
+    if _on_android:
+        hide_system_bars()                                                # immersive fullscreen: hide status + nav bars
 
     _WIDE_MAX = 272                                       # widescreen margin cap (px/side): fills 32:9 in BOTH
     #                                                        aspect modes (4:3 super-ultrawide wants ~267/side).
@@ -481,6 +483,9 @@ def main(argv=None) -> int:
                 touch.handle_event(ev, _tsize)               # FINGER*/mouse -> the virtual controls
             if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
                 ref["running"] = False
+            elif _on_android and ev.type == getattr(pygame, "APP_DIDENTERFOREGROUND", -1):
+                hide_system_bars()                                 # resume: re-assert immersive fullscreen (Android
+                #                                                    may have restored the status/nav bars)
             elif ev.type == pygame.VIDEORESIZE and not settings["fullscreen"]:
                 disp.resize(ev.w, ev.h)
             elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN
