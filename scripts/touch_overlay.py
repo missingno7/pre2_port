@@ -66,7 +66,9 @@ class TouchOverlay:
             elif t == pygame.MOUSEBUTTONUP and ev.button == 1:
                 self._mouse = None
 
-    def _active_points(self) -> dict[object, tuple[float, float]]:
+    def active_points(self) -> dict[object, tuple[float, float]]:
+        """The live touch points (real fingers, or the emulated mouse-finger on desktop) as a finger dict —
+        shared by the gameplay resolver AND the front-end MenuGestures (the menu reads the same touches)."""
         pts = dict(self._fingers)
         if self._mouse is not None and not self._fingers:
             pts[_MOUSE_ID] = self._mouse
@@ -75,7 +77,7 @@ class TouchOverlay:
     # -- per-poll tick --------------------------------------------------------------------------------
     def tick(self, size: tuple[int, int]) -> None:
         """Resolve the active touches into flags + a render model. Call once per input poll (in pump())."""
-        self.flags, self.render_model, self.jump_edge = self.controls.update(self._active_points(), size)
+        self.flags, self.render_model, self.jump_edge = self.controls.update(self.active_points(), size)
 
     def scancodes(self) -> set[int]:
         return self.flags.scancodes()

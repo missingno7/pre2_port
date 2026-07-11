@@ -116,12 +116,13 @@ def main(argv=None) -> int:
                     help="show the Develop tab in the F10 overlay menu (level select, god mode — cheats; "
                          "hidden from the end-user product by default)")
     args = ap.parse_args(argv)
-    # Android (python-for-android sets ANDROID_ARGUMENT) plays touch-first: default the controls on.
-    # --no-touch still wins. hasattr(sys, "getandroidapilevel") is the CPython/p4a signal.
-    import os as _os_early
-    _on_android = "ANDROID_ARGUMENT" in _os_early.environ or hasattr(sys, "getandroidapilevel")
-    if args.touch is None:
-        args.touch = _on_android
+    # Android plays touch-first: default the controls on (--no-touch still wins). All the mobile-specific glue
+    # lives in android_host (detection, touch-first defaults, the enhancement forcing, the panel-refresh probe,
+    # and the context-aware TouchController) so this desktop path stays clean.
+    from android_host import (TouchController, android_refresh_hz, force_touch_settings, on_android,
+                              resolve_touch_enabled)
+    _on_android = on_android()
+    args.touch = resolve_touch_enabled(args.touch, android=_on_android)
     if args.fps is None:
         args.fps = TICK_HZ                              # faithful pacing unless the user overrides
 
@@ -184,14 +185,14 @@ def main(argv=None) -> int:
     clock = pygame.time.Clock()
 
     # ---- TOUCH CONTROLS (Android / --touch) ---------------------------------------------------------------
-    # On-screen controls for a phone: a left virtual joystick (movement) + right JUMP/BASH buttons. Pure host
-    # layer — it only writes the same DC1 key-table flags the keyboard would, so gameplay stays byte-identical.
-    # Mouse doubles as a single finger on desktop for testing; real multitouch drives it on Android.
+    # Context-aware on-screen controls (android_host.TouchController): the left virtual joystick + right
+    # JUMP/BASH buttons DURING GAMEPLAY, and a whole-screen tap = fire / vertical swipe = up/down for the
+    # front-end MENUS. Pure host layer — it only writes the same DC1 key-table flags the keyboard would, so
+    # gameplay stays byte-identical. Mouse doubles as a single finger on desktop for testing.
     touch = None
     if args.touch:
         pygame.font.init()
-        from touch_overlay import TouchOverlay
-        touch = TouchOverlay(mouse_emulation=not _on_android)
+        touch = TouchController(android=_on_android)
 
     # ---- GAMEPAD (auto-detected) --------------------------------------------------------------------------
     # PRE2's own joystick was analog-READ (RC-timed game port 0x201) but immediately DIGITIZED to the same six
@@ -267,15 +268,9 @@ def main(argv=None) -> int:
                     return float(hz)
             except Exception:                                            # noqa: BLE001
                 pass
-        if _on_android:
-            try:                                                         # the panel's real rate (often 90/120 Hz);
-                from jnius import autoclass                               # SDL/pygame report 60 on Android
-                act = autoclass("org.kivy.android.PythonActivity").mActivity
-                r = float(act.getWindowManager().getDefaultDisplay().getRefreshRate())
-                if r > 1:
-                    return r
-            except Exception:                                            # noqa: BLE001 — jnius/display unavailable
-                pass
+        hz = android_refresh_hz()                                        # the panel's real 90/120 Hz (SDL says 60)
+        if hz > 1:
+            return hz
         try:
             r = float(pygame.display.get_current_refresh_rate())        # pygame >= 2.2 (fallback)
             if r > 0:
@@ -290,7 +285,7 @@ def main(argv=None) -> int:
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
            "menu_request": False, "switch_level": None, "tick_count": 0, "state": None, "snap_request": False,
            "jump_edge": False, "jump_buf": 0,   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
-           "frontend": False}   # True during titles/menu/carte -> touch BASH is edge-triggered (see drive_input)
+           "frontend": False}   # True during titles/menu/carte -> touch is whole-screen gestures (see drive_input)
     #   ref["state"] = the live NativeGameState (set once gameplay starts); ref["snap_request"] = F11 debug dump.
 
     # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
@@ -326,9 +321,7 @@ def main(argv=None) -> int:
     # Mobile (touch) FORCES the presentation enhancements ON — applied AFTER the persisted load so --touch always
     # enables them (there's no F10 menu to toggle on a phone; a stale settings file must not silently disable them).
     if args.touch:
-        settings.update({"interpolation": True, "widescreen": True, "true_widescreen": True,
-                         "smooth_transitions": True, "stereo_sfx": True, "responsive_controls": True,
-                         "intro_skippable": True})   # phones: a tap skips the long intro titles to the menu by default
+        force_touch_settings(settings)
     settings["god"] = False                                              # a cheat never persists across runs
 
     def save_settings():
@@ -512,7 +505,7 @@ def main(argv=None) -> int:
                 if sc:
                     ref["last_scan"] = sc
         if touch is not None:
-            touch.tick(_tsize)                                # resolve the active touches into flags this poll
+            touch.tick(_tsize, frontend=ref["frontend"])      # resolve touches for the current context (game vs menu)
             if touch.jump_edge and settings["responsive_controls"]:
                 ref["jump_edge"] = True                       # a JUMP tap edge, buffered like a keyboard/pad tap
         if ref["menu_request"]:
@@ -592,7 +585,7 @@ def main(argv=None) -> int:
                 _hud["surf"] = surf                              #  which the fill-once letterbox left behind)
             disp.draw_overlay(surf, (int(round(8 * us)), int(round(14 * us))))
         if touch is not None and touch.enabled:
-            touch.draw(disp)                                  # small control sprites (no full-window GPU upload)
+            touch.draw(disp, frontend=ref["frontend"])        # gameplay: small control sprites; menus: nothing (gestures)
         disp.flip()
         pace(fps)
         if caption:
@@ -654,16 +647,19 @@ def main(argv=None) -> int:
         if k[pygame.K_SPACE]:
             held.add(0x39)
         pad = pad_scancodes() if pads else set()                   # GAMEPAD: same scancodes the keyboard writes
-        tsc = touch.scancodes() if touch is not None else set()    # TOUCH: joystick dirs + JUMP(0x48)/BASH(0x39)
-        if touch is not None and ref["frontend"]:
-            # FRONT-END ONLY: BASH is edge-triggered here. A finger-hold spans many ticks, so a level fire would
-            # cascade the menu (one tap enters mode-select AND accepts it). Fire only on a fresh press; suppress
-            # while held, re-arm on release — tap to enter, release, tap again to accept. In GAMEPLAY (below) BASH
-            # stays level so you can hold to keep attacking.
-            _bash = 0x39 in tsc
-            if _bash and not ref.get("touch_bash_ready", True):
-                tsc = tsc - {0x39}                                 # still held from a prior tick -> not a new press
-            ref["touch_bash_ready"] = not _bash                    # a fresh press can fire again only after release
+        tsc = set()
+        if touch is not None:
+            if ref["frontend"]:
+                # FRONT-END: the whole screen is the input. A TAP is fire (advance the titles, pick the
+                # difficulty, confirm the mode, load the level); a vertical SWIPE is an up/down arrow (the
+                # mode-select toggle). MenuGestures already edge-shapes the tap (one pulse per finger-lift), so a
+                # held finger can't cascade the menu, and a swipe never also fires.
+                if touch.menu_fire:
+                    tsc.add(0x39)
+                if touch.menu_arrow:
+                    ref["last_scan"] = touch.menu_arrow            # -> [0x2874] below (the arrow the mode-select reads)
+            else:
+                tsc = touch.scancodes()                            # GAMEPLAY: joystick dirs + JUMP(0x48)/BASH(0x39)
         held |= ((pad | tsc) - {0x48})                             # dirs / attack / start straight in; jump via buffer
         jump = bool(k[pygame.K_UP] or k[pygame.K_KP8] or (0x48 in pad) or (0x48 in tsc))
         if settings["responsive_controls"]:
@@ -1974,7 +1970,7 @@ def main(argv=None) -> int:
     init_keyboard_input(state)                                     # the boot joystick-detect outcome (DC1 input)
     dos = NativeVGA()
     reached_gameplay = False
-    ref["frontend"] = True; ref["touch_bash_ready"] = True         # titles/menu/carte -> edge-triggered touch BASH
+    ref["frontend"] = True                                         # titles/menu/carte -> whole-screen touch gestures
     try:
         for scene in native_front_end(state, dos, 0, game_root=gr, intro_skippable=settings["intro_skippable"]):
             # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate

@@ -209,3 +209,56 @@ class TouchControls:
         rm = RenderModel(layout=lay, stick_base=base, knob=knob, stick_active=stick_active,
                          jump_pressed=jump, bash_pressed=bash)
         return flags, rm, jump_edge
+
+
+@dataclass
+class MenuGestures:
+    """Pure front-end (menu) touch gestures — the phone-native way to drive the NON-gameplay screens, where
+    the joystick + buttons are hidden and the whole screen is the input:
+
+    * a **tap** anywhere is *fire* (space/enter — advance the OLDIES/titles, pick the difficulty, confirm the
+      mode, load the level);
+    * a vertical **swipe** is an *arrow* (up ``0x48`` / down ``0x50``) — on the mode-select screen an arrow
+      toggles BEGINNER<->EXPERT.
+
+    One finger owns a gesture at a time (the first touch down). While it is held the vertical travel is
+    watched: crossing ``SWIPE_FRAC * min(w, h)`` emits the arrow ONCE and marks the gesture a swipe, so the
+    finger's lift won't ALSO fire. A lift with no swipe is a tap -> one fire pulse. Stateful; call
+    :meth:`update` once per input poll. Pure (no pygame) so the tap/swipe math is unit-testable with no device."""
+
+    SWIPE_FRAC: float = 0.06        # vertical travel (fraction of min(w, h)) that turns a drag into a swipe
+
+    _owner: Hashable | None = field(default=None, init=False)
+    _start_y: float = field(default=0.0, init=False)
+    _swiped: bool = field(default=False, init=False)
+
+    def reset(self) -> None:
+        """Drop the in-flight gesture (call on a context switch so a held finger doesn't leak across)."""
+        self._owner = None
+        self._swiped = False
+
+    def update(self, fingers: dict[Hashable, tuple[float, float]],
+               size: tuple[float, float]) -> tuple[bool, int]:
+        """Resolve one poll -> ``(fire, arrow)``. ``fire`` is True for the single poll a tap completes (the
+        owning finger lifts having never swiped); ``arrow`` is ``0x48`` / ``0x50`` for the single poll a swipe
+        crosses the threshold, else ``0``."""
+        ids = set(fingers)
+        fire = False
+        arrow = 0
+        if self._owner is not None and self._owner not in ids:     # the owning finger has lifted
+            if not self._swiped:
+                fire = True                                        # a tap (no swipe) -> one fire pulse
+            self._owner = None
+            self._swiped = False
+        if self._owner is None:                                    # claim the first active finger as the owner
+            for fid, (_x, y) in fingers.items():
+                self._owner = fid
+                self._start_y = y
+                self._swiped = False
+                break
+        if self._owner in ids and not self._swiped:                # watch the owner's vertical travel
+            dy = fingers[self._owner][1] - self._start_y
+            if abs(dy) >= self.SWIPE_FRAC * min(size):
+                arrow = SCAN_DOWN if dy > 0 else SCAN_UP           # swipe down/up -> down/up arrow (both toggle)
+                self._swiped = True                                # one arrow per gesture; the lift won't fire
+        return fire, arrow

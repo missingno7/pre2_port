@@ -19,6 +19,10 @@ flags in). The only game-facing addition is an on-screen control layer.
 - ✅ Floating hidden joystick — the stick is invisible until you touch the left zone, then it appears under your
   thumb. It's a full analog circle; stick-**up** only registers as UP while **BASH** is also held (an upward
   bash), so walking up a slope never triggers a stray jump. JUMP is the dedicated button.
+- ✅ Context-aware controls — the joystick + buttons are drawn/driven **only during gameplay**. In the front-end
+  MENUS they're hidden and the **whole screen** is the input: a **tap** = fire (advance the titles, pick the
+  difficulty, confirm the mode, load the level), and a vertical **swipe** = up/down arrow (the mode-select
+  BEGINNER↔EXPERT toggle). Much more phone-native than hunting for a tiny button on a title screen.
 - ✅ Skippable intro — the intro titles (TITUS, then the PREHISTORIK-2 logo) play normally, but a tap/fire-key
   press during them skips straight to the menu (a skip during TITUS drops the logo too; the OLDIES credits are
   always fire-skippable). It's an opt-in `intro_skippable` setting (breaks boot accuracy — the titles never poll
@@ -30,7 +34,10 @@ flags in). The only game-facing addition is an on-screen control layer.
 
 ## Controls
 
-Landscape, thumbs on the bottom corners:
+Landscape, thumbs on the bottom corners. The controls are **context-aware** — the joystick + buttons appear
+during **gameplay**; the front-end **menus** are driven by whole-screen gestures (nothing is drawn).
+
+**Gameplay:**
 
 | Control | Location | Maps to | DOS scancode |
 |---|---|---|---|
@@ -38,11 +45,22 @@ Landscape, thumbs on the bottom corners:
 | **JUMP** button | right, upper-left of the pair | up flag (the jump) | `0x48` |
 | **BASH** button | right, lower-right of the pair | fire flag (the club attack) | `0x39` |
 
+**Front-end menus** (titles / press-1-2 / mode-select / carte):
+
+| Gesture | Maps to | DOS scancode |
+|---|---|---|
+| **Tap** anywhere | fire — advance / pick / confirm / load | `0x39` |
+| Vertical **swipe** | up / down arrow — mode-select BEGINNER↔EXPERT toggle | `0x48` / `0x50` |
+
 The joystick is a *floating, hidden* analog stick: it's invisible until you touch the left zone, which sets
 its base under your thumb; then drag — a dead-zone plus a per-axis threshold turns the vector into clean
 4/8-way directions. Pushing the stick **up** only emits UP *while BASH is held* (an upward bash) — so climbing
 an up-diagonal never fires a stray jump. To actually jump, use the dedicated **JUMP** button; a JUMP tap feeds
 the same responsive-controls jump buffer a keyboard/gamepad tap does.
+
+In the menus a **tap** is edge-shaped (one fire pulse per finger-lift, so a held finger can't cascade the
+screens), and a **swipe** emits its arrow once per gesture and never also fires. The gesture that recognises
+tap-vs-swipe is the pure, unit-tested `pre2.native.touch.MenuGestures`.
 
 ### Why this stays byte-exact
 
@@ -54,14 +72,16 @@ byte-exact oracle are all unaffected — exactly like the gamepad path.
 
 | File | Role | pygame? |
 |---|---|---|
-| [`pre2/native/touch.py`](../pre2/native/touch.py) | Pure resolver: finger dict + window size → 5 flags + a render model. Stateful (per-finger ownership, floating-stick base). | no |
-| [`scripts/touch_overlay.py`](../scripts/touch_overlay.py) | Host: translates `FINGER*` / mouse events → finger dict, ticks the resolver, paints the controls (cached). | yes |
-| [`scripts/play_native.py`](../scripts/play_native.py) | Wires it in behind `--touch`: events in `pump()`, flags OR'd into `drive_input()`, overlay drawn in `present()`. | yes |
+| [`pre2/native/touch.py`](../pre2/native/touch.py) | Pure math: `TouchControls` (gameplay finger dict → 5 flags + render model) **and** `MenuGestures` (front-end tap → fire / swipe → arrow). Stateful, no pygame. | no |
+| [`scripts/touch_overlay.py`](../scripts/touch_overlay.py) | Gameplay host: translates `FINGER*` / mouse events → finger dict, ticks the resolver, paints the joystick + buttons (cached sprites). | yes |
+| [`scripts/android_host.py`](../scripts/android_host.py) | **All the Android/touch glue in one place**: platform detection, touch-first defaults, forcing the enhancements on, the panel-refresh probe, and `TouchController` — the context-aware wrapper that runs the joystick in gameplay and the menu gestures in the front-end. | yes |
+| [`scripts/play_native.py`](../scripts/play_native.py) | Wires it in behind `--touch`: events in `pump()`, `TouchController.tick(frontend=…)`, flags OR'd into `drive_input()`, `draw(frontend=…)` in `present()`. | yes |
 | [`main.py`](../main.py) | p4a entry point → `play_native.main([])`. | — |
 | [`buildozer.spec`](../buildozer.spec) | APK build config (numpy + pygame; landscape; fullscreen). | — |
 
 This keeps the project's layering rule intact: `pre2/` never imports pygame; all SDL/pygame lives in
-`scripts/` (and `main.py`).
+`scripts/` (and `main.py`). The module is `android_host` (not `android`) so it never shadows
+python-for-android's own top-level `android` package.
 
 ## Try the controls now (desktop)
 

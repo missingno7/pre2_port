@@ -114,6 +114,46 @@ def test_button_finger_held_after_sliding_off():
     assert flags.fire                             # ownership retained until it lifts
 
 
+def test_menu_tap_is_fire_on_release():
+    # front-end gestures: a TAP (finger down then up, no swipe) is one fire pulse, emitted on the LIFT.
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    fire, arrow = g.update({1: (600, 360)}, SIZE)            # finger down
+    assert not fire and arrow == 0                           # holding isn't a tap yet
+    fire, arrow = g.update({1: (605, 362)}, SIZE)            # tiny drift, still held
+    assert not fire and arrow == 0
+    fire, arrow = g.update({}, SIZE)                         # lift -> the tap completes
+    assert fire and arrow == 0
+
+
+def test_menu_swipe_down_is_down_arrow_and_never_fires():
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    g.update({1: (600, 280)}, SIZE)                          # finger down
+    fire, arrow = g.update({1: (600, 280 + 60)}, SIZE)       # drag down 60px (> 0.06*720 = 43px threshold)
+    assert arrow == touch.SCAN_DOWN and not fire
+    fire, arrow = g.update({}, SIZE)                         # lift -> a swipe must NOT also fire
+    assert not fire and arrow == 0
+
+
+def test_menu_swipe_up_is_up_arrow():
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    g.update({1: (600, 400)}, SIZE)
+    fire, arrow = g.update({1: (600, 400 - 60)}, SIZE)       # drag up past the threshold
+    assert arrow == touch.SCAN_UP and not fire
+
+
+def test_menu_swipe_emits_one_arrow_per_gesture():
+    # a single drag toggles the mode ONCE; dragging further doesn't re-toggle (a second swipe needs a lift).
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    g.update({1: (600, 260)}, SIZE)
+    _, a1 = g.update({1: (600, 320)}, SIZE)                  # crosses threshold -> one arrow
+    _, a2 = g.update({1: (600, 400)}, SIZE)                  # keeps dragging -> no repeat
+    assert a1 == touch.SCAN_DOWN and a2 == 0
+
+
 def test_scancodes_match_input_layer():
     from pre2.native import input as native_input
     assert touch.SCAN_LEFT == native_input.SCAN_LEFT
