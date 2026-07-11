@@ -82,23 +82,50 @@ class Display:
             pygame.transform.scale(self._srcsurf, rect.size, self.screen.subsurface(rect))
         return rect
 
-    def draw_overlay(self, surf, pos) -> None:
+    def draw_overlay(self, surf, pos, *, slot=None, changed=True) -> None:
         """Composite a pygame Surface (fps readout / the F10 menu) on top at window pixel ``pos``, alpha-blended.
         A persistent streaming texture per size is re-uploaded each call (content changes every frame), so no
         per-frame GPU allocation."""
         if self.gpu:
             sz = surf.get_size()
-            tex = self._ov.get(sz)
-            if tex is None:
-                if len(self._ov) > 6:
+            key = slot if slot is not None else sz               # dedicated slot (touch) vs shared-by-size (menu/fps)
+            entry = self._ov.get(key)
+            if entry is None or entry[1] != sz:                  # (re)create on first use or window resize
+                if entry is None and len(self._ov) > 8:
                     self._ov.clear()
                 tex = self._sdl2.Texture(self.renderer, sz, streaming=True)
                 tex.blend_mode = 1                                # SDL_BLENDMODE_BLEND (alpha)
-                self._ov[sz] = tex
-            tex.update(surf)
+                self._ov[key] = entry = (tex, sz)
+                changed = True                                    # a fresh texture must be uploaded once
+            tex = entry[0]
+            # ``changed=False`` reuses the last-uploaded texture — the touch overlay is a window-size (~18 MB)
+            # surface whose per-frame re-upload was the entire mobile present cost; it only changes when a control
+            # moves, so the interpolation sub-frames (and steady input) skip the upload. Menu/fps pass the default.
+            if changed:
+                tex.update(surf)
             tex.draw(dstrect=pygame.Rect(pos, sz))
         else:
             self.screen.blit(surf, pos)
+
+    def make_sprite(self, surf):
+        """A persistent drawable from a SMALL surface — a static GPU texture uploaded ONCE (or the surface on
+        the software path). Returns ``(drawable, w, h)``. For HUD/controls that MOVE but don't change content:
+        drawing them each frame is then a cheap quad, with no per-frame surface upload (unlike draw_overlay,
+        which re-uploads a whole window-size surface every call — murder on hi-res mobile GPUs)."""
+        w, h = surf.get_size()
+        if self.gpu:
+            tex = self._sdl2.Texture.from_surface(self.renderer, surf)
+            tex.blend_mode = 1                                    # SDL_BLENDMODE_BLEND (alpha)
+            return (tex, w, h)
+        return (surf.convert_alpha(), w, h)
+
+    def draw_sprite(self, spr, pos) -> None:
+        """Draw a :meth:`make_sprite` drawable with its top-left at window-pixel ``pos``."""
+        drawable, w, h = spr
+        if self.gpu:
+            drawable.draw(dstrect=pygame.Rect(int(pos[0]), int(pos[1]), w, h))
+        else:
+            self.screen.blit(drawable, (int(pos[0]), int(pos[1])))
 
     def new_overlay_canvas(self):
         """A transparent window-size surface to draw the modal F10 menu onto (then draw_overlay it)."""

@@ -152,25 +152,42 @@ def native_background_indices(rs, tile_cache: TileTextureCache, hud_cache: _HudC
     mcols_r = (margin_right + TILE - 1) // TILE
     gcols = VISIBLE_COLS + mcols_l + mcols_r
     vt = v_pad // TILE                                    # extra tile rows each side (v_pad % 16 == 0)
-    grid = np.zeros((GRID_H + 2 * vt * TILE, gcols * TILE), dtype=np.uint8)
     tiles, flag_tbl, anim_xlat, blit_type = rs.tiles, rs.flag_tbl, rs.anim_xlat, rs.blit_type
     cy, cx = rs.camera_y, rs.camera_x
-    for r in range(-vt, VISIBLE_ROWS + vt):
-        pad_row = r < 0 or r >= VISIBLE_ROWS              # an over-extraction row (lenient anim contract)
-        row_base = ((min(max(cy + r, 0), 0xFF)) * 0x100) & 0xFFFF   # clamp: stay within the map's rows
-        y = (r + vt) * TILE
-        for c in range(gcols):
-            col = min(max(cx + c - mcols_l, 0), 0xFF)     # clamp: stay within THIS map row
-            tid = tiles[(row_base + col) & 0xFFFF]
-            if flag_tbl[tid] != 0:                       # animated tile -> current-frame remap
-                gid = anim_xlat[tid]
-                if blit_type[gid] != 0:                  # the faithful anim grid only blits opaque (type 0)
-                    if not pad_row:
-                        raise NativeBackgroundUnsupported(f"animated tile {tid}->{gid} type {blit_type[gid]}")
-                    gid = tid                             # pad row: draw the raw tile rather than fail the frame
-            else:
-                gid = tid
-            grid[y:y + TILE, c * TILE:c * TILE + TILE] = tile_cache.get(gid, ver, rs.asset_planes)
+    # CACHE the assembled TILE GRID: it depends only on the tile-column camera (cx, cy), the asset version, the
+    # extent, and the animation remap — NOT on fine_scroll (that's the sub-tile crop applied below). While
+    # scrolling, cx/cy step only every 16 px, so this rebuilds the ~300-tile blit loop several times less often
+    # than per tick. Deterministic in these keys, so the composed output is byte-identical (parity preserved).
+    try:
+        # tiles is bytes (the whole tilemap) -> its hash catches any mid-level tilemap change (e.g. a bashed
+        # breakable block); anim_xlat's hash catches the animated-tile remap. Both are cheap C-speed hashes.
+        _sig = (hash(bytes(anim_xlat)), hash(tiles if isinstance(tiles, (bytes, bytearray)) else bytes(tiles)))
+    except TypeError:                                    # non-buffer table -> skip caching (build every call)
+        _sig = None
+    _grid_key = (ver, cx, cy, gcols, vt, mcols_l, mcols_r, _sig)
+    _gc = getattr(tile_cache, "_bg_grid", None)
+    if _sig is not None and _gc is not None and _gc[0] == _grid_key:
+        grid = _gc[1]
+    else:
+        grid = np.zeros((GRID_H + 2 * vt * TILE, gcols * TILE), dtype=np.uint8)
+        for r in range(-vt, VISIBLE_ROWS + vt):
+            pad_row = r < 0 or r >= VISIBLE_ROWS          # an over-extraction row (lenient anim contract)
+            row_base = ((min(max(cy + r, 0), 0xFF)) * 0x100) & 0xFFFF   # clamp: stay within the map's rows
+            y = (r + vt) * TILE
+            for c in range(gcols):
+                col = min(max(cx + c - mcols_l, 0), 0xFF)     # clamp: stay within THIS map row
+                tid = tiles[(row_base + col) & 0xFFFF]
+                if flag_tbl[tid] != 0:                   # animated tile -> current-frame remap
+                    gid = anim_xlat[tid]
+                    if blit_type[gid] != 0:              # the faithful anim grid only blits opaque (type 0)
+                        if not pad_row:
+                            raise NativeBackgroundUnsupported(f"animated tile {tid}->{gid} type {blit_type[gid]}")
+                        gid = tid                         # pad row: draw the raw tile rather than fail the frame
+                else:
+                    gid = tid
+                grid[y:y + TILE, c * TILE:c * TILE + TILE] = tile_cache.get(gid, ver, rs.asset_planes)
+        if _sig is not None:
+            tile_cache._bg_grid = (_grid_key, grid)      # reuse until cx/cy/version/anim/tilemap changes
     w = 320 + margin_left + margin_right
     x0 = mcols_l * TILE - margin_left                     # crop the tile-aligned grid to the pixel margins
     idx_ext = None

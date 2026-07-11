@@ -267,6 +267,15 @@ def main(argv=None) -> int:
                     return float(hz)
             except Exception:                                            # noqa: BLE001
                 pass
+        if _on_android:
+            try:                                                         # the panel's real rate (often 90/120 Hz);
+                from jnius import autoclass                               # SDL/pygame report 60 on Android
+                act = autoclass("org.kivy.android.PythonActivity").mActivity
+                r = float(act.getWindowManager().getDefaultDisplay().getRefreshRate())
+                if r > 1:
+                    return r
+            except Exception:                                            # noqa: BLE001 — jnius/display unavailable
+                pass
         try:
             r = float(pygame.display.get_current_refresh_rate())        # pygame >= 2.2 (fallback)
             if r > 0:
@@ -280,7 +289,8 @@ def main(argv=None) -> int:
     print(f"display: {display_hz:.0f} Hz (game tick {TICK_HZ:.2f} Hz)")
     ref = {"running": True, "last": None, "last_scan": 0, "p_prev": False, "display_hz": display_hz,
            "menu_request": False, "switch_level": None, "tick_count": 0, "state": None, "snap_request": False,
-           "jump_edge": False, "jump_buf": 0}   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
+           "jump_edge": False, "jump_buf": 0,   # RESPONSIVE CONTROLS: pending UP key-down edge + buffered ticks
+           "frontend": False}   # True during titles/menu/carte -> touch BASH is edge-triggered (see drive_input)
     #   ref["state"] = the live NativeGameState (set once gameplay starts); ref["snap_request"] = F11 debug dump.
 
     # RESPONSIVE CONTROLS (experimental): how many game ticks a jump press stays virtually held. The game samples
@@ -308,15 +318,15 @@ def main(argv=None) -> int:
                 "smooth_camera": False,   # X+Y band-drag presentation camera (experimental)
                 "camera_smoothing": 0,   # EXPERIMENTAL "bumping strength": 0=Off..3=High vertical band-drag damp
                 "responsive_controls": False}   # EXPERIMENTAL: buffer the jump key so fast taps are never dropped
-    # Mobile (touch) defaults the presentation enhancements ON — there's no F10 menu to toggle them on a phone,
-    # and they're pure presentation (no gameplay effect). A persisted settings file below still overrides these.
-    if args.touch:
-        settings.update({"interpolation": True, "widescreen": True, "true_widescreen": True,
-                         "smooth_transitions": True, "stereo_sfx": True, "responsive_controls": True})
     try:
         settings.update({k: v for k, v in json.loads(settings_path.read_text()).items() if k in settings})
     except Exception:                                                     # noqa: BLE001 — first run / unreadable
         pass
+    # Mobile (touch) FORCES the presentation enhancements ON — applied AFTER the persisted load so --touch always
+    # enables them (there's no F10 menu to toggle on a phone; a stale settings file must not silently disable them).
+    if args.touch:
+        settings.update({"interpolation": True, "widescreen": True, "true_widescreen": True,
+                         "smooth_transitions": True, "stereo_sfx": True, "responsive_controls": True})
     settings["god"] = False                                              # a cheat never persists across runs
 
     def save_settings():
@@ -580,9 +590,7 @@ def main(argv=None) -> int:
                 _hud["surf"] = surf                              #  which the fill-once letterbox left behind)
             disp.draw_overlay(surf, (int(round(8 * us)), int(round(14 * us))))
         if touch is not None and touch.enabled:
-            tsurf = touch.surface(disp.get_size())            # cached; only re-rendered when the controls change
-            if tsurf is not None:
-                disp.draw_overlay(tsurf, (0, 0))
+            touch.draw(disp)                                  # small control sprites (no full-window GPU upload)
         disp.flip()
         pace(fps)
         if caption:
@@ -645,11 +653,11 @@ def main(argv=None) -> int:
             held.add(0x39)
         pad = pad_scancodes() if pads else set()                   # GAMEPAD: same scancodes the keyboard writes
         tsc = touch.scancodes() if touch is not None else set()    # TOUCH: joystick dirs + JUMP(0x48)/BASH(0x39)
-        if touch is not None:
-            # BASH is EDGE-triggered for touch: a finger-hold spans many ticks, so a level fire cascades the
-            # front-end (one tap enters mode-select AND accepts it). Fire only on a fresh press; suppress while
-            # held, re-arm on release — so you tap to enter, release, tap again to accept (a quick keyboard tap).
-            # Directions + JUMP stay level/buffered.
+        if touch is not None and ref["frontend"]:
+            # FRONT-END ONLY: BASH is edge-triggered here. A finger-hold spans many ticks, so a level fire would
+            # cascade the menu (one tap enters mode-select AND accepts it). Fire only on a fresh press; suppress
+            # while held, re-arm on release — tap to enter, release, tap again to accept. In GAMEPLAY (below) BASH
+            # stays level so you can hold to keep attacking.
             _bash = 0x39 in tsc
             if _bash and not ref.get("touch_bash_ready", True):
                 tsc = tsc - {0x39}                                 # still held from a prior tick -> not a new press
@@ -1437,6 +1445,7 @@ def main(argv=None) -> int:
         print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
         if args.debug:
             print("  [debug] F11 = dump a native snapshot (--snapshot-loadable) for repro.")
+        ref["frontend"] = False       # gameplay: touch BASH is level (hold to keep attacking), not edge-triggered
         ref["state"] = state          # register the live state so the F11 debug hotkey (in pump) can snapshot it
         from time import perf_counter
         from pre2.bridge.foreground_tiles import read_foreground_state
@@ -1962,6 +1971,7 @@ def main(argv=None) -> int:
     init_keyboard_input(state)                                     # the boot joystick-detect outcome (DC1 input)
     dos = NativeVGA()
     reached_gameplay = False
+    ref["frontend"] = True; ref["touch_bash_ready"] = True         # titles/menu/carte -> edge-triggered touch BASH
     try:
         for scene in native_front_end(state, dos, 0, game_root=gr):
             # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate

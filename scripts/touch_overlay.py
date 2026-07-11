@@ -41,9 +41,8 @@ class TouchOverlay:
         self.flags = self.controls.update({}, (1, 1))[0]
         self.render_model = None
         self.jump_edge = False
-        # cached overlay surface
-        self._surf = None
-        self._sig = None
+        # small control sprites (built once per window size), drawn as cheap quads each frame
+        self._spr = None
         self._font = None
 
     # -- event intake ---------------------------------------------------------------------------------
@@ -93,38 +92,57 @@ class TouchOverlay:
             self._font = (px, pygame.font.Font(None, px))
         return self._font[1]
 
-    def surface(self, size: tuple[int, int]):
-        """A cached translucent SRCALPHA surface with the controls painted, sized to the window. Rebuilt
-        only when the control state (or window size) changes."""
+    def _disc(self, r, fill, edge_col, edge, label=None):
+        """A small SRCALPHA disc surface (fill + edge ring + optional centred label)."""
+        d = int(2 * r) + 2 * edge + 2
+        s = pygame.Surface((d, d), pygame.SRCALPHA)
+        c = (d // 2, d // 2)
+        pygame.draw.circle(s, fill, c, int(r), 0)
+        pygame.draw.circle(s, edge_col, c, int(r), edge)
+        if label:
+            font = self._get_font(max(12, int(r * 0.7)))
+            t = font.render(label, True, _LABEL)
+            s.blit(t, t.get_rect(center=c))
+        return s
+
+    def _build_sprites(self, disp, size):
+        """Build the control TEXTURES once (uploaded to the GPU a single time). The joystick ring, the knob
+        (idle/active), and each button (idle/pressed) become small static sprites; drawing them each frame is
+        then a handful of cheap quad draws at the current positions — no per-frame window-size upload."""
+        from pre2.native.touch import layout_for
+        lay = layout_for(size)
+        edge = max(2, int(lay.unit * 0.006))
+        rr = lay.stick_radius
+        ring = self._disc(rr, _RING, _RING_EDGE, edge)                # ring only (no knob baked in)
+        self._spr = {
+            "size": size, "lay": lay,
+            "ring": disp.make_sprite(ring),
+            "knob": disp.make_sprite(self._disc(lay.knob_radius, _KNOB, _KNOB, 0)),
+            "knob_a": disp.make_sprite(self._disc(lay.knob_radius, _KNOB_ACTIVE, _KNOB_ACTIVE, 0)),
+            "jump": disp.make_sprite(self._disc(lay.button_radius, _BTN, _BTN_EDGE, edge, "JUMP")),
+            "jump_p": disp.make_sprite(self._disc(lay.button_radius, _BTN_PRESSED, _BTN_EDGE, edge, "JUMP")),
+            "bash": disp.make_sprite(self._disc(lay.button_radius, _BTN, _BTN_EDGE, edge, "BASH")),
+            "bash_p": disp.make_sprite(self._disc(lay.button_radius, _BTN_PRESSED, _BTN_EDGE, edge, "BASH")),
+        }
+
+    def draw(self, disp) -> None:
+        """Draw the controls as small static sprites at their current positions (cheap GPU quads, no upload).
+        Replaces the old full-window ``surface()`` + ``draw_overlay`` which re-uploaded ~18 MB every frame the
+        knob moved — the phone's #1 stall."""
         rm = self.render_model
-        if rm is None:
-            return None
-        sig = (size, rm.signature())
-        if self._surf is not None and self._sig == sig:
-            return self._surf
+        if rm is None or not self.enabled:
+            return
+        size = disp.get_size()
+        if self._spr is None or self._spr["size"] != size:
+            self._build_sprites(disp, size)
+        spr = self._spr
+
+        def at(sprite, cx, cy):
+            _, w, h = sprite
+            disp.draw_sprite(sprite, (cx - w / 2, cy - h / 2))
+
         lay = rm.layout
-        surf = pygame.Surface(size, pygame.SRCALPHA)
-
-        # joystick: ring + knob
-        _circle(surf, _RING, rm.stick_base, lay.stick_radius, 0)
-        _circle(surf, _RING_EDGE, rm.stick_base, lay.stick_radius, max(2, int(lay.unit * 0.006)))
-        _circle(surf, _KNOB_ACTIVE if rm.stick_active else _KNOB, rm.knob, lay.knob_radius, 0)
-
-        # two buttons
-        self._button(surf, lay.jump_center, lay.button_radius, "JUMP", rm.jump_pressed, lay.unit)
-        self._button(surf, lay.bash_center, lay.button_radius, "BASH", rm.bash_pressed, lay.unit)
-
-        self._surf = surf
-        self._sig = sig
-        return surf
-
-    def _button(self, surf, center, r, label, pressed, unit) -> None:
-        _circle(surf, _BTN_PRESSED if pressed else _BTN, center, r, 0)
-        _circle(surf, _BTN_EDGE, center, r, max(2, int(unit * 0.006)))
-        font = self._get_font(max(12, int(r * 0.7)))
-        text = font.render(label, True, _LABEL)
-        surf.blit(text, text.get_rect(center=(int(center[0]), int(center[1]))))
-
-
-def _circle(surf, color, center, r, width) -> None:
-    pygame.draw.circle(surf, color, (int(center[0]), int(center[1])), max(1, int(r)), int(width))
+        at(spr["ring"], rm.stick_base[0], rm.stick_base[1])
+        at(spr["knob_a"] if rm.stick_active else spr["knob"], rm.knob[0], rm.knob[1])
+        at(spr["jump_p"] if rm.jump_pressed else spr["jump"], lay.jump_center[0], lay.jump_center[1])
+        at(spr["bash_p"] if rm.bash_pressed else spr["bash"], lay.bash_center[0], lay.bash_center[1])
