@@ -234,9 +234,18 @@ adb shell chmod -R 777 /data/local/tmp/pre2
 adb shell run-as org.pre2port.pre2 sh -c 'mkdir -p files && cp /data/local/tmp/pre2/*.SQZ /data/local/tmp/pre2/*.TRK files/'
 ```
 
-The **first-run SAF importer** (an "Import game files" screen → `ACTION_OPEN_DOCUMENT_TREE` → copy the
-picked folder's `*.SQZ/*.TRK` into that internal dir) is the real end-user mechanism and the next milestone
-— the loader above is already importer-ready (the internal dir is a first-class data root).
+The **first-run SAF importer** is implemented (`main.py`: an "Import game files" screen →
+`ACTION_OPEN_DOCUMENT_TREE` → copy the picked folder's `*.SQZ/*.TRK` into the internal dir). It needs
+`pyjnius` + the p4a `android` package, now in `buildozer.spec` requirements.
+
+> **KNOWN TOOLCHAIN BLOCKER (p4a):** this p4a (release-2026.05.09) fails to bundle `pyjnius` — its recipe
+> runs, but the final requirement install does an offline pip *dry-run* of `pyjnius==1.7.0` (a GitHub-only
+> tag with no PyPI wheel), which errors, and p4a then omits jnius from `_python_bundle` (verified: 0 jnius
+> entries; the app logs `SAF import failed: No module named 'jnius'`). Every jnius call therefore no-ops
+> (immersive nav-bar hide, the belt-and-braces landscape lock, panel-Hz probe, `getExternalFilesDir`, and
+> the SAF importer). The env-var `SDL_IOS_ORIENTATIONS` hint keeps landscape working regardless. Until the
+> pyjnius packaging is fixed (pin p4a to a good commit / patch `run_pymodules_install` to not pip-filter
+> recipe packages / inject the built package), provision data via the `run-as` recipe above.
 
 ### First-launch behaviour without data
 

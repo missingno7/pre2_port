@@ -36,7 +36,12 @@ version = 0.1.0
 # Pin the target Python + pygame: the bleeding-edge p4a defaults to Python 3.14 + pygame 2.1.0, which fails
 # to compile (pygame 2.1.0's _sdl2/sdl2.c needs longintrepr.h, gone after Python 3.11). 3.11.9 + pygame 2.6.1
 # is the proven-good combo (same as the desktop build).
-requirements = python3==3.11.9,numpy,pygame==2.6.1
+# pyjnius + the p4a `android` package are REQUIRED, not optional: the app calls into Android via jnius for
+# the SAF game-data importer (main.py), immersive fullscreen + landscape lock + panel-Hz probe + the
+# external-files dir (android_host.py). They are NOT auto-included just because the SDL2 bootstrap uses
+# them internally — without them every jnius call silently no-ops (ImportError), which is what shipped
+# before (the SAF picker failed with "No module named 'jnius'").
+requirements = python3==3.11.9,numpy,pygame==2.6.1,pyjnius,android
 
 orientation = landscape
 fullscreen = 1
