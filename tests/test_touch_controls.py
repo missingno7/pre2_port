@@ -114,44 +114,64 @@ def test_button_finger_held_after_sliding_off():
     assert flags.fire                             # ownership retained until it lifts
 
 
-def test_menu_tap_is_fire_on_release():
-    # front-end gestures: a TAP (finger down then up, no swipe) is one fire pulse, emitted on the LIFT.
+def test_menu_tap_is_fire():
+    # front-end gestures (event-driven): a TAP (down then up, no swipe) accumulates one fire pulse.
     from pre2.native.touch import MenuGestures
     g = MenuGestures()
-    fire, arrow = g.update({1: (600, 360)}, SIZE)            # finger down
-    assert not fire and arrow == 0                           # holding isn't a tap yet
-    fire, arrow = g.update({1: (605, 362)}, SIZE)            # tiny drift, still held
-    assert not fire and arrow == 0
-    fire, arrow = g.update({}, SIZE)                         # lift -> the tap completes
-    assert fire and arrow == 0
+    g.on_down(1, (600, 360))
+    assert g.poll() == (False, 0)                            # nothing until it completes
+    g.on_up(1)
+    assert g.poll() == (True, 0)                             # the tap fires
+    assert g.poll() == (False, 0)                            # drained (fire is a one-poll pulse)
+
+
+def test_menu_fast_tap_same_poll_still_fires():
+    # THE REGRESSION: a fast tap delivers down+up before a single poll (real devices do this constantly). The
+    # event-driven recogniser must still fire — a poll-of-the-current-finger-set recogniser would miss it.
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    g.on_down(1, (600, 360))
+    g.on_up(1)                                               # up in the SAME poll as down
+    assert g.poll() == (True, 0)
 
 
 def test_menu_swipe_down_is_down_arrow_and_never_fires():
     from pre2.native.touch import MenuGestures
     g = MenuGestures()
-    g.update({1: (600, 280)}, SIZE)                          # finger down
-    fire, arrow = g.update({1: (600, 280 + 60)}, SIZE)       # drag down 60px (> 0.06*720 = 43px threshold)
-    assert arrow == touch.SCAN_DOWN and not fire
-    fire, arrow = g.update({}, SIZE)                         # lift -> a swipe must NOT also fire
-    assert not fire and arrow == 0
+    g.on_down(1, (600, 280))
+    g.on_move(1, (600, 280 + 60), SIZE)                     # drag down 60px (> 0.06*720 = 43px threshold)
+    assert g.poll() == (False, touch.SCAN_DOWN)
+    g.on_up(1)                                               # lift -> a swipe must NOT also fire
+    assert g.poll() == (False, 0)
 
 
 def test_menu_swipe_up_is_up_arrow():
     from pre2.native.touch import MenuGestures
     g = MenuGestures()
-    g.update({1: (600, 400)}, SIZE)
-    fire, arrow = g.update({1: (600, 400 - 60)}, SIZE)       # drag up past the threshold
-    assert arrow == touch.SCAN_UP and not fire
+    g.on_down(1, (600, 400))
+    g.on_move(1, (600, 400 - 60), SIZE)                     # drag up past the threshold
+    assert g.poll() == (False, touch.SCAN_UP)
 
 
 def test_menu_swipe_emits_one_arrow_per_gesture():
     # a single drag toggles the mode ONCE; dragging further doesn't re-toggle (a second swipe needs a lift).
     from pre2.native.touch import MenuGestures
     g = MenuGestures()
-    g.update({1: (600, 260)}, SIZE)
-    _, a1 = g.update({1: (600, 320)}, SIZE)                  # crosses threshold -> one arrow
-    _, a2 = g.update({1: (600, 400)}, SIZE)                  # keeps dragging -> no repeat
-    assert a1 == touch.SCAN_DOWN and a2 == 0
+    g.on_down(1, (600, 260))
+    g.on_move(1, (600, 320), SIZE)                          # crosses threshold -> one arrow
+    g.on_move(1, (600, 400), SIZE)                          # keeps dragging -> no repeat
+    assert g.poll() == (False, touch.SCAN_DOWN)
+
+
+def test_menu_second_finger_ignored_until_owner_lifts():
+    from pre2.native.touch import MenuGestures
+    g = MenuGestures()
+    g.on_down(1, (600, 360))                                # finger 1 owns the gesture
+    g.on_down(2, (300, 360))                                # a second finger is ignored
+    g.on_up(2)                                              # its lift does nothing (not the owner)
+    assert g.poll() == (False, 0)
+    g.on_up(1)                                              # the owner's lift = the tap
+    assert g.poll() == (True, 0)
 
 
 def test_scancodes_match_input_layer():

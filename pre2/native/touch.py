@@ -221,44 +221,62 @@ class MenuGestures:
     * a vertical **swipe** is an *arrow* (up ``0x48`` / down ``0x50``) — on the mode-select screen an arrow
       toggles BEGINNER<->EXPERT.
 
-    One finger owns a gesture at a time (the first touch down). While it is held the vertical travel is
-    watched: crossing ``SWIPE_FRAC * min(w, h)`` emits the arrow ONCE and marks the gesture a swipe, so the
-    finger's lift won't ALSO fire. A lift with no swipe is a tap -> one fire pulse. Stateful; call
-    :meth:`update` once per input poll. Pure (no pygame) so the tap/swipe math is unit-testable with no device."""
+    **Event-driven**, so a fast tap (touch-down and -up in the *same* frame — which real devices deliver
+    constantly) still registers. The host feeds the raw gesture edges — :meth:`on_down` / :meth:`on_move` /
+    :meth:`on_up` (window-pixel coords, no pygame) — which ACCUMULATE the result, and drains it once per input
+    poll with :meth:`poll`. (A poll-only recogniser that reads the current finger set would miss a same-frame
+    tap: by the time it runs the finger is already gone, so it never saw a touch.)
+
+    One finger owns a gesture at a time (the first down). While it is held the vertical travel is watched:
+    crossing ``SWIPE_FRAC * min(w, h)`` records the arrow ONCE and marks the gesture a swipe, so the lift won't
+    ALSO fire. A lift with no swipe is a tap. Pure -> unit-testable with no device."""
 
     SWIPE_FRAC: float = 0.06        # vertical travel (fraction of min(w, h)) that turns a drag into a swipe
 
     _owner: Hashable | None = field(default=None, init=False)
     _start_y: float = field(default=0.0, init=False)
     _swiped: bool = field(default=False, init=False)
+    _fire: bool = field(default=False, init=False)         # accumulated tap, drained by poll()
+    _arrow: int = field(default=0, init=False)             # accumulated swipe arrow, drained by poll()
 
     def reset(self) -> None:
-        """Drop the in-flight gesture (call on a context switch so a held finger doesn't leak across)."""
+        """Drop the in-flight gesture AND any un-drained result (call on a context switch / focus loss so a
+        held finger and a stale tap don't leak across)."""
+        self._owner = None
+        self._swiped = False
+        self._fire = False
+        self._arrow = 0
+
+    def on_down(self, fid: Hashable, pos: tuple[float, float]) -> None:
+        """A touch went down at ``pos``. The first finger owns the gesture; later fingers are ignored until it
+        lifts."""
+        if self._owner is not None:
+            return
+        self._owner = fid
+        self._start_y = pos[1]
+        self._swiped = False
+
+    def on_move(self, fid: Hashable, pos: tuple[float, float], size: tuple[float, float]) -> None:
+        """The owning finger moved to ``pos``. Crossing the vertical swipe threshold records the arrow once."""
+        if fid != self._owner or self._swiped:
+            return
+        dy = pos[1] - self._start_y
+        if abs(dy) >= self.SWIPE_FRAC * min(size):
+            self._arrow = SCAN_DOWN if dy > 0 else SCAN_UP        # swipe down/up -> down/up arrow (both toggle)
+            self._swiped = True                                   # one arrow per gesture; the lift won't fire
+
+    def on_up(self, fid: Hashable) -> None:
+        """The owning finger lifted. A lift that never swiped is a tap -> record a fire pulse."""
+        if fid != self._owner:
+            return
+        if not self._swiped:
+            self._fire = True
         self._owner = None
         self._swiped = False
 
-    def update(self, fingers: dict[Hashable, tuple[float, float]],
-               size: tuple[float, float]) -> tuple[bool, int]:
-        """Resolve one poll -> ``(fire, arrow)``. ``fire`` is True for the single poll a tap completes (the
-        owning finger lifts having never swiped); ``arrow`` is ``0x48`` / ``0x50`` for the single poll a swipe
-        crosses the threshold, else ``0``."""
-        ids = set(fingers)
-        fire = False
-        arrow = 0
-        if self._owner is not None and self._owner not in ids:     # the owning finger has lifted
-            if not self._swiped:
-                fire = True                                        # a tap (no swipe) -> one fire pulse
-            self._owner = None
-            self._swiped = False
-        if self._owner is None:                                    # claim the first active finger as the owner
-            for fid, (_x, y) in fingers.items():
-                self._owner = fid
-                self._start_y = y
-                self._swiped = False
-                break
-        if self._owner in ids and not self._swiped:                # watch the owner's vertical travel
-            dy = fingers[self._owner][1] - self._start_y
-            if abs(dy) >= self.SWIPE_FRAC * min(size):
-                arrow = SCAN_DOWN if dy > 0 else SCAN_UP           # swipe down/up -> down/up arrow (both toggle)
-                self._swiped = True                                # one arrow per gesture; the lift won't fire
+    def poll(self) -> tuple[bool, int]:
+        """Drain the gesture outputs accumulated since the last poll: ``(fire, arrow)`` — ``fire`` True if a tap
+        completed, ``arrow`` = ``0x48`` / ``0x50`` if a swipe crossed, else ``0``. Call once per input poll."""
+        fire, arrow = self._fire, self._arrow
+        self._fire, self._arrow = False, 0
         return fire, arrow

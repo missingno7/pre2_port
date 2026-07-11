@@ -76,11 +76,14 @@ class TouchController:
     pure function of that one source of truth; a context switch resets the in-flight finger state so a tap
     held across the boundary can't leak into gameplay (or vice-versa)."""
 
+    _MENU_MOUSE = "mouse"          # the desktop mouse-as-one-finger id for the menu gestures
+
     def __init__(self, *, android: bool) -> None:
         from touch_overlay import TouchOverlay
         from pre2.native.touch import MenuGestures
         self._overlay = TouchOverlay(mouse_emulation=not android)   # gameplay joystick + JUMP/BASH buttons
         self._menu = MenuGestures()                                 # front-end whole-screen tap / swipe
+        self._mouse_emulation = not android                         # desktop: drive the menu gestures with the mouse
         self.enabled = True
         self.jump_edge = False        # a gameplay JUMP tap edge (for the responsive-controls jump buffer)
         self.menu_fire = False        # front-end: a tap completed this poll -> inject fire (0x39)
@@ -89,9 +92,30 @@ class TouchController:
 
     # -- event intake / per-poll tick ------------------------------------------------------------------
     def handle_event(self, ev, size) -> None:
-        """Feed one pygame event (FINGER*/mouse). Both the gameplay resolver and the menu gestures read the
-        overlay's finger set, so a single event stream serves both contexts."""
+        """Feed one pygame event. It drives BOTH the gameplay overlay (finger tracking + joystick) and the
+        front-end menu gestures — the menu recogniser is event-driven (not poll-driven) so a fast tap whose
+        FINGERDOWN and FINGERUP land in the same frame still registers."""
         self._overlay.handle_event(ev, size)
+        self._route_menu_event(ev, size)
+
+    def _route_menu_event(self, ev, size) -> None:
+        """Translate a pygame FINGER* / mouse event into a MenuGestures edge (on_down/on_move/on_up)."""
+        import pygame
+        w, h = size
+        t = ev.type
+        if t == pygame.FINGERDOWN:
+            self._menu.on_down(ev.finger_id, (ev.x * w, ev.y * h))
+        elif t == pygame.FINGERMOTION:
+            self._menu.on_move(ev.finger_id, (ev.x * w, ev.y * h), size)
+        elif t == pygame.FINGERUP:
+            self._menu.on_up(ev.finger_id)
+        elif self._mouse_emulation:                                 # desktop testing: the mouse is one finger
+            if t == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                self._menu.on_down(self._MENU_MOUSE, (float(ev.pos[0]), float(ev.pos[1])))
+            elif t == pygame.MOUSEMOTION:
+                self._menu.on_move(self._MENU_MOUSE, (float(ev.pos[0]), float(ev.pos[1])), size)
+            elif t == pygame.MOUSEBUTTONUP and ev.button == 1:
+                self._menu.on_up(self._MENU_MOUSE)
 
     def tick(self, size, *, frontend: bool) -> None:
         """Resolve the active touches for the current context. Call once per input poll (in ``pump()``)."""
@@ -99,11 +123,12 @@ class TouchController:
             self.reset()                                            # clear stale finger ownership across a switch
         self._prev_frontend = frontend
         self._overlay.tick(size)                                    # always track fingers + the gameplay flags
+        fire, arrow = self._menu.poll()                             # always drain (accumulated from the events)
         if frontend:
-            self.menu_fire, self.menu_arrow = self._menu.update(self._overlay.active_points(), size)
+            self.menu_fire, self.menu_arrow = fire, arrow
             self.jump_edge = False                                  # menus don't jump
         else:
-            self.menu_fire, self.menu_arrow = False, 0
+            self.menu_fire, self.menu_arrow = False, 0             # gestures ignored in gameplay (drained above)
             self.jump_edge = self._overlay.jump_edge
 
     # -- outputs ---------------------------------------------------------------------------------------

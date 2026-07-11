@@ -322,6 +322,9 @@ def main(argv=None) -> int:
     # enables them (there's no F10 menu to toggle on a phone; a stale settings file must not silently disable them).
     if args.touch:
         force_touch_settings(settings)
+    if _on_android:
+        settings["fullscreen"] = True    # a phone app is always fullscreen (SDL fullscreen-desktop = immersive,
+        #                                  hides the system status/nav bars). Desktop --touch stays windowed for testing.
     settings["god"] = False                                              # a cheat never persists across runs
 
     def save_settings():

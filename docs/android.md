@@ -22,7 +22,10 @@ flags in). The only game-facing addition is an on-screen control layer.
 - ✅ Context-aware controls — the joystick + buttons are drawn/driven **only during gameplay**. In the front-end
   MENUS they're hidden and the **whole screen** is the input: a **tap** = fire (advance the titles, pick the
   difficulty, confirm the mode, load the level), and a vertical **swipe** = up/down arrow (the mode-select
-  BEGINNER↔EXPERT toggle). Much more phone-native than hunting for a tiny button on a title screen.
+  BEGINNER↔EXPERT toggle). Much more phone-native than hunting for a tiny button on a title screen. Menu taps
+  are event-driven so even a fast same-frame tap registers.
+- ✅ Immersive fullscreen — on Android the runtime forces SDL fullscreen-desktop at boot (hides the status / nav
+  bars); desktop `--touch` stays windowed for testing.
 - ✅ Skippable intro — the intro titles (TITUS, then the PREHISTORIK-2 logo) play normally, but a tap/fire-key
   press during them skips straight to the menu (a skip during TITUS drops the logo too; the OLDIES credits are
   always fire-skippable). It's an opt-in `intro_skippable` setting (breaks boot accuracy — the titles never poll
@@ -58,9 +61,12 @@ its base under your thumb; then drag — a dead-zone plus a per-axis threshold t
 an up-diagonal never fires a stray jump. To actually jump, use the dedicated **JUMP** button; a JUMP tap feeds
 the same responsive-controls jump buffer a keyboard/gamepad tap does.
 
-In the menus a **tap** is edge-shaped (one fire pulse per finger-lift, so a held finger can't cascade the
-screens), and a **swipe** emits its arrow once per gesture and never also fires. The gesture that recognises
-tap-vs-swipe is the pure, unit-tested `pre2.native.touch.MenuGestures`.
+In the menus a **tap** is one fire pulse (a held finger can't cascade the screens), and a **swipe** emits its
+arrow once per gesture and never also fires. The recogniser (`pre2.native.touch.MenuGestures`) is
+**event-driven** — it accumulates on the touch-down / -up *edges* rather than polling the current finger set,
+so a fast tap whose FINGERDOWN and FINGERUP arrive in the *same frame* (which real devices deliver constantly)
+still registers. A poll-of-the-finger-set recogniser silently drops those taps — that was a real bug. Pure and
+unit-tested (including the same-frame case).
 
 ### Why this stays byte-exact
 
