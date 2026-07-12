@@ -16,6 +16,7 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
 from pre2.recovered.prng import rng_lcg
+from pre2.views.tables import Tables
 from pre2.views.dgroup_view import (DictBackend, EffectParticle, PlayerGlobals, PlayerView, RenderSlot,
                                     RngView, WidthContractBackend)
 
@@ -202,7 +203,6 @@ SCROLL_STOP_FLAG = 0x6BEA
 CAM_STATE = 0x91FE         # the camera state-machine state (==6 suppresses the spawn)
 SCROLL_GRAVITY = 0x10
 SCROLL_VY_GRAV_CAP = 0xE0
-TBL_FLOOR = 0x7F5E         # ground-tile property table (xlatb)
 
 
 @oracle_link("1030:70D7",
@@ -237,7 +237,7 @@ def tick_scroll_cursor(rb, rw, read_tile):
         col = _sar16(cur_x, 4) & 0xFF
         row = _sar16(cur_y, 4) & 0xFF
         tile = read_tile((col | (row << 8)) & 0xFFFF)     # [asm 7128-713B]
-        if rb((TBL_FLOOR + tile) & 0xFFFF) != 0:          # [asm 7142-7144] solid floor -> land
+        if Tables(rb).floor_props[tile] != 0:             # [asm 7142-7144] solid floor -> land
             writes[CURSOR_Y] = ((cur_y & 0xFFF0), 2)      # [asm 7146] snap (and byte [0x9201],0xF0)
             if _s16(vy) != 0:                             # [asm 714B] was scrolling
                 writes[SCROLL_STOP_FLAG] = (7, 1)

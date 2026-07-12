@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.views.dgroup_view import EffectParticle, ProjectileSlot, WidthContractBackend
+from pre2.views.tables import Tables
 
 
 class Pre2EffectsGap(Exception):
@@ -105,8 +106,6 @@ X_MAX = 0x1000               # [asm 6149] world-X bounce bound
 LIFE_CLAMP = 0x32            # [asm 612B] special ids cap their lifetime here
 FREEZE_FLAG = 0x6BD5         # [asm 61E3] bit0 -> skip the sprite animation
 MAP_SEG_PTR = 0x2DDA         # [asm 6106] [0x2DDA] = the level-map (es) segment
-TBL_FLOOR = 0x7F5E           # [asm 61A0] ground-tile property table (xlatb)
-TBL_CEIL = 0x7E5E            # [asm 61D1] ceiling-tile property table (xlatb)
 ANIM_WRAP_AT = 0x49          # [asm 61F9] sprite cycles ..->0x49 ->0x46
 ANIM_WRAP_TO = 0x46
 ID_LIFE_CLAMP = (0x136, 0x134, 0x12C, 0x132)   # [asm 6168] -> clamp lifetime, skip tile/anim
@@ -125,6 +124,7 @@ def tick_particles(rw, rb, read_tile):
     """[asm 60FE] ``rw``/``rb`` read DGROUP word/byte; ``read_tile(off)`` reads the level-map (es) segment.
     Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
+    tbl = Tables(rb)
     freeze = rb(FREEZE_FLAG) & 1
     b = PARTICLE_LO
     for _ in range(PARTICLE_N):
@@ -178,13 +178,13 @@ def tick_particles(rw, rb, read_tile):
             row = (_s16(y) >> 4) & 0xFF
             bx = (col | (row << 8)) & 0xFFFF
             if ydelta > 0:                                     # [asm 619B] falling -> floor check
-                if rb((TBL_FLOOR + read_tile(bx)) & 0xFFFF) != 0:    # [asm 61A3-61A6] solid
+                if tbl.floor_props[read_tile(bx)] != 0:              # [asm 61A3-61A6] solid
                     yv = _sar16(_neg16(yv), 1)                 # [asm 61A8-61AB] -Yvel/2
                     d = 8 if _s16(xv) >= 0 else -8             # [asm 61B3-61BA]
                     axv = (xv - d) & 0xFFFF                    # [asm 61BC] reduce |Xvel| by 8 toward 0
                     xv = axv if (((axv >> 8) ^ pt.facing) & 0xFF) == 0 else 0   # [asm 61C0-61C5]
             else:                                              # [asm 61CC] rising -> ceiling check
-                if rb((TBL_CEIL + read_tile((bx - 0x100) & 0xFFFF)) & 0xFFFF) != 0:        # [asm 61D1-61D5]
+                if tbl.ceil_props[read_tile((bx - 0x100) & 0xFFFF)] != 0:                  # [asm 61D1-61D5]
                     xv = _neg16(xv)                            # [asm 61D9]
                     x = (x + _sar16(xv, 4)) & 0xFFFF           # [asm 61DC-61E1]
             # [asm 61E3] sprite animation 0x46..0x49 (gated by [0x6BD5]&1 and Xvel!=0)

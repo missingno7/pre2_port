@@ -19,6 +19,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 from __future__ import annotations
 
 from pre2.views.dgroup_view import OverlayBackend, PlayerGlobals, PlayerView, RenderSlot
+from pre2.views.tables import Tables
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
 
@@ -31,8 +32,6 @@ RENDER_BUDGET = 7           # [asm 490D] bx
 MAP_HEIGHT = 0x2CF5
 CAM_X = 0x2DE4
 CAM_Y = 0x2DE6
-TBL_FLOOR = 0x7F5E
-HALF_H = 0x7191            # per-id hitbox half-height table
 PLAYER = 0x4F1C            # player sprite record
 COLLIDED = 0x6BFE          # "player already rode something this frame" flag
 PLAT_VEL = 0x4F2A         # platform velocity the player inherits
@@ -110,7 +109,7 @@ def _move_type8(ov, b):
         settle = False
         if bound >= nrow:                                    # [asm 49A3] jae (in bounds)
             tile = ov.tile((col | ((nrow & 0xFF) << 8)) & 0xFFFF)   # [asm 49B0]
-            prop = ov.rb((TBL_FLOOR + tile) & 0xFFFF)
+            prop = Tables(ov.rb).floor_props[tile]
             if prop != 0 and prop != 6:                      # [asm 49B5-49C1] solid
                 settle = True
         elif (nrow - bound) >= 3:                            # [asm 49A5-49AC]
@@ -197,8 +196,8 @@ def _collision_4b05(ov, di):
     g.airborne = 2
     g.last_land_y = p.y
     # snap onto the entity top or inherit its velocity
-    idx = (ov.rw((di + 4) & 0xFFFF) & 0x1FFF) << 1           # [asm 4B51-4B54]
-    top = (ov.rw((di + 2) & 0xFFFF) - ov.rb((HALF_H + idx) & 0xFFFF)) & 0xFFFF   # [asm 4B59-4B61]
+    ride = RenderSlot(ov, di)                                # the entity's render record
+    top = (ride.y - Tables(ov.rb).sprite_half_h(ride.sprite)) & 0xFFFF   # [asm 4B51-4B61]
     if _s16(p.y) <= _s16(top):                               # [asm 4B64] jle
         ov.ww(PLAT_VEL, (ov.rw(VY_SCRATCH) << 4) & 0xFFFF)   # [asm 4B76]
     else:
