@@ -370,14 +370,16 @@ def player_emit_trail(player_x: int, player_y: int, blink: int, ring_ptr: int):
     when gated, else ``(word_writes, new_ring_ptr)`` where ``word_writes`` maps ring offsets to 16-bit values."""
     if blink & 3:                                               # [5E11-5E16] gated
         return None
-    bx = ring_ptr & 0xFFFF
-    writes = {bx: player_x & 0xFFFF,                            # [5E1E-5E21] slot+0 = X
-              (bx + 2) & 0xFFFF: player_y & 0xFFFF,             # [5E23-5E26] slot+2 = Y
-              (bx + 4) & 0xFFFF: TRAIL_SPRITE}                  # [5E29] slot+4 = 0x35
-    bx = (bx - TRAIL_STRIDE) & 0xFFFF                           # [5E2E]
-    if bx < TRAIL_RING_LO:                                      # [5E31-5E37]
+    from pre2.views.dgroup_view import RenderSlot
+    be = DictBackend(lambda o: 0, lambda o: 0)                  # write-only: the slot fields fill the contract
+    slot = RenderSlot(be, ring_ptr & 0xFFFF)                    # the ring slot the cursor points at
+    slot.x = player_x                                           # [5E1E-5E21]
+    slot.y = player_y                                           # [5E23-5E26]
+    slot.sprite = TRAIL_SPRITE                                  # [5E29] 0x35
+    bx = (ring_ptr - TRAIL_STRIDE) & 0xFFFF                     # [5E2E] step the cursor down...
+    if bx < TRAIL_RING_LO:                                      # [5E31-5E37] ...wrapping to the top slot
         bx = TRAIL_RING_HI
-    return writes, bx
+    return be.writes, bx
 
 
 def player_charge_6bce(v: int) -> int:
@@ -826,33 +828,28 @@ def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     """1030:6017-6070 — spawn a projectile into the first free 0x4F2E slot (stride 0x12, 4 slots; free = [+4]
     ==0xFFFF). Reads the projectile's sprite/offsets from just past the phase frame-table's terminator.
     Returns True if a slot was taken (the caller then sets [0x4F0E]=0xFFFF)."""
-    si = None                                                  # [627C-6293] find a free 0x4F2E slot
-    p = ATTACK_SPAWN_LIST
-    for _ in range(4):
-        if rw((p + 4) & 0xFFFF) == 0xFFFF:
-            si = p
-            break
-        p = (p + 0x12) & 0xFFFF
-    if si is None:
+    be = DictBackend(rb, rw, out)
+    p, g = PlayerView(be), PlayerGlobals(be)
+    slot = next((s for s in g.projectiles if s.free), None)    # [627C-6293] the first free 0x4F2E slot
+    if slot is None:
         return False
-    out[(si + 8) & 0xFFFF] = (rb((rec + 4) & 0xFFFF) >> 1) & 3  # [601C-601E] [si+8] = (flag>>1)&3 (al is post-shr)
+    slot.kind = (rb((rec + 4) & 0xFFFF) >> 1) & 3              # [601C-601E] (flag>>1)&3 (al is post-shr)
     bx = rw(rec)                                               # [6021] frame-table ptr
     while rw(bx) != 0x55AA:                                    # [6025-602B] walk to the terminator
         bx = (bx + 2) & 0xFFFF
     bx = (bx + 6) & 0xFFFF                                     # [602D] past terminator -> the spawn record
-    out[(si + 0xC) & 0xFFFF] = bx                              # [6030]
+    slot.spawn_ptr = bx                                        # [6030]
     sprid = rw(bx)                                             # [6033] ax
     cx = rw((bx - 4) & 0xFFFF)                                 # [6035] x offset
     yoff = rw((bx - 2) & 0xFFFF)                               # [6038]
-    out[(si + 0xE) & 0xFFFF] = yoff                            # [603B]
-    p = PlayerView(DictBackend(rb, rw))
+    slot.yoff = yoff                                           # [603B]
     if p.facing_lo & 0x80:                                     # [603E-6049] facing flip
         sprid |= 0x8000
         cx = (-_s16(cx)) & 0xFFFF
-    out[(si + 4) & 0xFFFF] = sprid & 0xFFFF                    # [604B]
-    out[(si + 6) & 0xFFFF] = cx & 0xFFFF                       # [604E]
-    out[si] = (p.slot0.x + (_s16(cx) >> 4)) & 0xFFFF           # [6051-605E] pos relative to the render sprite
-    out[(si + 2) & 0xFFFF] = (p.slot0.y + (_s16(yoff) >> 4)) & 0xFFFF  # [6060-606D]
+    slot.sprite = sprid & 0xFFFF                               # [604B]
+    slot.xoff = cx & 0xFFFF                                    # [604E]
+    slot.x = (p.slot0.x + (_s16(cx) >> 4)) & 0xFFFF            # [6051-605E] pos relative to the render sprite
+    slot.y = (p.slot0.y + (_s16(yoff) >> 4)) & 0xFFFF          # [6060-606D]
     return True
 
 

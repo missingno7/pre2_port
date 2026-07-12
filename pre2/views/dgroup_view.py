@@ -300,6 +300,13 @@ class StructView:
         self._backend = backend
         self._base = base
 
+    @property
+    def offset(self) -> int:
+        """The struct's DGROUP base offset — TRANSITIONAL interop for the offset-keyed helpers a slot is
+        passed to during the field-backed migration (e.g. ``hitbox_overlap(rb, rw, slot.offset, di)``).
+        New code should pass the VIEW, not the offset; this property is the migration seam, not the API."""
+        return self._base
+
 
 def _coerce_backend(source):
     """A backend passes through — the package's own backends plus anything marked ``_IS_DGROUP_BACKEND``
@@ -689,3 +696,47 @@ class PlayerView(RenderSlot):
             return (v >> 4) & 0xFF
         return ((sar4(self._backend.rw(self._base + 2)) << 8)
                 | sar4(self._backend.rw(self._base))) & 0xFFFF
+
+
+class ProjectileSlot(RenderSlot):
+    """One thrown-weapon projectile slot (the 4-slot list at 0x4F2E, stride 0x12) — free when ``sprite`` is
+    0xFFFF. The attack handler spawns the club hitbox into the first free one [asm 627D/6017-6070]; the
+    camera-target scans test each active one [80E6/6FDE]."""
+
+    __slots__ = ()
+
+    xoff      = _U16(0x06)   # the spawn record's X offset word (facing-negated) [asm 604E]
+    kind      = _U8(0x08)    # (phase flag >> 1) & 3 [asm 601C]
+    spawn_ptr = _U16(0x0C)   # the spawn record ptr (past the frame table's terminator) [asm 6030]
+    yoff      = _U16(0x0E)   # the spawn record's Y offset word [asm 603B]
+
+    @property
+    def free(self) -> bool:
+        return self.sprite == 0xFFFF                        # [asm 6285/6FE4] the free/active test
+
+
+class WallMarker(StructView):
+    """One 8-byte wall-impact marker (the list at 0x6EA9); free when the leading word is 0x55AA [asm 64FA]."""
+
+    __slots__ = ()
+
+    x  = _U16(0)             # player X << 3 [asm 6505-650A]
+    y  = _U16(2)             # player Y << 3 [asm 650C-6511]
+    b4 = _U8(4)              # zeroed on registration [asm 6514]
+    b5 = _U8(5)              # zeroed [asm 6518]
+    b7 = _U8(7)              # zeroed [asm 651C]
+
+    @property
+    def free(self) -> bool:
+        return self.x == 0x55AA                             # [asm 64FD]
+
+
+# ---- the fixed slot LISTS (StructArrays: indexed named records instead of pointer walks). Attached to
+# PlayerGlobals here because RenderSlot/ProjectileSlot are defined below it in the file. ----
+PlayerGlobals.render_slots = StructArray(0x4F0A, 0x12, 116, RenderSlot)     # the on-screen records
+#     (0x4F0A..0x5732, slot 1 = the player); 116 = the span the forward oracle masks
+PlayerGlobals.projectiles = StructArray(0x4F2E, 0x12, 4, ProjectileSlot)    # the 4 thrown-weapon slots [627D]
+PlayerGlobals.trail_ring_slots = StructArray(0x4F76, 0x12, 5, RenderSlot)   # the trail/dust ring (the cursor
+#     g.trail_ring walks DOWN with wrap 0x4F76 -> 0x4FBE) [5E2E-5E37]
+PlayerGlobals.effect_row = StructArray(0x56A2, 0x12, 8, RenderSlot)         # the 7585 effect/boss-health row
+PlayerGlobals.wall_markers = StructArray(0x6EA9, 8, 20, WallMarker)         # the 64FA wall-impact list

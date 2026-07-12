@@ -64,21 +64,20 @@ GLYPH_LATCH = "__boss_glyph"
 def init_effect_row(cx):
     """[asm 7585] ``cx`` = the caller's spawn count. Returns the ``{offset: (value, width)}`` 0x56A2 contract
     (+ the ``SONG_REQUEST`` sentinel when cx>0 — the boss-music load the adapters emit)."""
-    writes: dict = {}
+    be = WidthContractBackend(lambda o: 0, lambda o: 0)  # write-only: the row slots fill the contract
+    row = PlayerGlobals(be).effect_row
+    writes = be.writes
     n = cx if cx < EFFECT_ROW_N else EFFECT_ROW_N        # [asm 758E-7593] cap at 8
-    si = EFFECT_ROW_LO
     x = EFFECT_X0
     if n:                                                # [asm 7597 jcxz / 7599-759C] boss music on a live row
         writes[SONG_REQUEST] = BOSS_SONG_INDEX
-    for _ in range(n):                                   # [asm 759F-75AF] the spawned row
-        writes[(si + 4) & 0xFFFF] = (EFFECT_SPRITE, 2)
-        writes[si & 0xFFFF] = (x, 2)
-        writes[(si + 2) & 0xFFFF] = (EFFECT_Y, 2)
+    for i in range(n):                                   # [asm 759F-75AF] the spawned row
+        row[i].sprite = EFFECT_SPRITE
+        row[i].x = x
+        row[i].y = EFFECT_Y
         x = (x + EFFECT_DX) & 0xFFFF
-        si = (si + EFFECT_ROW_STRIDE) & 0xFFFF
-    for _ in range(EFFECT_ROW_N - n):                    # [asm 75B9-75C1] terminate the rest
-        writes[(si + 4) & 0xFFFF] = (0xFFFF, 2)
-        si = (si + EFFECT_ROW_STRIDE) & 0xFFFF
+    for i in range(n, EFFECT_ROW_N):                     # [asm 75B9-75C1] terminate the rest
+        row[i].sprite = 0xFFFF
     return writes
 
 
@@ -154,12 +153,10 @@ def scan_camera_targets(rb, rw):
     if _target_collision(rb, rw, SCAN_PLAYER, writes):   # [asm 80DE-80E4] player first
         si_hit = SCAN_PLAYER
     else:
-        si = SCAN_PROJ
-        for _ in range(SCAN_PROJ_N):                      # [asm 80E6-80F4] then the 4 projectiles
-            if _target_collision(rb, rw, si, writes):
-                si_hit = si
+        for slot in g.projectiles:                        # [asm 80E6-80F4] then the 4 projectiles
+            if _target_collision(rb, rw, slot.offset, writes):
+                si_hit = slot.offset
                 break
-            si = (si + 0x12) & 0xFFFF
     if si_hit is None:                                    # [asm 80F6] no hit
         return writes
 
@@ -1226,16 +1223,14 @@ def _l6_boss_hit(ov):
         if h:                                             # [asm 6FDC jb 7001]
             hit_slot = 0x4F0A
     if hit_slot is None:
-        di = 0x4F2E
-        for _ in range(4):                                # [asm 6FDE-6FFC] the 4 projectiles
-            if ov.rw((di + 4) & 0xFFFF) != 0xFFFF:         # [asm 6FE4]
+        for slot in g.projectiles:                        # [asm 6FDE-6FFC] the 4 projectiles
+            if not slot.free:                             # [asm 6FE4] active slot
                 g.hit_pass_full = 1
-                h, hb = hitbox_overlap(ov.rb, ov.rw, si, di)   # [asm 6FEF]
+                h, hb = hitbox_overlap(ov.rb, ov.rw, si, slot.offset)   # [asm 6FEF]
                 ov.apply(hb); g.hit_pass_full = 0
                 if h:                                     # [asm 6FF7 jb 7001]
-                    hit_slot = di
+                    hit_slot = slot.offset
                     break
-            di = (di + 0x12) & 0xFFFF                      # [asm 6FF9]
     if hit_slot is None:                                  # [asm 6FFE jmp 70A5]
         return
     ov.wb((si + 5) & 0xFFFF, ov.rb((si + 5) & 0xFFFF) ^ 0x40)   # [asm 7001] flash the target
