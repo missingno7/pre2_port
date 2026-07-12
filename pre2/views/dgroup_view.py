@@ -108,10 +108,10 @@ class WidthContractBackend:
 
     __slots__ = ("_rb", "_rw", "writes")
 
-    def __init__(self, base_rb, base_rw):
+    def __init__(self, base_rb, base_rw, out: "dict[int, tuple[int, int]] | None" = None):
         self._rb = base_rb
         self._rw = base_rw
-        self.writes: dict[int, tuple[int, int]] = {}
+        self.writes: dict[int, tuple[int, int]] = {} if out is None else out
 
     def rb(self, off: int) -> int:
         return self._rb(off & 0xFFFF)
@@ -361,7 +361,9 @@ class PlayerGlobals(DgroupView):
     cam_row_word  = _U16(0x2DE6)  # width alias of cam_row [5ACD]
     respawn_state = _U8(0x6BE4)   # 0 = none; 2 = armed by the off-camera death trigger [65B3/65C9]
     lives         = _U8(0x27D8)   # consumed by the off-camera trigger [65C1]; set 2 by main 0141
-    unk_27D6      = _U8(0x27D6)   # reset 0 alongside the life consume [65C5]; purpose not yet evidenced
+    energy        = _U8(0x27D6)   # hit-points within a life: the crush chain decrements it (5-frame cooldown
+    #                               reload [824D]) and a life is consumed on underflow [825F]; reset 0 with the
+    #                               life consume [65C5]. (object_spawn's old 'LIVES' constant misnamed this.)
     end_signal    = _U8(0x6BE5)   # 1 = game over (no lives) [65D0]; 0xFF = game complete (level 0xE) [5B1F];
     #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
     map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
@@ -402,6 +404,38 @@ class PlayerGlobals(DgroupView):
 
 #: Back-compat alias — the class began as the collision island's globals and grew into the player's.
 CollisionGlobals = PlayerGlobals
+
+
+class RngView(DgroupView):
+    """The game's two PRNG state blocks, NAMED — replaces the 4-line read/advance/write-back boilerplate at
+    every roll site with ``rng.roll()``. The generator MATH stays in pre2/recovered/prng.py (this view is
+    layout + wiring only). Bind it to a read-through backend (an island overlay) when several rolls happen in
+    one pass — each roll must see the previous roll's state."""
+
+    __slots__ = ()
+
+    lcg_a  = _U8(0x2CEC)    # [asm 39DF] the four-byte mixing generator's state ...
+    lcg_b  = _U8(0x2CED)
+    lcg_c  = _U8(0x2CEE)
+    lcg_d  = _U16(0x2CEF)
+    ror    = _U16(0x28C1)   # [asm 26CF] the one-word rotate generator's state
+
+    def roll(self) -> int:
+        """Advance the LCG (``1030:39DF``), write the new state back through the backend, return ``AL``."""
+        from pre2.recovered.prng import rng_lcg
+        a, b, c, d, ret = rng_lcg(self.lcg_a, self.lcg_b, self.lcg_c, self.lcg_d)
+        self.lcg_a = a
+        self.lcg_b = b
+        self.lcg_c = c
+        self.lcg_d = d
+        return ret
+
+    def roll_ror(self) -> int:
+        """Advance the rotate generator (``1030:26CF``), write it back, return the new word (== the state)."""
+        from pre2.recovered.prng import rng_ror
+        new = rng_ror(self.ror)
+        self.ror = new
+        return new
 
 
 class _ScriptEntry(StructView):

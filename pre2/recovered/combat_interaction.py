@@ -67,6 +67,8 @@ def _abs8(d: int) -> int:
 
 
 class _Overlay:
+
+    _IS_DGROUP_BACKEND = True   # a dgroup-view backend: RngView/PlayerView bind straight onto it
     """A byte-level read-through write buffer over base DS memory, so a composed routine's later reads see
     its own earlier writes (the 8C72 debris loop fills the pool + scatters the enemy pos in place)."""
 
@@ -137,6 +139,17 @@ def roll_bonus_sprite_id(rng_state):
              "(un-halved) tolerance and [0x4F2A]/non-player gating the vertical-detail write [0xA330]/[0xA331]. "
              "Returns CF=overlap.",
              "VERIFIED", merge_target="combat_interaction")
+
+def roll_bonus_sprite(rng) -> int:
+    """:func:`roll_bonus_sprite_id` over a bound :class:`~pre2.views.dgroup_view.RngView` — reads and writes
+    the LCG state through the view's backend (bind to a read-through overlay when rolling repeatedly)."""
+    sid, (a, b, c, d) = roll_bonus_sprite_id((rng.lcg_a, rng.lcg_b, rng.lcg_c, rng.lcg_d))
+    rng.lcg_a = a
+    rng.lcg_b = b
+    rng.lcg_c = c
+    rng.lcg_d = d
+    return sid
+
 def hitbox_overlap(rb, rw, si, di):
     """[asm 8D7B] Sprite-hitbox overlap test. ``rb``/``rw`` read a byte/word from DS; ``si``/``di`` are the
     source/target sprite-record offsets. Returns ``(hit, writes)`` — ``hit`` = the ASM's CF (True = overlap),
@@ -494,13 +507,9 @@ PLAYER_STRUCT = 0x4F1C
 
 
 def _ov_rng(ov):
-    """Advance rng_lcg over the overlay state ([0x2CEC..0x2CF0]; d is the WORD at 0x2CEF); return new b."""
-    a, b, c, d, ret = rng_lcg(ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF))
-    ov.wb(0x2CEC, a)
-    ov.wb(0x2CED, b)
-    ov.wb(0x2CEE, c)
-    ov.ww(0x2CEF, d)
-    return ret
+    """Advance the LCG over the overlay state; return new b. (= RngView.roll — the named-state form.)"""
+    from pre2.views.dgroup_view import RngView
+    return RngView(ov).roll()
 
 
 def _bonus_popup_cx(lvl):

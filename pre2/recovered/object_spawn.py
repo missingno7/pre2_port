@@ -14,8 +14,9 @@ the live hook emits separately (like the other play_sfx seams) — it is outside
 from __future__ import annotations
 
 from pre2.islands import oracle_link
-from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite_id, spawn_effect_burst
+from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
 from pre2.recovered.prng import rng_lcg
+from pre2.views.dgroup_view import RngView
 
 
 class Pre2SpawnGap(Exception):
@@ -281,8 +282,8 @@ def player_cursor_dist(rw):
 
 
 # --- 824D: the player-hurt effect at the bottom of the camera-boundary crush chain (81B4->81F3->824D) ---
-HURT_COOLDOWN = 0x6BC9    # damage cooldown; reloads to 5 and costs a life on underflow
-LIVES = 0x27D6
+HURT_COOLDOWN = 0x6BC9    # damage cooldown; reloads to 5 and costs energy on underflow
+ENERGY = 0x27D6           # hit-points within a life (= PlayerGlobals.energy; was misnamed LIVES here)
 HURT_FX_X = 0xA336        # spawn_effect_burst reads this as its SPAWN_X
 HURT_FX_Y = 0xA338        # ... SPAWN_Y (player_Y - 0x30)
 HURT_FX_SPRITE = 0xA33A   # ... BURST_SPRITE (0x2046)
@@ -306,7 +307,7 @@ def player_death(rb, rw):
 
 @oracle_link("1030:824D",
              "the player-hurt effect when the scroll boundary crushes the player (bottom of the 81B4 chain): "
-             "tick the damage cooldown [0x6BC9] (reload 5 + lose a life [0x27D6] on underflow -> player death "
+             "tick the damage cooldown [0x6BC9] (reload 5 + spend energy [0x27D6] on underflow -> player death "
              "65B3 when lives deplete), record the hurt-burst origin [0xA336]/[0xA338] = player - (0,0x30), then "
              "spawn one hurt sprite (8D1B, id 0x2046, Xvel +/-0x30 by [0x6BC9] parity, Yvel 0xFF80). Composes "
              "the verified spawn_effect_burst over a read-through overlay so it sees the just-set origin/sprite.",
@@ -320,9 +321,9 @@ def hurt_effect(rb, rw):
     if cd & 0x80:                                        # [asm 8254] dec underflowed -> reload + lose a life
         writes[HURT_COOLDOWN] = (5, 1)
         cd = 5
-        lives = (rb(LIVES) - 1) & 0xFF
-        writes[LIVES] = (lives, 1)
-        if lives & 0x80:                                 # [asm 825F] energy underflow -> 65B3 player death
+        energy = (rb(ENERGY) - 1) & 0xFF
+        writes[ENERGY] = (energy, 1)
+        if energy & 0x80:                                # [asm 825F] energy underflow -> 65B3 player death
             writes.update(player_death(rb, rw))          # [asm 8261] arm the 4C69 death/respawn dispatch
     else:
         writes[HURT_COOLDOWN] = (cd, 1)
@@ -379,6 +380,8 @@ class _Ov:
     """Read-through overlay so each sub-call sees the prior ones' writes (81B4's [0xA425] hitbox reads
     [0x4F2A], which the earlier 81F3 bounces may have just set). Byte-level shadow; ``writes`` keeps the
     ordered ``{offset: (value, width)}`` contract (re-inserted on overwrite so last-write wins)."""
+
+    _IS_DGROUP_BACKEND = True   # a dgroup-view backend: RngView binds straight onto it
 
     def __init__(self, rb, rw):
         self._rb = rb
@@ -478,9 +481,7 @@ def boss_death_burst_94f3(rb, rw):
     ov = _Ov(rb, rw)
     ax, dx = 0x20, 0xFF60                                  # [asm 94F9-94FC]
     for _ in range(4):                                     # [asm 94F6 cx=4]
-        sid, (a, b, c, d) = roll_bonus_sprite_id(          # [asm 9504] 8C13 (advances the rng)
-            (ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF)))
-        ov.apply({0x2CEC: (a, 1), 0x2CED: (b, 1), 0x2CEE: (c, 1), 0x2CEF: (d, 2)})   # rng writeback
+        sid = roll_bonus_sprite(RngView(ov))               # [asm 9504] 8C13 (advances the rng via the view)
         ov.apply({0xA33A: (sid, 2)})                       # [asm 9507] the burst sprite id
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [asm 950B] 8D1B (one sprite)
         ax = (-ax) & 0xFFFF                                # [asm 950E] neg ax

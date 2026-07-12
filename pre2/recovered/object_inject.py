@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pre2.recovered.object_update import on_screen_tile
 from pre2.recovered.prng import rng_lcg
+from pre2.views.dgroup_view import RngView, WidthContractBackend
 
 __all__ = ["OBJ_BASE", "OBJ_STRIDE", "OBJ_COUNT", "find_free_object_slot", "ProjectResult", "project_entity"]
 
@@ -309,8 +310,7 @@ def handler_7d6e(rb, rw, si, cam_x, cam_y, find_free):
     w, base = _project_writes(pr, si)
     w.update(out)
     w[(si + 4) & 0xFFFF] = (0x37, 1)          # [7D87]
-    a, b, c, d, ret = rng_lcg(rb(0x2CEC), rb(0x2CED), rb(0x2CEE), rw(0x2CEF))   # [7D8B call 39DF]
-    w[0x2CEC] = (a, 1); w[0x2CED] = (b, 1); w[0x2CEE] = (c, 1); w[0x2CEF] = (d, 2)
+    ret = RngView(WidthContractBackend(rb, rw, w)).roll()                        # [7D8B call 39DF]
     w[(base + 0x02) & 0xFFFF] = ((pr.record[0x02] - (ret & 0x3F)) & 0xFFFF, 2)   # [7D8E/7D91] Y -= rng&0x3f
     return w, True
 

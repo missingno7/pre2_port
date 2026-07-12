@@ -964,7 +964,7 @@ def player_f1_suicide(rb) -> dict:
         timer = g.respawn_state              # 65D0 leaves the timer untouched (==0 here)
     else:                                    # [asm 65C1-65CA]
         g.lives = g.lives - 1
-        g.unk_27D6 = 0
+        g.energy = 0
         timer = 2
     g.respawn_state = (timer - 1) & 0xFF     # [asm 5875] dec after the call (reads 65B3's write)
     return be.writes

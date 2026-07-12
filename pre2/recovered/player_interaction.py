@@ -11,10 +11,11 @@ Recovered so far (the shared keystones used by both loops + the loop2 handlers):
 """
 from __future__ import annotations
 
-from pre2.recovered.combat_interaction import (death_handler, hitbox_overlap, roll_bonus_sprite_id,
+from pre2.recovered.combat_interaction import (death_handler, hitbox_overlap, roll_bonus_sprite,
                                                spawn_effect_burst, _Overlay)
 from pre2.recovered.player_collision import _offcamera_trigger
 from pre2.recovered.prng import rng_lcg
+from pre2.views.dgroup_view import RngView, WidthContractBackend
 
 SCORE = 0x6C0E              # [asm 888B] 32-bit player score (low 0x6C0E, high 0x6C10)
 SCORE_TABLE = 0xA353        # [asm 8887] score values, indexed ((id-0x4a)<<1); = (-0x5CAD)&0xFFFF
@@ -251,9 +252,7 @@ def _food_fountain(ov):
     entity (8D1B :func:`spawn_effect_burst`). ``ov`` is the bomb's read-through :class:`_Overlay`."""
     ax, dx = 0x20, 0xFF60                                  # [94F9/94FC] initial X/Y velocity
     for _ in range(4):                                    # [94F6] cx=4
-        sid, (a, b, c, d) = roll_bonus_sprite_id(         # [9504] 8C13 advances the rng state
-            (ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF)))
-        ov.wb(0x2CEC, a); ov.wb(0x2CED, b); ov.wb(0x2CEE, c); ov.ww(0x2CEF, d)
+        sid = roll_bonus_sprite(RngView(ov))              # [9504] 8C13 advances the rng state (via the view)
         ov.ww(A33A, sid)                                  # [9507] burst sprite id
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [950B] 8D1B, one sprite
         ax = (-ax) & 0xFFFF                               # [950E] neg ax (alternating spread)
@@ -371,8 +370,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         if ydir < 0x80:                                   # low -> count + score (shared 85B6)
             return _count_and_score(rb, rw, si, num), [4]
         out = {(si + 0xE) & 0xFFFF: ((-ydir) & 0xFFFF, 2)}   # bounce up
-        a, b, c, d, ret = rng_lcg(rb(0x2CEC), rb(0x2CED), rb(0x2CEE), rw(0x2CEF))
-        out[0x2CEC] = (a, 1); out[0x2CED] = (b, 1); out[0x2CEE] = (c, 1); out[0x2CEF] = (d, 2)
+        ret = RngView(WidthContractBackend(rb, rw, out)).roll()   # [asm call 39DF] advance + write back the LCG
         xv = 0x20
         if ret & 1:
             xv = (-0x20) & 0xFFFF

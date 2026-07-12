@@ -499,7 +499,7 @@ class _Overlay:
 
 def _offcamera_trigger(rb) -> dict:
     """The off-camera death/respawn trigger ``1030:65B3`` (called as `65AF`). If not already triggered
-    (``respawn_state == 0``): consume a life, reset ``unk_27D6``, arm the respawn (``respawn_state = 2``); if no
+    (``respawn_state == 0``): consume a life, reset the energy, arm the respawn (``respawn_state = 2``); if no
     lives remain, set the game-over flag (``end_signal = 1``). Returns the dict of writes. Pure."""
     be = DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
     g = PlayerGlobals(be)
@@ -509,7 +509,7 @@ def _offcamera_trigger(rb) -> dict:
         g.end_signal = 1                                          # [65D0]
         return be.writes
     g.lives = g.lives - 1                                          # [65C1]
-    g.unk_27D6 = 0                                                 # [65C5]
+    g.energy = 0                                                   # [65C5]
     g.respawn_state = 2                                            # [65C9]
     return be.writes
 
