@@ -347,11 +347,15 @@ class StructView:
 def _coerce_backend(source):
     """A backend passes through — the package's own backends plus anything marked ``_IS_DGROUP_BACKEND``
     (island-local overlays like player_collision's read-through ``_Overlay`` opt in with that attribute; the
-    VM ``mem`` object must NOT pass, its ``rb`` takes (seg, off)). Anything else (NativeGameState / VM ``mem``
-    / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
+    VM ``mem`` object must NOT pass, its ``rb`` takes (seg, off)). A state object carrying its own swappable
+    ``.backend`` (NativeGameState) binds to THAT — so a view follows the hybrid store, not a fresh image
+    wrapper. Anything else (VM ``mem`` / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
     if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend, DictBackend)) \
             or getattr(source, "_IS_DGROUP_BACKEND", False):
         return source
+    be = getattr(source, "backend", None)
+    if be is not None and getattr(be, "_IS_DGROUP_BACKEND", False):
+        return be
     return ByteBackend(source)
 
 

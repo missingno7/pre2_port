@@ -42,11 +42,25 @@ TBL_SRC_OFF = 0x5F48         # word: sprite pixel-data offset
 VAR_GLOBAL_SHIFT = 0x0000
 
 
+def _dgroup_backend(mem):
+    """The swappable DGROUP backend of a NativeGameState (so slot access follows a hybrid store), or None."""
+    be = getattr(mem, "backend", None)
+    return be if getattr(be, "_IS_DGROUP_BACKEND", False) else None
+
+
 def _rb(mem, seg, off):
+    if seg == DATA_SEG:
+        be = _dgroup_backend(mem)
+        if be is not None:
+            return be.rb(off)
     return mem.data[((seg << 4) + off) & 0xFFFFF]
 
 
 def _rw(mem, seg, off):
+    if seg == DATA_SEG:
+        be = _dgroup_backend(mem)
+        if be is not None:
+            return be.rw(off)
     b = ((seg << 4) + off) & 0xFFFFF
     return mem.data[b] | (mem.data[b + 1] << 8)
 
@@ -116,6 +130,11 @@ def read_attr(mem, sprite_id: int) -> SpriteAttr:
 def write_record(mem, off: int, update) -> None:
     """Write back the per-frame active-record mutation (1030:26FA): flags byte [+5] and
     life byte [+0x11]. ``update`` is a recovered ``SpriteRecordUpdate``."""
+    be = _dgroup_backend(mem)
+    if be is not None:
+        be.wb(off + 5, update.new_flags)
+        be.wb(off + 0x11, update.new_life)
+        return
     base = (DATA_SEG << 4) & 0xFFFFF
     mem.data[base + off + 5] = update.new_flags & 0xFF
     mem.data[base + off + 0x11] = update.new_life & 0xFF
