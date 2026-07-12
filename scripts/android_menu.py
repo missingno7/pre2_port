@@ -12,15 +12,21 @@ All rendering + hit-testing lives here (pygame, like the rest of ``scripts/``); 
 stays in ``pre2.native.touch``. Kept out of ``play_native.py`` / ``android_host.py`` so the mobile menu UI is
 one self-contained unit.
 
-Checkpoint counts come from the recovered password validator: 10 beginner (indices 0..9) + 9 expert (10..0x12).
+Level counts are per PLAYABLE path: 9 beginner (ends at the penguin level [0x2D8A]=0x08) + 10 expert (runs to
+the mode-9 boss [0x2D8A]=0x09) — beginner is the shorter path, expert has the longer expert-only tail.
 """
 from __future__ import annotations
 
 import pygame
 
-# The checkpoint grid = the game's own password levels (pre2.recovered.password: validator accepts 0..0x12).
-BEGINNER_LEVELS = 10        # beginner passwords: indices 0..9  -> [0x2D8A] 0..9
-EXPERT_LEVELS = 9           # expert passwords:  indices 10..0x12 -> [0x2D8A] 0..8, [0xB197]=1
+# The checkpoint grid = the game's actually-PLAYABLE levels per path (NOT the password count, which is a
+# separate encoding). Selecting cell i commits [0x2D8A]=i, so the counts are set by how far each path runs:
+#   * BEGINNER ends early — its last playable level is the penguin level [0x2D8A]=0x08 (the "you must be an
+#     EXPERT eater to continue" wall), i.e. 9 levels (indices 0..8);
+#   * EXPERT runs the full main progression to the mode-9 boss [0x2D8A]=0x09 (pre2.native.loop), i.e. 10
+#     levels (indices 0..9) — the expert-only tail is why its column is longer.
+BEGINNER_LEVELS = 9         # L1..L9   -> [0x2D8A] 0..8 (last = penguin 0x08)
+EXPERT_LEVELS = 10          # L1..L10  -> [0x2D8A] 0..9 (last = mode-9 boss 0x09), [0xB197]=1
 
 # translucent skin, tuned to read over the bright menu art (RGBA)
 _BTN_FILL = (18, 24, 34, 205)
@@ -264,7 +270,8 @@ class ContinueScreen:
             txtcol = _CELL_TEXT if c["unlocked"] else _CELL_LOCK_TEXT
             pygame.draw.rect(surf, fill[:3], r, border_radius=max(3, r.h // 5))
             pygame.draw.rect(surf, edge[:3], r, width=max(1, r.h // 16), border_radius=max(3, r.h // 5))
-            label = c["label"] if c["unlocked"] else f"{c['label']}  \U0001F512"
+            label = c["label"]                               # locked cells read as locked from the grey styling
+            #   alone — the default pygame font has no padlock glyph (it rendered as a tofu box)
             t = cf.render(label, True, txtcol[:3])
             surf.blit(t, t.get_rect(center=r.center))
         # BACK

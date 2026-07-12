@@ -39,7 +39,8 @@ flags in). The only game-facing addition is an on-screen control layer.
   input in the VM) so the desktop default keeps the uninterruptible intro; the `--touch` build forces it on.
 - ✅ Phone-native front door — the press-1/2 menu shows two touch buttons: **NEW GAME** (presses '1' → the
   byte-exact beginner mode-select) and **CONTINUE** (a graphical level picker). CONTINUE is a 2-column
-  BEGINNER | EXPERT grid of the game's own password checkpoints (10 beginner + 9 expert); a cell unlocks once
+  BEGINNER | EXPERT grid of the game's playable levels per path (9 beginner, 10 expert — beginner ends at the
+  penguin level and expert runs the longer, expert-only tail); a cell unlocks once
   you have *reached* that level on that path, and picking one jumps straight in. It writes the SAME
   `[0x2D8A]`/`[0xB197]` a valid password does — so it's the proven password-entry code path with a thumb-friendly
   front end, not new game logic. Progress is saved to `pre2native_progress.json` beside the settings.
@@ -54,7 +55,11 @@ flags in). The only game-facing addition is an on-screen control layer.
   `run_menu_flow` wrapper as the cold boot (frontend gestures, per-screen tap mapping, the NEW GAME /
   CONTINUE buttons and picker). Previously they ran bare loops that never flipped the touch context, so the
   game-over menu drew no buttons and taps acted as the gameplay joystick.
-- ⬜ Device polish — asset import (SAF), pause/resume + audio focus, request 120 Hz mode +
+- ✅ SAF game-data importer — first launch without data shows an import screen; tapping opens the Android
+  folder picker (Storage Access Framework), and the chosen folder's `*.SQZ/*.TRK` are copied into the
+  app's private dir. Requires `pyjnius` + the p4a `android` package in `requirements` (without them every
+  jnius call silently no-ops — the earlier "No module named 'jnius'" picker failure).
+- ⬜ Device polish — pause/resume + audio focus, request 120 Hz mode +
   further `extract` optimization (the remaining ~15 ms/tick limiter), a clean arm64-only repackage.
 
 > buildozer does **not** run on Windows. Build the APK on a Linux/WSL host (recipe below) or in CI.

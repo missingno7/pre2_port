@@ -31,10 +31,9 @@ def test_continue_columns_and_branch():
     cells, _back, *_ = cs._grid(SIZE)
     beg = [c for c in cells if not c["expert"]]
     exp = [c for c in cells if c["expert"]]
-    assert len(beg) == BEGINNER_LEVELS
-    assert len(exp) == EXPERT_LEVELS
-    # the expert tail is the branch: expert has fewer password checkpoints, so the columns differ in length
-    assert BEGINNER_LEVELS != EXPERT_LEVELS
+    assert len(beg) == BEGINNER_LEVELS == 9      # beginner ends at the penguin level (0x08)
+    assert len(exp) == EXPERT_LEVELS == 10       # expert runs to the mode-9 boss (0x09) — the longer, expert-only tail
+    assert EXPERT_LEVELS > BEGINNER_LEVELS        # the branch: expert is the longer path
 
 
 def test_continue_unlock_by_progress():
