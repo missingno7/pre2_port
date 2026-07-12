@@ -21,10 +21,17 @@ VENDORED = ROOT / "scripts" / "overlay_menu.py"
 CANONICAL = ROOT / "dos_re" / "dos_re" / "overlay_menu.py"
 
 
+def _normalized(path):
+    # Compare CONTENT, not line endings: git may check the vendored copy out CRLF (Windows autocrlf) while the
+    # submodule stays LF — both are stored LF in git, so an EOL-only difference is an environment artifact, not
+    # drift. Normalize CRLF -> LF before comparing.
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def test_vendored_overlay_menu_matches_framework():
     if not CANONICAL.exists():
         pytest.skip("dos_re submodule not checked out (or too old to have overlay_menu)")
-    assert VENDORED.read_bytes() == CANONICAL.read_bytes(), (
+    assert _normalized(VENDORED) == _normalized(CANONICAL), (
         "scripts/overlay_menu.py has drifted from dos_re/dos_re/overlay_menu.py — the menu is edited "
         "upstream (dos_re) and re-vendored, never locally; see this test's module docstring"
     )
