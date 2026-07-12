@@ -845,13 +845,14 @@ def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     cx = rw((bx - 4) & 0xFFFF)                                 # [6035] x offset
     yoff = rw((bx - 2) & 0xFFFF)                               # [6038]
     out[(si + 0xE) & 0xFFFF] = yoff                            # [603B]
-    if rb(0x4F25) & 0x80:                                      # [603E-6049] facing flip
+    p = PlayerView(DictBackend(rb, rw))
+    if p.facing_lo & 0x80:                                     # [603E-6049] facing flip
         sprid |= 0x8000
         cx = (-_s16(cx)) & 0xFFFF
     out[(si + 4) & 0xFFFF] = sprid & 0xFFFF                    # [604B]
     out[(si + 6) & 0xFFFF] = cx & 0xFFFF                       # [604E]
-    out[si] = (rw(0x4F0A) + (_s16(cx) >> 4)) & 0xFFFF          # [6051-605E] pos relative to the render sprite
-    out[(si + 2) & 0xFFFF] = (rw(0x4F0C) + (_s16(yoff) >> 4)) & 0xFFFF  # [6060-606D]
+    out[si] = (p.slot0.x + (_s16(cx) >> 4)) & 0xFFFF           # [6051-605E] pos relative to the render sprite
+    out[(si + 2) & 0xFFFF] = (p.slot0.y + (_s16(yoff) >> 4)) & 0xFFFF  # [6060-606D]
     return True
 
 

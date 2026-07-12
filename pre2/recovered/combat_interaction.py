@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.recovered.prng import rng_lcg
+from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView
 
 # --- globals this island reads/writes -------------------------------------------------
 SPAWN_X = 0xA336      # effect-spawn world X (cell << 4)
@@ -488,8 +489,9 @@ def bonus_collect_tail(rb, rw, di):
 
     al = old & 0xFF                                      # map X cell
     ah = (old >> 8) & 0xFF                               # map Y cell
-    cam_x = rb(0x2DE4)
-    cam_y = rb(0x2DE6)
+    g = PlayerGlobals(DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)))
+    cam_x = g.cam_col
+    cam_y = g.cam_row
     sx = (al - cam_x) & 0xFF                             # [asm 8B8D] sub al,[0x2DE4]
     sy = (ah - cam_y) & 0xFF                             # [asm 8B97] sub ah,[0x2DE6]
     onscreen = (al >= cam_x and sx < 0x14 and ah >= cam_y and sy < 0x0C)
@@ -526,7 +528,7 @@ def _bonus_facing_xvel(ov, src_si):
     if src_si >= PLAYER_STRUCT:
         v = ov.rw((src_si + 6) & 0xFFFF)
     else:
-        v = ov.rw(0x4F25)
+        v = _s16(PlayerView(ov).facing)
     return 0x30 if _s16(v) < 0 else (-0x30) & 0xFFFF   # jl keeps 0x30; else neg
 
 
@@ -579,7 +581,7 @@ def bonus_hit_handler(rb, rw, di, src_si):
         return ov.b, map_c, onscreen, True
 
     # [8AB1] normal bonus: frame debounce
-    frame = ov.rw(0x6BD5)
+    frame = PlayerGlobals(ov).frame_stamp
     if _abs16(frame - ov.rw(BONUS_DEBOUNCE)) < 6:
         return ov.b, {}, False, False                    # recently collected -> ignore
     ov.ww(BONUS_DEBOUNCE, frame)

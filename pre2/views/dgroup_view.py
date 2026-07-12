@@ -385,6 +385,7 @@ class PlayerGlobals(DgroupView):
     #                               phase record's sfx byte [5FD2]; timer-decremented [5A4A+]
     charge        = _U8(0x6BCE)   # the +2-while-<=0x30 charge counter [5EB7]; quadruples attack v19 [5FB5]
     frame_blink   = _U8(0x6BD5)   # frame counter gating the trail emit to every 4th frame [5E11]
+    frame_stamp   = _U16(0x6BD5)  # width alias: the debounce sites read the same counter as a WORD [80F7/8AB1]
     friction      = _U16(0x6BF6)  # the per-level directional-friction constant [62ED]
     cam_left      = _U16(0x8164)  # camera-left tile — the X-integrate right bound [5A1C]
     attack_phase  = _U8(0x7B18)   # index into the 5-byte attack phase records at 0x7B04 [5FA9]
@@ -392,6 +393,20 @@ class PlayerGlobals(DgroupView):
     #                               presets 0x14 [0141..] — exact consumer not yet mapped
     idle_clock    = _U16(0x27F0)  # the PIT-fed idle counter (the fidget selector reads &0x1FF [5DC9])
     unk_6BD9      = _U8(0x6BD9)   # nonzero suppresses the idle look-around camera pan [5D9B]
+
+    # --- the effect-burst / boss-fight block (object_spawn + combat_interaction) ---
+    burst_x       = _U16(0xA336)  # the spawn_effect_burst origin X (8D1B reads it) [8264/74A8/7041]
+    burst_y       = _U16(0xA338)  # ... origin Y [826A/74B1]
+    burst_sprite  = _U16(0xA33A)  # ... the burst sprite id [8285/9507/74E0]
+    hit_flag      = _U8(0xA330)   # hitbox_overlap's vertical-detail hit flag (1 = registered) [8D7B]
+    hit_pass_full = _U8(0xA312)   # set across a projectile/player pass -> 8D7B uses the FULL (un-halved)
+    #                               tolerance [6FCF/6FD7]
+    hit_debounce  = _U16(0xA3FD)  # frame stamp of the last camera-target hit (debounce window 0x16) [8109]
+    boss_phase    = _U16(0xA326)  # the L6/boss fight phase (advances every 7 hits) [7036/7DA9]
+    boss_x        = _U16(0x5648)  # the boss/camera-target record origin X [74A8/7041]
+    boss_y        = _U16(0x564A)  # ... origin Y [74B1/704A]
+
+    collected_linked = _U16(0x2A7A)  # the LINKED-item collected count (tally percent = [0x2A76]+this) [85CC/5139]
 
     # --- the six decoded input flags (DC1's outputs [0x27E8..0x27ED]) ---
     in_fire       = _U8(0x27E8)   # fire/jump held (space/enter sources) [0bc6/58FC]

@@ -410,11 +410,12 @@ def _wall_marker_push(rw) -> dict:
     ``StructArray`` is the eventual home. NOTE: never reached in any current demo (the side-solid ``0x805E&0x10``
     tile never occurs; walls block via ``collision_hblock``) — transcribed from the ASM at ASM_MATCHED
     confidence, not lockstep VERIFIED."""
+    p = PlayerView(DictBackend(lambda o: rw(o) & 0xFF, rw))       # named player reads (word fields only)
     si = WALL_MARKER_LIST
     while si < WALL_MARKER_END:                                    # [64FD-6529]
         if rw(si) == 0x55AA:                                       # [64FD] free slot
-            return {si: (rw(0x4F1C) << 3) & 0xFFFF,                # [6505-650A] X<<3 (word)
-                    (si + 2) & 0xFFFF: (rw(0x4F1E) << 3) & 0xFFFF,  # [650C-6511] Y<<3 (word)
+            return {si: (p.x << 3) & 0xFFFF,                       # [6505-650A] X<<3 (word)
+                    (si + 2) & 0xFFFF: (p.y << 3) & 0xFFFF,         # [650C-6511] Y<<3 (word)
                     (si + 4) & 0xFFFF: 0,                          # [6514] byte
                     (si + 5) & 0xFFFF: 0,                          # [6518] byte
                     (si + 7) & 0xFFFF: 0}                          # [651C] byte
