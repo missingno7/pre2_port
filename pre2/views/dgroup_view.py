@@ -475,6 +475,12 @@ class PlayerGlobals(DgroupView):
     scroll_vy     = _U16(0x6C08)  # ... Y velocity (gravity 0x10, cap 0xE0) [asm 7118/8144]
     script_last   = _U16(0x6C0A)  # camera-script pointer last seen; a change resets script_cursor [asm 7537]
 
+    bonus_letters = _U8(0x6CA7)   # the collected BONUS-letters bitmask (0x1F = all five -> reward) [67D7]
+    utensils_mask = _U8(0x6CA8)   # the collected-utensils bitmask (fresh start zeroes it) [asm 0155]
+    quake_dist_lo = _U16(0xA30E)  # the boss-quake player-distance^2 scratch, low word [object_update 724]
+    quake_dist_hi = _U16(0xA310)  # ... high word (must be 0 for the quake proximity test)
+    sprite_bank_lo = _U16(0x8C89)  # entity sprite-ref bank base A (level_load 4182 rebases against it)
+    sprite_bank_hi = _U16(0x8C8B)  # ... bank base B (reset to 0x35/0x138 after the rebase)
     # --- the spawner / camera-sequencer scalars (object_spawn + combat_interaction's globals) ---
     hit_detail    = _U16(0xA331)  # vertical penetration depth when hit_flag set [asm 8D7B]
     spawned_ptr   = _U16(0xA33E)  # the just-spawned burst-slot pointer (8C72 reads it back) [asm 88B9]
@@ -912,7 +918,107 @@ PlayerGlobals.cam_targets = StructArray(0xA407, 6, 4, CamTarget)            # th
 #: Named MUTABLE regions that are dynamic-record ARENAS, not fixed-stride arrays — the flip keeps each as an
 #: owned byte-buffer behind its manager (the variable-stride record layout lives with the owning island).
 ARENAS = {
-    # corpus high-water 0x86EA; the bound is provisional until a longer-level demo firms it
-    "entity_arena (the 2nd-pass live-entity records; entry 0 = the player; variable stride)": (0x8489, 0x8708),
+    # the stride-terminated list ([si] <= 0x32 walks; level_load 4182) ends before the sprite-bank
+    # words at 0x8C89 -- that is the arena's hard bound; corpus write high-water 0x8845
+    "entity_arena (the 2nd-pass live-entity records; entry 0 = the player; variable stride)": (0x8489, 0x8C88),
 }
 #     (x/y/sprite per record; +5 = the flash flags byte; boss_x/boss_y alias record 0's x/y) [6E42/7113]
+
+
+# ---- FieldBackend: the name-covered store (the field-backed seam's shipped half) ----------------------------
+
+def _named_map():
+    """offset -> the covering field's ``(name, base_offset, width)``, harvested from THIS module's
+    declarations (every DgroupView subclass + PlayerView + their StructArrays). Cached; built lazily so the
+    walk sees the post-class array attachments."""
+    import sys
+    mod = sys.modules[__name__]
+    if getattr(mod, "_NAMED_MAP", None) is not None:
+        return mod._NAMED_MAP
+
+    def field_descs(cls):
+        seen = set()
+        for klass in cls.__mro__:
+            for name, d in vars(klass).items():
+                if name not in seen and isinstance(d, (_U8, _S8, _U16, _S16)):
+                    seen.add(name)
+                    yield name, d.off, (2 if isinstance(d, (_U16, _S16)) else 1)
+
+    out: dict[int, tuple[str, int, int]] = {}
+
+    def mark(name, off, width):
+        for k in range(width):
+            out.setdefault((off + k) & 0xFFFF, (name, off & 0xFFFF, width))
+
+    for cls_name in dir(mod):
+        cls = getattr(mod, cls_name)
+        if not (isinstance(cls, type) and issubclass(cls, StructView)):
+            continue
+        base = 0 if (issubclass(cls, DgroupView) and cls is not DgroupView) else \
+            (PLAYER_BASE if cls is PlayerView else None)
+        if base is None:
+            continue
+        for fname, off, width in field_descs(cls):
+            mark(f"{cls_name}.{fname}", base + off, width)
+        for aname, d in vars(cls).items():
+            if isinstance(d, StructArray):
+                for i in range(d.length):
+                    ebase = base + d.off + i * d.stride
+                    for fname, off, width in field_descs(d.struct_cls):
+                        mark(f"{cls_name}.{aname}[{i}].{fname}", ebase + off, width)
+    for label, (lo, hi) in ARENAS.items():
+        for o in range(lo, hi + 1):
+            out.setdefault(o, (label, lo, hi - lo + 1))
+    mod._NAMED_MAP = out
+    return out
+
+
+_NAMED_MAP = None
+
+
+class FieldBackend:
+    """The NAME-COVERED state store: the same offset-keyed backend API as :class:`ByteBackend`, but storage
+    is sparse and every access must land inside a DECLARED field or arena — anything else raises (fail-loud).
+
+    This is the field-backed seam's shipped half: pure named-state code (and its tests) can run over it with
+    no memory image at all, and any hidden raw-offset dependency outside the declarations surfaces as an
+    immediate ``KeyError`` instead of silently reading a zero. The bridge's serializer
+    (``pre2.bridge.state_fields``, built on the MACHINE-GENERATED registry) converts a live image to/from the
+    same named space; scripts/verify_field_flip.py is the corpus proof that the named space covers every
+    mutated gameplay byte."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("_bytes", "_map")
+
+    def __init__(self, seed=None):
+        self._map = _named_map()
+        self._bytes: dict[int, int] = {}
+        if seed is not None:                                   # a whole image / NativeGameState
+            data = getattr(seed, "data", seed)
+            for o in self._map:
+                self._bytes[o] = data[DGROUP_BASE + o]
+
+    def _check(self, off):
+        if off not in self._map:
+            raise KeyError(f"FieldBackend: offset 0x{off:04X} is outside every declared field/arena")
+
+    def rb(self, off: int) -> int:
+        off &= 0xFFFF
+        self._check(off)
+        return self._bytes.get(off, 0)
+
+    def wb(self, off: int, v: int) -> None:
+        off &= 0xFFFF
+        self._check(off)
+        self._bytes[off] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v & 0xFF)
+        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+
+    def owner(self, off: int) -> str:
+        """The declared name covering ``off`` — the readable answer to 'what is this byte?'."""
+        return self._map[off & 0xFFFF][0]

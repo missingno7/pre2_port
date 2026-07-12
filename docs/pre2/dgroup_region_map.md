@@ -8,11 +8,11 @@ candidate-dead — widen the corpus before declaring).
 
 | class | bytes | % |
 |---|---|---|
-| field/array | 3,030 | 4.6% |
+| field/array | 4,448 | 6.8% |
 | masked (render/audio/input) | 13,376 | 20.4% |
-| read-only data (tables/defs) | 4,315 | 6.6% |
+| read-only data (tables/defs) | 4,309 | 6.6% |
 | WRITTEN-UNNAMED | 0 | 0.0% |
-| untouched | 44,815 | 68.4% |
+| untouched | 43,403 | 66.2% |
 
 ## The gap — 0 WRITTEN-unnamed bytes in 0 ranges
 
