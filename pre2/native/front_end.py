@@ -66,6 +66,9 @@ class FrontEndScene:
     pel: int = 0                         # MODE_PLANAR pan: fine pel-pan 0..7 (attr 0x33)
     wrap: int = 0xFFFF                   # MODE_PLANAR pan: display-start wrap (0x1FFF for the menu window)
     active_width: int = 320              # MODE_PLANAR pan: CRTC H-display width (carte narrows to 312)
+    screen: str = ""                     # front-end screen id for the touch host's per-screen input mapping
+    #                                      ("menu" = the press-1/2 difficulty screen -> a tap presses '1'). Empty
+    #                                      elsewhere (a tap is fire). Presentation metadata only; game-logic-free.
     game_paced: bool = False             # True = this frame is a game-TICK-rate scene (the VM presents it via
     #                                      44FB -> the 3-retrace 1C6F wait, ~23.33Hz), NOT the 70Hz retrace of
     #                                      the static front-end screens. The attract title animation is such a
@@ -143,6 +146,30 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
     return phase, fire == 0                                    # [asm 0bd9] jne: loop until released -> RET 0bdb
 
 
+def _skippable_intro(scenes, state, *, enabled: bool):
+    """Wrap an intro title generator so a fire-key press can skip it (jumping the flow straight to the menu).
+
+    Not in the VM: the real TITUS / PRESENT titles play uninterruptibly. So when ``enabled`` is False this just
+    re-``yield``s the scenes with NO input polling — byte-exact. When on (the touch default), it decodes DC1 once
+    per displayed frame and stops early on a FRESH fire press; the key must be seen released first, so a fire held
+    over from the OLDIES skip doesn't instantly abort the title. Returns True if it was skipped, so the caller can
+    drop the remaining intro screens too (``skipped = yield from _skippable_intro(...)``)."""
+    if not enabled:
+        yield from scenes
+        return False
+    rb, rw = readers(state)
+    armed = False                                              # only skip on a fresh press (wait for a release first)
+    for scene in scenes:
+        yield scene
+        apply_ds(state, decode_input(rb, rw))                 # DC1 input decode (same read as native_scene_wait)
+        fire = (rb(0x27E8) | rb(0x2832)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
+        if not fire:
+            armed = True
+        elif armed:
+            return True                                        # fresh fire press -> skip the rest of the intro
+    return False
+
+
 def _native_attract(state, dos, game_root: str):
     """[asm 8E98] The menu-idle ATTRACT: show the PREHISTORIK-2 title (the VM's resource-0xC blit), then the CARTE
     (as a normal level load does), then play the demo's level ([0x83E]) in DEMO-PLAYBACK input mode ([0x2879]=1).
@@ -206,20 +233,24 @@ def _native_attract(state, dos, game_root: str):
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
 
 
-def native_front_end(state, dos, display_page: int, *, game_root: str):
+def native_front_end(state, dos, display_page: int, *, game_root: str, intro_skippable: bool = False):
     """Drive the whole VM-less front-end, advancing the wall-clock idle counter ``[0x27F0]`` by one 70Hz timer
     tick per displayed frame. The front-end runs the timer exactly as the VM does (its scenes spin on the retrace),
     so gameplay starts with ``[0x27F0]`` at a lived-in value rather than 0 — a value the VM never has (its timer
     has run since boot). Without it the idle player at level start picks the wrong fidget pose (a crouch instead of
     the upright stand, since the idle-fidget selector 5DC9 reads ``[0x27F0] & 0x1FF``). The inner generator
-    (:func:`_native_front_end_frames`) loads the level after its last displayed frame."""
+    (:func:`_native_front_end_frames`) loads the level after its last displayed frame.
+
+    ``intro_skippable`` (an opt-in; default for touch): let a fire-key press during the TITUS / PREHISTORIK-2
+    title screens skip straight to the menu. OFF = byte-accurate (the titles play with no input polling)."""
     from pre2.native.loop import native_idle_timer_tick
-    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root):
+    for scene in _native_front_end_frames(state, dos, display_page, game_root=game_root,
+                                          intro_skippable=intro_skippable):
         native_idle_timer_tick(state, ticks=1)                 # 1 timer tick per front-end retrace (70Hz)
         yield scene
 
 
-def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
+def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, intro_skippable: bool = False):
     """Drive the front-end scene state machine from the entry state, ``yield``ing each displayed scene frame, until
     a level starts — then the caller switches to ``native_frame_step`` for gameplay.
 
@@ -250,16 +281,23 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str):
     # --- TITUS screen (912b): the first 13h title, TIMED (main 00FE-0104). Composition of three VERIFIED leaves:
     #     render_image_scene (the image, Δ=0 vs the framebuffer) + front_end_fade (the DAC fade, byte-exact vs the
     #     VM DAC) at the measured cadence: fade-IN 31 + hold 70 ([asm 9146 cx=0x46]) + fade-OUT 16. ---
-    yield from _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70)
+    # The intro titles (TITUS, then the PREHISTORIK-2 logo) play through normally, but when ``intro_skippable``
+    # is on (default for touch/Android; OFF for the byte-accurate default) a fire-key press during either title
+    # skips straight to the menu. A skip during TITUS drops the PRESENT title too. When OFF the titles play with
+    # NO input polling at all — byte-exact to the VM, which never checks for a skip here.
+    skipped = yield from _skippable_intro(
+        _native_title_screen(game_root, "TITUS.SQZ", n_entries=0x10, hold=70), state, enabled=intro_skippable)
 
-    # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
-    #     audio-command state write so the runner's NativeAudio plays it; then the "PREHISTORIK 2" title — fade-IN
-    #     256 over the background, then the 911D palette MORPH 234 over the background+logo (the title's colour
-    #     reveal). The morph target is the static palette at DGROUP 0xACE7. ---
-    from pre2.native.audio import native_load_song
-    native_load_song(state, "PRESENTA.TRK", game_root)           # [asm 02cc] the PRESENT title song (first music)
-    morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
-    yield from _native_present_screen(game_root, morph_target)
+    if not skipped:
+        # --- PRESENT.SQZ title (9090): 02cc loads the title song PRESENTA.TRK (the FIRST music) — reproduced as an
+        #     audio-command state write so the runner's NativeAudio plays it; then the "PREHISTORIK 2" title — fade-IN
+        #     256 over the background, then the 911D palette MORPH 234 over the background+logo (the title's colour
+        #     reveal). The morph target is the static palette at DGROUP 0xACE7. (native_menu_flow reloads the song.) ---
+        from pre2.native.audio import native_load_song
+        native_load_song(state, "PRESENTA.TRK", game_root)       # [asm 02cc] the PRESENT title song (first music)
+        morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
+        yield from _skippable_intro(
+            _native_present_screen(game_root, morph_target), state, enabled=intro_skippable)
 
     # --- FRONT.SQZ (the HUD front-panel) is stacked permanently before the sprite bank ([0x2875] 0x27be -> 0x2cd7),
     #     exactly as main() does between the titles and 2dfa. Without it the level later lands 0x519 paragraphs too
@@ -302,7 +340,7 @@ def native_menu_flow(state, dos, game_root: str):
     rb, _ = readers(state)
     while True:                                                             # the MENU <-> ATTRACT <-> CODE loop [asm 8e45]
         for p6 in menu_fade:                                                # fade the menu in (first entry + after each return)
-            yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img)
+            yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img, screen="menu")
         held8 = _expand_palette6(menu_fade[-1])
         wait = 0
         choice = LS_WAIT
@@ -310,7 +348,9 @@ def native_menu_flow(state, dos, game_root: str):
             choice = level_select_dispatch(rb(0x27F6), rb(0x27F7), rb(0x282D) | rb(0x2810), wait)  # 1/2/fire/timeout
             if choice != LS_WAIT:
                 break
-            yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img)   # hold the screen, poll again next frame
+            # screen="menu": the touch host maps a TAP here to '1' (beginner mode-select), not fire — matches the
+            # real key AND keeps the tap's fire from carrying into the mode-select map and auto-confirming it.
+            yield FrontEndScene(MODE_LINEAR, palette=held8, linear=menu_img, screen="menu")
             wait += 1
         if choice == LS_AUTO_ADVANCE:
             yield from _native_attract(state, dos, game_root)              # [asm 8E98] idle timeout -> attract, then re-loop
@@ -327,6 +367,18 @@ def native_menu_flow(state, dos, game_root: str):
         yield from _native_menu_map(state, dos, game_root, "mode_select")
         break
 
+    yield from native_carte_and_load(state, dos, game_root)
+    return                                                     # the level is loaded -> the caller runs native_frame_step
+
+
+def native_carte_and_load(state, dos, game_root: str):
+    """[asm 9520 CARTE + main 01A5..01D2] Show the world-map scroll-in for the CHOSEN level, then load and start it.
+
+    The level ([0x2d8a]) and mode ([0xB197]) must already be committed — by the mode-select map, a password match,
+    or the mobile CONTINUE screen, which all write the SAME two bytes a valid password does. Yields the carte
+    FrontEndScene frames; on return the level is loaded and ready for ``native_frame_step``. Factored out of
+    :func:`native_menu_flow` so a host that picks a level directly (the CONTINUE screen) reaches the loader without
+    re-driving the press-1/2 menu."""
     # --- 9520 CARTE: the world-map scroll-in the real flow shows between the mode-select and the loader (main 0x01A8).
     #     Loads MAP.SQZ (the map master), stamps the per-level 'you are here' marker (the player's position) onto it =
     #     the de-planarize [0x667a]:[0x62da] (byte-exact vs the VM master), then scrolls the map in via the recovered +
@@ -335,12 +387,11 @@ def native_menu_flow(state, dos, game_root: str):
 
     # --- the map selected a level ([0x2d8a]); the loader (main 01A5..01D2). native_level_start is VERIFIED byte-exact
     #     vs the pure-ASM oracle's gameplay-entry seed (every core gameplay table identical; see [[pre2-level-init-island]]). ---
-    from pre2.native.audio import native_level_song_name
+    from pre2.native.audio import native_level_song_name, native_load_song
     from pre2.native.level_init import native_level_start
     native_load_song(state, native_level_song_name(state), game_root)   # [asm 01B7] the level song (plays at start)
     native_level_start(state, game_root=game_root)            # [asm 013e..0155] load + init + level-start (lives, etc.)
     state.data[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)  # clear the residual key table (the DC1 raw keys)
-    return                                                     # the level is loaded -> the caller runs native_frame_step
 
 
 
@@ -478,9 +529,11 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     sine = bytes(state.data[_DS + 0x6F90:_DS + 0x6F90 + 0x100])  # [asm 9B00] the row-bounce sine table (DGROUP 0x6f90)
     pal = tuple(dos.vga_palette)
 
+    scr = "mode_select" if kind == "mode_select" else ""           # the ONLY screen the touch host reads swipes on
+
     def scene(planes, page_off, pel):
         return FrontEndScene(MODE_PLANAR, palette=pal, planes=tuple(bytes(p) for p in planes),
-                             page=page_off, pel=pel, wrap=0x1FFF,
+                             page=page_off, pel=pel, wrap=0x1FFF, screen=scr,
                              enh=("menu", motif, cam.x, cam.row))   # bg pattern + scroll phase (see FrontEndScene)
 
     matched = None                                              # (password) a valid ENTER-CODE accepted -> its level

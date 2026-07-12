@@ -1,0 +1,47 @@
+# Validate the Android/touch app code on every push (fast, game-data-free).
+#
+# The former `build` job (a full buildozer APK in CI) is RETIRED for two compounding reasons:
+#   1. its action (ArtemSBulgakov/buildozer_action) vanished from GitHub — every run died at action
+#      resolution ("repository not found");
+#   2. even a manual `buildozer android debug` cannot succeed here: the working build needs the
+#      python-for-android hand-edits documented in docs/android.md (hostpython 3.11.9, the pygame recipe's
+#      Cython + SIMD-blitter patches, the libmodplug decoder) which live in the local WSL checkout and are
+#      not yet captured as committed p4a.local_recipes. Until that reproducibility gap is closed, the
+#      supported APK path is the local WSL recipe in docs/android.md; this workflow's job is to fail fast
+#      when the APP CODE is broken.
+#
+# The repo ships no game data (*.SQZ/*.TRK are user-owned), so these tests are exactly the ones that run
+# game-data-free: the pure touch resolver, the Android menu/dialog geometry, the vendored-overlay drift
+# guard (needs the dos_re submodule), and the mobile entry import path.
+
+name: Android APK
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main, android-touch-port]
+    paths:
+      - "pre2/**"
+      - "scripts/**"
+      - "main.py"
+      - "buildozer.spec"
+      - ".github/workflows/android.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true               # dos_re: the vendored overlay-menu drift guard compares against it
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime deps
+        run: python -m pip install --upgrade pip numpy pygame pytest
+      - name: App-code unit tests (touch resolver, Android menus, vendored-overlay drift)
+        run: python -m pytest tests/test_touch_controls.py tests/test_android_menu.py tests/test_overlay_menu_vendored.py -q
+      - name: Import-check the mobile entry path
+        run: |
+          python -c "import sys; sys.path.insert(0, 'scripts'); import play_native; import touch_overlay; import android_host; import android_menu; import overlay_menu; print('entry imports OK')"
+          python -c "from pre2.native import touch; print('resolver OK')"

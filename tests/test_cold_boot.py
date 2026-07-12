@@ -155,6 +155,89 @@ def test_native_front_end_cold_start_reaches_gameplay():
     assert (state.data[_DS + 0x4F1C] | (state.data[_DS + 0x4F1D] << 8)) == 0x2A            # player X = level start
 
 
+def test_native_front_end_intro_skippable_reaches_menu_faster():
+    # intro_skippable (the touch/Android default; an OPT-IN that breaks boot accuracy) lets a fire-key press during
+    # the TITUS / PREHISTORIK-2 title screens skip straight to the "press 1/2" menu (a skip during TITUS drops the
+    # PRESENT title too). It must still reach the SAME level-init handoff as the faithful boot, byte-identical,
+    # because the non-visual setup (SFX bank, FRONT.SQZ, sprite bank, load-top) is untouched, and because a skip
+    # only fast-forwards past the title FRAMES -- it perturbs no gameplay memory. Guards _skippable_intro's gating.
+    from dos_re.dos import DOSMachine
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.front_end import native_front_end
+    from pre2.native.input import apply_input, init_keyboard_input, set_key
+    from pre2.native.state import NativeGameState
+
+    def _run(intro_skippable):
+        state = NativeGameState(build_boot_memory())
+        init_keyboard_input(state)
+        gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS),
+                               intro_skippable=intro_skippable)
+        n = 0
+        for i, _scene in enumerate(gen):
+            set_key(state, 0x02, True)                 # hold '1' -> mode-select map
+            apply_input(state, fire=(i % 2 == 0))      # pulse fire: advances the scene-waits AND triggers the skip
+            n += 1
+            if i > 4000:
+                raise AssertionError("front-end never reached the handoff")
+        return state, n
+
+    full_state, full_scenes = _run(False)
+    skip_state, skip_scenes = _run(True)
+
+    assert skip_scenes < full_scenes                   # the title frames really were skipped
+    # both boots land on the byte-identical level state (skipping the titles perturbs no gameplay memory)
+    assert skip_state.data[_DS + 0x4F0A:_DS + 0x5732] == full_state.data[_DS + 0x4F0A:_DS + 0x5732]
+    ref = native_cold_boot(str(ASSETS), level=0)
+    assert skip_state.data[_DS + 0x4F0A:_DS + 0x5732] == ref.data[_DS + 0x4F0A:_DS + 0x5732]
+
+
+def test_touch_front_end_screen_mapping_menu_and_mode_select():
+    # The touch host maps front-end taps per SCREEN: the press-1/2 MENU is tagged FrontEndScene.screen == "menu"
+    # (a tap there presses '1' -> beginner mode-select), and on the mode-select MAP a SWIPE is a real up/down
+    # ARROW keypress that toggles BEGINNER<->EXPERT ([0xB197]) — the map reads the FSM arrow flags the key table
+    # drives, NOT the [0x2874] latch. This guards both the screen tag and the arrow-key -> toggle chain.
+    from dos_re.dos import DOSMachine
+    from pre2.native.front_end import native_front_end
+    from pre2.native.input import init_keyboard_input, set_key
+    from pre2.native.state import NativeGameState
+
+    def set_keys(state, scs):
+        for sc in (0x39, 0x02, 0x03, 0x48, 0x50, 0x4D, 0x4B):
+            set_key(state, sc, sc in scs)
+
+    state = NativeGameState(build_boot_memory())
+    init_keyboard_input(state)
+    gen = native_front_end(state, DOSMachine(str(ASSETS)), 0, game_root=str(ASSETS), intro_skippable=True)
+
+    saw_menu_tag = False
+    on_map = 0
+    b197_before = None
+    b197_after_swipe = None
+    for i, scene in enumerate(gen):
+        keys = set()
+        on_mode_select = scene.screen == "mode_select"
+        if scene.screen == "menu":
+            saw_menu_tag = True
+        if on_mode_select:
+            on_map += 1
+            if b197_before is None:
+                b197_before = state.data[_DS + 0xB197]
+            if on_map == 5:
+                keys = {0x50}                          # a SWIPE-down == a down-arrow keypress
+            b197_after_swipe = state.data[_DS + 0xB197]
+            if on_map >= 8:
+                break                                  # got what we need; don't confirm out of the screen
+        elif i % 3 == 0:                               # PULSE the tap so press-then-release scene-waits complete
+            keys = {0x02} if scene.screen == "menu" else {0x39}   # '1' on the menu, fire elsewhere
+        set_keys(state, keys)
+        if i > 3000:
+            raise AssertionError("front-end never reached the mode-select map")
+
+    assert saw_menu_tag, "the press-1/2 menu scenes were not tagged screen == 'menu'"
+    assert on_map > 0, "a '1' tap on the menu never reached the mode-select map"
+    assert b197_before == 0 and b197_after_swipe == 1, "the swipe (down arrow) did not toggle BEGINNER->EXPERT"
+
+
 def test_native_front_end_oldies_palette():
     # The OLDIES credits screen loads its OWN 16-colour palette (the green/yellow look) from the DGROUP table at
     # 0x287e (0b92 -> int10 AX=1012), NOT the default EGA palette. This guards native_load_dac_palette being wired

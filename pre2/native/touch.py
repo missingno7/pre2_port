@@ -1,0 +1,299 @@
+"""Virtual touch controls — geometry + flag mapping for a phone host (pure, no pygame).
+
+The mobile input layout the Android host draws and drives:
+
+* **Left half — a virtual analog joystick.** Touch anywhere in the left zone to plant the stick base
+  there (a *floating* stick — the base follows your thumb-down, not a fixed spot), then drag: the knob
+  tracks the finger, clamped to the ring, and its vector becomes the four direction flags via a
+  dead-zone + per-axis threshold (so cardinals and diagonals both read cleanly).
+* **Right half — two round buttons.** ``JUMP`` sets the *up* flag (DOS scancode ``0x48``) and ``BASH``
+  sets the *fire* flag (``0x39``) — the very flags ``pre2.native.input`` already feeds the FSM. BASH is
+  the club attack; JUMP is the up-key jump.
+
+This module owns only the *math*, and is deliberately free of pygame and game state: given the active
+touch points (window-pixel coords, keyed by a stable finger id) and the window size, it resolves each
+finger to a control and yields the five movement flags plus a small render model for the host to draw.
+The host (``scripts/touch_overlay.py``) translates real pygame ``FINGER*`` / mouse events into the
+finger dict, calls :meth:`TouchControls.update` once per input poll, feeds the flags to
+``apply_input``/``set_key``, and paints the render model. Pure + stateful = unit-testable with no device.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from math import hypot
+from typing import Hashable
+
+# DOS scancodes — the SAME sources DC1 reads (kept in step with pre2.native.input). The host turns the
+# resolved flags into these and writes them into the key table exactly as a keyboard ISR would.
+SCAN_FIRE = 0x39           # BASH  -> fire flag  [0x27E8]
+SCAN_UP = 0x48             # JUMP  -> up flag    [0x27EA]
+SCAN_DOWN = 0x50           # stick down          [0x27EB]
+SCAN_RIGHT = 0x4D          # stick right         [0x27EC]
+SCAN_LEFT = 0x4B           # stick left          [0x27ED]
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Screen-relative placement of the controls, derived from the window size each frame (so it tracks
+    resize / rotation). All coordinates are window pixels; ``unit`` = ``min(w, h)`` keeps the controls a
+    consistent physical size across aspect ratios. Every fraction below is a tuning knob."""
+    w: float
+    h: float
+    unit: float
+    stick_rest: tuple[float, float]      # where the (inactive) stick is drawn at rest
+    stick_radius: float                  # ring radius = max knob travel
+    knob_radius: float
+    left_zone_x: float                   # a touch with x <= this may grab the stick
+    top_band: float                      # y < this is reserved (HUD / F10) — ignored by the controls
+    jump_center: tuple[float, float]
+    bash_center: tuple[float, float]
+    button_radius: float
+
+
+def layout_for(size: tuple[float, float]) -> Layout:
+    """Compute the control layout for a ``(w, h)`` window. Landscape is assumed (the game is played
+    sideways); the fractions still produce a usable portrait layout, just cramped."""
+    w, h = float(size[0]), float(size[1])
+    u = min(w, h)
+    return Layout(
+        w=w, h=h, unit=u,
+        stick_rest=(0.17 * w, 0.72 * h),
+        stick_radius=0.15 * u,
+        knob_radius=0.07 * u,
+        left_zone_x=0.48 * w,
+        top_band=0.16 * h,
+        jump_center=(0.75 * w, 0.60 * h),   # upper-left of the pair
+        bash_center=(0.90 * w, 0.76 * h),   # lower-right, nearest the thumb rest
+        button_radius=0.11 * u,
+    )
+
+
+@dataclass
+class Flags:
+    """The five movement flags the game consumes (one per DC1 input source)."""
+    left: bool = False
+    right: bool = False
+    up: bool = False
+    down: bool = False
+    fire: bool = False
+
+    def scancodes(self) -> set[int]:
+        """The active flags as the DOS scancodes ``pre2.native.input.set_key`` expects."""
+        out: set[int] = set()
+        if self.left: out.add(SCAN_LEFT)
+        if self.right: out.add(SCAN_RIGHT)
+        if self.up: out.add(SCAN_UP)
+        if self.down: out.add(SCAN_DOWN)
+        if self.fire: out.add(SCAN_FIRE)
+        return out
+
+    def any(self) -> bool:
+        return self.left or self.right or self.up or self.down or self.fire
+
+
+@dataclass
+class RenderModel:
+    """What the host needs to paint one frame of the controls."""
+    layout: Layout
+    stick_base: tuple[float, float]
+    knob: tuple[float, float]
+    stick_active: bool
+    jump_pressed: bool
+    bash_pressed: bool
+
+    def signature(self) -> tuple:
+        """A cheap value the host can diff to skip re-drawing an unchanged overlay."""
+        return (
+            round(self.layout.w), round(self.layout.h),
+            round(self.stick_base[0]), round(self.stick_base[1]),
+            round(self.knob[0]), round(self.knob[1]),
+            self.stick_active, self.jump_pressed, self.bash_pressed,
+        )
+
+
+def _in_circle(x: float, y: float, center: tuple[float, float], r: float) -> bool:
+    return hypot(x - center[0], y - center[1]) <= r
+
+
+@dataclass
+class TouchControls:
+    """Stateful resolver: maps the active fingers to the five flags, remembering which finger owns which
+    control across frames (so a finger that slides off a button still counts as held until it lifts, and
+    the floating stick keeps its planted base). Construct once; call :meth:`update` each input poll."""
+
+    DEADZONE: float = 0.28     # fraction of stick_radius the knob must leave before any direction reads
+    DIR_THRESH: float = 0.34   # per-axis fraction past which that axis' flag sets (diagonals when both do)
+
+    _stick_finger: Hashable | None = field(default=None, init=False)
+    _stick_base: tuple[float, float] | None = field(default=None, init=False)
+    _jump_finger: Hashable | None = field(default=None, init=False)
+    _bash_finger: Hashable | None = field(default=None, init=False)
+    _jump_prev: bool = field(default=False, init=False)
+
+    def reset(self) -> None:
+        """Drop all finger ownership (call on focus loss / pause so nothing sticks 'held')."""
+        self._stick_finger = self._stick_base = None
+        self._jump_finger = self._bash_finger = None
+        self._jump_prev = False
+
+    def update(self, fingers: dict[Hashable, tuple[float, float]],
+               size: tuple[float, float]) -> tuple[Flags, RenderModel, bool]:
+        """Resolve one poll. ``fingers`` maps a stable finger id -> its current ``(x, y)`` window-pixel
+        position. Returns ``(flags, render_model, jump_edge)`` where ``jump_edge`` is True only on the
+        frame JUMP first goes down (for the responsive-controls jump buffer)."""
+        lay = layout_for(size)
+        ids = set(fingers)
+
+        # Release ownership for any finger that has lifted since last poll.
+        if self._stick_finger not in ids:
+            self._stick_finger = self._stick_base = None
+        if self._jump_finger not in ids:
+            self._jump_finger = None
+        if self._bash_finger not in ids:
+            self._bash_finger = None
+
+        # Assign each new (unowned) finger to a control. Buttons win over the stick when overlapping.
+        owned = {self._stick_finger, self._jump_finger, self._bash_finger}
+        for fid, (x, y) in fingers.items():
+            if fid in owned:
+                continue
+            if self._jump_finger is None and _in_circle(x, y, lay.jump_center, lay.button_radius):
+                self._jump_finger = fid
+            elif self._bash_finger is None and _in_circle(x, y, lay.bash_center, lay.button_radius):
+                self._bash_finger = fid
+            elif self._stick_finger is None and x <= lay.left_zone_x and y >= lay.top_band:
+                self._stick_finger = fid
+                self._stick_base = (x, y)                 # floating stick: plant the base under the thumb
+            else:
+                continue
+            owned.add(fid)
+
+        jump = self._jump_finger is not None
+        bash = self._bash_finger is not None
+
+        flags = Flags()
+        base = lay.stick_rest
+        knob = base
+        stick_active = False
+        if self._stick_finger is not None and self._stick_base is not None:
+            base = self._stick_base
+            fx, fy = fingers[self._stick_finger]
+            dx, dy = fx - base[0], fy - base[1]
+            dist = hypot(dx, dy)
+            r = lay.stick_radius
+            if dist > r and dist > 0.0:                    # clamp the knob to the ring (full circle)
+                dx *= r / dist
+                dy *= r / dist
+                dist = r
+            knob = (base[0] + dx, base[1] + dy)
+            stick_active = True
+            if dist >= self.DEADZONE * r:
+                k = self.DIR_THRESH * r
+                if dx <= -k:
+                    flags.left = True
+                elif dx >= k:
+                    flags.right = True
+                if dy >= k:
+                    flags.down = True
+                elif dy <= -k and bash:                    # stick UP only registers WHILE BASH is held (an upward
+                    flags.up = True                        # bash) — so walking up-diagonal never triggers a jump
+
+        if jump:
+            flags.up = True                                # JUMP button == up flag (also reachable via stick-up)
+            flags.down = False                             # JUMP cancels a simultaneous crouch: an accidental
+            #     joystick-DOWN mid-move otherwise pairs up+down into a no-op, so you crouch instead of jumping and
+            #     fall into the pit. Jump must always win -> deliver only left/right + up, never down, while held.
+        if bash:
+            flags.fire = True                              # BASH button == fire flag (the club attack)
+
+        jump_edge = jump and not self._jump_prev
+        self._jump_prev = jump
+
+        rm = RenderModel(layout=lay, stick_base=base, knob=knob, stick_active=stick_active,
+                         jump_pressed=jump, bash_pressed=bash)
+        return flags, rm, jump_edge
+
+
+@dataclass
+class MenuGestures:
+    """Pure front-end (menu) touch gestures — the phone-native way to drive the NON-gameplay screens, where
+    the joystick + buttons are hidden and the whole screen is the input:
+
+    * a **tap** anywhere is *fire* (space/enter — advance the OLDIES/titles, pick the difficulty, confirm the
+      mode, load the level);
+    * a vertical **swipe** is an *arrow* (up ``0x48`` / down ``0x50``) — on the mode-select screen an arrow
+      toggles BEGINNER<->EXPERT.
+
+    **Event-driven**, so a fast tap (touch-down and -up in the *same* frame — which real devices deliver
+    constantly) still registers. The host feeds the raw gesture edges — :meth:`on_down` / :meth:`on_move` /
+    :meth:`on_up` (window-pixel coords, no pygame) — which ACCUMULATE the result, and drains it once per input
+    poll with :meth:`poll`. (A poll-only recogniser that reads the current finger set would miss a same-frame
+    tap: by the time it runs the finger is already gone, so it never saw a touch.)
+
+    One finger owns a gesture at a time (the first down). While it is held the vertical travel is watched:
+    crossing ``SWIPE_FRAC * min(w, h)`` records the arrow ONCE and marks the gesture a swipe, so the lift won't
+    ALSO fire. A lift with no swipe is a tap. Pure -> unit-testable with no device."""
+
+    SWIPE_FRAC: float = 0.06        # vertical travel (fraction of min(w, h)) that turns a drag into a swipe
+    swipe_enabled: bool = True      # when False, a drag is NOT a swipe -> every touch is a tap (fire). The host
+    #                                 sets this per frame: only the mode-select screen wants up/down gestures;
+    #                                 OLDIES / intro / main-menu / carte are tap-only (a stray drag still fires).
+
+    _owner: Hashable | None = field(default=None, init=False)
+    _start_y: float = field(default=0.0, init=False)
+    _down_pos: tuple[float, float] = field(default=(0.0, 0.0), init=False)   # where the owning finger went down
+    _swiped: bool = field(default=False, init=False)
+    _fire: bool = field(default=False, init=False)         # accumulated tap, drained by poll()
+    _arrow: int = field(default=0, init=False)             # accumulated swipe arrow, drained by poll()
+    _tap_pos: tuple[float, float] | None = field(default=None, init=False)   # accumulated tap position
+    tap_pos: tuple[float, float] | None = field(default=None, init=False)    # last DRAINED tap position (host reads
+    #                                                                          it after poll() to hit-test menu buttons)
+
+    def reset(self) -> None:
+        """Drop the in-flight gesture AND any un-drained result (call on a context switch / focus loss so a
+        held finger and a stale tap don't leak across)."""
+        self._owner = None
+        self._swiped = False
+        self._fire = False
+        self._arrow = 0
+        self._tap_pos = None
+        self.tap_pos = None
+
+    def on_down(self, fid: Hashable, pos: tuple[float, float]) -> None:
+        """A touch went down at ``pos``. The first finger owns the gesture; later fingers are ignored until it
+        lifts."""
+        if self._owner is not None:
+            return
+        self._owner = fid
+        self._start_y = pos[1]
+        self._down_pos = pos
+        self._swiped = False
+
+    def on_move(self, fid: Hashable, pos: tuple[float, float], size: tuple[float, float]) -> None:
+        """The owning finger moved to ``pos``. Crossing the vertical swipe threshold records the arrow once —
+        but only when :attr:`swipe_enabled` (the mode-select screen); otherwise a drag stays a tap."""
+        if fid != self._owner or self._swiped or not self.swipe_enabled:
+            return
+        dy = pos[1] - self._start_y
+        if abs(dy) >= self.SWIPE_FRAC * min(size):
+            self._arrow = SCAN_DOWN if dy > 0 else SCAN_UP        # swipe down/up -> down/up arrow (both toggle)
+            self._swiped = True                                   # one arrow per gesture; the lift won't fire
+
+    def on_up(self, fid: Hashable) -> None:
+        """The owning finger lifted. A lift that never swiped is a tap -> record a fire pulse."""
+        if fid != self._owner:
+            return
+        if not self._swiped:
+            self._fire = True
+            self._tap_pos = self._down_pos                     # remember WHERE, so the host can hit-test buttons
+        self._owner = None
+        self._swiped = False
+
+    def poll(self) -> tuple[bool, int]:
+        """Drain the gesture outputs accumulated since the last poll: ``(fire, arrow)`` — ``fire`` True if a tap
+        completed, ``arrow`` = ``0x48`` / ``0x50`` if a swipe crossed, else ``0``. Call once per input poll. The
+        tap's position (for menu-button hit-testing) is left in :attr:`tap_pos` (None when no tap this poll)."""
+        fire, arrow = self._fire, self._arrow
+        self.tap_pos = self._tap_pos if fire else None
+        self._fire, self._arrow, self._tap_pos = False, 0, None
+        return fire, arrow

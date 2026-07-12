@@ -17,7 +17,7 @@ _TITLE = "PRE2 — VM-less native"
 
 
 class Display:
-    def __init__(self, size, *, title: str = _TITLE):
+    def __init__(self, size, *, title: str = _TITLE, icon=None):
         self.integer_scale = False
         self.par = 1.0                     # displayed pixel aspect (height/width). 1.0 = square pixels;
         #                                    1.2 = the DOS 4:3 look (320x200 shown at 4:3 -> pixels 1.2x tall).
@@ -30,6 +30,11 @@ class Display:
             from pygame._sdl2 import video as sdl2
             self._sdl2 = sdl2
             self.window = sdl2.Window(title, size=size, resizable=True)
+            if icon is not None:
+                try:
+                    self.window.set_icon(icon)          # SDL2 window's own icon (titlebar / taskbar)
+                except Exception:                       # noqa: BLE001 — older pygame lacks Window.set_icon
+                    pass
             self.renderer = sdl2.Renderer(self.window, accelerated=-1, vsync=False)
             self.renderer.draw_color = (0, 0, 0, 255)
             self.gpu = True
@@ -77,27 +82,66 @@ class Display:
             pygame.transform.scale(self._srcsurf, rect.size, self.screen.subsurface(rect))
         return rect
 
-    def draw_overlay(self, surf, pos) -> None:
+    def draw_overlay(self, surf, pos, *, slot=None, changed=True) -> None:
         """Composite a pygame Surface (fps readout / the F10 menu) on top at window pixel ``pos``, alpha-blended.
         A persistent streaming texture per size is re-uploaded each call (content changes every frame), so no
         per-frame GPU allocation."""
         if self.gpu:
             sz = surf.get_size()
-            tex = self._ov.get(sz)
-            if tex is None:
-                if len(self._ov) > 6:
+            key = slot if slot is not None else sz               # dedicated slot (touch) vs shared-by-size (menu/fps)
+            entry = self._ov.get(key)
+            if entry is None or entry[1] != sz:                  # (re)create on first use or window resize
+                if entry is None and len(self._ov) > 8:
                     self._ov.clear()
                 tex = self._sdl2.Texture(self.renderer, sz, streaming=True)
                 tex.blend_mode = 1                                # SDL_BLENDMODE_BLEND (alpha)
-                self._ov[sz] = tex
-            tex.update(surf)
+                self._ov[key] = entry = (tex, sz)
+                changed = True                                    # a fresh texture must be uploaded once
+            tex = entry[0]
+            # ``changed=False`` reuses the last-uploaded texture — the touch overlay is a window-size (~18 MB)
+            # surface whose per-frame re-upload was the entire mobile present cost; it only changes when a control
+            # moves, so the interpolation sub-frames (and steady input) skip the upload. Menu/fps pass the default.
+            if changed:
+                tex.update(surf)
             tex.draw(dstrect=pygame.Rect(pos, sz))
         else:
             self.screen.blit(surf, pos)
 
+    def make_sprite(self, surf):
+        """A persistent drawable from a SMALL surface — a static GPU texture uploaded ONCE (or the surface on
+        the software path). Returns ``(drawable, w, h)``. For HUD/controls that MOVE but don't change content:
+        drawing them each frame is then a cheap quad, with no per-frame surface upload (unlike draw_overlay,
+        which re-uploads a whole window-size surface every call — murder on hi-res mobile GPUs)."""
+        w, h = surf.get_size()
+        if self.gpu:
+            tex = self._sdl2.Texture.from_surface(self.renderer, surf)
+            tex.blend_mode = 1                                    # SDL_BLENDMODE_BLEND (alpha)
+            return (tex, w, h)
+        return (surf.convert_alpha(), w, h)
+
+    def draw_sprite(self, spr, pos) -> None:
+        """Draw a :meth:`make_sprite` drawable with its top-left at window-pixel ``pos``."""
+        drawable, w, h = spr
+        if self.gpu:
+            drawable.draw(dstrect=pygame.Rect(int(pos[0]), int(pos[1]), w, h))
+        else:
+            self.screen.blit(drawable, (int(pos[0]), int(pos[1])))
+
     def new_overlay_canvas(self):
         """A transparent window-size surface to draw the modal F10 menu onto (then draw_overlay it)."""
         return pygame.Surface(self.get_size(), pygame.SRCALPHA)
+
+    def present_ui(self, surf, *, changed: bool = True) -> None:
+        """Present a full-window, OPAQUE host-UI surface as its own screen (the Android NEW GAME / CONTINUE
+        menus) — clear, draw, flip. ``changed=False`` reuses the last-uploaded texture (the menu is static
+        between resizes), so the modal loop redraws with a single quad instead of re-uploading each frame."""
+        if self.gpu:
+            self.renderer.clear()
+            self.draw_overlay(surf, (0, 0), slot="ui", changed=changed)
+            self.renderer.present()
+        else:
+            self.screen.blit(surf, (0, 0))
+            pygame.display.flip()
 
     def flip(self) -> None:
         if self.gpu:

@@ -1,18 +1,27 @@
-"""The F10 in-game overlay menu for the native product (visual style: pre2_editor's runtime menu).
+"""In-game overlay settings menu — the NATIVE product's F10 menu (tabbed, mouse+keyboard, pygame-injected).
+
+Promoted from the first completed port's `overlay_menu.py`. This is a POST-ENDGAME widget: it belongs to
+the native product only — the hybrid/VM runtimes are recovery instruments and stay pristine (their F10 is
+a screenshot key). See template_dos_port's `docs/post_endgame.md` for when and how to use it.
 
 Host-presentation layer ONLY — the determinism firewall is structural:
-  * the menu is MODAL: while open the caller freezes the game tick (like the P pause) and routes every
-    key event here, so nothing it consumes can ever reach the game's input cells or perturb a demo;
-  * items act through caller-supplied closures on HOST/presentation settings (scaling, overlays, audio
-    sink events) — this module imports nothing from pre2 and never touches a NativeGameState;
-  * the Develop tab (cheats: they DO write game state, as a deliberate user action) exists only when the
-    caller passes ``debug=True`` (the --debug flag) — hidden from the end-user product by default.
+  * the menu is MODAL: while open the caller freezes the game tick (like a pause) and routes every key
+    event here, so nothing it consumes can ever reach the game's input cells or perturb a demo;
+  * items act through caller-supplied closures on HOST/presentation settings — this module imports
+    nothing from any game and never touches game state;
+  * pygame is INJECTED (the ``pygame_mod`` constructor arg): importing this module needs nothing.
 
-Items are data (the pre2_editor pattern): ``{"label": str, "value": str, "activate": fn, "adjust": fn(d)}``
-per tab, supplied by a provider so values re-render live. An item with ``"info": True`` is a non-interactive
-text row (small dim font, skipped by selection) — used for disclaimers. Keys: F10/M/ESC close, Up/Down select,
-Left/Right adjust (or switch tab when the item has no ``adjust``), Tab/PgUp/PgDn switch tab,
-Enter/Space activate.
+The tab convention the callers follow (the accuracy taxonomy — enforce it in your tabs_provider):
+  * presentation tabs (Display / Audio / ...): READ-ONLY enhancements, parity-gated, faithful defaults;
+  * an **Experimental** tab: anything that can affect game accuracy (state-writing opt-ins) is
+    quarantined here — labeled, default OFF, never mixed in with the safe toggles;
+  * a debug/cheats tab (they write game state as a deliberate user action) exists only when the caller
+    passes ``debug=True``-style gating — hidden from the end-user product by default.
+
+Items are data: ``{"label": str, "value": str, "activate": fn, "adjust": fn(d)}`` per tab, supplied by a
+provider so values re-render live. An item with ``"info": True`` is a non-interactive text row (small dim
+font, skipped by selection) — used for disclaimers. Keys: F10/M/ESC close, Up/Down select, Left/Right
+adjust (or switch tab when the item has no ``adjust``), Tab/PgUp/PgDn switch tab, Enter/Space activate.
 
 Settings persistence lives with the caller (a JSON next to the game data) — this module just edits the
 dict through the closures.
@@ -212,7 +221,7 @@ class OverlayMenu:
                 elif ra is not None and ra.collidepoint(pos):
                     adjust(1)                        # the › arrow -> next
                 elif act is not None:
-                    act()                            # body click on an apply-row (Develop Level) -> apply
+                    act()                            # body click on an apply-row -> apply
                 else:
                     adjust(1)                        # body click on a plain cycle-row -> next
             elif act is not None and event.button == 1:
