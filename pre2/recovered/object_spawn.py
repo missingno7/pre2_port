@@ -152,7 +152,8 @@ def scan_camera_targets(rb, rw):
     """[asm 80DE..8181] ``rb``/``rw`` read DGROUP byte/word. Returns the ``{offset: (value, width)}`` contract.
     The sfx-8 emit is an audio side-effect seam (not in the state contract)."""
     writes: dict[int, tuple[int, int]] = {}
-    g = PlayerGlobals(WidthContractBackend(rb, rw, writes))
+    be = WidthContractBackend(rb, rw, writes)
+    g = PlayerGlobals(be); pv = PlayerView(be)
     si_hit = None
     if _target_collision(rb, rw, SCAN_PLAYER, writes):   # [asm 80DE-80E4] player first
         si_hit = SCAN_PLAYER
@@ -174,16 +175,16 @@ def scan_camera_targets(rb, rw):
     g.glider = 0                                          # [asm 812C]
     writes.update(inc_scroll_phase(rb))                  # [asm 8131] 757A
     al = g.attack_v19                                     # [asm 8134]
-    nfc = (rw(SPAWN_COUNT) - al) & 0xFFFF                 # [asm 8139] decrement the level param
+    nfc = (g.spawn_count - al) & 0xFFFF                   # [asm 8139] decrement the level param
     writes[SPAWN_COUNT] = (nfc, 2)
     if nfc & 0x8000:                                      # [asm 813D] underflow -> finale approach
         writes[CAM_STATE] = (6, 1)                        # [asm 813F]
         writes[SCROLL_VY] = (0xFF80, 2)                   # [asm 8144]
         return writes
     if al > 0x14:                                         # [asm 814C] a scroll kick
-        dx = 0x30 if _s16(rw(CURSOR_X)) >= _s16(rw(PLAYER_X)) else (-0x30) & 0xFFFF   # [asm 8153-815C]
+        dx = 0x30 if _s16(g.cursor_x) >= _s16(pv.x) else (-0x30) & 0xFFFF   # [asm 8153-815C]
         writes[SCROLL_VX] = (dx, 2)                       # [asm 815E]
-        writes[SCROLL_VY] = (0xFF80 if _s16(rw(SCROLL_VY)) > 0 else 0xFFC0, 2)        # [asm 8162-816E]
+        writes[SCROLL_VY] = (0xFF80 if _s16(g.scroll_vy) > 0 else 0xFFC0, 2)        # [asm 8162-816E]
         writes[CAM_STATE] = (5, 1)                        # [asm 8171]
     writes[0xA3F7] = (0, 2)                               # [asm 8176]
     RenderSlot(WidthContractBackend(rb, rw, writes), si_hit).sprite = 0xFFFF   # [asm 817C] free the hitting slot
@@ -216,22 +217,23 @@ SCROLL_VY_GRAV_CAP = 0xE0
 def tick_scroll_cursor(rb, rw, read_tile):
     """[asm 70D7..7172] ``rb``/``rw`` read DGROUP byte/word; ``read_tile`` reads the level map (es=[0x2DDA])."""
     writes: dict[int, tuple[int, int]] = {}
+    g = PlayerGlobals(DictBackend(rb, rw))                # read-only named access
     di = rw(SPAWN_GATE_PTR)                                # [asm 70E1-70F7] spawn gate
-    cx = (rw(SPAWN_COUNT) >> 3) & 0xFFFF
-    if di == 0xFFFF or rb(CAM_STATE) == 6 or not (di & 0x2000):
+    cx = (g.spawn_count >> 3) & 0xFFFF
+    if di == 0xFFFF or g.cam_state == 6 or not (di & 0x2000):
         cx = 0
     writes.update(init_effect_row(cx))                    # [asm 70F9] 7585
 
-    ax = (_sar16(rw(SCROLL_VX), 4) + rw(CURSOR_X)) & 0xFFFF   # [asm 70FE-7103] advance cursor X
+    ax = (_sar16(g.scroll_vx, 4) + g.cursor_x) & 0xFFFF   # [asm 70FE-7103] advance cursor X
     if not (ax & 0x8000) and _s16(rw(CURSOR_X_LO)) <= _s16(ax) and _s16(rw(CURSOR_X_HI)) >= _s16(ax):
         writes[CURSOR_X] = (ax, 2)                        # [asm 7115] within bounds
         cur_x = ax
     else:
-        cur_x = rw(CURSOR_X)
+        cur_x = g.cursor_x
 
-    cur_y = (rw(CURSOR_Y) + _sar16(rw(SCROLL_VY), 4)) & 0xFFFF   # [asm 7118] advance cursor Y
+    cur_y = (g.cursor_y + _sar16(g.scroll_vy, 4)) & 0xFFFF   # [asm 7118] advance cursor Y
     writes[CURSOR_Y] = (cur_y, 2)
-    vy = rw(SCROLL_VY)
+    vy = g.scroll_vy
     landed = False
     if _s16(vy) >= 0:                                     # [asm 7121-7126] jl 7165 (scrolling up -> straight to gravity)
         col = _sar16(cur_x, 4) & 0xFF
@@ -271,14 +273,16 @@ def _abs16(v):
              "OBSERVED", merge_target="object_spawn")
 def player_cursor_dist(rw):
     """[asm 7172..71AB] ``rw`` reads a DGROUP word. Returns ``(writes, cull)``."""
-    px = rw(PLAYER_X)
-    cur_x = rw(CURSOR_X)
+    be = DictBackend(lambda o: rw(o) & 0xFF, rw)          # word-only reads; byte reader derived from rw
+    g = PlayerGlobals(be); pv = PlayerView(be)
+    px = pv.x
+    cur_x = g.cursor_x
     dir_flag = 0 if cur_x >= px else 1                    # [asm 7177] jae (unsigned)
     xd = _abs16((px - cur_x) & 0xFFFF)                    # [asm 7185-718B]
     writes = {DIST_DIR: (dir_flag, 1), DIST_X: (xd, 2)}
     cull = xd > CULL_X                                    # [asm 7190] jbe
     if not cull:
-        yd = _abs16((rw(PLAYER_Y) - rw(CURSOR_Y)) & 0xFFFF)   # [asm 7198-71A1]
+        yd = _abs16((pv.y - g.cursor_y) & 0xFFFF)   # [asm 7198-71A1]
         cull = yd > CULL_Y                               # [asm 71A3] jbe
     return writes, cull
 
@@ -329,8 +333,9 @@ def hurt_effect(rb, rw):
             writes.update(player_death(rb, rw))          # [asm 8261] arm the 4C69 death/respawn dispatch
     else:
         writes[HURT_COOLDOWN] = (cd, 1)
-    writes[HURT_FX_X] = (rw(PLAYER_X), 2)                # [asm 8264]
-    writes[HURT_FX_Y] = ((rw(PLAYER_Y) - 0x30) & 0xFFFF, 2)   # [asm 826A]
+    pv = PlayerView(DictBackend(rb, rw))
+    writes[HURT_FX_X] = (pv.x, 2)                        # [asm 8264]
+    writes[HURT_FX_Y] = ((pv.y - 0x30) & 0xFFFF, 2)      # [asm 826A]
     ax = (-0x30 if (cd & 1) else 0x30) & 0xFFFF          # [asm 8276-8280] sign by the final [0x6BC9] parity
     writes[HURT_FX_SPRITE] = (0x2046, 2)                 # [asm 8285]
     orw = lambda o: (writes[o & 0xFFFF][0] & 0xFFFF) if (o & 0xFFFF) in writes else rw(o)   # 8D1B reads the writes above
@@ -364,7 +369,7 @@ def camera_target_bounce(rb, rw, di):
     if not hit:                                       # [asm 8204] jae
         return writes
     al = (4 - rb(SCROLL_PUSH)) & 0xFF                 # [asm 8206]
-    r = (rb(SCROLL_PHASE) - al) & 0xFF                # [asm 820C] sub [0x6C05],al
+    r = (PlayerGlobals(DictBackend(rb, rw)).scroll_phase - al) & 0xFF   # [asm 820C] sub [0x6C05],al
     writes[SCROLL_PHASE] = (0 if (r & 0x80) else r, 1)   # [asm 8210] jns -> clamp to 0
     writes.update(hurt_effect(rb, rw))               # [asm 8217] 824D
     writes[0x4F2D] = (0x2C, 1)                        # [asm 8220]
@@ -458,7 +463,8 @@ def _cam_scroll_velocity(rb, rw):
     [0x91FB]*0x50; direction is toward the player."""
     bx = (rb(SCROLL_PUSH) * 0x50) & 0xFFFF               # [asm 7301-7308]
     w = {SCRIPT_PTR: (0xA45E, 2)}                         # [asm 730A]
-    diff = (rw(CURSOR_X) - rw(PLAYER_X)) & 0xFFFF         # [asm 7310-7313]
+    _be = DictBackend(rb, rw)
+    diff = (PlayerGlobals(_be).cursor_x - PlayerView(_be).x) & 0xFFFF   # [asm 7310-7313]
     adist = _abs16(diff)                                  # [asm 7318-731A]
     if adist <= bx:                                       # [asm 731C] jbe 7328
         q = (adist // 0xE) & 0xFF                         # [asm 7328-732C] 8-bit div, ah cleared
