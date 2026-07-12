@@ -16,7 +16,7 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, PlayerView, RngView,
+from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, PlayerView, RenderSlot, RngView,
                                     WidthContractBackend)
 
 
@@ -165,8 +165,8 @@ def scan_camera_targets(rb, rw):
         return writes
     g.hit_debounce = bd5                                  # [asm 8109]
     # [asm 8110] play_sfx 8 -> audio seam (emitted at the live hook, not part of the state contract)
-    for rec in FLASH_RECORDS:                             # [asm 8113-8127] set the flash bit on every target
-        writes[rec] = ((rb(rec) | 0x40) & 0xFF, 1)
+    for tgt in g.boss_targets:                            # [asm 8113-8127] set the flash bit on every target
+        tgt.flags = tgt.flags | 0x40
     g.glider = 0                                          # [asm 812C]
     writes.update(inc_scroll_phase(rb))                  # [asm 8131] 757A
     al = g.attack_v19                                     # [asm 8134]
@@ -501,8 +501,8 @@ def camera_state6_finale(rb, rw):
     """[asm 7491..74E9] Returns the ``{offset: (value, width)}`` write contract for the boss-reach finale."""
     ov = _Ov(rb, rw)
     ov.apply({0x91FE: (0xFF, 1)})                          # [asm 7491] disable the camera state machine
-    for off in (0x564C, 0x565E, 0x5670, 0x5682, 0x5694):  # [asm 7496-74A5] clear the 5 target render records
-        ov.apply({off: (0xFFFF, 2)})
+    for tgt in PlayerGlobals(ov).boss_targets:            # [asm 7496-74A5] clear the 5 target render records
+        tgt.sprite = 0xFFFF
     g = PlayerGlobals(ov)
     g.burst_x = g.boss_x                                   # [asm 74A8-74B1] the boss origin
     g.burst_y = g.boss_y
@@ -1127,24 +1127,18 @@ def _l6_spawn_state_machine(ov):
         g = PlayerGlobals(ov); p = PlayerView(ov)
         g.camera_shake = 4                                 # [asm 6EB6]
         p.x = (p.x + 2) & 0xFFFF                           # [asm 6EBB] nudge the player X
-        si = None                                          # [asm 6EC1-6ED0] find a free projectile slot
-        p = L6_PROJ_LIST
-        for _ in range(5):
-            if ov.rw((p + 4) & 0xFFFF) == 0xFFFF:
-                si = p
-                break
-            p = (p + 0xB) & 0xFFFF
-        if si is not None:                                 # [asm 6ED4]
-            ov.ww((si + 4) & 0xFFFF, 0x1B3)                # [asm 6ED4] sprite id
-            ov.ww((si + 2) & 0xFFFF, (p.y - 0x96) & 0xFFFF)   # [asm 6ED9] Y = playerY - 0x96
+        slot = next((s for s in g.l6_projectiles if s.free), None)   # [asm 6EC1-6ED0] a free projectile slot
+        if slot is not None:                               # [asm 6ED4]
+            slot.sprite = 0x1B3                            # [asm 6ED4] sprite id
+            slot.y = (p.y - 0x96) & 0xFFFF                 # [asm 6ED9] Y = playerY - 0x96
             ret = _l6_draw_rng(ov)                         # [asm 6EE2] 39DF
             al2 = ret & 0x7C                               # [asm 6EE7] and al,0x7c
             if al2 & 4:                                    # [asm 6EE9 test/6EED neg] randomize the X sign
                 al2 = (-al2) & 0xFF
-            ov.ww(si & 0xFFFF, (_cbw(al2) + p.x) & 0xFFFF)   # [asm 6EEF-6EF4] X = playerX +/- offset
-            ov.ww((si + 6) & 0xFFFF, (((ret & 3) + 1) << 4) & 0xFFFF)  # [asm 6EF6-6F02] fall speed
-            ov.ww((si + 8) & 0xFFFF, 0)                    # [asm 6F05]
-            ov.wb((si + 0xA) & 0xFFFF, 4)                  # [asm 6F0A]
+            slot.x = (_cbw(al2) + p.x) & 0xFFFF            # [asm 6EEF-6EF4] X = playerX +/- offset
+            slot.fall_vel = (((ret & 3) + 1) << 4) & 0xFFFF   # [asm 6EF6-6F02] fall speed
+            slot.drift_acc = 0                             # [asm 6F05]
+            slot.drift_step = 4                            # [asm 6F0A]
     ov.wb(L6_TIMER, ah)                                    # [asm 6F0F]
     reseed = (ov.rb(L6_RESEED) - 1) & 0xFF                 # [asm 6F13] dec [0xA32C]
     ov.wb(L6_RESEED, reseed)
@@ -1202,10 +1196,10 @@ def _l6_tree_death_finale(rb, rw):
     ov.apply(boss_death_burst_94f3(ov.rb, ov.rw))         # [asm 7072] burst 4
     g.burst_sprite = 0x63                                 # [asm 707C]
     ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0, 0, 1))  # [asm 7075-7082] final sprite (no velocity)
-    for k in range(5):                                    # [asm 7085-7093] clear the 5 L6 projectile render slots
-        ov.ww((L6_PROJ_RENDER + k * 0x12 + 4) & 0xFFFF, 0xFFFF)
-    for k in range(5):                                    # [asm 7095-70A3] clear the 5 L6 boss target records
-        ov.ww((0x5648 + k * 0x12 + 4) & 0xFFFF, 0xFFFF)
+    for rslot in g.l6_render_slots:                       # [asm 7085-7093] clear the 5 L6 projectile render slots
+        rslot.sprite = 0xFFFF
+    for tgt in g.boss_targets:                            # [asm 7095-70A3] clear the 5 L6 boss target records
+        tgt.sprite = 0xFFFF
     return ov.writes
 
 
@@ -1214,7 +1208,8 @@ def _l6_boss_hit(ov):
     target record set (0x5648 + 0x24*[0xA326]); on a hit, kill the attacker, flash the target, and (every 7 hits)
     advance the phase [0xA326]. Reaching phase 3 runs the boss-death finale (94F3 x4 + burst)."""
     p, g = PlayerView(ov), PlayerGlobals(ov)
-    si = (0x5648 + 0x24 * ov.rb(L6_PHASE)) & 0xFFFF        # [asm 6FBB-6FC7]
+    tgt = g.boss_targets[2 * ov.rb(L6_PHASE)]              # [asm 6FBB-6FC7] 0x5648 + 0x24*phase (two records/phase)
+    si = tgt.offset
     hit_slot = None
     if p.slot0.sprite != 0xFFFF:                           # [asm 6FC9] the player club (0x4F0A+4)
         g.hit_pass_full = 1                                # [asm 6FCF] full-tolerance hitbox
@@ -1233,10 +1228,11 @@ def _l6_boss_hit(ov):
                     break
     if hit_slot is None:                                  # [asm 6FFE jmp 70A5]
         return
-    ov.wb((si + 5) & 0xFFFF, ov.rb((si + 5) & 0xFFFF) ^ 0x40)   # [asm 7001] flash the target
+    tgt.flags = tgt.flags ^ 0x40                          # [asm 7001] flash the target
     if ov.rw(L6_PHASE) != 0:                              # [asm 7005 je 7010]
-        ov.wb((si - 0xD) & 0xFFFF, ov.rb((si - 0xD) & 0xFFFF) ^ 0x40)   # [asm 700C]
-    ov.ww((hit_slot + 4) & 0xFFFF, 0xFFFF)                # [asm 7010] kill the attacker
+        prev = g.boss_targets[2 * ov.rb(L6_PHASE) - 1]     # [asm 700C] (si-0xD = the previous record's flags)
+        prev.flags = prev.flags ^ 0x40
+    RenderSlot(ov, hit_slot).sprite = 0xFFFF              # [asm 7010] kill the attacker
     ov.wb(L6_STUN, 6)                                     # [asm 7015] hit-stun
     if ov.rw(L6_PHASE) < 2:                               # [asm 701A jae 702B]
         ov.wb(L6_SUB_B, 3); ov.wb(L6_SUB_A, 3)            # [asm 7021-7026]
@@ -1276,57 +1272,55 @@ def tick_level6_boss(rb, rw):
     ov.apply(init_effect_row(((2 - ov.rw(L6_PHASE)) << 1) & 0xFFFF))   # [asm 6D34-6D3D] 7585 effect row
 
     # [asm 6D40..6DDD] the 5 falling projectiles: move + player collision, projected to the render slots
-    bx = L6_PROJ_LIST
-    di = L6_PROJ_RENDER
-    for _ in range(5):
-        bp = ov.rw((bx + 4) & 0xFFFF)
+    for proj, rslot in zip(g.l6_projectiles, g.l6_render_slots):
+        bp = proj.sprite
         if bp != 0xFFFF:                                  # [asm 6D4F] active slot
             killed = False
             if g.respawn_state == 0:                      # [asm 6D54] not the death freeze
-                hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, di)   # [asm 6D5B] 8D7B(player, projected slot)
+                hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, rslot.offset)   # [asm 6D5B] 8D7B(player, slot)
                 ov.apply(hb)
                 if hit:                                   # [asm 6D5E jb -> knock the player back]
                     p.death_state = 0x2C; g.anim_gate = 0                 # [asm 6D60-6D65]
                     p.yvel = 0xFF80; p.motion_mode = 3; p.xvel = 0xFF80   # [asm 6D6A-6D75]
                     ov.apply(hurt_effect(ov.rb, ov.rw))   # [asm 6D7B] 824D
                     bp = 0xFFFF
-                    ov.ww((bx + 4) & 0xFFFF, bp)          # [asm 6DC9-6DCC] kill source
-                    ov.ww((di + 4) & 0xFFFF, bp)          # [asm 6DCF]
+                    proj.sprite = bp                      # [asm 6DC9-6DCC] kill source
+                    rslot.sprite = bp                     # [asm 6DCF]
                     killed = True
             if not killed:
-                # [asm 6D80] integrate the projectile (Y by [+6]>>4, X by an oscillating [+8]/[+A] accumulator)
-                ov.ww((bx + 2) & 0xFFFF, (ov.rw((bx + 2) & 0xFFFF) + _sar16(ov.rw((bx + 6) & 0xFFFF), 4)) & 0xFFFF)
-                ov.ww((bx + 8) & 0xFFFF, (ov.rw((bx + 8) & 0xFFFF) + _cbw(ov.rb((bx + 0xA) & 0xFFFF))) & 0xFFFF)
-                d8 = _s16(ov.rw((bx + 8) & 0xFFFF))       # [asm 6D95-6DA2] reverse at the +/-0x20 extents
+                # [asm 6D80] integrate: Y by fall_vel>>4, X by the oscillating drift accumulator
+                proj.y = (proj.y + _sar16(proj.fall_vel, 4)) & 0xFFFF
+                proj.drift_acc = (proj.drift_acc + _cbw(proj.drift_step)) & 0xFFFF
+                d8 = _s16(proj.drift_acc)                 # [asm 6D95-6DA2] reverse at the +/-0x20 extents
                 if d8 >= 0x20 or d8 < -0x20:
-                    ov.wb((bx + 0xA) & 0xFFFF, (-ov.rb((bx + 0xA) & 0xFFFF)) & 0xFF)
-                dx4 = _sar16(ov.rw((bx + 8) & 0xFFFF), 4)   # [asm 6DA5]
+                    proj.drift_step = (-proj.drift_step) & 0xFF
+                dx4 = _sar16(proj.drift_acc, 4)           # [asm 6DA5]
                 if dx4 != 0:                              # [asm 6DAD je 6DB7]
                     bp = (bp + (1 if _s16(dx4) > 0 else 2)) & 0xFFFF   # [asm 6DAF-6DB5] anim by drift sign
-                ov.ww(bx & 0xFFFF, (ov.rw(bx & 0xFFFF) + dx4) & 0xFFFF)   # [asm 6DB7] X += drift
-                ov.ww(di & 0xFFFF, ov.rw(bx & 0xFFFF))    # [asm 6DB9-6DBB] project X
-                y = ov.rw((bx + 2) & 0xFFFF)
-                ov.ww((di + 2) & 0xFFFF, y)               # [asm 6DBD-6DC0] project Y
+                proj.x = (proj.x + dx4) & 0xFFFF          # [asm 6DB7] X += drift
+                rslot.x = proj.x                          # [asm 6DB9-6DBB] project X
+                y = proj.y
+                rslot.y = y                               # [asm 6DBD-6DC0] project Y
                 if _s16(y) > 0x7D8:                       # [asm 6DC3 jle keeps]
                     bp = 0xFFFF
-                    ov.ww((bx + 4) & 0xFFFF, bp)          # [asm 6DC9-6DCC] kill off the bottom
-                ov.ww((di + 4) & 0xFFFF, bp)              # [asm 6DCF]
-        di = (di + 0x12) & 0xFFFF                          # [asm 6DD2]
-        bx = (bx + 0xB) & 0xFFFF                           # [asm 6DD5]
+                    proj.sprite = bp                      # [asm 6DC9-6DCC] kill off the bottom
+                rslot.sprite = bp                         # [asm 6DCF]
 
-    # [asm 6DDE..6E57] bake the target geometry from the three tables
-    ov.ww(0x5670, 0xFFFF); ov.ww(0x565E, 0xFFFF)          # [asm 6DDE-6DE4]
+    # [asm 6DDE..6E57] bake the target geometry from the three tables into the boss target records
+    t0, t1, t2, t3, t4 = g.boss_targets                   # records 0x5648/565A/566C/567E/5690
+    t2.sprite = 0xFFFF; t1.sprite = 0xFFFF                # [asm 6DDE-6DE4]
     if ov.rw(L6_PHASE) < 2:                               # [asm 6DE7 jae 6E12]
         si = (0xC * ov.rb(L6_SUB_B) + 0xA4B5) & 0xFFFF     # [asm 6DEE-6DF6]
-        for src, dst in ((0, 0x566C), (2, 0x566E), (4, 0x5670), (6, 0x565A), (8, 0x565C), (0xA, 0x565E)):
-            ov.ww(dst, ov.rw((si + src) & 0xFFFF))        # [asm 6DFA-6E0F]
+        t2.x = ov.rw(si); t2.y = ov.rw((si + 2) & 0xFFFF); t2.sprite = ov.rw((si + 4) & 0xFFFF)   # [6DFA-6E02]
+        t1.x = ov.rw((si + 6) & 0xFFFF); t1.y = ov.rw((si + 8) & 0xFFFF)                          # [6E05-6E0A]
+        t1.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                    # [6E0F]
     si = (0xC * ov.rb(L6_SUB_A) + 0xA485) & 0xFFFF         # [asm 6E12-6E18]
-    for src, dst in ((0, 0x5690), (2, 0x5692), (4, 0x5694), (6, 0x567E), (8, 0x5680), (0xA, 0x5682)):
-        ov.ww(dst, ov.rw((si + src) & 0xFFFF))            # [asm 6E1E-6E33]
+    t4.x = ov.rw(si); t4.y = ov.rw((si + 2) & 0xFFFF); t4.sprite = ov.rw((si + 4) & 0xFFFF)       # [6E1E-6E26]
+    t3.x = ov.rw((si + 6) & 0xFFFF); t3.y = ov.rw((si + 8) & 0xFFFF)                              # [6E29-6E2E]
+    t3.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                        # [6E33]
     si = (6 * ov.rb(L6_ANIM) + 0xA4E5) & 0xFFFF            # [asm 6E36-6E3C] the main target record
-    g.boss_x = ov.rw(si); g.boss_y = ov.rw((si + 2) & 0xFFFF)   # [asm 6E42-6E47]
-    w2 = 0xFFFF if ov.rw(L6_PHASE) != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E52]
-    ov.ww(0x564C, w2)                                     # [asm 6E55]
+    t0.x = ov.rw(si); t0.y = ov.rw((si + 2) & 0xFFFF)     # [asm 6E42-6E47] (= boss_x / boss_y)
+    t0.sprite = 0xFFFF if ov.rw(L6_PHASE) != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E55]
 
     if (g.frame_blink & 3) == 0:                          # [asm 6E58] cycle the anim index every 4th frame
         ov.wb(L6_ANIM, (ov.rb(L6_ANIM) + 1) % 3)          # [asm 6E5F-6E6A]

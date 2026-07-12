@@ -731,6 +731,25 @@ class WallMarker(StructView):
         return self.x == 0x55AA                             # [asm 64FD]
 
 
+class L6Projectile(StructView):
+    """One level-6 tree-boss falling projectile (the 5-slot list at 0x7DAF, stride 0xB) — free when
+    ``sprite`` is 0xFFFF. Integrated per frame (Y by ``fall_vel>>4``, X by the oscillating drift
+    accumulator) and projected into its 0x55EE render slot [asm 6D40..6DDD / 6E92..6F37]."""
+
+    __slots__ = ()
+
+    x          = _U16(0x0)   # world X [asm 6DB7]
+    y          = _U16(0x2)   # world Y [asm 6D80]
+    sprite     = _U16(0x4)   # anim/id; 0xFFFF = free [asm 6D4F/6ED4]
+    fall_vel   = _U16(0x6)   # Y velocity, 12.4 fixed [asm 6EF6/6D80]
+    drift_acc  = _U16(0x8)   # the oscillating X-drift accumulator [asm 6D8B/6F05]
+    drift_step = _U8(0xA)    # per-frame drift step, negated at the +/-0x20 extents [asm 6D95/6F0A]
+
+    @property
+    def free(self) -> bool:
+        return self.sprite == 0xFFFF                     # [asm 6D4F/6EC1]
+
+
 # ---- the fixed slot LISTS (StructArrays: indexed named records instead of pointer walks). Attached to
 # PlayerGlobals here because RenderSlot/ProjectileSlot are defined below it in the file. ----
 PlayerGlobals.render_slots = StructArray(0x4F0A, 0x12, 116, RenderSlot)     # the on-screen records
@@ -740,3 +759,7 @@ PlayerGlobals.trail_ring_slots = StructArray(0x4F76, 0x12, 5, RenderSlot)   # th
 #     g.trail_ring walks DOWN with wrap 0x4F76 -> 0x4FBE) [5E2E-5E37]
 PlayerGlobals.effect_row = StructArray(0x56A2, 0x12, 8, RenderSlot)         # the 7585 effect/boss-health row
 PlayerGlobals.wall_markers = StructArray(0x6EA9, 8, 20, WallMarker)         # the 64FA wall-impact list
+PlayerGlobals.l6_projectiles = StructArray(0x7DAF, 0xB, 5, L6Projectile)    # the L6 tree-boss projectiles
+PlayerGlobals.l6_render_slots = StructArray(0x55EE, 0x12, 5, RenderSlot)    # ...their projected render slots
+PlayerGlobals.boss_targets = StructArray(0x5648, 0x12, 5, RenderSlot)       # the boss/camera-target records
+#     (x/y/sprite per record; +5 = the flash flags byte; boss_x/boss_y alias record 0's x/y) [6E42/7113]
