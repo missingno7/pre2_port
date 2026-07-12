@@ -93,10 +93,11 @@ def main(argv=None) -> int:
                     help="DEBUG: seed gameplay from a savestate dir (memory_1mb.bin) instead of cold-booting")
     ap.add_argument("--play-demo", default=None,
                     help="replay a recorded demo. If DIR/game_tick_demo.bin exists (created once by "
-                         "scripts/verify_native_tick_demo.py DIR), the replay is DETERMINISTIC: seeded from the "
-                         "oracle's first gameplay tick, per-tick keys injected, gameplay digest checked vs the VM "
-                         "every tick. Otherwise falls back to APPROXIMATE scancode replay (cold boot + live keys "
-                         "merged; front-end timing drifts).")
+                         "scripts/verify_native_tick_demo.py DIR), the GAMEPLAY replay is DETERMINISTIC: seeded "
+                         "from the oracle's first gameplay tick, per-tick keys injected, gameplay digest checked "
+                         "vs the VM every tick. A COLD-START recording additionally plays the FRONT END first "
+                         "from the recorded scancodes (approximate pacing — the front end has no game ticks). "
+                         "Without a tick file: fully APPROXIMATE scancode replay (cold boot + live keys merged).")
     # Frozen exe: look for the game data NEXT TO the .exe (drop it into the GOG folder and run). Source run:
     # the repo's assets/. (ROOT is the PyInstaller temp extraction dir when frozen, so it can't hold the data.)
     _default_game_root = str(Path(sys.executable).parent) if getattr(sys, "frozen", False) else str(ROOT / "assets")
@@ -144,13 +145,33 @@ def main(argv=None) -> int:
     if not (Path(gr) / "SPRITES.SQZ").exists():
         raise SystemExit(f"--game-root {gr}: no SPRITES.SQZ here — point it at the Prehistorik 2 data folder")
     demo = None
-    if args.play_demo and not (Path(args.play_demo) / "game_tick_demo.bin").exists():
-        # APPROXIMATE scancode fallback only — the deterministic tick replay below doesn't need the input demo
-        # (it has its own exact per-tick keys, gtd.keys, covering the WHOLE recording — see the loop below).
-        # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud here).
-        from dos_re.input_demo import InputDemoPlayback
-        demo = DemoInput(InputDemoPlayback.load(args.play_demo))
-        print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
+    if args.play_demo:
+        _tick_exists = (Path(args.play_demo) / "game_tick_demo.bin").exists()
+        # A COLD-START recording (start snapshot at program entry, steps==0) covers the FRONT END too — and the
+        # tick file is GAMEPLAY-ONLY by design (the front end has no game ticks), so a tick replay alone would
+        # jump straight to the level and silently skip the intro/menu the demo was recorded to show.
+        try:
+            import json as _json
+            _st = _json.loads((Path(args.play_demo) / "snapshot" / "state.json").read_text(encoding="utf-8"))
+            _fe_portion = int(_st.get("steps") or 0) == 0
+        except Exception:                                          # noqa: BLE001 — no start snapshot at all is a
+            _fe_portion = not (Path(args.play_demo) / "snapshot").exists()   # dos_re cold-start demo (front end incl.)
+        if not _tick_exists:
+            # APPROXIMATE scancode fallback — the deterministic tick replay doesn't need the input demo (it has
+            # its own exact per-tick keys, gtd.keys, covering the WHOLE gameplay recording — see the loop below).
+            # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud).
+            from dos_re.input_demo import InputDemoPlayback
+            demo = DemoInput(InputDemoPlayback.load(args.play_demo))
+            print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
+        elif _fe_portion:
+            # tick file + a cold-start recording: load the scancode events so the replay can SHOW the front end
+            # first (drive_input merges demo.held); the tick replay then reseeds gameplay byte-exactly. Soft-fail:
+            # without the input plumbing (standalone) the tick replay still works, just without the front end.
+            try:
+                from dos_re.input_demo import InputDemoPlayback
+                demo = DemoInput(InputDemoPlayback.load(args.play_demo))
+            except ImportError:
+                print("cold-start demo: input-demo plumbing unavailable here -- tick replay only (no front end)")
 
     # DPI awareness BEFORE any window exists: on Windows with display scaling (e.g. 150%) an un-aware process
     # gets the LOGICAL desktop size, so a borderless-fullscreen window doesn't cover the physical screen and
@@ -2100,6 +2121,28 @@ def main(argv=None) -> int:
             from pre2.native.game_tick_demo import GameTickDemo, _inject, gameplay_digest
             gtd = GameTickDemo.load(tick_path)
             print(f"tick replay: {gtd.n_ticks} game ticks (deterministic; digest-checked vs the VM oracle)")
+            if demo is not None:
+                # ---- the recording STARTS AT POWER-ON: show the FRONT END first (OLDIES -> titles -> menu ->
+                #      map -> loader), driven by the recorded scancodes via drive_input's demo merge. Pacing is
+                #      APPROXIMATE (the recorded boundary clock is the workbench's emulated-frame budget: waits
+                #      stretch, timed screens play at native pace; live keys are merged, so SPACE can nudge past
+                #      a long wait). The tick replay below RESEEDS from the oracle's first gameplay tick, so the
+                #      gameplay stays byte-exact regardless of any front-end pacing drift. ----
+                print("cold-start demo: playing the FRONT END from the recorded inputs first (approximate "
+                      "pacing; live keys can nudge), then the byte-exact gameplay tick replay")
+                fe_state = NativeGameState(build_boot_memory())
+                init_keyboard_input(fe_state)
+                fe_dos = NativeVGA()
+                try:
+                    run_menu_flow(fe_state, fe_dos, "PRE2 VM-less — cold-start demo (front-end)",
+                                  gen=native_front_end(fe_state, fe_dos, 0, game_root=gr,
+                                                       intro_skippable=settings["intro_skippable"]))
+                except Exception as e:                             # noqa: BLE001 — presentation only here: the
+                    print(f"  front-end replay stopped early: {type(e).__name__}: "   # gameplay reseeds below
+                          f"{str(e)[:80]}")
+                if not ref["running"]:
+                    pygame.quit()
+                    return 0
             state = NativeGameState(bytearray(gtd.seed))           # the VM's memory at the first gameplay tick
             dos = NativeVGA()
             native_load_level_palette(state, dos)
