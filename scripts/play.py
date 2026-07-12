@@ -87,7 +87,7 @@ def _install_hook_trace(rt, args: argparse.Namespace) -> None:
               flush=True)
 
     rt._verify_summary = _summary   # the loop prints a final summary on exit
-    print("[hook-trace] live hybrid runtime — counting recovered hook fires (no oracle). "
+    print("[hook-trace] live hybrid runtime -- counting recovered hook fires (no oracle). "
           "Hooks absent here = still pure ASM.", flush=True)
 
 
@@ -572,7 +572,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             # (byte-equivalent; --safe-hooks@150k measured 82fps wall), and the extra headroom keeps heavy
             # scenes at original pacing too. (Under pure ASM the spin IS interpreted unless
             # --fast-retrace-waits is passed, so bigger budgets cost real wall-clock there.)
-            print(f"  WARNING: {mode.upper()} recording with a hybrid-sized step budget — the game will "
+            print(f"  WARNING: {mode.upper()} recording with a hybrid-sized step budget -- the game will "
                   f"internally lag/frame-skip (deterministic, but not original pacing).\n"
                   f"  For original pacing record with:  --{'no-replacements' if mode == 'pure' else 'safe-hooks'} "
                   f"--chunk-steps 150000")
@@ -1001,7 +1001,7 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
         rec_mode = str(meta["replacements"])
         if rec_mode != _replacements_mode(args):
             print(f"replaying in the demo's recorded mode: {rec_mode.upper()} "
-                  f"(metadata overrides the CLI — the trajectory is mode-dependent)")
+                  f"(metadata overrides the CLI -- the trajectory is mode-dependent)")
         args.no_replacements = rec_mode == "pure"
         args.safe_hooks = rec_mode == "safe"
         # The hook-set COMPOSITION is a reproducibility knob too (the safe set grows as hooks are proven);
@@ -1009,10 +1009,10 @@ def _make_replay_runtime(args: argparse.Namespace, playback: InputDemoPlayback):
         # playthrough. Warn loud — the only fix is re-recording under the current set.
         if "hook_set" in meta and meta["hook_set"] != _hook_set_fingerprint(rec_mode):
             print(f"WARNING: this demo was recorded under a DIFFERENT {rec_mode} hook set "
-                  f"(recorded {meta['hook_set']}, current {_hook_set_fingerprint(rec_mode)}) — the replay "
+                  f"(recorded {meta['hook_set']}, current {_hook_set_fingerprint(rec_mode)}) -- the replay "
                   f"will be deterministic but will NOT reproduce the recorded playthrough. Re-record it.")
     else:
-        print(f"WARNING: this demo predates the `replacements` metadata key — replaying in the CLI-selected "
+        print(f"WARNING: this demo predates the `replacements` metadata key -- replaying in the CLI-selected "
               f"{_replacements_mode(args).upper()} mode; if that is not the mode it was recorded in, the "
               f"replay WILL desync.")
     native = _replacements_mode(args)

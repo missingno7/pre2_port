@@ -1648,7 +1648,7 @@ def main(argv=None) -> int:
         gameplay frame reaches the screen — the (future) interpolation replaces exactly this: hold prev+cur
         FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
         The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
-        print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
+        print("Gameplay -- SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
         if args.debug:
             print("  [debug] F11 = dump a native snapshot (--snapshot-loadable) for repro.")
         ref["frontend"] = False       # gameplay: touch BASH is level (hold to keep attacking), not edge-triggered
@@ -2110,17 +2110,17 @@ def main(argv=None) -> int:
                     # against the level the transition just loaded, which is exactly what produced gtd.digests[i]
                     # when this was recorded. (Verified: without this, EVERY demo that crosses a transition
                     # reports a spurious divergence at the very first post-transition tick.)
-                    print(f"  tick replay: LEVEL END at tick {i} — continuing the recording into the next level")
+                    print(f"  tick replay: LEVEL END at tick {i} -- continuing the recording into the next level")
                     between_levels(state, dos)
                     transitions += 1
                     continue
                 except Pre2GameOverTransition:
-                    print(f"  tick replay: GAME OVER at tick {i} — continuing the recording into the restart")
+                    print(f"  tick replay: GAME OVER at tick {i} -- continuing the recording into the restart")
                     game_over_restart(state, dos)
                     transitions += 1
                     continue
                 except Pre2GameComplete:
-                    print(f"  tick replay: THE END at tick {i} — the game is finished")
+                    print(f"  tick replay: THE END at tick {i} -- the game is finished")
                     the_end_restart(state, dos)
                     break
                 except Exception as e:                             # noqa: BLE001
@@ -2130,7 +2130,7 @@ def main(argv=None) -> int:
                     return 0
                 if div is None and gameplay_digest(state.data[DS:DS + 0x10000]) != gtd.digests[i]:
                     div = i
-                    print(f"  tick replay DIVERGENCE at tick {i} (gameplay digest mismatch) — continuing")
+                    print(f"  tick replay DIVERGENCE at tick {i} (gameplay digest mismatch) -- continuing")
                 if native_audio is not None:
                     native_audio.poll(state)
                 i += 1
@@ -2144,7 +2144,7 @@ def main(argv=None) -> int:
                 gameplay_loop(state, dos)                          # hand over to live play once the recording ends
             pygame.quit()
             return 0
-        print(f"(no {tick_path.name} in the demo — approximate input replay; run "
+        print(f"(no {tick_path.name} in the demo -- approximate input replay; run "
               f"scripts/verify_native_tick_demo.py {args.play_demo} once to make it deterministic)")
 
     if args.from_level is not None:
@@ -2170,7 +2170,7 @@ def main(argv=None) -> int:
             # A savestate taken DURING a level-load / transition (F12 mid-curtain): the gameplay DGROUP is not
             # populated yet (player/objects/camera/frame-counter all zero, ip parked in the loader's retrace
             # wait). Native has no "resume a half-loaded level" path, so seed a CLEAN LEVEL{lvl+1} instead.
-            print(f"--snapshot: DGROUP is PRE-GAMEPLAY (level {lvl + 1} mid-load — player/objects/frame-counter "
+            print(f"--snapshot: DGROUP is PRE-GAMEPLAY (level {lvl + 1} mid-load -- player/objects/frame-counter "
                   f"all zero). Native can't resume a half-loaded level; booting LEVEL{lvl + 1} fresh instead.")
             state = native_cold_boot(gr, level=lvl)
         else:
