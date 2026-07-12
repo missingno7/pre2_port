@@ -1,10 +1,14 @@
-# Plan: get the original-memory layout out of the shipped product
+# Plan: the object-model product — the original memory becomes a detachable verification layer
 
-Goal (user, 2026-07-13): the native release code should be fully human-readable — **no `rb`/`rw`/`wb`/`ww`,
-no raw DGROUP offsets, no `DATA_SEG`/`<<4`** in shipped layers. Everything that ties the code to the original
-game's memory image moves into the detachable component. A **linter** enforces the ban so it can't regress.
+Goal (user, 2026-07-13): the native release runs on a pure Python **object graph** (dataclasses) — **no
+`rb`/`rw`/`wb`/`ww`, no raw DGROUP offsets, no `DATA_SEG`/`<<4`, no byte image**. The *entire* original-memory
+world (layout, offsets, byte translation) moves into a **detachable bridge** used only for verification.
+Detached, the end user gets a clean native port that (by design) **cannot** play demos or load snapshots;
+attached, the bridge serializes the object graph to a bit-exact DGROUP image and proves the port matches the
+original ASM tick-for-tick. A **linter** enforces the ban so it can't regress.
 
-This doc plans what that actually means, what is reachable, what is *not* (and why), and the phased path.
+This doc plans what that means, why it is reachable, where the difficulty concentrates, and the phased path.
+It supersedes an earlier "quarantine the residue" framing (see §2) — the object model is cleaner.
 
 ---
 
@@ -38,21 +42,38 @@ rule decidable and mechanical.
 
 ---
 
-## 2. Two possible end-states — pick one
+## 2. The chosen end-state — the object model (decided 2026-07-13)
 
-**E1 — "names, not numbers" (recommended, achievable).**
-Shipped code expresses gameplay purely as named state + named tables + record handles. The offset *numbers*
-and the byte-translation machinery live in / behind the detachable layer. A tiny, clearly-labeled
-**quarantine module** holds the irreducible pointer residue (§4). The byte image survives as the state
-substrate (it is the game's heap), which keeps verification a `memcmp`.
+The target is the **holy grail**: the shipped product runs on a pure Python **object graph** (dataclasses) —
+no `bytearray`, no offsets, no `rb`/`rw` — and the entire original-memory world (the layout, the offset
+numbers, the byte translation) lives in a **detachable bridge** used only for verification. Detached, the
+product is a clean native port; attached, the bridge can serialize the object graph back to a bit-exact
+DGROUP image and prove the port matches the original ASM tick-for-tick.
 
-**E2 — "no memory image at all" (not recommended).**
-Reimplement the game's linked structures as real Python object graphs (lists of dataclasses, no arena).
-This **breaks byte-exact verification** (the image is no longer the state — every digest needs a
-reconstruction step), contradicts the v0.4.0 finding that *the image is the heap*, and invites behavioral
-drift in exactly the subtle pointer-following code that is hardest to test. It is a rewrite, not a cleanup.
+Two user decisions pin the design (2026-07-13):
 
-The rest of this plan assumes **E1**.
+- **Detached = no replay/snapshot at all.** Demos and snapshots are byte-level artifacts; they are a
+  bridge/verification concern only. The shipped product carries zero replay code. (Cleanest boundary.)
+- **Verification stays byte-level: serialize → `memcmp`.** The bridge serializes the object graph to a
+  bit-exact image and compares vs the VM every tick — the strongest guarantee, catching even bytes we did
+  not model. This requires the bit-exact serializer (§4).
+
+**Why this supersedes the earlier "quarantine" framing.** An earlier draft called the pointer-following code
+(`di = rw(TARGET_A)`, the variable-stride arena, script cursors) an *irreducible residue* that had to stay in
+the product as a quarantined offset-speaking module. That is only true *while the product keeps the byte
+image*. With a real object model the residue **dissolves** — a stored offset becomes an object reference, an
+arena becomes a `list`, a script cursor becomes an index. Nothing in the product speaks offsets; the offset
+knowledge **relocates entirely into the bridge serializer**, which is exactly the goal. So the object model is
+architecturally *cleaner* than quarantining, not a compromise.
+
+**Why it is now feasible.** The hardest precondition — knowing *every* mutable byte of state — is already met:
+the v0.4.0 field-backed campaign proved WRITTEN-UNNAMED = 0 over the corpus. A lossless object model needs
+exactly that census, and it exists.
+
+**The rejected alternative** was keeping the byte image as the product's state substrate (verification-as-
+`memcmp`-for-free, no serializer to build). Cleaner to *build*, but it never reaches the holy grail — the
+product forever carries the image and the offset residue. We are trading a one-time serializer effort for a
+permanently offset-free product.
 
 ---
 
@@ -78,54 +99,78 @@ This only pays off if the **product runtime stops needing offsets at all**, i.e.
 *runtime-dead* — needed only when the bridge is attached to read/write a real image. That is the flip that
 makes the offset table genuinely detachable rather than just "moved to another shipped file."
 
+**(c) Read-only game content.** The tilemap, the ~hundreds of sprite-definition records, the animation
+scripts, and the property tables (floor `0x7F5E`, ceiling `0x7E5E`, half-widths/heights `0x7190/0x7191`,
+slope `0x8E1D`, cos/sin `0x6F90/0x7090`, …) are *content*, not mutable state — but gameplay reads them by
+offset today. For the object model these become **loaded content objects** the level loader produces
+(`level.tilemap`, `level.sprite_defs[id]`, `floor_props[tile]`). This is the **long pole** of the effort: the
+mutable state is ~4,900 already-named fields, but the read-only content is larger and currently offset-addressed
+throughout. It migrates at the loader (`level_load` decodes SQZ assets into structured content instead of into
+image bytes).
+
 ---
 
-## 4. The irreducible residue — be honest about it
+## 4. The pointer code — dissolved by the object model, concentrated in the serializer
 
-Some recovered code follows pointers the **game itself stores in its own memory**:
+Some recovered code follows pointers the **game itself stores in its own memory**. Under a byte image these
+are irreducible offset arithmetic. Under the **object model** each becomes an ordinary object relationship,
+and the offset reconstruction moves to the bridge serializer:
 
-- **Stored absolute record pointers** (~13 sites): `di = rw(TARGET_A)` — `[0xA423]` holds an *offset* into
-  DGROUP; the code dereferences it (`slot = RenderSlot(be, di)`). The field access can be named (and is), but
-  `di` is a raw offset the original algorithm computed.
-- **Variable-stride arenas**: the 2nd-pass entity list (`0x8489`) is walked by `si += [si]` — the stride is
-  read *from* the data. There is no fixed-index array to name; it is a linked structure.
-- **Live script cursors**: the camera/boss script interpreters advance an offset cursor through bytecode
-  stored in game state.
+| in the byte world | in the object model | the serializer's job |
+|---|---|---|
+| `di = rw(TARGET_A)`; `[0xA423]` holds an offset | `camera.target: RenderRecord \| None` (a reference) | write the referent's assigned offset into `0xA423` |
+| variable-stride arena `0x8489`, `si += [si]` | `entities: list[Entity]` (each carries its kind) | pack the list back in order, re-emit each stride byte |
+| a script cursor offset into bytecode | an index into a named `list[Opcode]` | index → the cursor's absolute offset |
 
-You cannot express these on a pure name-keyed store without reimplementing the data structures (→ E2, which
-we rejected). Under E1 they get **quarantined**: one small module (working name `pre2/native/raw_arena.py`)
-that is the *only* shipped place allowed to do offset arithmetic, is loudly documented as "the byte-exact
-pointer core — intrinsic to fidelity, not a cleanup miss," and is the single entry on the linter's allowlist.
-Everything else in the product is offset-free. Estimated residue: **< 30 sites**, down from ~787.
+So there is **no quarantine module** — nothing in the product speaks offsets. Instead there is one new
+bridge artifact, the **bit-exact serializer** `object_graph → DGROUP image`, and it is where all the offset
+complexity concentrates (which is the goal). Its hard parts:
+
+1. **Pointer reconstruction** — assign every object a stable offset (fixed-slot arrays: index → offset;
+   the arena: packing order), then write each reference field as its referent's offset.
+2. **Arena packing** — reproduce the 2nd-pass entity list's exact record order and per-record strides.
+3. **Freed-slot stale bytes** — the DOS game leaves junk in freed slots; the model must preserve it, so slot
+   arrays stay **fixed-length with a `dead` flag** (never dynamic lists that drop entries), or the `memcmp`
+   diverges in regions the digest masks do not cover.
+4. **Constant fill** — the ~45k untouched / read-only bytes come from a per-level **template image**; the
+   serializer overlays the object graph's mutable bytes on top. (The field-backed census guarantees the
+   overlay covers every mutable byte.)
+
+The serializer becomes a trusted artifact, and the tick corpus is exactly what earns that trust: run
+native-on-objects and the VM from the same seed, `serialize(world)` each tick, `memcmp` vs the VM.
 
 ---
 
 ## 5. Phased path (each phase gated by the full proof corpus)
 
-**Phase 0 — the linter (build first, so every later phase ratchets).**
-`scripts/lint.py` gains a shipped-layer rule: no `rb(`/`rw(`/`wb(`/`ww(` calls, no `state.data[` indexing,
-no `<< 4` / `DATA_SEG` / `DGROUP_BASE`, no numeric-literal first arg to a view/record constructor. Allowlist
-exactly the quarantine module (§4) and the translation machinery *until* it relocates. The linter starts
-**advisory** (reports a shrinking count) and flips to **enforcing** per file as each is cleaned — a ratchet,
-never a big-bang.
+The object model is the **terminal state of the phases already in flight** — not a separate project. The
+FieldBackend flip (Phase 4) is the pivot ("product runs without the image"); the object model is that plus
+the read-only-content migration (§3c) plus modeling the pointer relationships (§4).
 
-**Phase 1 — finish the record-interior conversions** (continue task #18). Kills kind-2 `rb`/`rw`. Files:
-object_tick, player_collision, the remaining object_spawn/combat/player_interaction sites; assess terrain
-(polymorphic) and object_inject (arena) honestly rather than forcing dishonest names.
+**Phase 1 — record-interior conversions** (task #18) — **essentially DONE.** Kind-2 `rb`/`rw` gone from the
+clean fixed-stride files (object_spawn, effects_update, combat_interaction, player_interaction, object_tick).
+terrain (polymorphic) and object_inject (arena) were assessed and left as honest arithmetic — they become
+`list`/`Entity` objects at the model step, not forced names now.
 
-**Phase 2 — read-only tables → named `TableView`s.** A new view kind: `floor_props[tile]`, `half_height[id]`,
-`hurt_sfx[n]`, the level-map reader. Base offsets move to the layout map; shipped code indexes by meaning.
+**Phase 2 — read-only tables → named accessors.** `floor_props[tile]`, `half_height[id]`, `hurt_sfx[n]`, the
+level-map reader. First step of the §3c content migration; base offsets move toward the bridge layout.
 
 **Phase 3 — relocate the translation machinery.** Consolidate `readers`/`apply_ds`/`tile_reader`/`DATA_SEG`
-into one adapter, then push it behind the detachable boundary; the native loop asks for named views, not
-readers. Removes kind-4 from `views/`.
+into one adapter and push it behind the detachable boundary; the native loop asks for named views, not
+readers. Removes kind-4 from the shipped `views/` layer.
 
-**Phase 4 — the FieldBackend product flip.** Run the tick core on the name-keyed store for scalars + fixed
-records; keep a byte image only for the arena/pointer residue (a hybrid store). Proven by the existing
-`verify_field_flip.py` per-tick round-trip + the digest corpus.
+**Phase 0 — the linter** (build *after* Phase 3, per the 2026-07-13 decision to shrink the surface first).
+Shipped-layer rule: no `rb(`/`rw(`/`wb(`/`ww(`, no `state.data[`, no `<< 4` / `DATA_SEG` / `DGROUP_BASE`, no
+numeric-literal first arg to a view/record constructor. Starts **advisory** (shrinking count), ratchets to
+**enforcing** per file as each is cleaned.
 
-**Phase 5 — quarantine the residue** (§4) and make the linter fully enforcing. Document the module as the
-intrinsic byte-exact core.
+**Phase 4 — the FieldBackend product flip.** Run the tick core on the name-keyed store; the byte image is no
+longer the product's state. Proven by `verify_field_flip.py` per-tick round-trip + the digest corpus.
+
+**Phase 5 — the object model + the serializer.** Wrap the name-keyed state as real dataclasses; build the
+bit-exact serializer (§4) in the bridge; migrate the remaining read-only content (§3c). Detached, the product
+is pure objects with **no replay/snapshot**; attached, the bridge serializes → `memcmp` verifies. The linter
+goes fully enforcing with an **empty** allowlist — the holy grail.
 
 ---
 
@@ -136,6 +181,10 @@ intrinsic byte-exact core.
   (919/207/187/68/15) + deploy smoke — the same discipline that carried the field-backed campaign.
 - **Risk**: the read-through vs read-original backend semantics (a converted read must see the same memory
   the ASM saw) is the recurring footgun — caught only by the corpus, which is why every batch runs it.
-- **The payoff is real but bounded**: the product becomes ~97% offset-free and reads as source; a small,
-  honestly-labeled pointer core remains because byte-exact fidelity to a pointer-based 1993 DOS heap
-  *requires* it. That residue is a feature of faithfulness, not a debt.
+- **The new artifact to trust**: the bit-exact serializer (§4). It concentrates all the offset/layout
+  complexity in one bridge module — pointer reconstruction, arena packing, stale-byte preservation. It is
+  earned by the same tick corpus that proves everything else.
+- **The payoff**: a **fully** offset-free product — pure dataclasses, no image, no `rb`/`rw`, empty linter
+  allowlist. The entire original-memory world lives in the detachable bridge; plug it in to verify, unplug it
+  to ship. That is the holy grail, and the v0.4.0 "every mutable byte is named" result is what makes it
+  reachable rather than aspirational.
