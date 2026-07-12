@@ -26,6 +26,7 @@ DGROUP_BASE = 0x1A0F << 4       # DS<<4 — the game data segment's linear base 
 class ByteBackend:
     """Reads/writes go straight to the 1 MB image at ``DGROUP_BASE + offset``."""
 
+    _IS_DGROUP_BACKEND = True
     __slots__ = ("data",)
 
     def __init__(self, source):
@@ -171,8 +172,13 @@ def apply_contract(state, writes, *, word_fields=None) -> None:
 
     THE FLIP POINT: when the product's state becomes field-backed, this function (plus the read half,
     the backends) is where the offset world ends — the contract application resolves through the generated
-    field registry instead of a byte image, and this module's offset map moves to the detachable bridge."""
-    be = ByteBackend(state)
+    field registry instead of a byte image, and this module's offset map moves to the detachable bridge.
+
+    Routes through ``state.backend`` when present (the NativeGameState seam — swappable to a hybrid store),
+    else a fresh :class:`ByteBackend` (the workbench's VM state / raw images)."""
+    be = getattr(state, "backend", None)
+    if be is None or not getattr(be, "_IS_DGROUP_BACKEND", False):
+        be = ByteBackend(state)
     for off, v in writes.items():
         if isinstance(v, tuple):
             val, width = v

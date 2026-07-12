@@ -15,7 +15,6 @@
   "pre2/native/render.py": 1,
   "pre2/native/runtime.py": 86,
   "pre2/native/sprite_bank.py": 2,
-  "pre2/native/state.py": 6,
   "pre2/recovered/combat_interaction.py": 91,
   "pre2/recovered/effects_update.py": 12,
   "pre2/recovered/input_decode.py": 14,

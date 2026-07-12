@@ -38,7 +38,8 @@ _SHIPPED_LAYERS = ("recovered", "views", "native", "enhanced", "codecs")
 _SHIPPED_SCRIPTS = {"play_native.py", "sdl_view.py", "render_frame.py", "overlay_menu.py",
                     "android_menu.py", "android_host.py", "main_android.py"}
 # the machinery's legitimate single homes — they own the verbs by design
-_ALLOWLIST = {"pre2/views/memory_adapter.py", "pre2/views/dgroup_view.py"}
+_ALLOWLIST = {"pre2/views/memory_adapter.py", "pre2/views/dgroup_view.py",
+              "pre2/native/state.py"}    # the NativeGameState adapter: the swappable backend + rb/rw/wb/ww seam
 
 _VERB = re.compile(r"\b(?:rb|rw|wb|ww)\(|\.data\[|\bDATA_SEG\b|\bDGROUP_BASE\b")
 _DEF = re.compile(r"\bdef\s+(?:rb|rw|wb|ww)\b")

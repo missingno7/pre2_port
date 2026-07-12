@@ -292,7 +292,7 @@ _DS_BASE = DATA_SEG << 4
 
 
 def _wb(state, off: int, v: int) -> None:
-    state.data[(_DS_BASE + (off & 0xFFFF)) & 0xFFFFF] = v & 0xFF
+    state.wb(off, v)                                     # through the backend seam (Phase 4)
 
 
 def _ww(state, off: int, v: int) -> None:

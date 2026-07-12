@@ -19,8 +19,8 @@ class NativeGameState:
     """The recovered game's memory image. Exposes ``.data`` (the 1 MB address space) so the existing bridges
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
-    __slots__ = ("data", "sfx_queue", "particle_capture", "flash_slots", "song_request", "boss_glyph",
-                 "snow_plots", "particle_capture_last", "flash_slots_last", "_hud_frozen_predeath")
+    __slots__ = ("data", "backend", "sfx_queue", "particle_capture", "flash_slots", "song_request",
+                 "boss_glyph", "snow_plots", "particle_capture_last", "flash_slots_last", "_hud_frozen_predeath")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -28,6 +28,12 @@ class NativeGameState:
         if len(data) < ADDR_SPACE:
             data = data + bytearray(ADDR_SPACE - len(data))
         self.data = data
+        #: THE swappable DGROUP memory backend (the field-backed flip's seam). Defaults to a ByteBackend over
+        #: ``.data`` — a byte-exact no-op — so every rb/rw/wb/ww and the write-contract applier go through one
+        #: object. Phase 4 swaps this for a hybrid (named state in a FieldBackend, only the residue in bytes);
+        #: ``.data`` stays as the materialised image the renderer reads. See docs/pre2/offset_quarantine_plan.md.
+        from pre2.views.dgroup_view import ByteBackend
+        self.backend = ByteBackend(self)
         #: play_sfx TRIGGERS this frame (a list of effect indices). native_play_sfx appends one per CALL — so a
         #: repeated identical effect (e.g. a held attack hitting each frame) fires each time, unlike the single
         #: [0x1004] descriptor which is last-wins. NativeAudio drains it once per displayed frame; capped so a
@@ -66,10 +72,17 @@ class NativeGameState:
         return cls(bytearray(rt.cpu.mem.data))
 
     def rb(self, off: int) -> int:
-        """Read a DGROUP byte (DS-relative), the recovered functions' ``rb`` accessor."""
-        return self.data[((DATA_SEG << 4) + (off & 0xFFFF)) & 0xFFFFF]
+        """Read a DGROUP byte (DS-relative), the recovered functions' ``rb`` accessor — via the backend seam."""
+        return self.backend.rb(off)
 
     def rw(self, off: int) -> int:
-        """Read a DGROUP word (DS-relative), the recovered functions' ``rw`` accessor."""
-        b = ((DATA_SEG << 4) + (off & 0xFFFF)) & 0xFFFFF
-        return self.data[b] | (self.data[(b + 1) & 0xFFFFF] << 8)
+        """Read a DGROUP word (DS-relative), the recovered functions' ``rw`` accessor — via the backend seam."""
+        return self.backend.rw(off)
+
+    def wb(self, off: int, v: int) -> None:
+        """Write a DGROUP byte (DS-relative) — via the backend seam."""
+        self.backend.wb(off, v)
+
+    def ww(self, off: int, v: int) -> None:
+        """Write a DGROUP word (DS-relative) — via the backend seam."""
+        self.backend.ww(off, v)
