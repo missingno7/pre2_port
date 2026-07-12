@@ -2133,10 +2133,29 @@ def main(argv=None) -> int:
                 fe_state = NativeGameState(build_boot_memory())
                 init_keyboard_input(fe_state)
                 fe_dos = NativeVGA()
+                # BOUND the presentation. The recorded scancodes are keyed to the VM's frame clock; merged into
+                # native's (faster, differently-paced) front end they reliably drive the TIMED intro (fire nudges
+                # OLDIES/titles) but NOT the interactive press-1/2 menu + level-select — so native_front_end would
+                # wait there forever (the menu never gets a valid selection). A faithful, keystroke-exact front-end
+                # replay needs the VM's per-frame input injected (verify_native_frontend.py) or a baked front-end
+                # input track; neither is available VM-lessly here. Since this presentation is DISCARDED (gtd.seed
+                # reseeds gameplay below), cap it so a cold-start demo ALWAYS reaches its byte-exact gameplay replay
+                # instead of hanging at the menu. If the menu does complete first, run_menu_flow returns earlier.
+                _FE_PRESENT_CAP = 1800     # ~native's full intro (~1300 frames) + a short menu window
+
+                def _capped_frontend(gen, n):
+                    for k, scene in enumerate(gen):
+                        if k >= n:
+                            print(f"  front-end presentation reached the {n}-frame cap (the recorded menu "
+                                  f"navigation is not reproducible VM-lessly) -- handing to the gameplay replay")
+                            return
+                        yield scene
                 try:
                     run_menu_flow(fe_state, fe_dos, "PRE2 VM-less — cold-start demo (front-end)",
-                                  gen=native_front_end(fe_state, fe_dos, 0, game_root=gr,
-                                                       intro_skippable=settings["intro_skippable"]))
+                                  gen=_capped_frontend(
+                                      native_front_end(fe_state, fe_dos, 0, game_root=gr,
+                                                       intro_skippable=settings["intro_skippable"]),
+                                      _FE_PRESENT_CAP))
                 except Exception as e:                             # noqa: BLE001 — presentation only here: the
                     print(f"  front-end replay stopped early: {type(e).__name__}: "   # gameplay reseeds below
                           f"{str(e)[:80]}")
