@@ -21,7 +21,7 @@
   "pre2/recovered/input_decode.py": 14,
   "pre2/recovered/object_inject.py": 53,
   "pre2/recovered/object_particles.py": 15,
-  "pre2/recovered/object_spawn.py": 171,
+  "pre2/recovered/object_spawn.py": 146,
   "pre2/recovered/object_tick.py": 11,
   "pre2/recovered/player.py": 31,
   "pre2/recovered/player_collision.py": 16,

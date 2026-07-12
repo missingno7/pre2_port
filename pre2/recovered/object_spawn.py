@@ -534,9 +534,10 @@ def camera_state6_finale(rb, rw):
 def camera_state_machine(rb, rw):
     """[asm 71AB..7534] Returns the ``{offset: (value, width)}`` writes at the 7534 exit (or the state-6 finale's
     writes, which the ASM RETs at 74E9)."""
-    state = rb(CAM_STATE)
-    dist = rw(DIST_X)
-    g0 = PlayerGlobals(DictBackend(rb, rw))               # read-only named access
+    be = DictBackend(rb, rw)
+    g0 = PlayerGlobals(be); pv = PlayerView(be)           # read-only named access
+    state = g0.cam_state
+    dist = g0.dist_x
     w = {}
 
     if state == 0:                                        # [asm 71AB]
@@ -552,9 +553,9 @@ def camera_state_machine(rb, rw):
         if dist >= 0xFA:                                  # [asm 71E0] jb 71F0
             w[CAM_STATE] = (0, 1)                          # [asm 71E8]
             return w
-        t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 71F0]
+        t = (g0.cam_timer + 1) & 0xFFFF                   # [asm 71F0]
         w[CAM_TIMER] = (t, 2)
-        if rw(SPAWN_COUNT) < 0x3C:                         # [asm 71F4] jae 7203
+        if g0.spawn_count < 0x3C:                         # [asm 71F4] jae 7203
             w[CAM_STATE] = (2, 1)                          # [asm 71FB]
             return w
         w[SCRIPT_PTR] = (0xA434, 2)                        # [asm 7203]
@@ -566,7 +567,7 @@ def camera_state_machine(rb, rw):
         if g0.anim_gate != 0 and (g0.frame_blink & 7) == 0:   # [asm 7221/7228]
             w.update(inc_scroll_phase(rb))                # [asm 722F] 757A
             return w
-        c = rb(SCROLL_PHASE)                               # [asm 7235]
+        c = g0.scroll_phase                               # [asm 7235]
         if c >= 0xA:                                       # jb 724A
             w[CAM_STATE] = (3, 1); w[CAM_TIMER] = (0, 2)    # [asm 723C/7241]
         elif c > 3:                                        # [asm 724A] ja 7254
@@ -574,7 +575,7 @@ def camera_state_machine(rb, rw):
         return w
 
     if state == 2:                                        # [asm 7262]
-        t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 726C]
+        t = (g0.cam_timer + 1) & 0xFFFF                   # [asm 726C]
         w[CAM_TIMER] = (t, 2)
         if t < 0x2C:                                       # [asm 7270/7277]
             w.update(camera_boundary_collision(rb, rw))   # [asm 7279] 81B4
@@ -586,20 +587,20 @@ def camera_state_machine(rb, rw):
         if t == 0x2C:                                      # [asm 7275] je 7299
             w.update(camera_boundary_collision(rb, rw))   # [asm 7299] 81B4
             w[SCROLL_VY] = (0xFF20, 2)                     # [asm 729C]
-            if rw(SPAWN_COUNT) < 0x28 and dist < 0x50:      # [asm 72A2/72A9]
+            if g0.spawn_count < 0x28 and dist < 0x50:      # [asm 72A2/72A9]
                 w[CAM_STATE] = (4, 1); w[CAM_TIMER] = (0, 2)   # [asm 72B0/72B5]
             w[SCRIPT_PTR] = (0xA45E, 2)                    # [asm 72BB]
             return w
         # t > 0x2C  [asm 72C4]
-        if _s16(rw(SCROLL_VY)) > 0:                        # [asm 72C4] jle 72DB
-            w[SCRIPT_PTR] = (0xA460 if rw(SPAWN_COUNT) >= 0x64 else 0xA462, 2)   # [asm 72CB-72D8]
+        if _s16(g0.scroll_vy) > 0:                        # [asm 72C4] jle 72DB
+            w[SCRIPT_PTR] = (0xA460 if g0.spawn_count >= 0x64 else 0xA462, 2)   # [asm 72CB-72D8]
         if dist > 0x50:                                    # [asm 72DB] ja 72F5
             if t < 0x58:                                   # [asm 72F5] jae 72FF
                 return w
             if t == 0x58:                                  # [asm 72FF] jne 7349
                 w.update(_cam_scroll_velocity(rb, rw))    # [asm 7301-7346]
                 return w
-            if rw(SCROLL_VY) == 0:                         # [asm 7349] je 7353
+            if g0.scroll_vy == 0:                         # [asm 7349] je 7353
                 w[SCROLL_PHASE] = (3, 1); w[CAM_TIMER] = (0, 2); w[CAM_STATE] = (1, 1)   # [asm 7353-735E]
             return w
         w[CAM_TIMER] = (0, 2); w[CAM_STATE] = (3, 1); w[SCROLL_PHASE] = (0xB, 1)   # [asm 72E2-72ED]
@@ -607,30 +608,30 @@ def camera_state_machine(rb, rw):
 
     if state == 3:                                        # [asm 7366]
         w.update(camera_boundary_collision(rb, rw))       # [asm 7370] 81B4
-        t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 7373]
+        t = (g0.cam_timer + 1) & 0xFFFF                   # [asm 7373]
         w[CAM_TIMER] = (t, 2)
-        limit = 0x9A if _abs16((rw(SPAWN_COUNT) - 0x32) & 0xFFFF) <= 0x19 else 0x42   # [asm 7377-7389]
+        limit = 0x9A if _abs16((g0.spawn_count - 0x32) & 0xFFFF) <= 0x19 else 0x42   # [asm 7377-7389]
         if t > limit:                                      # [asm 738C] ja 740C
             w[CAM_TIMER] = (0, 2); w[CAM_STATE] = (2, 1)    # [asm 740C]
             return w
-        vy = _s16(rw(SCROLL_VY))                            # [asm 7392]
+        vy = _s16(g0.scroll_vy)                            # [asm 7392]
         if vy < 0:                                          # [asm 7397 je / 7399 jg]
             w[SCRIPT_PTR] = (0xA45E, 2)                    # [asm 739B]
             return w
         if vy > 0:
             w[SCRIPT_PTR] = (0xA464, 2)                    # [asm 73A4]
             return w
-        a = rw(DIST_X)                                      # [asm 73AD] vy == 0
+        a = g0.dist_x                                      # [asm 73AD] vy == 0
         if a >= 0x64:                                       # [asm 73B0] jae 73F1
             w[SCROLL_VY] = (0xFFAF, 2)                      # [asm 73F1]
-            dx = 0x50 if _s16(rw(PLAYER_X)) > _s16(rw(CURSOR_X)) else (-0x50) & 0xFFFF   # [asm 73FA-7403]
+            dx = 0x50 if _s16(pv.x) > _s16(g0.cursor_x) else (-0x50) & 0xFFFF   # [asm 73FA-7403]
             w[SCROLL_VX] = (dx, 2)                          # [asm 7405]
         elif a <= 0x19:                                     # [asm 73B5] jbe 73DA
             w[SCRIPT_PTR] = (0xA470, 2)                    # [asm 73DA]
         elif a <= 0x23:                                     # [asm 73BA] jbe 73E3
             w[CAM_STATE] = (4, 1); w[CAM_TIMER] = (0, 2)    # [asm 73E3]
         else:                                               # [asm 73BF] 0x24..0x63
-            sp = w[SCROLL_PHASE][0] if SCROLL_PHASE in w else rb(SCROLL_PHASE)   # 81B4 may have knocked it down
+            sp = w[SCROLL_PHASE][0] if SCROLL_PHASE in w else g0.scroll_phase   # 81B4 may have knocked it down
             if sp == 0:                                     # [asm 73BF] jne 73D1
                 w[CAM_STATE] = (7, 1); w[CAM_TIMER] = (0, 2)   # [asm 73C6]
             w[SCRIPT_PTR] = (0xA46B, 2)                    # [asm 73D1]
@@ -638,18 +639,18 @@ def camera_state_machine(rb, rw):
 
     if state == 4:                                        # [asm 741A]
         w.update(camera_boundary_collision(rb, rw))       # [asm 7421] 81B4
-        t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 7424]
+        t = (g0.cam_timer + 1) & 0xFFFF                   # [asm 7424]
         w[CAM_TIMER] = (t, 2)
         if t > 0x42:                                       # [asm 7428] jbe 743D
             w[CAM_STATE] = (3, 1); w[CAM_TIMER] = (0, 2)    # [asm 742F]
             return w
         w[SCRIPT_PTR] = (0xA475, 2)                        # [asm 743D]
-        if rw(SCROLL_VY) == 0:                             # [asm 7443] jne 744F
+        if g0.scroll_vy == 0:                             # [asm 7443] jne 744F
             w[0x6BEA] = (4, 1)                             # [asm 744A]
         return w
 
     if state == 5:                                        # [asm 7452]
-        t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 7459]
+        t = (g0.cam_timer + 1) & 0xFFFF                   # [asm 7459]
         w[CAM_TIMER] = (t, 2)
         if t > 0x13:                                       # [asm 745D] jbe 7471
             w[CAM_TIMER] = (0, 2); w[CAM_STATE] = (1, 1)    # [asm 7464-7469]
@@ -659,23 +660,23 @@ def camera_state_machine(rb, rw):
 
     if state == 6:                                        # [asm 747A]
         w[SCRIPT_PTR] = (0xA480, 2)                        # [asm 7481]
-        if _s16(rw(SCROLL_VY)) < 0:                        # [asm 7487] jge 7491
+        if _s16(g0.scroll_vy) < 0:                        # [asm 7487] jge 7491
             return w
         for off, vw in camera_state6_finale(rb, rw).items():   # [asm 7491-74E9] the boss-reach death finale
             w[off] = vw
         return w
 
     if state == 7:                                        # [asm 74EA]
-        t = (rw(CAM_TIMER) + 1) & 0xFFFF                   # [asm 74F1]
+        t = (g0.cam_timer + 1) & 0xFFFF                   # [asm 74F1]
         w[CAM_TIMER] = (t, 2)
         if t > 0x2C:                                       # [asm 74F5] jbe 7503
             w[CAM_STATE] = (1, 1)                          # [asm 74FC]
             return w
         w[SCRIPT_PTR] = (0xA45E, 2)                        # [asm 7503]
-        vy = rw(SCROLL_VY)
+        vy = g0.scroll_vy
         if vy == 0:                                        # [asm 7509] je 751A
             w[SCROLL_VY] = (0xFF9F, 2)                      # [asm 751A]
-            dx = 0xFFD0 if _s16(rw(PLAYER_X)) > _s16(rw(CURSOR_X)) else 0x30   # [asm 7523-752C]
+            dx = 0xFFD0 if _s16(pv.x) > _s16(g0.cursor_x) else 0x30   # [asm 7523-752C]
             w[SCROLL_VX] = (dx, 2)                          # [asm 752E]
         elif _s16(vy) > 0:                                 # [asm 7510] jl 7534
             w[SCRIPT_PTR] = (0xA460, 2)                    # [asm 7512]
