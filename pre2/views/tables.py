@@ -36,13 +36,15 @@ TILE_PROPS  = 0x8E1D   # tile id -> collision property: solid / slope (0x30) / d
 COS         = 0x6F90   # angle -> signed cos byte (particle/bird X velocity)
 SIN         = 0x7090   # angle -> signed sin byte (particle/bird Y velocity)
 SPRITE_GEOM = 0x7190   # sprite (id & 0x1FFF)<<1 -> word: low byte = width (src bytes), high byte = height (rows)
+PLAYER_ANIM_HEIGHT = 0x7191  # player anim frame -> vertical extent (byte-indexed; reuses the sprite-geom region)
 
 
 class Tables:
     """Every named read-only DGROUP table, bound to one ``read_byte`` accessor. ``t = Tables(rb)`` then
     ``t.floor_props[tile]`` / ``t.cos[angle]`` / ``t.sprite_half_w(id)``."""
 
-    __slots__ = ("_rb", "floor_props", "ceil_props", "tile_props", "cos", "sin", "sprite_geom")
+    __slots__ = ("_rb", "floor_props", "ceil_props", "tile_props", "cos", "sin", "sprite_geom",
+                 "player_anim_height")
 
     def __init__(self, read_byte):
         self._rb = read_byte
@@ -52,6 +54,7 @@ class Tables:
         self.cos = ByteTable(read_byte, COS)
         self.sin = ByteTable(read_byte, SIN)
         self.sprite_geom = ByteTable(read_byte, SPRITE_GEOM)  # index by (id & 0x1FFF)<<1 (+1 = height)
+        self.player_anim_height = ByteTable(read_byte, PLAYER_ANIM_HEIGHT)
 
     def sprite_half_w(self, sprite_id: int) -> int:
         """The sprite's X half-extent byte (``[0x7190 + (id&0x1FFF)<<1]``)."""
