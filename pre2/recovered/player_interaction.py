@@ -37,7 +37,8 @@ def spawn_pickup_effect(rb, rw, eff_id: int, src_si: int) -> dict:
     bx = (eff_id - 0x4A) & 0xFFFF
     if bx <= 0x10:
         val = rw((SCORE_TABLE + (bx << 1)) & 0xFFFF)            # [8887] table word
-        score = (rw(SCORE) | (rw((SCORE + 2) & 0xFFFF) << 16)) + val   # [888B/888F] 32-bit add
+        g = PlayerGlobals(DictBackend(rb, rw))
+        score = (g.score_lo | (g.score_hi << 16)) + val   # [888B/888F] 32-bit add
         out[SCORE] = (score & 0xFFFF, 2)
         out[(SCORE + 2) & 0xFFFF] = ((score >> 16) & 0xFFFF, 2)
     # [8894] allocate a free effect slot ([+4]==0xFFFF)
@@ -95,8 +96,9 @@ def _s16(v: int) -> int:
 
 def _knockback(rb, rw, yvel: int) -> dict:
     """[asm 837A] knock the player up: Yvel=yvel, clear [0x6BD2], player Y -= [0xA331]."""
+    pv = PlayerView(DictBackend(rb, rw))
     return {PLAYER_YVEL: (yvel & 0xFFFF, 2), 0x6BD2: (0, 1),
-            PLAYER_Y: ((rw(PLAYER_Y) - rw(KNOCKBACK_Y)) & 0xFFFF, 2)}
+            PLAYER_Y: ((pv.y - rw(KNOCKBACK_Y)) & 0xFFFF, 2)}
 
 
 def _hurt(rb, rw, di):
@@ -146,7 +148,8 @@ def _stomp(rb, rw, di):
     """[asm 82F7] player stomps object ``di`` (attacking + falling fast): spawn effect, mark stomped, and on
     the 3rd stomp (``[di+0x10]&3 == 2``) kill it (squash anim + bounce velocities); else knock the player up."""
     out = {}
-    obj = ObjectSlot(WidthContractBackend(rb, rw, out), di)
+    _be = WidthContractBackend(rb, rw, out)
+    obj = ObjectSlot(_be, di); pv = PlayerView(_be)
     v10 = obj.hits
     dl = v10 & 3
     out.update(spawn_pickup_effect(rb, rw, ((dl << 1) + 0x52) & 0xFFFF, PLAYER))   # [82F7..8304]
@@ -157,8 +160,8 @@ def _stomp(rb, rw, di):
         defp = rw((di + 6) & 0xFFFF)
         out[(defp + 4) & 0xFFFF] = (rb((defp + 4) & 0xFFFF) & 0xF7, 1)   # [831A]
         obj.yvel = 0xFF38                                  # [831E] object Yvel up
-        ax = abs(_s16(rw(PLAYER_YVEL)))                    # [8323] |player Yvel|
-        if not (_s16(rw(di)) > _s16(rw(PLAYER))):          # [8330] obj left of player -> push left
+        ax = abs(_s16(pv.yvel))                            # [8323] |player Yvel|
+        if not (_s16(obj.x) > _s16(pv.x)):                 # [8330] obj left of player -> push left
             ax = -ax
         obj.xvel = (ax * 3) & 0xFFFF                       # [8336] object Xvel = 3*(+/-|Yvel|)
         return out, []
@@ -174,7 +177,7 @@ def _loop1_hit_outcome(rb, rw, di):
         return _death(rb, rw, di)                                     #   vertical-detail (jne skips) OR [0x4F2B]<0
     if rb(_ATTACK) == 0:                                              # [82E9] hurt
         return _hurt(rb, rw, di)
-    if _s16(rw(PLAYER_YVEL)) <= 0x20:                                 # [82F0] not falling -> bump
+    if _s16(PlayerView(DictBackend(rb, rw)).yvel) <= 0x20:            # [82F0] not falling -> bump
         return _knockback(rb, rw, 0xFFA0), []
     return _stomp(rb, rw, di)                                         # [82F7] stomp
 
@@ -185,7 +188,9 @@ def loop1(rb, rw, apply, emit_sfx):
     (death/hurt/stomp/bump) applies + returns. ``apply({off:(val,width)})`` commits writes (so a later
     spawn's find-free sees earlier ones); ``emit_sfx(idx)`` plays a sound. Returns ``early_ret`` — True means
     the 8295 routine returns here (loop2 is skipped)."""
-    if rb(PLAYER_DEATH) != 0:                              # [8295] already dying -> straight to loop2
+    be = DictBackend(rb, rw)
+    g = PlayerGlobals(be); pv = PlayerView(be)
+    if pv.death_state != 0:                               # [8295] already dying -> straight to loop2
         return False
     di = OBJ_BASE
     for _ in range(12):                                    # [82A5] cx=0xC
@@ -196,7 +201,7 @@ def loop1(rb, rw, apply, emit_sfx):
             hit, hb = hitbox_overlap(rb, rw, PLAYER, di)   # [82C3] 8D7B
             apply(hb)
             if hit:
-                if rw(SCALE_LEVEL) != 0:                   # [82C8] scale/zoom active -> instant death, keep walking
+                if g.scale_level != 0:                     # [82C8] scale/zoom active -> instant death, keep walking
                     # 8C72 returns byte-level {off:value}; loop1's apply wants (val,width) tuples
                     apply({o: (v, 1) for o, v in death_handler(rb, rw, defp, di, PLAYER).items()})   # [82CF]
                 else:
@@ -308,6 +313,8 @@ def loop2_handler(num, rb, rw, si, find_free):
     (writes, sfx). Every effect path is now recovered + verified (the trap 864F was the last ASM_MATCHED-only
     one, verified byte-exact on the skull witness 202721); an unmapped id is a no-op (ASM 84F3). (Names per
     cyxx level.c.)"""
+    be = DictBackend(rb, rw)
+    g = PlayerGlobals(be); pv = PlayerView(be)             # read-only named access
     if num == 0x91:                                        # id 0xc6 [885F] "tap": clear fly timers, then count
         out = {}
         for k in range(0x14):                              # [8861] table 0x6EA9, 0x14 * 8
@@ -315,7 +322,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         out.update(_count_and_score(rb, rw, si, num))
         return out, [8]
     if num == 0xE2:                                       # id 0x117 [882A] end-of-level (level transition)
-        lvl = rb(LEVEL); out = {}
+        lvl = g.level; out = {}
         nxt = {2: 0xC, 0xD: 2, 6: 0xE, 0xF: 6}.get(lvl)
         if nxt is not None:
             out[LEVEL] = (nxt, 1)
@@ -324,7 +331,7 @@ def loop2_handler(num, rb, rw, si, find_free):
     if num == 0x102:                                      # id 0x137 [8859] game complete
         return {LEVEL_DONE: (0xFF, 1)}, []
     if num == 0xE4:                                       # id 0x119 [87FD] checkpoint
-        out = {0x6BAD: (rw(PLAYER), 2), 0x6BAF: (rw(PLAYER_Y), 2)}
+        out = {0x6BAD: (pv.x, 2), 0x6BAF: (pv.y, 2)}
         for k in range(0x46):                             # [8809] reveal item 0x118 in the 0x8F1D table
             o = (0x8F1D + k * 7 + 4) & 0xFFFF
             if rw(o) == 0x118:
@@ -335,7 +342,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         return out, []
     if num == 0xAE:                                       # id 0xe3 [87E6] extra life (+1 life, spawn effect)
         out = {}
-        lives = rb(LIVES)                                 # [65D6] 65DA cmp [0x27D8],0x63
+        lives = g.lives                                   # [65D6] 65DA cmp [0x27D8],0x63
         if lives < 0x63:                                  # [65DF je / 65E1 jb] <99 -> inc (==99 caps; the
             out[LIVES] = ((lives + 1) & 0xFF, 1)          #   65E3 >99 cs:[0x26FA] self-mod path is unreachable)
         out.update(spawn_pickup_effect(rb, rw, 0xE3, PLAYER))   # [87F6] 0xe3 effect at the player pos
@@ -349,8 +356,8 @@ def loop2_handler(num, rb, rw, si, find_free):
         out = dict(_consume_link(rw, si))
         ctr = (rb(BONUS_ENERGY_CTR) + 1) & 0xFF
         out[BONUS_ENERGY_CTR] = (ctr, 1)
-        if ctr >= 6 and rb(ENERGY) != 3:
-            out[ENERGY] = ((rb(ENERGY) + 1) & 0xFF, 1)
+        if ctr >= 6 and g.energy != 3:
+            out[ENERGY] = ((g.energy + 1) & 0xFF, 1)
             out[BONUS_ENERGY_CTR] = (0, 1)
             out.update(spawn_pickup_effect(rb, rw, 0xE2, si))
         return out, [8]
@@ -358,13 +365,13 @@ def loop2_handler(num, rb, rw, si, find_free):
         out = {}
         idx = (num - 0x27) & 0xFFFF
         if 0 <= idx <= 4:
-            out[LETTERS_MASK] = (rb(LETTERS_MASK) | (1 << idx), 1)
+            out[LETTERS_MASK] = (g.bonus_letters | (1 << idx), 1)
         out.update(_consume_link(rw, si))
         return out, [8]
     if num <= 0x32:                                       # ids 0x62-0x67 [854F] utensils/tools
         out = {}
         idx = (num - 0x2D) & 0xFF
-        out[UTENSILS_MASK] = (rb(UTENSILS_MASK) | (1 << idx), 1)
+        out[UTENSILS_MASK] = (g.utensils_mask | (1 << idx), 1)
         if idx == 1:                                      # lighter -> reveal the 0x116 semaphore item
             for k in range(0x46):
                 o = (0x8F1D + k * 7 + 4) & 0xFFFF
@@ -387,7 +394,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         return out, [4]
     if num <= 0x4A:                                       # ids 0x76-0x7f [850A] flying power-up
         out = {}
-        if rb(FLYING) == 0:
+        if g.glider == 0:
             out[FLYING] = (1, 1)
             out[CUR_ANIM] = (0xFF, 1)
             out.update(_consume_link(rw, si))
@@ -396,8 +403,8 @@ def loop2_handler(num, rb, rw, si, find_free):
         return _count_and_score(rb, rw, si, num), [8]
     if num == 0xAD:                                       # id 0xe2 [84F6] energy refill (+1 if < 3)
         out = {}
-        if rb(ENERGY) < 3:
-            out[ENERGY] = ((rb(ENERGY) + 1) & 0xFF, 1)
+        if g.energy < 3:
+            out[ENERGY] = ((g.energy + 1) & 0xFF, 1)
             out.update(_consume_link(rw, si))
             return out, [4]
         return out, []                                    # full -> nothing (the 8509 ret)

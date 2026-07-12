@@ -25,7 +25,7 @@
   "pre2/recovered/object_tick.py": 11,
   "pre2/recovered/player.py": 31,
   "pre2/recovered/player_collision.py": 16,
-  "pre2/recovered/player_interaction.py": 95,
+  "pre2/recovered/player_interaction.py": 75,
   "pre2/recovered/sprite_decode.py": 1,
   "pre2/recovered/terrain_entities.py": 74,
   "pre2/views/audio.py": 64,
