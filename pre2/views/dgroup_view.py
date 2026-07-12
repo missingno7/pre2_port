@@ -126,6 +126,34 @@ class WidthContractBackend:
         self.writes[off & 0xFFFF] = (v & 0xFFFF, 2)
 
 
+class DictBackend:
+    """The PLAIN ``{offset: value}`` write-contract accumulator (vs :class:`WidthContractBackend`'s
+    ``(value, width)`` tuples) — the convention the player-collision island returns, where the width is
+    implicit (the consumer splits words vs its byte-field set). Reads delegate to the island's ``rb``/``rw``
+    closures and do NOT see the accumulated writes (functions that need read-after-write keep a local, exactly
+    like the hand-built dicts they replace). A named view bound to one of these makes ``p.yvel = 0`` record
+    ``{0x4F2A: 0}`` — same contract, no offset at the call site."""
+
+    __slots__ = ("_rb", "_rw", "writes")
+
+    def __init__(self, base_rb, base_rw, out: dict | None = None):
+        self._rb = base_rb
+        self._rw = base_rw
+        self.writes: dict[int, int] = {} if out is None else out
+
+    def rb(self, off: int) -> int:
+        return self._rb(off & 0xFFFF)
+
+    def rw(self, off: int) -> int:
+        return self._rw(off & 0xFFFF)
+
+    def wb(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = v & 0xFF
+
+    def ww(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = v & 0xFFFF
+
+
 # ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
 
 class _U16:
@@ -274,9 +302,12 @@ class StructView:
 
 
 def _coerce_backend(source):
-    """A backend passes through; anything else (NativeGameState / VM ``mem`` / raw ``bytearray``) is wrapped
-    in a :class:`ByteBackend`."""
-    if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend)):
+    """A backend passes through — the package's own backends plus anything marked ``_IS_DGROUP_BACKEND``
+    (island-local overlays like player_collision's read-through ``_Overlay`` opt in with that attribute; the
+    VM ``mem`` object must NOT pass, its ``rb`` takes (seg, off)). Anything else (NativeGameState / VM ``mem``
+    / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
+    if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend, DictBackend)) \
+            or getattr(source, "_IS_DGROUP_BACKEND", False):
         return source
     return ByteBackend(source)
 
@@ -289,6 +320,47 @@ class DgroupView(StructView):
 
     def __init__(self, source):
         super().__init__(_coerce_backend(source), 0)
+
+
+class CollisionGlobals(DgroupView):
+    """The player-collision island's DGROUP globals, NAMED — the readability contract for `1030:5A96` and its
+    handlers (pre2/recovered/player_collision.py). Each field's offset + width + meaning is the recovered
+    evidence (the [asm] site that reads/writes it); gameplay code reads ``g.airborne``, never ``rb(0x6BF3)`` —
+    the offset lives HERE, once. Uncertain-purpose fields keep an honest ``unk_`` name until evidence firms."""
+
+    __slots__ = ()
+
+    airborne      = _U8(0x6BF3)   # bit0 = airborne [asm 6401]; 2 = grounded [64EE]; 0xFF = off-top [5B8E]
+    fall_frames   = _U8(0x6BD2)   # the fall counter: ++ per descending airborne tick [5B4E]; classifies the
+    #                               landing impact (soft <=4 / dust / shake >=0x14 / bounce >0xA) [647C..64D3]
+    fall_latch    = _U8(0x6BD1)   # cleared on every landing [64E9/64DF]; set by the 58A7 FSM elsewhere
+    fall_grace    = _U8(0x6BE0)   # = 6 while falling [63DD]; saturating-dec on each soft land [64DF-64E4]
+    last_land_y   = _U16(0x6BCA)  # Y of the last landing — the fall-height reference [64F3/6499]
+    camera_shake  = _U8(0x6BEA)   # = 8 on a hard fall -> the camera-shake kick [64AE]
+    low_gravity   = _U8(0x6BC7)   # == 1: lighter gravity (4) + terminal>>3 [6313]; cleared on land [642D]
+    drop_gate     = _U8(0x6BE1)   # nonzero: ground-handler-5 tiles FALL THROUGH instead of landing [664A]
+    air_control   = _U8(0x6BDB)   # nonzero: facing-direction accel applies to Xvel in the air [62B9]
+    flying_cheat  = _U8(0x6BC5)   # dormant flying flag: forces the 0x2D/0x2E fly anims [63C3]
+    trail_ring    = _U16(0x6BBE)  # the landing-dust / trail effect ring cursor (5E18's ring) [6483]
+    anim_gate     = _U8(0x6BD0)   # nonzero: hold the current anim (no fall-anim change) [63E2]
+    current_object = _U16(0x6BB1)  # the FSM's current-object pointer; NULL on the player's own collision [6698]
+    dipping_tile  = _U16(0x6BAB)  # map offset of the currently-sagging bridge tile; 0x55AA = none [5BBB/5BF4]
+    grid_dirty    = _U8(0x2DF4)   # whole-grid redraw request [5C82]
+    grid_dirty_token = _U16(0x2DE0)  # its 0x55AA companion token [5C87]
+    page_dirty    = _U8(0x6BBD)   # one-tile direct re-blit page flag (the 653D path) [659C]
+    cam_col       = _U8(0x2DE4)   # camera tile column [6546] (byte read — the on-screen test)
+    cam_row       = _U8(0x2DE6)   # camera tile row [6551]
+    cam_col_word  = _U16(0x2DE4)  # width alias: the camera-range check reads the same cells as WORDS [5ADF]
+    cam_row_word  = _U16(0x2DE6)  # width alias of cam_row [5ACD]
+    respawn_state = _U8(0x6BE4)   # 0 = none; 2 = armed by the off-camera death trigger [65B3/65C9]
+    lives         = _U8(0x27D8)   # consumed by the off-camera trigger [65C1]; set 2 by main 0141
+    unk_27D6      = _U8(0x27D6)   # reset 0 alongside the life consume [65C5]; purpose not yet evidenced
+    end_signal    = _U8(0x6BE5)   # 1 = game over (no lives) [65D0]; 0xFF = game complete (level 0xE) [5B1F];
+    #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
+    map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
+    level         = _U8(0x2D8A)   # the current level index [5B18]
+    level_flags   = _U8(0x8166)   # bit0 = suppress the hard-land bounce [64BA]; bit2 = top-kill fence [5AF1]
+    unk_6BFE      = _U8(0x6BFE)   # post-worker: nonzero -> the 64DF soft-land tail instead of air physics [5B38]
 
 
 class _ScriptEntry(StructView):
