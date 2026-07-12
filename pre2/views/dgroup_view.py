@@ -790,6 +790,12 @@ class ProjectileSlot(RenderSlot):
     kind      = _U8(0x08)    # (phase flag >> 1) & 3 [asm 601C]
     spawn_ptr = _U16(0x0C)   # the spawn record ptr (past the frame table's terminator) [asm 6030]
     yoff      = _U16(0x0E)   # the spawn record's Y offset word [asm 603B]
+    # in-flight aliases: once launched, the 6210 physics tick reinterprets the same words as kinematics
+    alive     = _U8(0x05)    # width alias of RenderSlot.flags: bit 0x20 = alive, else free the slot [asm 621C]
+    xvel      = _U16(0x06)   # width alias of xoff: X velocity, 12.4 fixed [asm 6229]
+    facing    = _U8(0x07)    # width alias of xvel's high byte: the facing byte (bit7) [asm 6256]
+    anim_ptr  = _U16(0x0C)   # width alias of spawn_ptr: the live anim-script cursor [asm 6244]
+    yvel      = _U16(0x0E)   # width alias of yoff: Y velocity [asm 6236]
 
     @property
     def free(self) -> bool:
@@ -829,6 +835,21 @@ class L6Projectile(StructView):
     @property
     def free(self) -> bool:
         return self.sprite == 0xFFFF                     # [asm 6D4F/6EC1]
+
+
+class EffectParticle(RenderSlot):
+    """The 60FE PHYSICS interpretation of the same stride-0x12 slot family — the 0x50A8 pool when it holds
+    bounce/debris particles and boss bolts (emitters: combat_interaction's burst, the boss-script spawners).
+    A genuine UNION with :class:`ObjectSlot`: the object walker keeps velocities at +8/+0xA, the effects
+    pass keeps them at +6/+0xE — which record class applies is decided by the pass that ticks the slot."""
+
+    __slots__ = ()
+
+    xvel     = _U16(0x06)   # X velocity, 12.4 fixed [asm 6229: X += Xvel>>4]
+    facing   = _U8(0x07)    # width alias of xvel's high byte: the facing/flip byte [effects_update]
+    lifetime = _U16(0x0C)   # signed lifetime countdown; doubles as the anim selector [asm 612B/61F9]
+    yvel     = _U16(0x0E)   # Y velocity (gravity +9/frame, capped 0x100) [asm 615C-615F]
+    substate = _U8(0x11)    # width alias of RenderSlot.life: the particle substate byte [effects_update]
 
 
 class ObjectSlot(RenderSlot):
@@ -910,6 +931,7 @@ PlayerGlobals.l6_render_slots = StructArray(0x55EE, 0x12, 5, RenderSlot)    # ..
 PlayerGlobals.boss_targets = StructArray(0x5648, 0x12, 5, RenderSlot)       # the boss/camera-target records
 PlayerGlobals.enemy_slots = StructArray(0x4FD0, 0x12, 12, ObjectSlot)       # the 12 active object/enemy slots
 PlayerGlobals.burst_slots = StructArray(0x50A8, 0x12, 32, ObjectSlot)       # the effect/score-burst pool
+PlayerGlobals.effect_particles = StructArray(0x50A8, 0x12, 32, EffectParticle)  # the SAME pool, 60FE physics view
 #     (0x50A8..0x52E8 — the free pool after the 12 main objects; same record family)
 PlayerGlobals.particles = StructArray(0x7DE6, 6, 20, Particle)              # the 4B8E particle array
 PlayerGlobals.terrain_entities = StructArray(0x9107, 0xF, 16, TerrainEntity)  # the 4907 source list

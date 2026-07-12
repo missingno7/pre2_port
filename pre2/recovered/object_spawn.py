@@ -16,8 +16,8 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, PlayerView, RenderSlot, RngView,
-                                    WidthContractBackend)
+from pre2.views.dgroup_view import (DictBackend, EffectParticle, PlayerGlobals, PlayerView, RenderSlot,
+                                    RngView, WidthContractBackend)
 
 
 class Pre2SpawnGap(Exception):
@@ -116,15 +116,18 @@ def _target_collision(rb, rw, si, writes):
         breakable — underflowing [0x91FC] into the state-6 dive; finish-game demo tick 24.)
       * TARGET-B [asm 81A8-81AF]: the overlap CF is returned as-is (81AF ret) — THIS is the response hit
         (the boss/target that decrements [0x91FC]; the gorilla damages through here, not target A)."""
-    if rw((si + 4) & 0xFFFF) == 0xFFFF:                  # [asm 8182/8186 je 81B2] inactive -> clc (False)
+    be = WidthContractBackend(rb, rw, writes)
+    slot = RenderSlot(be, si)                             # the probing sprite/projectile record
+    if slot.sprite == 0xFFFF:                             # [asm 8182/8186 je 81B2] inactive -> clc (False)
         return False
     di = rw(TARGET_A)                                     # [asm 8188] di = [0xA423] (the target record ptr)
-    if (rw((di + 4) & 0xFFFF) & 0x1FFF) in TARGET_SPRITES:   # [asm 818C-819A] TARGET_A's OWN id is 0x19C/0x19D
+    target_a = RenderSlot(be, di)
+    if (target_a.sprite & 0x1FFF) in TARGET_SPRITES:      # [asm 818C-819A] TARGET_A's OWN id is 0x19C/0x19D
         hit, hb = hitbox_overlap(rb, rw, si, di)             # [asm 819C] 8D7B (si vs target A)
         for off, (val, wid) in hb.items():
             writes[off] = (val, wid)
         if hit:                                          # [asm 819F jae 81A8 / 81A1-81A6]
-            writes[(si + 4) & 0xFFFF] = (0xFFFF, 2)       # free the projectile, then jmp 81B2 -> clc:
+            slot.sprite = 0xFFFF                          # free the projectile, then jmp 81B2 -> clc:
             return False                                  #   consumed, but NOT a response hit
     hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_B))   # [asm 81A8-81AC] target B -> 81AF ret (CF as-is)
     for off, (val, wid) in hb.items():
@@ -182,7 +185,7 @@ def scan_camera_targets(rb, rw):
         writes[SCROLL_VY] = (0xFF80 if _s16(rw(SCROLL_VY)) > 0 else 0xFFC0, 2)        # [asm 8162-816E]
         writes[CAM_STATE] = (5, 1)                        # [asm 8171]
     writes[0xA3F7] = (0, 2)                               # [asm 8176]
-    writes[(si_hit + 4) & 0xFFFF] = (0xFFFF, 2)           # [asm 817C] free the hitting slot
+    RenderSlot(WidthContractBackend(rb, rw, writes), si_hit).sprite = 0xFFFF   # [asm 817C] free the hitting slot
     return writes
 
 
@@ -941,11 +944,17 @@ def spawn_boss_bolt_1ca(rb, rw):
     si = _free_boss_slot(rw)
     if si is None:                                         # [asm 6CBA] pool full -> no spawn
         return {}
-    writes = {(si + 4) & 0xFFFF: (0x1CA, 2), si: (0xC8, 2), (si + 2) & 0xFFFF: (0x58, 2),   # [asm 6CBC-6CC5]
-              (si + 0x11) & 0xFFFF: (0, 1), (si + 0xC) & 0xFFFF: (0x84, 2), (si + 9) & 0xFFFF: (0xFFFF, 2)}
+    writes: dict = {}
+    bolt = EffectParticle(WidthContractBackend(rb, rw, writes), si)
+    bolt.sprite = 0x1CA                                    # [asm 6CBC]
+    bolt.x = 0xC8                                          # [asm 6CC0]
+    bolt.y = 0x58                                          # [asm 6CC5]
+    bolt.substate = 0                                      # [asm 6CCA]
+    bolt.lifetime = 0x84                                   # [asm 6CCE] the anim selector
+    bolt.source = 0xFFFF                                   # [asm 6CD3] no source entity
     r = _rng_lcg_next(rb, rw, writes)                     # [asm 6CD8] 39DF
-    writes[(si + 6) & 0xFFFF] = ((-(((r & 0xF) << 3) & 0xFFFF)) & 0xFFFF, 2)   # [asm 6CDB-6CE6] Xvel
-    writes[(si + 0xE) & 0xFFFF] = (0, 2)                  # [asm 6CE9] Yvel
+    bolt.xvel = (-(((r & 0xF) << 3) & 0xFFFF)) & 0xFFFF   # [asm 6CDB-6CE6] random upward-left
+    bolt.yvel = 0                                          # [asm 6CE9]
     return writes
 
 
@@ -959,15 +968,17 @@ def spawn_boss_bolt_1cb(rb, rw):
     si = _free_boss_slot(rw)
     if si is None:                                         # [asm 6D04] pool full -> no spawn
         return {}
-    writes = {(si + 4) & 0xFFFF: (0x1CB, 2)}              # [asm 6D06]
+    writes: dict = {}
+    bolt = EffectParticle(WidthContractBackend(rb, rw, writes), si)
+    bolt.sprite = 0x1CB                                    # [asm 6D06]
     r = _rng_lcg_next(rb, rw, writes)                     # [asm 6D0B] 39DF
-    writes[si] = (((r & 0x7F) - 0x10) & 0xFFFF, 2)        # [asm 6D0E-6D14] random X
-    writes[(si + 2) & 0xFFFF] = (0, 2)                    # [asm 6D16] Y
-    writes[(si + 0x11) & 0xFFFF] = (0, 1)                 # [asm 6D1B]
-    writes[(si + 0xC) & 0xFFFF] = (0x42, 2)              # [asm 6D1F] anim
-    writes[(si + 9) & 0xFFFF] = (0xFFFF, 2)              # [asm 6D24]
-    writes[(si + 6) & 0xFFFF] = (0, 2)                    # [asm 6D2B] Xvel
-    writes[(si + 0xE) & 0xFFFF] = (0, 2)                  # [asm 6D2E] Yvel
+    bolt.x = ((r & 0x7F) - 0x10) & 0xFFFF                 # [asm 6D0E-6D14] random X
+    bolt.y = 0                                             # [asm 6D16]
+    bolt.substate = 0                                      # [asm 6D1B]
+    bolt.lifetime = 0x42                                   # [asm 6D1F] the anim selector
+    bolt.source = 0xFFFF                                   # [asm 6D24] no source entity
+    bolt.xvel = 0                                          # [asm 6D2B]
+    bolt.yvel = 0                                          # [asm 6D2E]
     return writes
 
 
