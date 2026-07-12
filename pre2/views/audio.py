@@ -11,7 +11,7 @@ from __future__ import annotations
 from pre2.recovered.mixer import BLOCK_LEN, ChannelState, Instrument, Sfx
 from pre2.recovered.tracker import PlaybackState, TrackerInstrument, TrackerVoice
 
-DATA_SEG = 0x1A0F          # GOG build
+from pre2.views.memory_adapter import DATA_SEG   # the game data segment (GOG build)
 CODE_SEG = 0x1030
 
 # per-channel state — arrays of 4 words, indexed by channel*2 (ds=1A0F).

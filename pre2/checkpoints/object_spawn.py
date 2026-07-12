@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.views.object_spawn import apply_ds, readers, tile_reader
+from pre2.views.memory_adapter import apply_ds, readers, tile_reader
 from pre2.gaps import Pre2HybridGap
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.recovered.object_spawn import (BOSS_SONG_INDEX, GLYPH_LATCH, Pre2SpawnGap, SONG_REQUEST,

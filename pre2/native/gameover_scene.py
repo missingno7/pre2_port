@@ -17,7 +17,7 @@ this module recovers the STATE side:
 [0x2879]!=0 (demo playback) skips the whole scene, exactly as the ASM's 9B2C gate."""
 from __future__ import annotations
 
-from pre2.views.input_decode import apply_ds, readers
+from pre2.views.memory_adapter import apply_ds, readers
 from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input

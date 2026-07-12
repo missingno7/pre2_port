@@ -12,7 +12,7 @@ per-frame update reads/writes this image natively and the VM is needed only as t
 from __future__ import annotations
 
 ADDR_SPACE = 0x100000   # 1 MB real-mode address space (DGROUP @ DS<<4, tilemap @ [0x2DDA], framebuffer, ...)
-DATA_SEG = 0x1A0F       # the game data segment (DGROUP)
+from pre2.views.memory_adapter import DATA_SEG   # the game data segment (DGROUP)
 
 
 class NativeGameState:

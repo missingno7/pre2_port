@@ -18,7 +18,7 @@ from pre2.recovered.object_render import (
     LIST_BASE, LIST_TOP, RECORD_BYTES, Camera, Sprite, SpriteAttr,
 )
 
-DATA_SEG = 0x1A0F
+from pre2.views.memory_adapter import DATA_SEG
 CODE_SEG = 0x1030
 PLANE_BYTES = EGA_PLANE_STRIDE   # 0x10000 per EGA plane
 

@@ -14,7 +14,7 @@ shared address space, invisible to the DGROUP comparison, so calling it here is 
 """
 from __future__ import annotations
 
-from pre2.views.input_decode import readers
+from pre2.views.memory_adapter import readers
 from pre2.views.camera_pan import apply_camera_pan
 from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG

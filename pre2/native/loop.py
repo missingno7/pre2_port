@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import Counter
 
 from pre2.views.dgroup_view import apply_contract
-from pre2.views.object_spawn import apply_ds, readers, tile_reader
+from pre2.views.memory_adapter import apply_ds, readers, tile_reader
 from pre2.views.object_tick import LiveWalkerMem
 from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
                                      Pre2LevelEndTransition, Pre2RespawnTransition)

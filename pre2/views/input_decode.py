@@ -6,6 +6,6 @@ byte/word readers + write-apply from the effects-update island.
 """
 from __future__ import annotations
 
-from pre2.views.effects_update import apply_ds, readers
+from pre2.views.memory_adapter import apply_ds, readers
 
 __all__ = ["readers", "apply_ds"]
