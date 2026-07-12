@@ -15,7 +15,7 @@ from pre2.recovered.combat_interaction import (death_handler, hitbox_overlap, ro
                                                spawn_effect_burst, _Overlay)
 from pre2.recovered.player_collision import _offcamera_trigger
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, PlayerView, RngView,
+from pre2.views.dgroup_view import (DictBackend, ObjectSlot, PlayerGlobals, PlayerView, RngView,
                                     WidthContractBackend)
 
 SCORE = 0x6C0E              # [asm 888B] 32-bit player score (low 0x6C0E, high 0x6C10)
@@ -104,9 +104,10 @@ def _hurt(rb, rw, di):
     Returns ``(writes, sfx)``."""
     out = {}
     sfx = [3]                                              # [834B] play_sfx(3)
-    hc = rb((di + 0x10) & 0xFFFF) >> 2                     # [834E] hit count
+    obj = ObjectSlot(WidthContractBackend(rb, rw, out), di)
+    hc = obj.hits >> 2                                     # [834E] hit count
     if hc != 0xB:                                          # [8355] cap
-        out[(di + 0x10) & 0xFFFF] = ((rb((di + 0x10) & 0xFFFF) + 4) & 0xFF, 1)   # [8359]
+        obj.hits = (obj.hits + 4) & 0xFF                   # [8359]
         cnt = (hc + 1) & 0xFF                              # [835D] inc
         if (cnt & 1) == 0:                                 # [8360] shr/jnb -> only on even counts
             eff = rw((HURT_SFX_TABLE + cnt) & 0xFFFF)      # [8366]
@@ -145,22 +146,23 @@ def _stomp(rb, rw, di):
     """[asm 82F7] player stomps object ``di`` (attacking + falling fast): spawn effect, mark stomped, and on
     the 3rd stomp (``[di+0x10]&3 == 2``) kill it (squash anim + bounce velocities); else knock the player up."""
     out = {}
-    v10 = rb((di + 0x10) & 0xFFFF)
+    obj = ObjectSlot(WidthContractBackend(rb, rw, out), di)
+    v10 = obj.hits
     dl = v10 & 3
     out.update(spawn_pickup_effect(rb, rw, ((dl << 1) + 0x52) & 0xFFFF, PLAYER))   # [82F7..8304]
-    out[(di + 5) & 0xFFFF] = (rb((di + 5) & 0xFFFF) | 0x40, 1)    # [8307]
+    obj.flags = obj.flags | 0x40                           # [8307] mark stomped
     if dl == 2:                                            # [830B] kill
-        out[(di + 0xE) & 0xFFFF] = (0xFF, 1)               # [8310]
+        obj.state = 0xFF                                   # [8310]
         out.update(advance_anim_script(rw, di))            # [8314] 80CB
         defp = rw((di + 6) & 0xFFFF)
         out[(defp + 4) & 0xFFFF] = (rb((defp + 4) & 0xFFFF) & 0xF7, 1)   # [831A]
-        out[(di + 0xA) & 0xFFFF] = (0xFF38, 2)             # [831E] object Yvel up
+        obj.yvel = 0xFF38                                  # [831E] object Yvel up
         ax = abs(_s16(rw(PLAYER_YVEL)))                    # [8323] |player Yvel|
         if not (_s16(rw(di)) > _s16(rw(PLAYER))):          # [8330] obj left of player -> push left
             ax = -ax
-        out[(di + 8) & 0xFFFF] = ((ax * 3) & 0xFFFF, 2)    # [8336] object Xvel = 3*(+/-|Yvel|)
+        obj.xvel = (ax * 3) & 0xFFFF                       # [8336] object Xvel = 3*(+/-|Yvel|)
         return out, []
-    out[(di + 0x10) & 0xFFFF] = ((v10 + 1) & 0xFF, 1)      # [8340]
+    obj.hits = (v10 + 1) & 0xFF                            # [8340]
     out.update(_knockback(rb, rw, 0xFFA0))                 # [8343] ax=0xffa0 -> 837A
     return out, []
 
