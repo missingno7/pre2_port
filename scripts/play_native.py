@@ -93,10 +93,11 @@ def main(argv=None) -> int:
                     help="DEBUG: seed gameplay from a savestate dir (memory_1mb.bin) instead of cold-booting")
     ap.add_argument("--play-demo", default=None,
                     help="replay a recorded demo. If DIR/game_tick_demo.bin exists (created once by "
-                         "scripts/verify_native_tick_demo.py DIR), the replay is DETERMINISTIC: seeded from the "
-                         "oracle's first gameplay tick, per-tick keys injected, gameplay digest checked vs the VM "
-                         "every tick. Otherwise falls back to APPROXIMATE scancode replay (cold boot + live keys "
-                         "merged; front-end timing drifts).")
+                         "scripts/verify_native_tick_demo.py DIR), the GAMEPLAY replay is DETERMINISTIC: seeded "
+                         "from the oracle's first gameplay tick, per-tick keys injected, gameplay digest checked "
+                         "vs the VM every tick. A COLD-START recording additionally plays the FRONT END first "
+                         "from the recorded scancodes (approximate pacing — the front end has no game ticks). "
+                         "Without a tick file: fully APPROXIMATE scancode replay (cold boot + live keys merged).")
     # Frozen exe: look for the game data NEXT TO the .exe (drop it into the GOG folder and run). Source run:
     # the repo's assets/. (ROOT is the PyInstaller temp extraction dir when frozen, so it can't hold the data.)
     _default_game_root = str(Path(sys.executable).parent) if getattr(sys, "frozen", False) else str(ROOT / "assets")
@@ -144,13 +145,33 @@ def main(argv=None) -> int:
     if not (Path(gr) / "SPRITES.SQZ").exists():
         raise SystemExit(f"--game-root {gr}: no SPRITES.SQZ here — point it at the Prehistorik 2 data folder")
     demo = None
-    if args.play_demo and not (Path(args.play_demo) / "game_tick_demo.bin").exists():
-        # APPROXIMATE scancode fallback only — the deterministic tick replay below doesn't need the input demo
-        # (it has its own exact per-tick keys, gtd.keys, covering the WHOLE recording — see the loop below).
-        # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud here).
-        from dos_re.input_demo import InputDemoPlayback
-        demo = DemoInput(InputDemoPlayback.load(args.play_demo))
-        print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
+    if args.play_demo:
+        _tick_exists = (Path(args.play_demo) / "game_tick_demo.bin").exists()
+        # A COLD-START recording (start snapshot at program entry, steps==0) covers the FRONT END too — and the
+        # tick file is GAMEPLAY-ONLY by design (the front end has no game ticks), so a tick replay alone would
+        # jump straight to the level and silently skip the intro/menu the demo was recorded to show.
+        try:
+            import json as _json
+            _st = _json.loads((Path(args.play_demo) / "snapshot" / "state.json").read_text(encoding="utf-8"))
+            _fe_portion = int(_st.get("steps") or 0) == 0
+        except Exception:                                          # noqa: BLE001 — no start snapshot at all is a
+            _fe_portion = not (Path(args.play_demo) / "snapshot").exists()   # dos_re cold-start demo (front end incl.)
+        if not _tick_exists:
+            # APPROXIMATE scancode fallback — the deterministic tick replay doesn't need the input demo (it has
+            # its own exact per-tick keys, gtd.keys, covering the WHOLE gameplay recording — see the loop below).
+            # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud).
+            from dos_re.input_demo import InputDemoPlayback
+            demo = DemoInput(InputDemoPlayback.load(args.play_demo))
+            print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
+        elif _fe_portion:
+            # tick file + a cold-start recording: load the scancode events so the replay can SHOW the front end
+            # first (drive_input merges demo.held); the tick replay then reseeds gameplay byte-exactly. Soft-fail:
+            # without the input plumbing (standalone) the tick replay still works, just without the front end.
+            try:
+                from dos_re.input_demo import InputDemoPlayback
+                demo = DemoInput(InputDemoPlayback.load(args.play_demo))
+            except ImportError:
+                print("cold-start demo: input-demo plumbing unavailable here -- tick replay only (no front end)")
 
     # DPI awareness BEFORE any window exists: on Windows with display scaling (e.g. 150%) an un-aware process
     # gets the LOGICAL desktop size, so a borderless-fullscreen window doesn't cover the physical screen and
@@ -1047,8 +1068,18 @@ def main(argv=None) -> int:
     def run_front_end(gen, state, caption):
         """Present + drive a front-end scene generator to completion. Returns 'done' (it finished -> a level is
         loaded), 'continue' (the mobile CONTINUE button was tapped -> pause here so the picker can run; the SAME
-        generator resumes on the next call), or 'quit'. Shared by the cold boot, the game-over / THE-END restarts,
-        and the CONTINUE carte+load."""
+        generator resumes on the next call), 'expert_eater' (a BEGINNER committed level 8/9 -> the CASTLE wall must
+        show, then the menu re-runs — [asm 0163]), or 'quit'. Shared by the cold boot, the game-over / THE-END
+        restarts, and the CONTINUE carte+load."""
+        from pre2.gaps import Pre2ExpertEater
+        try:
+            return _run_front_end_scenes(gen, state, caption)
+        except Pre2ExpertEater:
+            # [asm 0163->0178] native_carte_and_load raised BEFORE the carte/loader — the level was never loaded;
+            # hand back to run_menu_flow, which shows CASTLE.SQZ and re-enters the press-1/2 menu (jmp 012F).
+            return "expert_eater"
+
+    def _run_front_end_scenes(gen, state, caption):
         for scene in gen:
             # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
             # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
@@ -1111,12 +1142,19 @@ def main(argv=None) -> int:
         if gen is None:
             from pre2.native.front_end import native_menu_flow
             gen = native_menu_flow(state, dos, gr)
+        from pre2.native.front_end import native_menu_flow as _native_menu_flow
         prev_frontend = ref["frontend"]
         ref["frontend"] = True                                     # menus: whole-screen gestures + buttons
         try:
             result = run_front_end(gen, state, caption)
-            while result == "continue":                            # CONTINUE tapped on the press-1/2 menu
-                ref["continue_requested"] = False
+            while result in ("continue", "expert_eater"):
+                if result == "expert_eater":                       # [asm 0163->0178] a BEGINNER committed level 8/9
+                    if not present_expert_eater(state):            #   -> CASTLE.SQZ (no carte/load), then the menu
+                        return False                               #   (window closed while showing the wall)
+                    gen = _native_menu_flow(state, dos, gr)        # [asm 0199 -> jmp 012F -> 8E45] fresh press-1/2 menu
+                    result = run_front_end(gen, state, caption)
+                    continue
+                ref["continue_requested"] = False                  # CONTINUE tapped on the press-1/2 menu
                 if touch is not None:
                     touch.reset()                                  # drop the tap so it can't leak into the picker
                 if run_continue_screen(state):                     # a checkpoint chosen -> carte + load it
@@ -1134,6 +1172,7 @@ def main(argv=None) -> int:
         recovered CARTE scene with the 'you are here' marker at the NEW level (the VM advances [0x2D8A] before the
         carte too). The full 4CCB exit-anim cutscene (iris + player walk + food-throw count-up) is deferred; the
         tally TEXT is shown."""
+        from pre2.gaps import Pre2ExpertEater
         from pre2.native.audio import native_load_song
         from pre2.native.front_end import _native_carte
         from pre2.native.level_state import level_end_takes_tally, native_level_end
@@ -1236,7 +1275,11 @@ def main(argv=None) -> int:
                 native_audio.poll(state)
             if not ref["running"]:
                 return
-        native_level_end(state, game_root=gr)
+        try:
+            native_level_end(state, game_root=gr)
+        except Pre2ExpertEater:                                    # [asm 0163] beginner advanced into level 8/9 -> the
+            expert_eater_screen(state, dos)                        #   CASTLE wall BEFORE the carte/load (never loaded),
+            return                                                 #   then the menu. No carte, no level reveal.
         for scene in _native_carte(state, dos, gr):                # fire (press after release) advances
             present_front_scene(scene, _FRONT_END_FPS, "PRE2 VM-less — world map")
             pump()
@@ -1287,6 +1330,32 @@ def main(argv=None) -> int:
             return                                                 # (full touch support: buttons + CONTINUE picker)
         native_load_level_palette(state, dos)                      # the level palette after the carte DAC
         reveal_level(state, dos)                                    # 3054 center-out curtain into the level
+
+    def present_expert_eater(state):
+        """[asm 0178] Present JUST the CASTLE 'YOU MUST BE AN EXPERT EATER' wall (fade-in + wait-for-fire) — no
+        load, no menu. Returns False if the window closed while it was up. Shared by the progression path
+        (:func:`expert_eater_screen`) and the menu/password/CONTINUE path (run_menu_flow's 'expert_eater' status)."""
+        from pre2.native.front_end import native_expert_eater
+        print("  EXPERT-EATER wall (beginner reached level 8/9) -> CASTLE.SQZ -> menu")
+        for scene in native_expert_eater(state, gr):               # [asm 0178] fade-in + wait-for-fire
+            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — EXPERT EATER")
+            pump(); drive_input(state)
+            if native_audio is not None:
+                native_audio.poll(state)
+            if not ref["running"]:
+                return False
+        return True
+
+    def expert_eater_screen(state, dos):
+        """[asm 0163->0178] A BEGINNER advanced into level 8/9 -> the CASTLE 'YOU MUST BE AN EXPERT EATER' wall
+        (no level load), then back to the press-1/2 menu. The PROGRESSION entry (between_levels caught the wall
+        AFTER the tally): show the scene, re-enter the menu so the player can restart as EXPERT, then load."""
+        if not present_expert_eater(state):
+            return
+        if not run_menu_flow(state, dos, "PRE2 VM-less — restart"):   # [asm 0160 -> 8E45] menu -> map -> carte -> loader
+            return
+        native_load_level_palette(state, dos)
+        reveal_level(state, dos)
 
     def the_end_restart(state, dos):
         """[asm 5034 -> main 0x12f] THE END: the player cleared the final level 0xE ([0x6be5]==0xFF). Show the
@@ -1627,7 +1696,7 @@ def main(argv=None) -> int:
         gameplay frame reaches the screen — the (future) interpolation replaces exactly this: hold prev+cur
         FrameSnapshots and present lerped frames at ref["display_hz"] instead of one faithful frame per tick.
         The TICK cadence itself never changes with enhancements — only what is shown between ticks."""
-        print("Gameplay — SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
+        print("Gameplay -- SPACE = fire/jump, arrows/numpad = move, P = pause, ESC = quit. (VM-less native gameplay)")
         if args.debug:
             print("  [debug] F11 = dump a native snapshot (--snapshot-loadable) for repro.")
         ref["frontend"] = False       # gameplay: touch BASH is level (hold to keep attacking), not edge-triggered
@@ -1913,9 +1982,16 @@ def main(argv=None) -> int:
                     _animate(state, _REVEAL_S, lambda p: _curtain_frame(base, p))
 
         ref["p_prev"] = True    # a Start/P still held from the menu-in must not read as an instant pause edge
+        from pre2.native.front_end import is_expert_eater_wall
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
+            if is_expert_eater_wall(state):                        # SAFETY NET only: the real [asm 0163] gate now fires
+                expert_eater_screen(state, dos)                    #   BEFORE the carte/load (native_carte_and_load /
+                if not ref["running"]:                             #   native_level_end raise Pre2ExpertEater), so no
+                    break                                          #   normal path reaches gameplay with the wall set.
+                continue                                           #   This catches only DIRECT entry (--snapshot of a
+                #                                                    beginner 8/9 state, which skips the front-end).
             if ref["exit_to_menu"]:                                # Back dialog: abandon the level -> main menu
                 ref["exit_to_menu"] = False
                 quit_to_menu(state, dos)                           # menu -> map -> carte -> fresh level loaded
@@ -2045,6 +2121,54 @@ def main(argv=None) -> int:
             from pre2.native.game_tick_demo import GameTickDemo, _inject, gameplay_digest
             gtd = GameTickDemo.load(tick_path)
             print(f"tick replay: {gtd.n_ticks} game ticks (deterministic; digest-checked vs the VM oracle)")
+            if demo is not None:
+                # ---- the recording STARTS AT POWER-ON: show the FRONT END first (OLDIES -> titles -> menu ->
+                #      map -> loader), driven by the recorded scancodes via drive_input's demo merge. Pacing is
+                #      APPROXIMATE (the recorded boundary clock is the workbench's emulated-frame budget: waits
+                #      stretch, timed screens play at native pace; live keys are merged, so SPACE can nudge past
+                #      a long wait). The tick replay below RESEEDS from the oracle's first gameplay tick, so the
+                #      gameplay stays byte-exact regardless of any front-end pacing drift. ----
+                print("cold-start demo: playing the FRONT END from the recorded inputs first (approximate "
+                      "pacing; live keys can nudge), then the byte-exact gameplay tick replay")
+                fe_state = NativeGameState(build_boot_memory())
+                init_keyboard_input(fe_state)
+                fe_dos = NativeVGA()
+                # BOUND the presentation. The recorded scancodes are keyed to the VM's frame clock; merged into
+                # native's (faster, differently-paced) front end they reliably drive the TIMED intro (fire nudges
+                # OLDIES/titles) but NOT the interactive press-1/2 menu + level-select — so native_front_end would
+                # wait there forever (the menu never gets a valid selection). A faithful, keystroke-exact front-end
+                # replay needs the VM's per-frame input injected (verify_native_frontend.py) or a baked front-end
+                # input track; neither is available VM-lessly here. Since this presentation is DISCARDED (gtd.seed
+                # reseeds gameplay below), cap it so a cold-start demo ALWAYS reaches its byte-exact gameplay replay
+                # instead of hanging at the menu. If the menu does complete first, run_menu_flow returns earlier.
+                _FE_PRESENT_CAP = 1200     # ~native's full intro (~900 frames) + a short menu window
+
+                def _capped_frontend(gen, n):
+                    for k, scene in enumerate(gen):
+                        if k >= n:
+                            print(f"  front-end presentation reached the {n}-frame cap (the recorded menu "
+                                  f"navigation is not reproducible VM-lessly) -- handing to the gameplay replay")
+                            return
+                        # Pin the menu ATTRACT idle-timeout OFF ([asm 8E90] [0x27F0] >= 0x10E -> 8E98 auto-advances
+                        # to the in-game demo). The recorded scancodes can't land the press-1/level-select on
+                        # native's clock, so an un-pinned menu idles out into the ATTRACT demo (user: "it plays that
+                        # ingame demo"). This presentation is DISCARDED (gtd.seed reseeds gameplay), so hold the
+                        # idle counter low -> the menu waits cleanly instead of drifting into attract.
+                        fe_state.data[DS + 0x27F0] = 0
+                        fe_state.data[DS + 0x27F1] = 0
+                        yield scene
+                try:
+                    run_menu_flow(fe_state, fe_dos, "PRE2 VM-less — cold-start demo (front-end)",
+                                  gen=_capped_frontend(
+                                      native_front_end(fe_state, fe_dos, 0, game_root=gr,
+                                                       intro_skippable=settings["intro_skippable"]),
+                                      _FE_PRESENT_CAP))
+                except Exception as e:                             # noqa: BLE001 — presentation only here: the
+                    print(f"  front-end replay stopped early: {type(e).__name__}: "   # gameplay reseeds below
+                          f"{str(e)[:80]}")
+                if not ref["running"]:
+                    pygame.quit()
+                    return 0
             state = NativeGameState(bytearray(gtd.seed))           # the VM's memory at the first gameplay tick
             dos = NativeVGA()
             native_load_level_palette(state, dos)
@@ -2083,17 +2207,17 @@ def main(argv=None) -> int:
                     # against the level the transition just loaded, which is exactly what produced gtd.digests[i]
                     # when this was recorded. (Verified: without this, EVERY demo that crosses a transition
                     # reports a spurious divergence at the very first post-transition tick.)
-                    print(f"  tick replay: LEVEL END at tick {i} — continuing the recording into the next level")
+                    print(f"  tick replay: LEVEL END at tick {i} -- continuing the recording into the next level")
                     between_levels(state, dos)
                     transitions += 1
                     continue
                 except Pre2GameOverTransition:
-                    print(f"  tick replay: GAME OVER at tick {i} — continuing the recording into the restart")
+                    print(f"  tick replay: GAME OVER at tick {i} -- continuing the recording into the restart")
                     game_over_restart(state, dos)
                     transitions += 1
                     continue
                 except Pre2GameComplete:
-                    print(f"  tick replay: THE END at tick {i} — the game is finished")
+                    print(f"  tick replay: THE END at tick {i} -- the game is finished")
                     the_end_restart(state, dos)
                     break
                 except Exception as e:                             # noqa: BLE001
@@ -2103,7 +2227,7 @@ def main(argv=None) -> int:
                     return 0
                 if div is None and gameplay_digest(state.data[DS:DS + 0x10000]) != gtd.digests[i]:
                     div = i
-                    print(f"  tick replay DIVERGENCE at tick {i} (gameplay digest mismatch) — continuing")
+                    print(f"  tick replay DIVERGENCE at tick {i} (gameplay digest mismatch) -- continuing")
                 if native_audio is not None:
                     native_audio.poll(state)
                 i += 1
@@ -2117,7 +2241,7 @@ def main(argv=None) -> int:
                 gameplay_loop(state, dos)                          # hand over to live play once the recording ends
             pygame.quit()
             return 0
-        print(f"(no {tick_path.name} in the demo — approximate input replay; run "
+        print(f"(no {tick_path.name} in the demo -- approximate input replay; run "
               f"scripts/verify_native_tick_demo.py {args.play_demo} once to make it deterministic)")
 
     if args.from_level is not None:
@@ -2143,7 +2267,7 @@ def main(argv=None) -> int:
             # A savestate taken DURING a level-load / transition (F12 mid-curtain): the gameplay DGROUP is not
             # populated yet (player/objects/camera/frame-counter all zero, ip parked in the loader's retrace
             # wait). Native has no "resume a half-loaded level" path, so seed a CLEAN LEVEL{lvl+1} instead.
-            print(f"--snapshot: DGROUP is PRE-GAMEPLAY (level {lvl + 1} mid-load — player/objects/frame-counter "
+            print(f"--snapshot: DGROUP is PRE-GAMEPLAY (level {lvl + 1} mid-load -- player/objects/frame-counter "
                   f"all zero). Native can't resume a half-loaded level; booting LEVEL{lvl + 1} fresh instead.")
             state = native_cold_boot(gr, level=lvl)
         else:

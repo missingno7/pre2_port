@@ -28,6 +28,7 @@ _RENDERERS = {
     "TITUS.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],
     "MOTIF.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],
     "THEEND.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],   # THE END (5034): 768-byte pal + 13h image
+    "CASTLE.SQZ": lambda dec: dec[_IMAGE_OFF:_IMAGE_OFF + _IMAGE_LEN],   # the "EXPERT eater" wall (0178, res 0x2C)
 }
 
 _decode_cache: dict = {}

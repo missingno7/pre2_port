@@ -32,7 +32,7 @@ from pre2.native.vga import _dac8
 from pre2.bridge.image_scene import image_palette, render_image_scene
 from pre2.bridge.input_decode import apply_ds, readers
 from pre2.bridge.oldies_scene import build_oldies_scene
-from pre2.gaps import Pre2HybridGap
+from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
@@ -330,6 +330,16 @@ def native_menu_flow(state, dos, game_root: str):
     native_load_song(state, "PRESENTA.TRK", game_root)   # [asm 015a/0107 ax=3] the title/MENU song — the shared
     #   restart path (main 0x141) reloads it before 8e45, so a return here from THE END (FINAL.TRK) or the game-over
     #   scene (BOULA.TRK) switches back to the menu music. Idempotent on the cold boot (the PRESENT title just set it).
+    # --- [asm 0141..0155] the FRESH-start block runs BEFORE the menu (every 8E45 entry: the cold start and the
+    #     0199/012F restarts all pass through it): lives=2, BONUS-letters/utensils masks cleared, damage reset.
+    #     native_level_start re-applies the same values at the load (outcome-identical), but writing them HERE
+    #     matches the VM's state at menu entry byte-for-byte (the front-end transition witness reads it). ---
+    d = state.data
+    d[_DS + 0x27D8] = 0x02                                # [asm 0141] lives
+    d[_DS + 0x6CA7] = 0x00                                # [asm 0146] BONUS-letters mask
+    d[_DS + 0x7B19] = 0x14                                # [asm 014B] damage/energy
+    d[_DS + 0x7B18] = 0x00                                # [asm 0150]
+    d[_DS + 0x6CA8] = 0x00                                # [asm 0155] utensils mask
     # --- 8e45: the "press 1/2" difficulty screen (MENU.SQZ = resource 8, a 13h image) faded in over 0xA0 DAC
     #     entries ([asm 8e67 cl=0xA0] -> 919f), then held while the dispatch waits for a choice. Pixel-exact vs the
     #     VM. The dispatch flags [0x27f6]/[0x27f7] ARE the '1'/'2' key-table entries (0x27f4 + scancode 2/3); fire =
@@ -379,6 +389,12 @@ def native_carte_and_load(state, dos, game_root: str):
     FrontEndScene frames; on return the level is loaded and ready for ``native_frame_step``. Factored out of
     :func:`native_menu_flow` so a host that picks a level directly (the CONTINUE screen) reaches the loader without
     re-driving the press-1/2 menu."""
+    # --- [asm 0163] the EXPERT-EATER gate: main checks it AFTER the level is committed (the menu / a password match /
+    #     the CONTINUE picker all wrote [0x2d8a]/[0xB197] already) but BEFORE the carte (9520) and the loader (447d).
+    #     A BEGINNER who chose level 8/9 (the penguin is expert-only) is shown CASTLE.SQZ and sent back to the menu,
+    #     so we must raise BEFORE yielding the carte / loading — the flow driver catches this and drives the wall. ---
+    if is_expert_eater_wall(state):
+        raise Pre2ExpertEater()
     # --- 9520 CARTE: the world-map scroll-in the real flow shows between the mode-select and the loader (main 0x01A8).
     #     Loads MAP.SQZ (the map master), stamps the per-level 'you are here' marker (the player's position) onto it =
     #     the de-planarize [0x667a]:[0x62da] (byte-exact vs the VM master), then scrolls the map in via the recovered +
@@ -657,6 +673,40 @@ def _native_title_screen(game_root: str, name: str, *, n_entries: int, hold: int
         yield FrontEndScene(MODE_LINEAR, palette=held8, linear=image)
     for p6 in fade_out:                                                 # [asm 914E -> 9286] fade-out retrace frames
         yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
+
+
+def native_expert_eater(state, game_root: str):
+    """[asm 0163->0178] The "YOU MUST BE AN EXPERT EATER" wall.
+
+    When a BEGINNER ([0xB197]==0) advances into level 8 or 9 ([0x2D8A] in {8,9}), main's 0x0163 gate shows
+    CASTLE.SQZ (resource 0x2C, ``dx=0x2c`` -> 107B) INSTEAD of loading the level: fade it IN (919F, ``cl=0xFF``
+    = the full 256-entry DAC), HOLD it while the scene-wait (0BBE) waits for the fire key press+release, then
+    re-enter the press-1/2 MENU (0199 ``mov ax,1``; jmp 012F -> 8E45). There is NO fade-OUT (unlike THE END).
+
+    A GENERATOR yielding :class:`FrontEndScene` frames; the caller re-enters ``native_menu_flow`` when it returns.
+    Same 13h-image + fade + 0BBE-wait primitives as :func:`native_the_end`, reused rather than re-derived."""
+    image = render_image_scene("CASTLE.SQZ", game_root)                # [asm 0178->107B res 0x2c] 64000-byte 13h image
+    pal6 = image_palette("CASTLE.SQZ", game_root)                      # the 256-entry DAC at the asset's head
+    fade_in = fade_in_frames(pal6, 0xFF)                              # [asm 018C cl=0xFF -> 919F] black -> target
+    held = fade_in[-1]
+    for p6 in fade_in:                                                 # [asm 919F] fade-in retrace frames
+        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
+    held8 = _expand_palette6(held)
+    phase = WAIT_PRESS                                                 # [asm 0196 -> 0BBE] wait for fire press+release
+    while True:
+        yield FrontEndScene(MODE_LINEAR, palette=held8, linear=image)
+        phase, done = native_scene_wait(state, phase)
+        if done:
+            break
+    # [asm 0199 mov ax,1 / jmp 012F -> 8E45] no fade-out — the caller re-enters the press-1/2 menu directly.
+
+
+def is_expert_eater_wall(state) -> bool:
+    """[asm 0163-0176] True when a BEGINNER (``[0xB197]==0``) has advanced to level 8 or 9 (``[0x2D8A]`` in
+    {8, 9}) — where main's 0x0163 gate shows the CASTLE "expert eater" wall (:func:`native_expert_eater`)
+    instead of loading the level. Beginner can only PLAY levels 0..7; 8 (penguin) is the expert-only wall."""
+    d = state.data
+    return d[_DS + 0x2D8A] in (8, 9) and d[_DS + 0xB197] == 0
 
 
 def native_the_end(state, game_root: str):

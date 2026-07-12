@@ -135,11 +135,44 @@ def test_ceiling_head_bump_zeroes_yvel_and_snaps_down():
     assert out[0x4F1E] == 0x360          # (0x357 & 0xFFF0) + 0x10
 
 
-def test_ceiling_head_bump_yvel0_fails_loud():
-    # idx 1 with Yvel==0 takes the 668B push-out branch, which is unwitnessed
+def test_ceiling_head_bump_yvel0_null_pointer_noop():
+    # idx 1 with Yvel==0 takes the 668B "push out of a solid ceiling" branch. It operates through the [0x6BB1]
+    # current-object pointer, which is NULL on the player path — so it derefs low DGROUP, lands on a non-ceiling-
+    # solid cell, and no-ops (byte-exact with the original's latent dead code). It must NOT fail loud (the freeze).
     rb, rw, read_es = _ceil_mem(handler_idx=1, yvel=0)
-    with pytest.raises(NotImplementedError):
-        collision_ceiling(rb, rw, read_es, 0)
+    assert collision_ceiling(rb, rw, read_es, 0) == {}
+
+
+def test_ceiling_headbump_pushout_transcription():
+    # Prove the 668B logic directly (it is a no-op for the player, but must be byte-exact if [0x6BB1] were set).
+    from pre2.recovered.player_collision import TILE_CEIL_SOLID_TABLE, _ceiling_headbump_pushout
+    mem: dict[int, int] = {}
+
+    def setw(a, v):
+        mem[a] = v & 0xFF
+        mem[a + 1] = (v >> 8) & 0xFF
+    rb = lambda o: mem.get(o, 0) & 0xFF                                     # noqa: E731
+    rw = lambda o: (mem.get(o, 0) & 0xFF) | ((mem.get(o + 1, 0) & 0xFF) << 8)  # noqa: E731
+
+    # anim [0x4F20] in {0x0A, 0x15} skips the push-out outright [668E/6692]
+    setw(0x4F20, 0x0A)
+    assert _ceiling_headbump_pushout(rb, rw, lambda o: 0xFF) == {}
+    mem.clear()
+
+    # null pointer ([0x6BB1]=0): reads low DGROUP as a bogus position, lands on a non-ceiling-solid cell -> {}
+    assert _ceiling_headbump_pushout(rb, rw, lambda o: 0xFF) == {}   # ceil_solid[0xFF] defaults 0
+
+    # with a (synthetic) non-null pointer AND a ceiling-solid cell: nudge toward the open side
+    setw(0x6BB1, 0x4F1C)         # pretend the current-object ptr is the player
+    setw(0x4F1C, 0x0200)         # X -> col 0x20
+    setw(0x4F1E, 0x0100)         # Y -> row 0x10 ([ptr+2])
+    tiles = {0x1020: 0x50, 0x101F: 0x51}                    # cell (row<<8|col)=0x1020, left=0x101F
+    read_es = lambda o: tiles.get(o & 0xFFFF, 0)            # noqa: E731
+    mem[TILE_CEIL_SOLID_TABLE + 0x50] = 1                   # the player's cell is ceiling-solid
+    mem[TILE_CEIL_SOLID_TABLE + 0x51] = 1                   # left also solid -> push RIGHT (+0x10)
+    assert _ceiling_headbump_pushout(rb, rw, read_es) == {0x4F1C: 0x0210}
+    mem[TILE_CEIL_SOLID_TABLE + 0x51] = 0                   # left open -> push LEFT (-0x10) toward it
+    assert _ceiling_headbump_pushout(rb, rw, read_es) == {0x4F1C: 0x01F0}
 
 
 def test_ceiling_trigger_idx2_is_offcamera_death():

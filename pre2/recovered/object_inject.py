@@ -119,6 +119,7 @@ def handler_ground_snap_spawn(rb, rw, read_es, si, find_free):
     slot = find_free()                                    # [7DE7] no free slot -> no draw
     if slot is None:
         return out, False
+    base = OBJ_BASE + slot * OBJ_STRIDE
 
     # [7DF4] place at playerX + the next ring offset, advance the ring
     ring = rw(SPAWN_OFFSET_RING)
@@ -126,6 +127,16 @@ def handler_ground_snap_spawn(rb, rw, read_es, si, find_free):
     new_x = (player_x + rw((ring - SPAWN_OFFSET_TABLE) & 0xFFFF)) & 0xFFFF
     out[SPAWN_OFFSET_RING] = ((ring + 2) & 0x0F, 2)
     xvel = 0 if _s16(player_x) >= _s16(new_x) else 0xFFFF  # [7E0C] dx=0 / not dx (sign toward the player)
+
+    # [7DEC-7E15] these slot writes are BEFORE the terrain scan, so they land UNCONDITIONALLY — even when the
+    # scan below finds no standable surface and the entity is NOT drawn, the [+0x10]/slot-ptr/X/Xvel residue is
+    # left in the (still-empty) slot. The ASM's write ORDER is load-bearing: a failed projection leaves exactly
+    # this residue, which the byte-exact oracle checks (regression demo_pre2_20260712_121135 tick 159 — a freed
+    # slot's [+8] Xvel = 0xFFFF that the old code, writing everything only on success, never left).
+    out[base + 0x10] = (0, 1)                             # [7DEC]
+    out[PROJ_SLOT_PTR] = (base & 0xFFFF, 2)               # [7DF0] [0xA32E] = the projected slot
+    out[base + 0x00] = (new_x, 2)                         # [7E0A] X
+    out[base + 0x08] = (xvel, 2)                          # [7E15] Xvel sign
 
     # [7E18] scan the terrain map upward for a standable surface (solid here, 2 empty above)
     start = (((py_cell + 4) & 0xFF) << 8) | ((new_x >> 4) & 0xFF)   # bp = ((playerY>>4)+4):(newX>>4)
@@ -146,13 +157,10 @@ def handler_ground_snap_spawn(rb, rw, read_es, si, find_free):
         if bp < 0x300:                                   # [7E60] ran off the top -> give up
             break
 
-    if ground_row is None:                               # [7E95] no surface -> no draw
+    if ground_row is None:                               # [7E95] no surface -> not drawn (the residue above remains)
         return out, False
 
-    base = OBJ_BASE + slot * OBJ_STRIDE
-    out[base + 0x10] = (0, 1)                             # [7DEC]
-    out[base + 0x00] = (new_x, 2)                         # [7E0A] X
-    out[base + 0x08] = (xvel, 2)                          # [7E15] Xvel sign
+    # [7E6C-7E90] a standable surface was found -> finish the record
     out[base + 0x02] = ((ground_row << 4) & 0xFFFF, 2)    # [7E74] Y = surface row * 16
     out[base + 0x04] = (rw((si + 2) & 0xFFFF), 2)         # [7E77] sprite id
     out[base + 0x06] = (si & 0xFFFF, 2)                   # [7E7D] back-pointer
@@ -160,7 +168,6 @@ def handler_ground_snap_spawn(rb, rw, read_es, si, find_free):
     out[base + 0x0A] = (0, 2)                             # [7E88] Yvel
     out[base + 0x0F] = (rb((si + 5) & 0xFFFF), 1)         # [7E90] flip byte
     out[(si + 4) & 0xFFFF] = (0x17, 1)                    # [7E80] entity mode
-    out[PROJ_SLOT_PTR] = (base & 0xFFFF, 2)               # [7DF0] [0xA32E] = the projected slot
     return out, True
 
 

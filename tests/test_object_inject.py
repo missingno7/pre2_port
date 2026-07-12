@@ -61,6 +61,34 @@ def test_player_trail_full_draw_snaps_to_ground():
     assert out[0xA341] == (2, 2)                          # offset ring advanced
 
 
+def test_player_trail_failed_scan_still_leaves_x_xvel_residue():
+    # REGRESSION (demo_pre2_20260712_121135 tick 159): when the upward terrain scan finds NO standable surface
+    # the entity is NOT drawn — but the ASM has already written [+0x10] / the slot pointer / X / Xvel BEFORE the
+    # scan (7DEC-7E15), so that residue stays in the (still-empty) slot. The old code wrote everything only on a
+    # successful scan, so native left a freed slot's [+8] Xvel at 0 while the VM left 0xFFFF.
+    SI = 0x4000
+    kv = {0x2D8A: 8, SI + 7: 0, SI + 6: 0,
+          SI + 9: 0, SI + 0xA: 0, SI + 0xB: 0xFF, SI + 0xC: 0xFF,
+          0x4F1C: 0x120, 0x4F1E: 0x100,                  # player at tile cell (0x12, 0x10)
+          0x4FD4: 0xFFFF,                                 # object slot 0 is free
+          0xA341: 0, 0xA343: 0,                          # ring index 0, offset[0] = 0 -> new_x = playerX
+          0x2CF5: 0x20}                                   # map height 0x20 rows
+    rb = lambda o: kv.get(o, 0) & 0xFF                    # noqa: E731
+    rw = lambda o: kv.get(o, 0) & 0xFFFF                  # noqa: E731
+    read_es = lambda o: 0                                 # noqa: E731 — every tile empty -> no standable surface
+    find_free = lambda: find_free_object_slot(lambda s: rw(0x4FD0 + s * 0x12 + 4))   # noqa: E731
+    out, drawn = handler_ground_snap_spawn(rb, rw, read_es, SI, find_free)
+    assert drawn is False
+    base = OBJ_BASE
+    assert out[base + 0x00] == (0x120, 2)                 # [7E0A] X written unconditionally
+    assert out[base + 0x08] == (0, 2)                     # [7E15] Xvel sign (playerX >= new_x -> 0) written too
+    assert out[base + 0x10] == (0, 1)                     # [7DEC] slot state byte
+    assert out[0xA32E] == (base, 2)                       # [7DF0] projected-slot pointer set even when not drawn
+    assert out[0xA341] == (2, 2)                          # ring advanced
+    # the success-only record fields were NOT written (the slot stays empty):
+    assert (base + 0x02) not in out and (base + 0x04) not in out and (SI + 4) not in out
+
+
 def test_lookup_anim_frame_skips_wrong_type_section():
     # a 0x7D01 section for the WRONG type (3) first, then the right one (5)
     table = {0xA871: 0x7D01, 0xA873: 0x0003, 0xA875: 0x00C8,        # type-3 section (skipped)
