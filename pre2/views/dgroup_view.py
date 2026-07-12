@@ -154,6 +154,36 @@ class DictBackend:
         self.writes[off & 0xFFFF] = v & 0xFFFF
 
 
+def apply_contract(state, writes, *, word_fields=None) -> None:
+    """THE single seam every island write-contract crosses to reach live state.
+
+    Applies a recovered write-contract to the game state through a :class:`ByteBackend`. The three contract
+    conventions are handled uniformly:
+
+    * ``{offset: (value, width)}`` — a tuple value is self-describing (the width-contract islands);
+    * ``{offset: value}`` with ``word_fields`` — a plain value is a WORD iff its offset is in the set
+      (the FSM convention, ``FSM_WORD_FIELDS``);
+    * ``{offset: value}`` without ``word_fields`` — plain values are BYTES (the byte-level overlay
+      contracts: collision, terrain).
+
+    Sentinel keys (strings like SONG_REQUEST/SCROLL_REQUEST) must be popped by the caller BEFORE applying —
+    a string key here is a bug and raises.
+
+    THE FLIP POINT: when the product's state becomes field-backed, this function (plus the read half,
+    the backends) is where the offset world ends — the contract application resolves through the generated
+    field registry instead of a byte image, and this module's offset map moves to the detachable bridge."""
+    be = ByteBackend(state)
+    for off, v in writes.items():
+        if isinstance(v, tuple):
+            val, width = v
+        else:
+            val, width = v, (2 if word_fields is not None and off in word_fields else 1)
+        if width == 2:
+            be.ww(off, val)
+        else:
+            be.wb(off, val)
+
+
 # ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
 
 class _U16:

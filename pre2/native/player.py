@@ -25,6 +25,7 @@ from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, pla
                                    player_fsm_step, player_tick_timers, player_x_integrate, player_y_integrate)
 from pre2.recovered.player_collision import collision
 from pre2.recovered.player_interaction import player_interaction_tick
+from pre2.views.dgroup_view import PlayerGlobals, PlayerView, apply_contract
 
 _PX, _PY = 0x4F1C, 0x4F1E
 _XVEL, _YVEL, _CAM_LEFT = 0x4F22, 0x4F2A, 0x8164
@@ -84,14 +85,14 @@ def ecombo_confirmed(state) -> bool:
 def native_player_step(state) -> None:
     """Run the whole 5850 player update over the NativeGameState in place (no VM)."""
     rb, rw = readers(state)
-    _w(state, _RENDER_SUPPRESS, 0xFFFF, 2)                              # [asm 585E]
+    pv, g = PlayerView(state), PlayerGlobals(state)
+    pv.slot0.sprite = 0xFFFF                                            # [asm 585E] suppress the raw player draw
 
-    if rb(_DEATH_TIMER) == 0 and rb(_F1_KEY) != 0:                      # [asm 5864-5879] F1 debug kill-self
-        for a, v in player_f1_suicide(rb).items():                     #   65AF/65B3: spend a life (or game-over)
-            _w(state, a, v, 1)                                         #   + arm the respawn timer 4C69 dispatches
+    if g.respawn_state == 0 and rb(_F1_KEY) != 0:                       # [asm 5864-5879] F1 debug kill-self
+        apply_contract(state, player_f1_suicide(rb))                   #   65AF/65B3: spend a life (or game-over)
         return                                                         #   [asm 5879] jmp 5A8C — skip the rest
     if rb(_F2_KEY) != 0:                                                # [asm 587C-588F] F2 debug abort -> game over
-        _w(state, _GAMEOVER_FLAG, 1, 1)                                 #   [asm 5883] set [0x6BE5]=1 (4C69 -> 5063)
+        g.end_signal = 1                                                #   [asm 5883] set [0x6BE5]=1 (4C69 -> 5063)
         return                                                          #   [asm 588F] jmp 5A8C — skip the rest
     if _keycombo_active(rb) and _cheat_combo_confirmed(rb):             # [asm 5892 -> 247B] the dev-credits combo
         raise Pre2CheatCredits()                                        #   Ctrl+Alt+W(/Z), no other key -> 2505
@@ -104,34 +105,29 @@ def native_player_step(state) -> None:
         raise Pre2HybridGap(f"native player: {exc}") from exc
 
     writes, sfx, scroll = player_fsm_step(rb, rw)                       # [asm 58A7] FSM (sfx = jump/land/... sounds)
-    for a, v in writes.items():
-        _w(state, a, v, 2 if a in FSM_WORD_FIELDS else 1)
+    apply_contract(state, writes, word_fields=FSM_WORD_FIELDS)
     from pre2.native.audio import native_emit_sfx, player_sfx_x
     native_emit_sfx(state, sfx, player_sfx_x(state))                   # emit the FSM's play_sfx commands (jump/throw)
     if scroll:                                                         # idle look-around pan (anim13)
         from pre2.views.camera_pan import apply_camera_pan
         apply_camera_pan(state, scroll)
 
-    _w(state, _PX, player_x_integrate(rw(_PX), rw(_XVEL), rw(_CAM_LEFT)), 2)   # [asm 5A0F]
-    _w(state, _PY, player_y_integrate(rw(_PY), rw(_YVEL)), 2)                  # [asm 5A36]
+    pv.x = player_x_integrate(pv.x, pv.xvel & 0xFFFF, g.cam_left)      # [asm 5A0F]
+    pv.y = player_y_integrate(pv.y, pv.yvel & 0xFFFF)                   # [asm 5A36]
 
     es_base = (rw(_MAP_SEG_PTR) << 4) & 0xFFFFF                         # [asm 5A41] ground/tile collision
     ds_w, map_w, _redraws = collision(rb, rw, lambda o: state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF])
-    for a, v in ds_w.items():
-        _w(state, a, v, 1)
+    apply_contract(state, ds_w)                                         # byte-level overlay contract
     for o, v in map_w.items():
         state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF] = v & 0xFF
 
     if rb(_MOMENTUM_GATE) != 0:                                         # [asm 5A44 -> 484E] the glider/flying update
-        for a, (v, wd) in player_flying_484e(rb, rw).items():          # anim [0x4F20] + tilt [0x7B1A] + wing slot
-            _w(state, a, v, wd)
+        apply_contract(state, player_flying_484e(rb, rw))              # anim + tilt + the wing slot (width tuples)
 
     timers = {a: rb(a) for a in TIMER_BYTES}                           # [asm 5A47-5A8B]
     timers[TIMER_WORD] = rw(TIMER_WORD)
     out = player_tick_timers(timers)
-    for a in TIMER_BYTES:
-        _w(state, a, out[a], 1)
-    _w(state, TIMER_WORD, out[TIMER_WORD], 2)
+    apply_contract(state, {**{a: out[a] for a in TIMER_BYTES}, TIMER_WORD: (out[TIMER_WORD], 2)})
 
 
 def native_player_interaction(state) -> None:
