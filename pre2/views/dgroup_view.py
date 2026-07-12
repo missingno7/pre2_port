@@ -322,27 +322,34 @@ class DgroupView(StructView):
         super().__init__(_coerce_backend(source), 0)
 
 
-class CollisionGlobals(DgroupView):
-    """The player-collision island's DGROUP globals, NAMED — the readability contract for `1030:5A96` and its
-    handlers (pre2/recovered/player_collision.py). Each field's offset + width + meaning is the recovered
-    evidence (the [asm] site that reads/writes it); gameplay code reads ``g.airborne``, never ``rb(0x6BF3)`` —
-    the offset lives HERE, once. Uncertain-purpose fields keep an honest ``unk_`` name until evidence firms."""
+class PlayerGlobals(DgroupView):
+    """The player islands' DGROUP globals, NAMED — the readability contract for the collision routine
+    (`1030:5A96`, pre2/recovered/player_collision.py) and the player FSM (`1030:58A7..`, pre2/recovered/
+    player.py). Each field's offset + width + meaning is the recovered evidence (the [asm] site that
+    reads/writes it); gameplay code reads ``g.airborne``, never ``rb(0x6BF3)`` — the offset lives HERE, once.
+    Uncertain-purpose fields keep an honest ``unk_`` name until evidence firms."""
 
     __slots__ = ()
 
     airborne      = _U8(0x6BF3)   # bit0 = airborne [asm 6401]; 2 = grounded [64EE]; 0xFF = off-top [5B8E]
     fall_frames   = _U8(0x6BD2)   # the fall counter: ++ per descending airborne tick [5B4E]; classifies the
     #                               landing impact (soft <=4 / dust / shake >=0x14 / bounce >0xA) [647C..64D3]
-    fall_latch    = _U8(0x6BD1)   # cleared on every landing [64E9/64DF]; set by the 58A7 FSM elsewhere
-    fall_grace    = _U8(0x6BE0)   # = 6 while falling [63DD]; saturating-dec on each soft land [64DF-64E4]
+    fall_latch    = _U8(0x6BD1)   # cleared on every landing [64E9/64DF]; the JUMP arc's frame counter [5F46]
+    fall_grace    = _U8(0x6BE0)   # = 6 while falling [63DD]; saturating-dec on each soft land [64DF-64E4];
+    #                               nonzero routes the jump handler into idle [5F37]
     last_land_y   = _U16(0x6BCA)  # Y of the last landing — the fall-height reference [64F3/6499]
-    camera_shake  = _U8(0x6BEA)   # = 8 on a hard fall -> the camera-shake kick [64AE]
-    low_gravity   = _U8(0x6BC7)   # == 1: lighter gravity (4) + terminal>>3 [6313]; cleared on land [642D]
-    drop_gate     = _U8(0x6BE1)   # nonzero: ground-handler-5 tiles FALL THROUGH instead of landing [664A]
-    air_control   = _U8(0x6BDB)   # nonzero: facing-direction accel applies to Xvel in the air [62B9]
-    flying_cheat  = _U8(0x6BC5)   # dormant flying flag: forces the 0x2D/0x2E fly anims [63C3]
+    camera_shake  = _U8(0x6BEA)   # = 8 on a hard fall -> the camera-shake kick [64AE]; timer-decremented [5A4A+]
+    low_gravity   = _U8(0x6BC7)   # == 1: lighter gravity (4) + terminal>>3 [6313]; cleared on land [642D];
+    #                               the GLIDER descend flag (bit0 armed at speed [5A06], bit1 or'd [59CF])
+    drop_gate     = _U8(0x6BE1)   # nonzero: ground-handler-5 tiles FALL THROUGH instead of landing [664A];
+    #                               set 4 by the anim4/anim5 handlers [5E6C/5EA5]; timer-decremented
+    input_lr      = _U8(0x6BDB)   # left|right held (the FSM front-end combines [0x27EC]|[0x27ED] [58A7]);
+    #                               drives player_accel's input_held / the air drift [62B9]
+    input_ud      = _U8(0x6BDC)   # up|down held ([0x27EA]|[0x27EB] [58B4])
+    glider        = _U8(0x6BC5)   # the GLIDER/flying gate — armed by the glider pickup [484E/5960/63C3]
     trail_ring    = _U16(0x6BBE)  # the landing-dust / trail effect ring cursor (5E18's ring) [6483]
-    anim_gate     = _U8(0x6BD0)   # nonzero: hold the current anim (no fall-anim change) [63E2]
+    anim_gate     = _U8(0x6BD0)   # nonzero: hold the current anim / route the FSM into the 5F93 override tail
+    #                               [63E2/5F35]; the attack writes it from the anim high byte's ~bit6 [5FC3]
     current_object = _U16(0x6BB1)  # the FSM's current-object pointer; NULL on the player's own collision [6698]
     dipping_tile  = _U16(0x6BAB)  # map offset of the currently-sagging bridge tile; 0x55AA = none [5BBB/5BF4]
     grid_dirty    = _U8(0x2DF4)   # whole-grid redraw request [5C82]
@@ -359,8 +366,42 @@ class CollisionGlobals(DgroupView):
     #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
     map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
     level         = _U8(0x2D8A)   # the current level index [5B18]
-    level_flags   = _U8(0x8166)   # bit0 = suppress the hard-land bounce [64BA]; bit2 = top-kill fence [5AF1]
-    unk_6BFE      = _U8(0x6BFE)   # post-worker: nonzero -> the 64DF soft-land tail instead of air physics [5B38]
+    level_flags   = _U8(0x8166)   # bit0 = suppress the hard-land bounce [64BA]; bit1 = no idle camera-pan
+    #                               [5D95]; bit2 = top-kill fence [5AF1]
+    unk_6BFE      = _U8(0x6BFE)   # post-worker: nonzero -> the 64DF soft-land tail instead of air physics
+    #                               [5B38]; zeroed by the jump body [5F41]; gates the attack Yvel nudge [6004]
+
+    # --- the FSM's own state (pre2/recovered/player.py) ---
+    idle_timer    = _U8(0x6BD3)   # sat-inc per run/attack frame [5EF9/5F9F]; >=0x1E = long idle [5D49];
+    #                               zeroed by anim4 [5E6C]; -3 per long-idle frame [5D60]
+    fly_timer     = _U8(0x6BC8)   # glider hold/flight counter [5EE4/5F13]; wing-anim bump gate [48DD]
+    fly_hold      = _U8(0x6BC6)   # glider hold budget [5F1A=0x18, 599E dec, 59B8 sat-dec, 59F7 recharge]
+    glider_tilt   = _U8(0x7B1A)   # glider tilt/pitch 0..6, neutral 3 [597E/5993/48A3]
+    anim_hi       = _U8(0x6BCF)   # advance_anim's raw frame high byte [6398]; the attack reads ~bit6 [5FC3]
+    run_count     = _U16(0x6BEB)  # inc-wrap-to-1 run counter [5952]; reset on a turn [58F4] / anim change [5947]
+    input_suppress = _U8(0x6BCD)  # nonzero forces the input bitmask to 0 [5921]; the attack loads it from the
+    #                               phase record's sfx byte [5FD2]; timer-decremented [5A4A+]
+    charge        = _U8(0x6BCE)   # the +2-while-<=0x30 charge counter [5EB7]; quadruples attack v19 [5FB5]
+    frame_blink   = _U8(0x6BD5)   # frame counter gating the trail emit to every 4th frame [5E11]
+    friction      = _U16(0x6BF6)  # the per-level directional-friction constant [62ED]
+    cam_left      = _U16(0x8164)  # camera-left tile — the X-integrate right bound [5A1C]
+    attack_phase  = _U8(0x7B18)   # index into the 5-byte attack phase records at 0x7B04 [5FA9]
+    attack_v19    = _U8(0x7B19)   # loaded from phase.v19 (x4 when charged) [5FC0]; the fresh-start block
+    #                               presets 0x14 [0141..] — exact consumer not yet mapped
+    idle_clock    = _U16(0x27F0)  # the PIT-fed idle counter (the fidget selector reads &0x1FF [5DC9])
+    unk_6BD9      = _U8(0x6BD9)   # nonzero suppresses the idle look-around camera pan [5D9B]
+
+    # --- the six decoded input flags (DC1's outputs [0x27E8..0x27ED]) ---
+    in_fire       = _U8(0x27E8)   # fire/jump held (space/enter sources) [0bc6/58FC]
+    in_aux        = _U8(0x27E9)   # the sixth flag (single scancode source 0x2840) — idle-gate input [5D50]
+    in_up         = _U8(0x27EA)   # up held [4897]
+    in_down       = _U8(0x27EB)   # down held [489B]
+    in_right      = _U8(0x27EC)   # right held (drives facing +1 [58BF])
+    in_left       = _U8(0x27ED)   # left held (drives facing -1 [58D9])
+
+
+#: Back-compat alias — the class began as the collision island's globals and grew into the player's.
+CollisionGlobals = PlayerGlobals
 
 
 class _ScriptEntry(StructView):

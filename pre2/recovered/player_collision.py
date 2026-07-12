@@ -9,7 +9,7 @@ This module recovers the island bottom-up, each leaf proven byte-exact in shadow
 Started with the three self-contained leaves (slope offset, fall flag, horizontal block).
 
 READABILITY (the offsets-into-views lift): gameplay logic here reads/writes NAMED state — ``p`` is the
-:class:`PlayerView` (x/y/sprite/xvel/yvel/...), ``g`` the :class:`CollisionGlobals` (airborne/fall_frames/
+:class:`PlayerView` (x/y/sprite/xvel/yvel/...), ``g`` the :class:`PlayerGlobals` (airborne/fall_frames/
 last_land_y/...) — each field's DGROUP offset + width + [asm] evidence lives ONCE, in pre2/views/dgroup_view.
 The functions still return the island's plain ``{offset: value}`` write contracts (named assignments record
 into them via :class:`DictBackend`), so callers, hooks and the byte-exact proofs are unchanged. Raw offsets
@@ -18,7 +18,7 @@ tile-table indexing through the named table constants)."""
 from __future__ import annotations
 
 from pre2.recovered.player import player_emit_trail
-from pre2.views.dgroup_view import CollisionGlobals, DictBackend, PlayerView
+from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView
 
 __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "collision_land",
            "collision_ceiling", "collision_ground_handler", "collision_bridge_dip",
@@ -27,7 +27,7 @@ __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "coll
            "DIRTY_KIND_TABLE", "SIDE_FLAG_TABLE", "WALL_MARKER_LIST", "WALL_MARKER_END",
            "PLAYER_ANIM_HEIGHT_TABLE", "COLLISION_BYTE_FIELDS"]
 
-AIRBORNE_FLAG = 0x6BF3   # [asm 6401] the "no ground under the player" flag (= CollisionGlobals.airborne)
+AIRBORNE_FLAG = 0x6BF3   # [asm 6401] the "no ground under the player" flag (= PlayerGlobals.airborne)
 TILE_PROP_TABLE = 0x8E1D  # [asm 643C] tile id -> property byte (solid / slope 0x30 / dir 0x10 / height 0x0F)
 TILE_CEIL_SOLID_TABLE = 0x7E5E   # [asm 5C20] tile id -> ceiling-solid flag (bit0) for the side-nudge
 TILE_CEIL_HANDLER_TABLE = 0x805E  # [asm 5C26] tile id -> ceiling-handler index (cs:[0x7DA9]): 0 noop / 1 head-bump / 2 trigger
@@ -65,7 +65,7 @@ def _views(rb, rw, out: dict | None = None):
     fresh dict) in the island's plain ``{offset: value}`` contract convention; reads see original memory
     only (read-after-write keeps a local, exactly like the hand-built dicts this replaces)."""
     be = DictBackend(rb, rw, out)
-    return PlayerView(be), CollisionGlobals(be), be
+    return PlayerView(be), PlayerGlobals(be), be
 
 
 def collision_slope_offset(prop: int, player_x: int) -> int:
@@ -100,12 +100,12 @@ def collision_hblock(x: int, xvel: int) -> tuple:
 
 
 def _air_drift_x(rw, rb, bp: int) -> int:
-    """Air horizontal drift + clamp ``1030:62B1`` (``bp`` = max air X speed). When ``g.air_control`` is set,
+    """Air horizontal drift + clamp ``1030:62B1`` (``bp`` = max air X speed). When ``g.input_lr`` is set,
     add a facing-direction accel (``(facing << 4) sar motion_mode``) to Xvel; clamp the result to
     ``[-bp, +bp]``. Returns the new Xvel."""
     p, g, _ = _views(rb, rw)
     ax = 0                                                          # [62B5]
-    if g.air_control != 0:                                         # [62B9]
+    if g.input_lr != 0:                                         # [62B9]
         ax = (p.facing << 4) & 0xFFFF                              # [62C0-62C9] facing << 4
     ax = _s16(ax) >> p.motion_mode                                 # [62CB-62CF] sar ax, motion_mode
     dx = p.xvel + ax                                               # [62D1-62D5]
@@ -140,7 +140,7 @@ def collision_airborne(rw, rb) -> dict:
     new_yvel = _gravity_y(rw, rb, 0xC0)                            # [63BD-63C0]
     p.yvel = new_yvel
     yvel = _s16(new_yvel)
-    if g.flying_cheat != 0:                                       # [63C3] (dormant in normal play)
+    if g.glider != 0:                                       # [63C3] (dormant in normal play)
         al = 0x2D if yvel < 0 else 0x2E                           # [63CA-63D3] fly frames
         p.sprite = ((p.facing_lo & 0x80) << 8) | al               # [63F4-63FB]
         return be.writes
@@ -160,7 +160,7 @@ def _dec_floor8(v: int) -> int:
     return (v - 1) & 0xFF if v != 0 else 0
 
 
-def _coll_soft_land(p: PlayerView, g: CollisionGlobals, new_y: int) -> None:
+def _coll_soft_land(p: PlayerView, g: PlayerGlobals, new_y: int) -> None:
     """The soft-land exit `1030:64D9`: zero Yvel + set the grounded state flags."""
     p.yvel = 0                                            # [64D9]
     g.fall_grace = _dec_floor8(g.fall_grace)              # [64DF-64E4] sat-dec
@@ -352,7 +352,7 @@ def collision_ground_handler(idx: int, rb, rw, read_es, di: int) -> dict:
     raise NotImplementedError(f"ground handler idx {idx} not recovered")
 
 
-def _bridge_dirty(new_tile: int, off: int, g: CollisionGlobals, redraws: list, rb) -> None:
+def _bridge_dirty(new_tile: int, off: int, g: PlayerGlobals, redraws: list, rb) -> None:
     """The bridge sag/spring dirty step ``1030:5C7B`` (`bx = new_tile`, the tile at map offset `off` = the foot
     `di`). For ``[0x4DF8+tile] >= 1`` mark the whole grid dirty. For ``== 0`` the ASM redraws that ONE tile
     directly (`5C8E -> 653D`): if the cell is on-screen (col in ``[cam_col, cam_col+0x14)``, row in
@@ -454,7 +454,7 @@ class _Overlay:
     earlier (the ASM mutates memory in place; the pure handlers return write dicts). DS writes are split into
     bytes using ``COLLISION_BYTE_FIELDS`` for widths; map (es) writes are byte-keyed. ``ds``/``mp`` accumulate the
     net byte writes = the routine's write-contract. Also a dgroup-view backend (``_IS_DGROUP_BACKEND``): the
-    composition binds :class:`PlayerView`/:class:`CollisionGlobals` straight onto it, so named reads see earlier
+    composition binds :class:`PlayerView`/:class:`PlayerGlobals` straight onto it, so named reads see earlier
     writes and named writes land in the same byte contract (a word field writes its two bytes, exactly like
     ``apply_ds`` splitting a non-byte-field word)."""
 
@@ -502,7 +502,7 @@ def _offcamera_trigger(rb) -> dict:
     (``respawn_state == 0``): consume a life, reset ``unk_27D6``, arm the respawn (``respawn_state = 2``); if no
     lives remain, set the game-over flag (``end_signal = 1``). Returns the dict of writes. Pure."""
     be = DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
-    g = CollisionGlobals(be)
+    g = PlayerGlobals(be)
     if g.respawn_state != 0:                                       # [65B3] already triggered
         return be.writes
     if g.lives == 0:                                              # [65BA] no lives left -> game over
@@ -517,7 +517,7 @@ def _offcamera_trigger(rb) -> dict:
 def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
     """The tile-interaction worker ``1030:5B81`` composed onto the overlay ``ov`` (``cell_bx`` = the tile one row
     above the foot). Off-top (`Y<=-1`) + foot-tile remap + bridge-dip + ground dispatch + ceiling."""
-    p, g = PlayerView(ov), CollisionGlobals(ov)
+    p, g = PlayerView(ov), PlayerGlobals(ov)
     if _s16(p.y) <= -1:                                            # [5B84 cmp Y,-1 / 5B89 jg 5B96]
         # Off-top: the player is above the level ceiling (e.g. a high bounce off a spider). There is no tile
         # up here, so the worker skips ALL tile interaction and just runs the in-air physics, marks the player
@@ -561,7 +561,7 @@ def collision(rb, rw, read_es) -> tuple:
     (`5B81`: bridge-dip + ground dispatch + ceiling), resolves the post-worker fall/land state, then scans the
     player's vertical extent for horizontal/body collisions (`cs:[0x7D95]`)."""
     ov = _Overlay(rb, rw, read_es)
-    p, g = PlayerView(ov), CollisionGlobals(ov)
+    p, g = PlayerView(ov), PlayerGlobals(ov)
 
     # --- tile cell + scan parameters [5A99-5AC4] ---
     row_m1 = ((_s16(p.y) >> 4) - 1) & 0xFFFF                       # (Y>>4) - 1
@@ -615,7 +615,7 @@ def collision(rb, rw, read_es) -> tuple:
     return ov.ds, ov.mp, ov.redraws
 
 
-def _out_of_camera_range(p: PlayerView, g: CollisionGlobals) -> bool:
+def _out_of_camera_range(p: PlayerView, g: PlayerGlobals) -> bool:
     """The camera visibility test ``1030:5ACD-5B16`` — True when the player is off the visible map (the only
     branch with side effects). Pure."""
     if abs((_s16(p.y) >> 4) - _s16(g.cam_row_word)) > 0x0B:       # [5ACD-5ADD]
