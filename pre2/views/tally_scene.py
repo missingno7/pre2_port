@@ -7,9 +7,9 @@ the already-grounded object pass (reused from gameover_scene); the panel is rend
 """
 from __future__ import annotations
 
-from pre2.bridge.gameover_scene import _object_overlay
-from pre2.bridge.render_state import read_renderer_state, retarget_page
-from pre2.bridge.tally_panel import read_tally_panel
+from pre2.views.gameover_scene import _object_overlay
+from pre2.views.render_state import read_renderer_state, retarget_page
+from pre2.views.tally_panel import read_tally_panel
 from pre2.recovered.scene_compositor import RecoveredBackground, compose_scene
 from pre2.recovered.tally_panel import render_tally_panel
 

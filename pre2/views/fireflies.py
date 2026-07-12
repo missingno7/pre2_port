@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from pre2.bridge.dgroup_view import SwarmView
+from pre2.views.dgroup_view import SwarmView
 from pre2.recovered.fireflies import Firefly
 
 

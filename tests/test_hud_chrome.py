@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # noqa: E402
 
-from pre2.bridge.hud_chrome import load_hud_chrome, _BG_LEN, _BG_OFF  # noqa: E402
+from pre2.views.hud_chrome import load_hud_chrome, _BG_LEN, _BG_OFF  # noqa: E402
 from pre2.codecs.sqz import unpack_sqz  # noqa: E402
 from pre2.recovered.hud import (  # noqa: E402
     HUD_BAR_DI, HUD_BAR_PLANE_BYTES, draw_hud, draw_status_bar,

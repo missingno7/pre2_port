@@ -108,10 +108,10 @@ class WidthContractBackend:
 
     __slots__ = ("_rb", "_rw", "writes")
 
-    def __init__(self, base_rb, base_rw):
+    def __init__(self, base_rb, base_rw, out: "dict[int, tuple[int, int]] | None" = None):
         self._rb = base_rb
         self._rw = base_rw
-        self.writes: dict[int, tuple[int, int]] = {}
+        self.writes: dict[int, tuple[int, int]] = {} if out is None else out
 
     def rb(self, off: int) -> int:
         return self._rb(off & 0xFFFF)
@@ -124,6 +124,34 @@ class WidthContractBackend:
 
     def ww(self, off: int, v: int) -> None:
         self.writes[off & 0xFFFF] = (v & 0xFFFF, 2)
+
+
+class DictBackend:
+    """The PLAIN ``{offset: value}`` write-contract accumulator (vs :class:`WidthContractBackend`'s
+    ``(value, width)`` tuples) — the convention the player-collision island returns, where the width is
+    implicit (the consumer splits words vs its byte-field set). Reads delegate to the island's ``rb``/``rw``
+    closures and do NOT see the accumulated writes (functions that need read-after-write keep a local, exactly
+    like the hand-built dicts they replace). A named view bound to one of these makes ``p.yvel = 0`` record
+    ``{0x4F2A: 0}`` — same contract, no offset at the call site."""
+
+    __slots__ = ("_rb", "_rw", "writes")
+
+    def __init__(self, base_rb, base_rw, out: dict | None = None):
+        self._rb = base_rb
+        self._rw = base_rw
+        self.writes: dict[int, int] = {} if out is None else out
+
+    def rb(self, off: int) -> int:
+        return self._rb(off & 0xFFFF)
+
+    def rw(self, off: int) -> int:
+        return self._rw(off & 0xFFFF)
+
+    def wb(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = v & 0xFF
+
+    def ww(self, off: int, v: int) -> None:
+        self.writes[off & 0xFFFF] = v & 0xFFFF
 
 
 # ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
@@ -274,9 +302,12 @@ class StructView:
 
 
 def _coerce_backend(source):
-    """A backend passes through; anything else (NativeGameState / VM ``mem`` / raw ``bytearray``) is wrapped
-    in a :class:`ByteBackend`."""
-    if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend)):
+    """A backend passes through — the package's own backends plus anything marked ``_IS_DGROUP_BACKEND``
+    (island-local overlays like player_collision's read-through ``_Overlay`` opt in with that attribute; the
+    VM ``mem`` object must NOT pass, its ``rb`` takes (seg, off)). Anything else (NativeGameState / VM ``mem``
+    / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
+    if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend, DictBackend)) \
+            or getattr(source, "_IS_DGROUP_BACKEND", False):
         return source
     return ByteBackend(source)
 
@@ -289,6 +320,159 @@ class DgroupView(StructView):
 
     def __init__(self, source):
         super().__init__(_coerce_backend(source), 0)
+
+
+class PlayerGlobals(DgroupView):
+    """The player islands' DGROUP globals, NAMED — the readability contract for the collision routine
+    (`1030:5A96`, pre2/recovered/player_collision.py) and the player FSM (`1030:58A7..`, pre2/recovered/
+    player.py). Each field's offset + width + meaning is the recovered evidence (the [asm] site that
+    reads/writes it); gameplay code reads ``g.airborne``, never ``rb(0x6BF3)`` — the offset lives HERE, once.
+    Uncertain-purpose fields keep an honest ``unk_`` name until evidence firms."""
+
+    __slots__ = ()
+
+    airborne      = _U8(0x6BF3)   # bit0 = airborne [asm 6401]; 2 = grounded [64EE]; 0xFF = off-top [5B8E]
+    fall_frames   = _U8(0x6BD2)   # the fall counter: ++ per descending airborne tick [5B4E]; classifies the
+    #                               landing impact (soft <=4 / dust / shake >=0x14 / bounce >0xA) [647C..64D3]
+    fall_latch    = _U8(0x6BD1)   # cleared on every landing [64E9/64DF]; the JUMP arc's frame counter [5F46]
+    fall_grace    = _U8(0x6BE0)   # = 6 while falling [63DD]; saturating-dec on each soft land [64DF-64E4];
+    #                               nonzero routes the jump handler into idle [5F37]
+    last_land_y   = _U16(0x6BCA)  # Y of the last landing — the fall-height reference [64F3/6499]
+    camera_shake  = _U8(0x6BEA)   # = 8 on a hard fall -> the camera-shake kick [64AE]; timer-decremented [5A4A+]
+    low_gravity   = _U8(0x6BC7)   # == 1: lighter gravity (4) + terminal>>3 [6313]; cleared on land [642D];
+    #                               the GLIDER descend flag (bit0 armed at speed [5A06], bit1 or'd [59CF])
+    drop_gate     = _U8(0x6BE1)   # nonzero: ground-handler-5 tiles FALL THROUGH instead of landing [664A];
+    #                               set 4 by the anim4/anim5 handlers [5E6C/5EA5]; timer-decremented
+    input_lr      = _U8(0x6BDB)   # left|right held (the FSM front-end combines [0x27EC]|[0x27ED] [58A7]);
+    #                               drives player_accel's input_held / the air drift [62B9]
+    input_ud      = _U8(0x6BDC)   # up|down held ([0x27EA]|[0x27EB] [58B4])
+    glider        = _U8(0x6BC5)   # the GLIDER/flying gate — armed by the glider pickup [484E/5960/63C3]
+    trail_ring    = _U16(0x6BBE)  # the landing-dust / trail effect ring cursor (5E18's ring) [6483]
+    anim_gate     = _U8(0x6BD0)   # nonzero: hold the current anim / route the FSM into the 5F93 override tail
+    #                               [63E2/5F35]; the attack writes it from the anim high byte's ~bit6 [5FC3]
+    current_object = _U16(0x6BB1)  # the FSM's current-object pointer; NULL on the player's own collision [6698]
+    dipping_tile  = _U16(0x6BAB)  # map offset of the currently-sagging bridge tile; 0x55AA = none [5BBB/5BF4]
+    grid_dirty    = _U8(0x2DF4)   # whole-grid redraw request [5C82]
+    grid_dirty_token = _U16(0x2DE0)  # its 0x55AA companion token [5C87]
+    page_dirty    = _U8(0x6BBD)   # one-tile direct re-blit page flag (the 653D path) [659C]
+    cam_col       = _U8(0x2DE4)   # camera tile column [6546] (byte read — the on-screen test)
+    cam_row       = _U8(0x2DE6)   # camera tile row [6551]
+    cam_col_word  = _U16(0x2DE4)  # width alias: the camera-range check reads the same cells as WORDS [5ADF]
+    cam_row_word  = _U16(0x2DE6)  # width alias of cam_row [5ACD]
+    respawn_state = _U8(0x6BE4)   # 0 = none; 2 = armed by the off-camera death trigger [65B3/65C9]
+    lives         = _U8(0x27D8)   # consumed by the off-camera trigger [65C1]; set 2 by main 0141
+    energy        = _U8(0x27D6)   # hit-points within a life: the crush chain decrements it (5-frame cooldown
+    #                               reload [824D]) and a life is consumed on underflow [825F]; reset 0 with the
+    #                               life consume [65C5]. (object_spawn's old 'LIVES' constant misnamed this.)
+    end_signal    = _U8(0x6BE5)   # 1 = game over (no lives) [65D0]; 0xFF = game complete (level 0xE) [5B1F];
+    #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
+    map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
+    display_page  = _U16(0x2DD6)  # the CRTC display-start PAGE the present flips [2DD6; read at every present]
+    input_source  = _U8(0x2879)   # DC1's source: 0 live keyboard / 1 demo-attract playback / 2 record [0DC1]
+    level_end_mode = _U8(0x6BE6)  # the 4C69 level-end dispatch mode: 1 normal end / >1 warp [4C69/4C74]
+    level         = _U8(0x2D8A)   # the current level index [5B18]; 0xFF = none chosen yet [8ee9]
+    mode          = _U8(0xB197)   # 0 = BEGINNER / 1 = EXPERT — the mode-select toggle [9941/8ee9]
+    mode_copy     = _U8(0xB198)   # the committed copy the loader reads [994E]
+    attract_mode  = _U8(0x083D)   # the attract-demo header's mode byte (set with the commit) [994E]
+    attract_level = _U8(0x083E)   # the attract/default level header [8E98]
+    level_flags   = _U8(0x8166)   # bit0 = suppress the hard-land bounce [64BA]; bit1 = no idle camera-pan
+    #                               [5D95]; bit2 = top-kill fence [5AF1]
+    unk_6BFE      = _U8(0x6BFE)   # post-worker: nonzero -> the 64DF soft-land tail instead of air physics
+    #                               [5B38]; zeroed by the jump body [5F41]; gates the attack Yvel nudge [6004]
+
+    # --- the FSM's own state (pre2/recovered/player.py) ---
+    idle_timer    = _U8(0x6BD3)   # sat-inc per run/attack frame [5EF9/5F9F]; >=0x1E = long idle [5D49];
+    #                               zeroed by anim4 [5E6C]; -3 per long-idle frame [5D60]
+    fly_timer     = _U8(0x6BC8)   # glider hold/flight counter [5EE4/5F13]; wing-anim bump gate [48DD]
+    fly_hold      = _U8(0x6BC6)   # glider hold budget [5F1A=0x18, 599E dec, 59B8 sat-dec, 59F7 recharge]
+    glider_tilt   = _U8(0x7B1A)   # glider tilt/pitch 0..6, neutral 3 [597E/5993/48A3]
+    anim_hi       = _U8(0x6BCF)   # advance_anim's raw frame high byte [6398]; the attack reads ~bit6 [5FC3]
+    run_count     = _U16(0x6BEB)  # inc-wrap-to-1 run counter [5952]; reset on a turn [58F4] / anim change [5947]
+    input_suppress = _U8(0x6BCD)  # nonzero forces the input bitmask to 0 [5921]; the attack loads it from the
+    #                               phase record's sfx byte [5FD2]; timer-decremented [5A4A+]
+    charge        = _U8(0x6BCE)   # the +2-while-<=0x30 charge counter [5EB7]; quadruples attack v19 [5FB5]
+    frame_blink   = _U8(0x6BD5)   # frame counter gating the trail emit to every 4th frame [5E11]
+    frame_stamp   = _U16(0x6BD5)  # width alias: the debounce sites read the same counter as a WORD [80F7/8AB1]
+    friction      = _U16(0x6BF6)  # the per-level directional-friction constant [62ED]
+    cam_left      = _U16(0x8164)  # camera-left tile — the X-integrate right bound [5A1C]
+    attack_phase  = _U8(0x7B18)   # index into the 5-byte attack phase records at 0x7B04 [5FA9]
+    attack_v19    = _U8(0x7B19)   # loaded from phase.v19 (x4 when charged) [5FC0]; the fresh-start block
+    #                               presets 0x14 [0141..] — exact consumer not yet mapped
+    idle_clock    = _U16(0x27F0)  # the PIT-fed idle counter (the fidget selector reads &0x1FF [5DC9])
+    unk_6BD9      = _U8(0x6BD9)   # nonzero suppresses the idle look-around camera pan [5D9B]
+
+    # --- the effect-burst / boss-fight block (object_spawn + combat_interaction) ---
+    burst_x       = _U16(0xA336)  # the spawn_effect_burst origin X (8D1B reads it) [8264/74A8/7041]
+    burst_y       = _U16(0xA338)  # ... origin Y [826A/74B1]
+    burst_sprite  = _U16(0xA33A)  # ... the burst sprite id [8285/9507/74E0]
+    hit_flag      = _U8(0xA330)   # hitbox_overlap's vertical-detail hit flag (1 = registered) [8D7B]
+    hit_pass_full = _U8(0xA312)   # set across a projectile/player pass -> 8D7B uses the FULL (un-halved)
+    #                               tolerance [6FCF/6FD7]
+    hit_debounce  = _U16(0xA3FD)  # frame stamp of the last camera-target hit (debounce window 0x16) [8109]
+    boss_phase    = _U16(0xA326)  # the L6/boss fight phase (advances every 7 hits) [7036/7DA9]
+    boss_x        = _U16(0x5648)  # the boss/camera-target record origin X [74A8/7041]
+    boss_y        = _U16(0x564A)  # ... origin Y [74B1/704A]
+
+    collected_linked = _U16(0x2A7A)  # the LINKED-item collected count (tally percent = [0x2A76]+this) [85CC/5139]
+
+    # --- the six decoded input flags (DC1's outputs [0x27E8..0x27ED]) ---
+    in_fire       = _U8(0x27E8)   # fire/jump held (space/enter sources) [0bc6/58FC]
+    in_aux        = _U8(0x27E9)   # the sixth flag (single scancode source 0x2840) — idle-gate input [5D50]
+    in_up         = _U8(0x27EA)   # up held [4897]
+    in_down       = _U8(0x27EB)   # down held [489B]
+    in_right      = _U8(0x27EC)   # right held (drives facing +1 [58BF])
+    in_left       = _U8(0x27ED)   # left held (drives facing -1 [58D9])
+
+
+#: Back-compat alias — the class began as the collision island's globals and grew into the player's.
+CollisionGlobals = PlayerGlobals
+
+
+class LoaderGlobals(DgroupView):
+    """The asset-loader / boot layout fields (main's 0107..0155 block + the 107B stacking loader) — the
+    load-buffer bookkeeping the VM-less cold boot and front end reproduce byte-exactly."""
+
+    __slots__ = ()
+
+    load_top   = _U16(0x2875)   # the SQZ stacking top segment (107B bumps it per load) [107B/0129]
+    reset_base = _U16(0x0039)   # the per-level allocation RESET base (= load_top after the front-end assets;
+    #                             a restart frees back to here) [asm 0129-012C]
+    fg_bank    = _U16(0x003B)   # the FOREGROUND tile-gfx bank segment (the 3721 foliage-in-front pass reads
+    #                             it; missing = no foreground) [asm 0123]
+    year       = _U16(0x0037)   # the DOS clock year captured at boot (the creators-photo gate: < 0x7CA
+    #                             (1994) skips it) [asm 25F6]
+
+
+class RngView(DgroupView):
+    """The game's two PRNG state blocks, NAMED — replaces the 4-line read/advance/write-back boilerplate at
+    every roll site with ``rng.roll()``. The generator MATH stays in pre2/recovered/prng.py (this view is
+    layout + wiring only). Bind it to a read-through backend (an island overlay) when several rolls happen in
+    one pass — each roll must see the previous roll's state."""
+
+    __slots__ = ()
+
+    lcg_a  = _U8(0x2CEC)    # [asm 39DF] the four-byte mixing generator's state ...
+    lcg_b  = _U8(0x2CED)
+    lcg_c  = _U8(0x2CEE)
+    lcg_d  = _U16(0x2CEF)
+    ror    = _U16(0x28C1)   # [asm 26CF] the one-word rotate generator's state
+
+    def roll(self) -> int:
+        """Advance the LCG (``1030:39DF``), write the new state back through the backend, return ``AL``."""
+        from pre2.recovered.prng import rng_lcg
+        a, b, c, d, ret = rng_lcg(self.lcg_a, self.lcg_b, self.lcg_c, self.lcg_d)
+        self.lcg_a = a
+        self.lcg_b = b
+        self.lcg_c = c
+        self.lcg_d = d
+        return ret
+
+    def roll_ror(self) -> int:
+        """Advance the rotate generator (``1030:26CF``), write it back, return the new word (== the state)."""
+        from pre2.recovered.prng import rng_ror
+        new = rng_ror(self.ror)
+        self.ror = new
+        return new
 
 
 class _ScriptEntry(StructView):

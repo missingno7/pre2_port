@@ -13,7 +13,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.particles import read_particle_consume_inputs
+from pre2.views.particles import read_particle_consume_inputs
 from pre2.checkpoints.particles import particles_draw
 from pre2.runtime import load_pre2_snapshot
 

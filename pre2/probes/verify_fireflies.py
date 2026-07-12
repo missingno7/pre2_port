@@ -13,7 +13,7 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.fireflies import read_fireflies
+from pre2.views.fireflies import read_fireflies
 from pre2.recovered.fireflies import draw_fireflies
 from pre2.runtime import load_pre2_snapshot
 

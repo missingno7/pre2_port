@@ -25,7 +25,7 @@ during pause/scripted pose).
 """
 from __future__ import annotations
 
-from pre2.bridge.dgroup_view import RenderSlot, WidthContractBackend
+from pre2.views.dgroup_view import RenderSlot, WidthContractBackend
 from pre2.islands import oracle_link
 
 SRC_LIST = 0x8F1D

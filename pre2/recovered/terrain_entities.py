@@ -18,7 +18,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
-from pre2.bridge.dgroup_view import OverlayBackend, RenderSlot
+from pre2.views.dgroup_view import OverlayBackend, PlayerGlobals, PlayerView, RenderSlot
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
 
@@ -163,9 +163,10 @@ def _collision_4b05(ov, di):
     """[asm 4B05] player-ride collision. Writes player state on contact; returns CF (True = the player rode)."""
     if ov.rb(COLLIDED) != 0:                                  # [asm 4B08]
         return False
-    if _s16(ov.rw((di + 2) & 0xFFFF)) <= _s16(ov.rw(0x4F1E)):  # [asm 4B0F-4B15]
+    p, g = PlayerView(ov), PlayerGlobals(ov)
+    if _s16(ov.rw((di + 2) & 0xFFFF)) <= _s16(p.y):          # [asm 4B0F-4B15]
         return False
-    saved_y = ov.rw(0x4F1E)
+    saved_y = p.y
     yadj = ov.rw(VY_SCRATCH)
     temp_y = (saved_y + yadj) & 0xFFFF if _s16(yadj) >= 0 else saved_y   # [asm 4B1E-4B25]
 
@@ -188,21 +189,20 @@ def _collision_4b05(ov, di):
         return False
 
     ov.wb(COLLIDED, 1)                                       # [asm 4B3D]
-    ov.wb(0x4F24, 0)                                         # [asm 4B42]
+    p.motion_mode = 0                                        # [asm 4B42]
     ov.ww(PLAYER, (ov.rw(PLAYER) + ov.rw(VX_SCRATCH)) & 0xFFFF)   # [asm 4B47] push player X
     # 64DF landing reset
-    g = ov.rb(0x6BE0)                                        # [asm 64DF] saturating dec
-    ov.wb(0x6BE0, max(g - 1, 0))
-    ov.wb(0x6BD1, 0)
-    ov.wb(0x6BF3, 2)
-    ov.ww(0x6BCA, ov.rw(0x4F1E))
+    g.fall_grace = max(g.fall_grace - 1, 0)                  # [asm 64DF] saturating dec
+    g.fall_latch = 0
+    g.airborne = 2
+    g.last_land_y = p.y
     # snap onto the entity top or inherit its velocity
     idx = (ov.rw((di + 4) & 0xFFFF) & 0x1FFF) << 1           # [asm 4B51-4B54]
     top = (ov.rw((di + 2) & 0xFFFF) - ov.rb((HALF_H + idx) & 0xFFFF)) & 0xFFFF   # [asm 4B59-4B61]
-    if _s16(ov.rw(0x4F1E)) <= _s16(top):                     # [asm 4B64] jle
+    if _s16(p.y) <= _s16(top):                               # [asm 4B64] jle
         ov.ww(PLAT_VEL, (ov.rw(VY_SCRATCH) << 4) & 0xFFFF)   # [asm 4B76]
     else:
-        ov.ww(0x4F1E, (top + 1) & 0xFFFF)                    # [asm 4B6A]
+        p.y = (top + 1) & 0xFFFF                             # [asm 4B6A]
         ov.ww(PLAT_VEL, 1)
     return True
 

@@ -119,7 +119,7 @@ def player_fsm_hook(cpu) -> None:
     _apply_fsm_writes(mem, writes)
     cpu.s.ip = _FSM_EXIT[1]                          # jump to the X integrate (skip the ASM FSM body)
     if scroll:                                       # idle look-around (anim13): pan + reveal the column
-        from pre2.bridge.camera_pan import apply_camera_pan
+        from pre2.views.camera_pan import apply_camera_pan
         apply_camera_pan(mem, scroll)
     if sfx:
         _emit_sfx(cpu, sfx)

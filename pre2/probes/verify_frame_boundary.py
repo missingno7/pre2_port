@@ -16,8 +16,8 @@ import sys; sys.path.insert(0, '.')
 
 from dataclasses import replace
 from pre2.runtime import load_pre2_snapshot
-from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.game_visual_state import capture_game_visual_state, render_game_visual_state
+from pre2.views.render_state import read_renderer_state
 from pre2.recovered.render_frame import render_frame
 from dos_re.runtime import enable_sound_blaster
 from dos_re.interrupts import deliver_interrupt

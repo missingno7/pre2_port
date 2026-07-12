@@ -12,7 +12,7 @@ from pathlib import Path
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
-from pre2.bridge.object_render import read_planes
+from pre2.views.object_render import read_planes
 from pre2.recovered.present import scroll_blit_column
 from pre2.runtime import load_pre2_snapshot
 

@@ -145,7 +145,7 @@ losing verifiability — the dataclasses are simultaneously the recovered source
 data model *and* the verification surface.
 
 The **concrete realization** of "memory view / adapter" is the state-view layer in
-`pre2/bridge/dgroup_view.py`: a human-named view API (`s.wind`, `slot.x`,
+`pre2/views/dgroup_view.py`: a human-named view API (`s.wind`, `slot.x`,
 `entry.threshold`) over swappable **backends** — a byte-backed one (the live image;
 verification stays a `memcmp`), a read-through **overlay** one (contract-returning
 islands), and a width-tracking write-contract one. The recovered logic is written once

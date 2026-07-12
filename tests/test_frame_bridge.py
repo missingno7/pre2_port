@@ -1,7 +1,7 @@
 """Unit tests for the frame-renderer / scroll-engine memory bridge.
 
 Pure (no VM): writes known values at the documented data-segment offsets and
-checks pre2.bridge.frame parses the Camera/ScrollState contract — including the
+checks pre2.views.frame parses the Camera/ScrollState contract — including the
 witness-confirmed ring invariant and the 0x55AA dirty sentinel.
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pre2.bridge import frame as F  # noqa: E402
+from pre2.views import frame as F  # noqa: E402
 
 
 class _FakeMem:

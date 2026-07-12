@@ -12,7 +12,7 @@ points ``script_ptr`` at the shared empty ``-1`` table. The routine has two halv
   plotted pixels for the faithful renderer (``draw_snow``); mutates the flake array (cosmetic) AND the shared
   gameplay rng (``rng_a..rng_d`` — byte-exact matters).
 
-**Offset-free**: these functions operate on a human-named *view* (see ``pre2.bridge.dgroup_view``); the DGROUP
+**Offset-free**: these functions operate on a human-named *view* (see ``pre2.views.dgroup_view``); the DGROUP
 layout lives entirely in that view, not here. Verified byte-exact vs the ASM (state sweep + a live LEVELG snow
 frame: rng, flake array, and all 260 plots).
 """

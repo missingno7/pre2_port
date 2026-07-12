@@ -93,8 +93,8 @@ def main() -> int:
 
     print("full-pipeline sweep vs native_render (EFFECTS + FLASH: particles/foreground/fireflies/opaque),")
     print("earthquake level, 60 ticks — the exact construction play_native's interpolation uses:")
-    from pre2.bridge.foreground_tiles import read_foreground_state
-    from pre2.bridge.gameplay_effects import capture_gameplay_effects
+    from pre2.views.foreground_tiles import read_foreground_state
+    from pre2.views.gameplay_effects import capture_gameplay_effects
     from pre2.native.render import native_render
     from sdl_view import render_planar_rgb_from_planes
     state, dos = _boot(0x0D, 120)

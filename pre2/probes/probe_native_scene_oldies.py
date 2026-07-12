@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from pre2.runtime import create_pre2_runtime
 from pre2.native.state import NativeGameState, DATA_SEG
-from pre2.bridge.oldies_scene import build_oldies_scene
+from pre2.views.oldies_scene import build_oldies_scene
 import play
 
 _DS = DATA_SEG << 4

@@ -14,7 +14,7 @@ import play
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.runtime import enable_sound_blaster
 from dos_re.interrupts import deliver_scancode
-from pre2.bridge import object_render as B
+from pre2.views import object_render as B
 from pre2.recovered.object_render import plan_sprite
 from pre2.runtime import load_pre2_snapshot
 

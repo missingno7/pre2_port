@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, ".")
 
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge.oldies_scene import read_oldies
+from pre2.views.oldies_scene import read_oldies
 from pre2.recovered.oldies_screen import render_oldies
 from pre2.runtime import load_pre2_snapshot
 

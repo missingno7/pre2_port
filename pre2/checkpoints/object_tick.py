@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge.object_tick import LiveWalkerMem
+from pre2.views.object_tick import LiveWalkerMem
 from pre2.recovered.object_tick import object_tick
 
 _ENTRY = (0x1030, 0x684E)     # mov si,0x4FD0  (walker entry)

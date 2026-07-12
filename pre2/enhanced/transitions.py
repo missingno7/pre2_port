@@ -17,7 +17,7 @@ VIEWPORT_H = 176   # gameplay viewport rows; the vertical fade clears only these
 def apply_vfade(frame, top_cleared: int, bot_start: int):
     """Project the recovered VERTICAL fade-out (1030:30C6) onto ``frame`` IN PLACE: black the two full-width
     bands converging from the top and bottom toward the middle -- rows ``[0, top_cleared)`` and
-    ``[bot_start, VIEWPORT_H)`` -- exactly matching :func:`pre2.bridge.live_render.compose_vfade_planes`'s
+    ``[bot_start, VIEWPORT_H)`` -- exactly matching :func:`pre2.views.live_render.compose_vfade_planes`'s
     geometry. ``top_cleared``/``bot_start`` are the recovered phase (no interpolation -> original timing)."""
     t = max(0, min(VIEWPORT_H, int(top_cleared)))
     b = max(0, min(VIEWPORT_H, int(bot_start)))

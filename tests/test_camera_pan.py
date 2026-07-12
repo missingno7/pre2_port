@@ -79,7 +79,7 @@ def _mem_with(camera_x, de8, dea):
 
 
 def test_apply_camera_pan_left_state():
-    from pre2.bridge.camera_pan import apply_camera_pan
+    from pre2.views.camera_pan import apply_camera_pan
     mem = _mem_with(camera_x=0x58, de8=0x08, dea=0x06)
     assert apply_camera_pan(mem, "left") is True
     base = 0x1A0F << 4
@@ -90,7 +90,7 @@ def test_apply_camera_pan_left_state():
 
 
 def test_apply_camera_pan_left_at_edge_is_noop():
-    from pre2.bridge.camera_pan import apply_camera_pan
+    from pre2.views.camera_pan import apply_camera_pan
     mem = _mem_with(camera_x=0x00, de8=0x05, dea=0x06)     # already at the left map edge
     assert apply_camera_pan(mem, "left") is False
     base = 0x1A0F << 4

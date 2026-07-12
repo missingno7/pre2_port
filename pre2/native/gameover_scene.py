@@ -17,7 +17,7 @@ this module recovers the STATE side:
 [0x2879]!=0 (demo playback) skips the whole scene, exactly as the ASM's 9B2C gate."""
 from __future__ import annotations
 
-from pre2.bridge.input_decode import apply_ds, readers
+from pre2.views.input_decode import apply_ds, readers
 from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input
@@ -170,7 +170,7 @@ def native_gameover_scene(state, dos, game_root: str):
     table (DC1 sources) between yields.
 
     [asm 9B2C] demo playback ([0x2879]!=0) skips the scene entirely."""
-    from pre2.bridge.gameover_scene import build_gameover_scene
+    from pre2.views.gameover_scene import build_gameover_scene
     from pre2.native.render import native_load_dac_palette
     from pre2.recovered.front_end_fade import fade_out_frames
 

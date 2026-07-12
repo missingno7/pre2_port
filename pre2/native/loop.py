@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from collections import Counter
 
-from pre2.bridge.object_spawn import apply_ds, readers, tile_reader
-from pre2.bridge.object_tick import LiveWalkerMem
+from pre2.views.object_spawn import apply_ds, readers, tile_reader
+from pre2.views.object_tick import LiveWalkerMem
 from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
                                      Pre2LevelEndTransition, Pre2RespawnTransition)
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
-from pre2.bridge import object_render as _obj_render
+from pre2.views import object_render as _obj_render
 from pre2.recovered.object_inject import second_pass_tick
 from pre2.recovered.object_particles import project_particles
 from pre2.recovered.object_render import plan_record_update, plan_sprite
@@ -28,7 +28,7 @@ from pre2.recovered.object_tick import object_tick
 from pre2.recovered.terrain_entities import tick_terrain_entities
 from pre2.native.state import DATA_SEG
 from pre2.native.camera_scroll import _v_scroll_down, _v_scroll_up, native_camera_follow
-from pre2.bridge.camera_pan import apply_camera_pan
+from pre2.views.camera_pan import apply_camera_pan
 from pre2.native.player import native_player_interaction, native_player_step
 
 
@@ -159,7 +159,7 @@ def native_trigger_scan(state) -> None:
     raises :class:`Pre2CaveTeleport` (BEFORE mutating anything) — the caller drives the multi-frame 5326
     transition via the ``native_cave_teleport`` generator (fade-out curtain, hidden pan, mini-pass, reveal,
     then the frame's remainder)."""
-    from pre2.bridge.dgroup_view import PlayerView
+    from pre2.views.dgroup_view import PlayerView
     rb, rw = readers(state)
     if rb(0x6BE1) != 0 and rb(0x6BC5) == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
         dx = PlayerView(state).tile_coords                  # [asm 5313 -> 549A] the player's packed tile coord
@@ -193,7 +193,7 @@ def native_cave_teleport(state, si):
          "one-tick drift" (demo 195135 @frame 206) — now byte-reproduced. 3054 is the CENTER-OUT REVEAL curtain
          -> yields ``("reveal", k)`` k=1..10 (the panel_copy strip pairs).
       6. The interrupted frame's REMAINDER (the post-0238 spine) — ``_frame_tail_after_trigger``."""
-    from pre2.bridge.dgroup_view import PlayerView
+    from pre2.views.dgroup_view import PlayerView
     rb, rw = readers(state)
     player = PlayerView(state)
     dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
@@ -248,7 +248,7 @@ def native_proximity_trigger(state) -> None:
     (``trigger_pos`` = FIRED, camera shake = 7); a fired entry re-applies its map modification
     (:func:`native_proximity_mapmod`) each frame until its countdown disarms it. No trigger in range and
     none fired -> a byte-exact no-op."""
-    from pre2.bridge.dgroup_view import PlayerView, ProximityTrigger, ProximityView
+    from pre2.views.dgroup_view import PlayerView, ProximityTrigger, ProximityView
     player = PlayerView(state).tile_coords                        # [asm 5313 -> 549A] packed player tile
     v = ProximityView(state)
     for trig in v.triggers:
@@ -266,7 +266,7 @@ def native_proximity_mapmod(state, trig) -> None:
     ``block_top`` up a row, reveal a fresh bottom row from the 41CA-saved pristine rows in the bank (walking
     ``reveal_cursor`` backward one ``width`` per fire), and count down — disarming at 0. The per-tile 653D
     re-blit is a render side-effect (the faithful renderer redraws the changed tiles)."""
-    from pre2.bridge.dgroup_view import ProximityTrigger, ProximityView, SegmentBackend
+    from pre2.views.dgroup_view import ProximityTrigger, ProximityView, SegmentBackend
     v = ProximityView(state)
     v.shake = 7                                                   # [asm 5429] camera shake (even on gated frames)
     if v.tick & 3:                                                # [asm 542E] only acts every 4th frame
@@ -342,7 +342,7 @@ def native_idle_timer_tick(state, ticks: int = _TICKS_PER_FRAME) -> None:
 def native_firefly_step(state) -> None:
     """[asm 0253: 54AB] Step the firefly swarm (animation + both RNGs) in place — the per-frame sim. The VRAM
     draw is the renderer's job; only the state contract (slots + RNG seeds + scratch) is applied here."""
-    from pre2.bridge.firefly_sim import read_firefly_sim_state, write_firefly_sim_state
+    from pre2.views.firefly_sim import read_firefly_sim_state, write_firefly_sim_state
     from pre2.recovered.firefly_sim import step_fireflies
     st = read_firefly_sim_state(state)
     step_fireflies(st)
@@ -362,7 +362,7 @@ def native_scroll_script(state) -> None:
 
     State access goes through a human-named ``ScrollScriptView`` (the byte-backed layout bridge) — the logic is
     offset-free; the view is the one place this island's DGROUP offsets live."""
-    from pre2.bridge.dgroup_view import ScrollScriptView
+    from pre2.views.dgroup_view import ScrollScriptView
     from pre2.recovered.scroll_script import scroll_script_snow, scroll_script_state
     view = ScrollScriptView(state)
     scroll_script_state(view)
@@ -467,7 +467,7 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
         # _redraws = the on-screen tile re-blit (a render side-effect) — the faithful renderer's job.
         did = collected                                             # [asm 890D] jae -> skip the bounce if no collect
     if bounce and did:
-        from pre2.bridge.dgroup_view import PlayerView
+        from pre2.views.dgroup_view import PlayerView
         player = PlayerView(state)
         if player.yvel != 0:                                        # [asm 890F/8914] airborne only
             player.yvel = -0x50                                     # [asm 8916] bounce up
@@ -497,7 +497,7 @@ def native_particle_consume(state) -> None:
     is one-shot, gone by the next frame. The plot is render (the faithful renderer redraws it from a 4B8E-entry
     snapshot); the STATE half — write the advanced Y back to [slot+2] and the kill sentinel [slot]=0xFFFF — is
     gameplay-coupled (the effect-spawn handlers reuse a freed slot), so native must run it or the array fills up."""
-    from pre2.bridge.particles import apply_particle_writeback, read_particle_consume_inputs
+    from pre2.views.particles import apply_particle_writeback, read_particle_consume_inputs
     from pre2.recovered.particles import advance_particle
     slots, _cc, _cr, _yb, _pg, cos, sin = read_particle_consume_inputs(state)
     if slots:                                                          # [asm 4BA9] active slots (X != 0xFFFF)
@@ -538,7 +538,7 @@ def _frame_tail_after_trigger(state) -> None:
     # side effects are extracted: 4B8E's particle consume (state half below) and 26FA (object_render), which bumps
     # the free-running 16-bit frame counter [0x6bd5] that the animation phase reads ([0x6bd5]&1/&3/&7/&0xf) — in 11
     # gameplay calls. The prefix above already read it as N (frame start); the firefly/scroll/respawn/shake read N+1.
-    from pre2.bridge.particles import read_particles
+    from pre2.views.particles import read_particles
     state.particle_capture = read_particles(state)                  # snapshot [0x7DE6] at the 4B8E ENTRY (spider-
     #   threads/sparkles) so native_render can DRAW them — the consume below KILLS the one-shot slots
     native_particle_consume(state)                                  # [asm 0247: 4B8E state] advance-Y + kill [0x7DE6]
@@ -568,7 +568,7 @@ def native_light_fade_step(state) -> None:
     in the gameplay frame — found by the safe-hooks demo 230900 (tick 382: the VM counted [0x6C03] 1,2,4...
     while state-only native stayed 0), and it also fixes the native fade PACING (it advanced per RENDER call,
     i.e. --fps-dependent, instead of per game tick)."""
-    from pre2.bridge.dgroup_view import LightFadeView
+    from pre2.views.dgroup_view import LightFadeView
     fade = LightFadeView(state)
     if not fade.active:                                              # [asm 6771/6775 je 67D6] no active fade
         return
@@ -625,7 +625,7 @@ def native_death_bounce_509d(state):
     residual is the 8 effect slots that the render 26FA frees ([slot+4]=0xffff) as their lifetime expires —
     render-managed, and in the full 4F6C respawn it is immediately wiped by 5237's pool re-init, so it is
     irrelevant to the respawn outcome (and would be reproduced by native_render's per-frame draw in a renderer)."""
-    from pre2.bridge.dgroup_view import PlayerView
+    from pre2.views.dgroup_view import PlayerView
     from pre2.native.audio import native_play_sfx, player_sfx_x
     rb, rw = readers(state)
     player = PlayerView(state)

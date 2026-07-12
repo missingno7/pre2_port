@@ -2,7 +2,7 @@
 
 The game's audio is exposed as a stream of **semantic** :mod:`~pre2.audio.events`
 (``StartSong`` / ``PlaySfx`` / ``StopSong`` / ``SetMusicEnabled``), recovered from the
-original audio command routines by :mod:`pre2.bridge.audio_commands`. The recovery layer's
+original audio command routines by :mod:`pre2.views.audio_commands`. The recovery layer's
 job is to discover the high-level *intent* — which song starts (matched to its standard
 ``.TRK``), which SFX fire — not to dictate how it is mixed.
 

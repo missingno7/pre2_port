@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from pre2.bridge.dgroup_view import DGROUP_BASE, ScrollScriptView
+from pre2.views.dgroup_view import DGROUP_BASE, ScrollScriptView
 from pre2.native.state import NativeGameState
 from pre2.recovered.scroll_script import scroll_script_snow, scroll_script_state
 

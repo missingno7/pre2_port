@@ -1,12 +1,12 @@
 """Reconstruct the native audio engine's input (:class:`AudioState`) from VM memory.
 
-Read-only, one place. Reuses the per-layer readers in :mod:`pre2.bridge.audio` and bundles
+Read-only, one place. Reuses the per-layer readers in :mod:`pre2.views.audio` and bundles
 a complete, detached song+SFX snapshot the recovered :class:`AudioSystem` can play with no
 VM / Sound Blaster.
 """
 from __future__ import annotations
 
-from pre2.bridge import audio as _a
+from pre2.views import audio as _a
 from pre2.recovered.audio_system import AudioState
 from pre2.recovered.mixer import Sfx
 

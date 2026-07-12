@@ -12,8 +12,18 @@ block of per-frame timer decrements. The player struct is at `0x4F1C`:
 
 This module recovers the FSM bottom-up, each leaf proven byte-exact in shadow before any live replacement.
 Started with the isolated horizontal-kinematics leaf (the player counterpart of the object `apply_velocity`).
+
+READABILITY (the offsets-into-views lift, same pattern as player_collision): the rb/rw-consuming handlers
+read/write NAMED state — ``p`` = :class:`PlayerView`, ``g`` = :class:`PlayerGlobals` — with every field's
+offset + width + [asm] evidence living once in pre2/views/dgroup_view. The leaf primitives (integrate, accel,
+friction, gravity, set/advance anim) already take VALUES, not memory. Contracts are unchanged: the handlers
+still return their plain ``{offset: value}`` dicts (widths implied by FSM_WORD_FIELDS); ``player_flying_484e``
+keeps its ``{offset: (value, width)}`` convention via :class:`WidthContractBackend`. Raw offsets remain only
+for genuinely dynamic data — the anim/impulse/phase TABLES, the trail ring, the projectile spawn slots.
 """
 from __future__ import annotations
+
+from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView, WidthContractBackend
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
@@ -75,6 +85,13 @@ def _s16(v: int) -> int:
 def _s8(v: int) -> int:
     v &= 0xFF
     return v - 0x100 if v & 0x80 else v
+
+
+def _views(rb, rw, out: dict | None = None):
+    """Bind the named views over the caller's DS readers; named writes record into ``out`` (or a fresh dict)
+    in the FSM's plain ``{offset: value}`` contract (widths implied by FSM_WORD_FIELDS at apply time)."""
+    be = DictBackend(rb, rw, out)
+    return PlayerView(be), PlayerGlobals(be), be
 
 
 def player_x_integrate(x: int, xvel: int, cam_left: int) -> int:
@@ -255,30 +272,32 @@ def player_flying_484e(rb, rw):
 
     Returns the ``{offset: (value, width)}`` write contract. Empty (a no-op) when ``[0x6BC5]==0``. The gameplay
     writes are ``[0x4F20]`` (anim) + ``[0x7B1A]`` (tilt); the wing slot ``[0x4F0A/0C/0E]`` is a render record."""
-    if rb(GLIDER_GATE) == 0:                                        # [484E] not flying
+    be = WidthContractBackend(rb, rw)
+    p, g = PlayerView(be), PlayerGlobals(be)
+    if g.glider == 0:                                             # [484E] not flying
         return {}
-    out: dict = {}
-    frame = rw(ANIM_FRAME)
-    if rb(0x6BC7) != 0:                                            # [485D] recompute the flight frame
+    out = be.writes
+    frame = p.sprite
+    if g.low_gravity != 0:                                        # [485D] descending -> recompute the flight frame
         f = frame & 0x8000                                         # [485F] keep the facing bit
-        ax = abs(_s16(rw(0x4F22)))                                 # [4868-486F] |Xvel|
+        ax = abs(p.xvel)                                           # [4868-486F] |Xvel|
         dx = 0x30                                                  # [4865]
         if ax <= 0x40:                                            # [4871-487C]
             dx += 1
             if ax <= 0x20:
                 dx += 1
-        tilt = rb(GLIDER_TILT)                                     # [487D]
+        tilt = g.glider_tilt                                       # [487D]
         if tilt < 3:                                              # [4880-4886] banked below neutral
             dx = (0x33 - tilt) & 0xFF
         frame = (f | dx) & 0xFFFF                                 # [4888]
-        out[ANIM_FRAME] = (frame, 2)
+        p.sprite = frame
     dl = (frame >> 8) & 0xFF                                      # [4892] facing/high byte
     key = frame & 0x1FFF                                          # [4894] and ah,0x1f
-    tilt = rb(GLIDER_TILT)
-    if (rb(0x27EA) | rb(0x27EB)) == 0:                            # [4897-489F] no up/down -> auto-return the tilt
+    tilt = g.glider_tilt
+    if (g.in_up | g.in_down) == 0:                                # [4897-489F] no up/down -> auto-return the tilt
         if tilt != 3:                                            # [48A3-48AC] step toward neutral
-            tilt = (tilt + (1 if tilt < 3 else -1)) & 0xFF        # [48AE] writes [0x7B1A] IN MEMORY, so the
-            out[GLIDER_TILT] = (tilt, 1)                          #   tilt-table lookup below sees this new value
+            tilt = (tilt + (1 if tilt < 3 else -1)) & 0xFF        # [48AE] writes the tilt IN MEMORY, so the
+            g.glider_tilt = tilt                                  #   tilt-table lookup below sees this new value
     si = GLIDER_ANIM_TABLE                                        # [488C]
     while True:
         cx = rw(si)                                              # [48B2]
@@ -292,11 +311,11 @@ def player_flying_484e(rb, rw):
             if dl & 0x80:                                        # [48D4-48DB] facing left
                 wing = (wing | 0x8000) & 0xFFFF
                 xoff = -xoff
-            if rb(0x6BC8) > 0x18 and (wing & 0xFF) < 0x79:       # [48DD-48E8]
+            if g.fly_timer > 0x18 and (wing & 0xFF) < 0x79:      # [48DD-48E8]
                 wing = (wing + 1) & 0xFFFF
-            out[0x4F0E] = (wing, 2)                              # [48E9] the wing anim
-            out[0x4F0A] = ((rw(0x4F1C) + xoff) & 0xFFFF, 2)      # [48EC-48F1] wing X
-            out[0x4F0C] = ((rw(0x4F1E) + _s8(rb(si + 5))) & 0xFFFF, 2)   # [48F4-48FC] wing Y
+            p.slot0.sprite = wing                                # [48E9] the wing anim (render slot 0)
+            p.slot0.x = (p.x + xoff) & 0xFFFF                    # [48EC-48F1] wing X
+            p.slot0.y = (p.y + _s8(rb(si + 5))) & 0xFFFF         # [48F4-48FC] wing Y
             return out
         si = (si + 6) & 0xFFFF                                   # [4901]
 
@@ -315,31 +334,31 @@ def player_state_run(rb, rw) -> dict:
         advance_anim(ptr)                         # 5F0F player_advance_anim ([0x4F20]/[0x4F28]/[0x6BCF])
 
     ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
-    out = {}
-    # [asm 5ECE-5EF8] the FLYING-state block: while gliding ([0x6BC5]) at speed (|Xvel|>=0x40), count the flying
-    # timer [0x6BC8] up (saturating), dropping ONE trail sprite (5E18 = the ungated 5E11 emit) when it hits 0x17.
-    if rb(GLIDER_GATE) != 0 and abs(_s16(rw(0x4F22))) >= 0x40:                           # [5ED8-5EE2]
-        bc8 = rb(0x6BC8)
-        bc8 = 0xFF if bc8 == 0xFF else (bc8 + 1) & 0xFF                                  # [5EE4-5EE9] sat_inc
-        out[0x6BC8] = bc8
+    p, g, be = _views(rb, rw)
+    out = be.writes
+    # [asm 5ECE-5EF8] the FLYING-state block: while gliding at speed (|Xvel|>=0x40), count the flying
+    # timer up (saturating), dropping ONE trail sprite (5E18 = the ungated 5E11 emit) when it hits 0x17.
+    if g.glider != 0 and abs(p.xvel) >= 0x40:                                            # [5ED8-5EE2]
+        bc8 = _sat_inc_byte(g.fly_timer)                                                 # [5EE4-5EE9] sat_inc
+        g.fly_timer = bc8
         if bc8 == 0x17:                                                                  # [5EEE-5EF5] -> 5E18 trail
-            emit = player_emit_trail(rw(0x4F1C), rw(0x4F1E), 0, rw(0x6BBE))              # blink 0 = ungated emit
+            emit = player_emit_trail(p.x, p.y, 0, g.trail_ring)                          # blink 0 = ungated emit
             if emit is not None:
                 out.update(emit[0])
-                out[0x6BBE] = emit[1]
-    out[0x6BD3] = _sat_inc_byte(rb(0x6BD3))                                              # [5EF9-5EFE]
-    xvel = player_accel(rw(0x4F22), rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, RUN_ACCEL_LIMIT)  # [5F03-5F06]
-    xvel = player_friction_dir(xvel, rw(0x6BF6))                                         # [5F09]
-    out[0x4F22] = xvel
+                g.trail_ring = emit[1]
+    g.idle_timer = _sat_inc_byte(g.idle_timer)                                           # [5EF9-5EFE]
+    xvel = player_accel(p.xvel & 0xFFFF, p.facing, p.motion_mode, g.input_lr != 0, RUN_ACCEL_LIMIT)  # [5F03-5F06]
+    xvel = player_friction_dir(xvel, g.friction)                                         # [5F09]
+    p.xvel = xvel
     # [5F0C] set_anim_b: the seq index is the dispatch `bx` (anim_id*2), which the flying gate (5960) bumped by
     # 0x40 — so gliding plays the FLYING run sequence (0x42) instead of the ground-run one (0x02).
-    seq = 0x42 if rb(GLIDER_GATE) != 0 else 2
-    state, ptr = player_set_anim(1, seq, rb(0x4F27), rw(0x4F28), rw)
-    out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)                # [5F0F]
-    out[0x4F28] = new_ptr
-    out[0x4F20] = frame
-    out[0x6BCF] = bcf
+    seq = 0x42 if g.glider != 0 else 2
+    state, ptr = player_set_anim(1, seq, p.anim_b, p.anim_ptr, rw)
+    p.anim_b = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, p.facing_lo, rw)                      # [5F0F]
+    p.anim_ptr = new_ptr
+    p.sprite = frame
+    g.anim_hi = bcf
     return out
 
 
@@ -381,39 +400,41 @@ def player_state_anim5(rb, rw, anim_id: int = 5) -> dict:
         [0x6BCE] = charge_6bce([0x6BCE])             # 5EB3 -> 5EB7
 
     ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
-    out = {0x6BC8: 0, 0x6BE1: 4}
-    seq = (anim_id * 2 + (0x40 if rb(GLIDER_GATE) != 0 else 0)) & 0xFF                    # [dispatch bx]
-    state, ptr = player_set_anim(anim_id, seq, rb(0x4F27), rw(0x4F28), rw)                # [5EAA]
-    out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)                 # [5EAD]
-    out[0x4F28] = new_ptr
-    out[0x4F20] = frame
-    out[0x6BCF] = bcf
-    out[0x4F22] = player_friction_sym(rw(0x4F22), rb(0x4F24))                             # [5EB0]
-    out[0x6BCE] = player_charge_6bce(rb(0x6BCE))                                          # [5EB3->5EB7]
-    return out
+    p, g, be = _views(rb, rw)
+    g.fly_timer = 0                                                                       # [5EA0]
+    g.drop_gate = 4                                                                       # [5EA5]
+    seq = (anim_id * 2 + (0x40 if g.glider != 0 else 0)) & 0xFF                           # [dispatch bx]
+    state, ptr = player_set_anim(anim_id, seq, p.anim_b, p.anim_ptr, rw)                  # [5EAA]
+    p.anim_b = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, p.facing_lo, rw)                       # [5EAD]
+    p.anim_ptr = new_ptr
+    p.sprite = frame
+    g.anim_hi = bcf
+    p.xvel = player_friction_sym(p.xvel & 0xFFFF, p.motion_mode)                          # [5EB0]
+    g.charge = player_charge_6bce(g.charge)                                               # [5EB3->5EB7]
+    return be.writes
 
 
-def _idle_set_advance(out: dict, anim_id: int, seq: int, rb, rw, facing: int) -> None:
-    """Idle helper: ``set_anim_a`` (635D, tracks ``[0x4F2C]``) then ``advance_anim`` (638B)."""
-    state, ptr = player_set_anim(anim_id, seq, rb(0x4F2C), rw(0x4F28), rw)
-    out[0x4F2C] = state
+def _idle_set_advance(p: PlayerView, g: PlayerGlobals, anim_id: int, seq: int, rb, rw, facing: int) -> None:
+    """Idle helper: ``set_anim_a`` (635D, tracks ``run_flag``) then ``advance_anim`` (638B)."""
+    state, ptr = player_set_anim(anim_id, seq, p.run_flag, p.anim_ptr, rw)
+    p.run_flag = state
     frame, new_ptr, bcf = player_advance_anim(ptr, facing & 0xFF, rw)
-    out[0x4F28] = new_ptr
-    out[0x4F20] = frame
-    out[0x6BCF] = bcf
+    p.anim_ptr = new_ptr
+    p.sprite = frame
+    g.anim_hi = bcf
 
 
-def _idle_default_anim(out: dict, entry_bx: int, facing: int, rw) -> None:
+def _idle_default_anim(p: PlayerView, entry_bx: int, facing: int, rw) -> None:
     """Idle "default" anim path ``1030:5DED`` — load the sequence for the handler's entry ``bx`` (anim_id*2;
     0 for a direct idle, but e.g. 4 when the jump handler falls through) and write frame 0 WITHOUT advancing
-    and WITHOUT the 0x1F mask (only the facing bit is merged); resets ``[0x4F2C]``."""
+    and WITHOUT the 0x1F mask (only the facing bit is merged); resets ``run_flag``."""
     ptr = rw((entry_bx + ANIM_SEQ_TABLE) & 0xFFFF)              # [5DED] bx = [entry_bx + 0x7CDF]
-    out[0x4F28] = ptr                                            # [5DF1]
+    p.anim_ptr = ptr                                             # [5DF1]
     ax = rw(ptr)                                                 # [5DF5]
     ah = ((ax >> 8) | (facing & 0x80)) & 0xFF                    # [5DF7-5DFE] no 0x1F mask here
-    out[0x4F20] = ((ah << 8) | (ax & 0xFF)) & 0xFFFF            # [5E00]
-    out[0x4F2C] = 0                                              # [5E03]
+    p.sprite = ((ah << 8) | (ax & 0xFF)) & 0xFFFF               # [5E00]
+    p.run_flag = 0                                               # [5E03]
 
 
 def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
@@ -428,44 +449,46 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
     (3435/3414 -> the scroll/render sub-island 3588/350c) — is NOT recovered and fails loud. It does fire under
     the live-collapse trajectory (idle look-around), so it gates the FSM *live-drive*; recovering it (the camera
     pan) is the next step. The verify oracle is unaffected (28/28 demos clean)."""
-    out = {0x6BC8: 0}                                            # [5CE8]
-    xv = player_friction_dir(rw(0x4F22), rw(0x6BF6))            # [5CED]
-    xv = player_friction_sym(xv, rb(0x4F24))                    # [5CF0]
-    out[0x4F22] = xv
+    p, g, be = _views(rb, rw)
+    out = be.writes
+    g.fly_timer = 0                                             # [5CE8]
+    xv = player_friction_dir(p.xvel & 0xFFFF, g.friction)       # [5CED]
+    xv = player_friction_sym(xv, p.motion_mode)                 # [5CF0]
+    p.xvel = xv
 
-    if rb(0x6BFE) == 0 and rw(0x4F2A) != 0:                     # [5CF3-5CFF] airborne (in the air)
-        if rb(0x6BD1) > 4:                                      # [5D01] jbe
-            out[0x4F22] = player_friction_dir(out[0x4F22], rw(0x6BF6))   # [5D08]
-        return out                                              # [5D0B] jmp 5E0D (no [0x4F27] reset)
+    if g.unk_6BFE == 0 and (p.yvel & 0xFFFF) != 0:              # [5CF3-5CFF] airborne (in the air)
+        if g.fall_latch > 4:                                    # [5D01] jbe
+            p.xvel = player_friction_dir(xv, g.friction)        # [5D08]
+        return out                                              # [5D0B] jmp 5E0D (no anim_b reset)
 
-    facing = rb(0x4F25)
+    facing = p.facing_lo
     ax = abs(_s16(out[0x4F22]))                                 # [5D0E-5D15] |Xvel| (post-friction)
     if ax >= 8:                                                 # [5D17] jb 5D42
-        if ((rb(0x4F21) >> 7) & 1) == ((out[0x4F22] >> 15) & 1):   # [5D1C-5D2C] facing == vel sign?
-            _idle_set_advance(out, 0x12, 0x24, rb, rw, facing)      # [5D31-5D39] anim 0x12
-            trail = player_emit_trail(rw(0x4F1C), rw(0x4F1E), rb(0x6BD5), rw(0x6BBE))  # [5D3C] call 5E11
+        if ((p.flags >> 7) & 1) == ((out[0x4F22] >> 15) & 1):   # [5D1C-5D2C] facing == vel sign?
+            _idle_set_advance(p, g, 0x12, 0x24, rb, rw, facing)     # [5D31-5D39] anim 0x12
+            trail = player_emit_trail(p.x, p.y, g.frame_blink, g.trail_ring)  # [5D3C] call 5E11
             if trail is not None:
                 out.update(trail[0])
-                out[0x6BBE] = trail[1]
+                g.trail_ring = trail[1]
         else:
-            _idle_default_anim(out, entry_bx, facing, rw)                # [5D2E] jmp 5DED
-        out[0x4F27] = 0                                         # [5E08]
+            _idle_default_anim(p, entry_bx, facing, rw)                # [5D2E] jmp 5DED
+        p.anim_b = 0                                            # [5E08]
         return out
 
     if _s16(out[0x4F22]) != 0:                                  # [5D42-5D46] 0 < |Xvel| < 8 -> default
-        _idle_default_anim(out, entry_bx, facing, rw)
-        out[0x4F27] = 0
+        _idle_default_anim(p, entry_bx, facing, rw)
+        p.anim_b = 0
         return out
 
     # Xvel == 0 [5D49]
-    timer = rb(0x6BD3)
-    e9 = rb(0x27E9)
-    eced = rb(0x27EC) & rb(0x27ED)
+    timer = g.idle_timer
+    e9 = g.in_aux
+    eced = g.in_right & g.in_left
     if timer >= 0x1E:                                           # [5D49] jb 5D73
         if e9 == 0 and eced == 0:                               # [5D50-5D5E] no input -> long idle
-            out[0x6BD3] = (timer - 3) & 0xFF                    # [5D60]
-            _idle_set_advance(out, 0x10, 0x20, rb, rw, facing)  # [5D65-5D6D] anim 0x10
-            out[0x4F27] = 0
+            g.idle_timer = timer - 3                            # [5D60]
+            _idle_set_advance(p, g, 0x10, 0x20, rb, rw, facing)  # [5D65-5D6D] anim 0x10
+            p.anim_b = 0
             return out
         reach_5d83 = True                                      # input present -> 5D83
     else:                                                       # [5D73]
@@ -476,29 +499,29 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         else:
             reach_5d83 = True
 
-    if reach_5d83 and rb(0x6BFE) == 0:                          # [5D83] jne 5DC9 ; else 5D8A — look-around
-        _idle_set_advance(out, 0x13, 0x26, rb, rw, facing)     # [5D8A-5D92] set_anim_a 0x13 + advance
-        if not (rb(0x8166) & 2) and rb(0x6BD9) == 0:           # [5D95-5DA1] camera-pan gates
-            screen_x = (_s16(rw(0x4F1C)) >> 4) - _s16(rw(0x2DE4))   # [5DA3-5DAA] player tile X - camera X
-            if rb(0x4F21) & 0x80:                              # [5DAE] facing left -> 3414
+    if reach_5d83 and g.unk_6BFE == 0:                          # [5D83] jne 5DC9 ; else 5D8A — look-around
+        _idle_set_advance(p, g, 0x13, 0x26, rb, rw, facing)    # [5D8A-5D92] set_anim_a 0x13 + advance
+        if not (g.level_flags & 2) and g.unk_6BD9 == 0:        # [5D95-5DA1] camera-pan gates
+            screen_x = (_s16(p.x) >> 4) - _s16(g.cam_col_word)  # [5DA3-5DAA] player tile X - camera X
+            if p.flags & 0x80:                                 # [5DAE] facing left -> 3414
                 if (screen_x & 0xFFFF) < 0x11:                 # [5DBF-5DC2] jae 5E08
                     out[SCROLL_REQUEST] = "left"               # [5DC4 call 3414]
             elif (screen_x & 0xFFFF) > 2:                      # [5DB5-5DB8] facing right, jbe 5E08 -> 3435
                 out[SCROLL_REQUEST] = "right"                  # [5DBA call 3435]
-        out[0x4F27] = 0                                         # [5E08]
+        p.anim_b = 0                                            # [5E08]
         return out
 
-    # fidget [5DC9]: find the 0x79E0 range [lo,hi) containing key=[0x27F0]&0x1FF -> anim 0x11; below lo -> default
-    key = rw(0x27F0) & 0x1FF
+    # fidget [5DC9]: find the 0x79E0 range [lo,hi) containing key=idle_clock&0x1FF -> anim 0x11; below lo -> default
+    key = g.idle_clock & 0x1FF
     si = 0x79E0
     while True:
         if key < rw(si):                                       # [5DD2] jb 5DED
-            _idle_default_anim(out, entry_bx, facing, rw)
-            out[0x4F27] = 0
+            _idle_default_anim(p, entry_bx, facing, rw)
+            p.anim_b = 0
             return out
         if key < rw((si + 2) & 0xFFFF):                        # [5DD6] jb 5DE0
-            _idle_set_advance(out, 0x11, 0x22, rb, rw, facing)  # [5DE0-5DE8] anim 0x11
-            out[0x4F27] = 0
+            _idle_set_advance(p, g, 0x11, 0x22, rb, rw, facing)  # [5DE0-5DE8] anim 0x11
+            p.anim_b = 0
             return out
         si = (si + 4) & 0xFFFF                                 # [5DDB]
 
@@ -511,7 +534,8 @@ def player_state_jump(rb, rw) -> dict:
     ``[0x6BD1]``, post-incremented), then switch to gravity; apply horizontal control (accel toward 0x30 when
     Xvel is small, else symmetric friction); ``set_anim_b(2, seq=4)`` + advance; finally two directional
     frictions. ``rb``/``rw`` read entry memory; returns the dict of writes."""
-    if rb(0x6BE0) != 0:                                          # [5F37-5F3E] jmp 5CDB
+    _p, g, _be = _views(rb, rw)
+    if g.fall_grace != 0:                                        # [5F37-5F3E] jmp 5CDB
         return player_state_idle(rb, rw, entry_bx=4)
     return _jump_body(rb, rw)
 
@@ -522,47 +546,51 @@ def _jump_body(rb, rw) -> dict:
     gravity), horizontal control, ``set_anim_b(2)``, and two directional frictions. Under the flying gate
     (``[0x6BC5]!=0``) the impulse is halved (``5F5B-5F62``); when ``[0x6BC5]==0`` that is a no-op, so the normal
     jump is unchanged."""
-    out = {0x6BFE: 0}                                            # [5F41]
-    counter = rb(0x6BD1)                                         # [5F46]
-    out[0x6BD1] = (counter + 1) & 0xFF                          # [5F4C] inc
+    p, g, be = _views(rb, rw)
+    g.unk_6BFE = 0                                               # [5F41]
+    counter = g.fall_latch                                       # [5F46] (the jump arc's frame counter)
+    g.fall_latch = counter + 1                                   # [5F4C] inc
     if counter < JUMP_FRAMES:                                    # [5F50] jae
         impulse = rw((JUMP_IMPULSE_TABLE + counter * 2) & 0xFFFF)   # [5F55-5F57]
-        if rb(0x6BC5) != 0:                                     # [5F5B-5F62] flying state -> halve the impulse
+        if g.glider != 0:                                       # [5F5B-5F62] flying state -> halve the impulse
             impulse = (_s16(impulse) >> 1) & 0xFFFF
-        out[0x4F2A] = (rw(0x4F2A) + impulse) & 0xFFFF           # [5F64] Yvel += impulse
+        p.yvel = ((p.yvel & 0xFFFF) + impulse) & 0xFFFF         # [5F64] Yvel += impulse
     else:
-        out[0x4F2A] = player_gravity(rw(0x4F2A), rb(0x6BC7), 0xC0)   # [5F6A-5F6D] gravity
+        p.yvel = player_gravity(p.yvel & 0xFFFF, g.low_gravity, 0xC0)   # [5F6A-5F6D] gravity
 
-    xvel = rw(0x4F22)
-    if (xvel & 0xFFFF) < 0x30:                                  # [5F73] jb (unsigned)
-        xvel = player_accel(xvel, rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, 0x30)   # [5F7E]
+    xvel = p.xvel & 0xFFFF
+    if xvel < 0x30:                                             # [5F73] jb (unsigned)
+        xvel = player_accel(xvel, p.facing, p.motion_mode, g.input_lr != 0, 0x30)   # [5F7E]
     else:
-        xvel = player_friction_sym(xvel, rb(0x4F24))            # [5F79]
+        xvel = player_friction_sym(xvel, p.motion_mode)         # [5F79]
 
-    state, ptr = player_set_anim(2, 4, rb(0x4F27), rw(0x4F28), rw)   # [5F81-5F86] set_anim_b
-    out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)   # [5F89]
-    out[0x4F28] = new_ptr
-    out[0x4F20] = frame
-    out[0x6BCF] = bcf
+    state, ptr = player_set_anim(2, 4, p.anim_b, p.anim_ptr, rw)     # [5F81-5F86] set_anim_b
+    p.anim_b = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, p.facing_lo, rw)  # [5F89]
+    p.anim_ptr = new_ptr
+    p.sprite = frame
+    g.anim_hi = bcf
 
-    xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8C]
-    xvel = player_friction_dir(xvel, rw(0x6BF6))               # [5F8F]
-    out[0x4F22] = xvel
-    return out
+    xvel = player_friction_dir(xvel, g.friction)                # [5F8C]
+    xvel = player_friction_dir(xvel, g.friction)                # [5F8F]
+    p.xvel = xvel
+    return be.writes
 
 
 def _flying_jump(rb, rw) -> dict:
     """The flying-mode jump ``1030:5F13`` (``cs:[0x7D6F][2]``). Once the hold counter ``[0x6BC8]`` reaches
     0x18 the jump ends (arm the descent: ``[0x6BC7]=1``, ``[0x6BC6]=0x18``, nudge ``Y-=3``, reset ``[0x6BC8]``)
     and only the two directional frictions run; otherwise it runs the shared jump body."""
-    if rb(0x6BC8) >= 0x18:                                      # [5F13-5F18]
-        out = {0x6BC7: 1, 0x6BC6: 0x18, 0x6BC8: 0,            # [5F1A-5F29]
-               0x4F1E: (rw(0x4F1E) - 3) & 0xFFFF}
-        xvel = player_friction_dir(rw(0x4F22), rw(0x6BF6))     # [5F2E jmp 5F8C]
-        xvel = player_friction_dir(xvel, rw(0x6BF6))           # [5F8F]
-        out[0x4F22] = xvel
-        return out
+    p, g, be = _views(rb, rw)
+    if g.fly_timer >= 0x18:                                     # [5F13-5F18]
+        g.low_gravity = 1                                       # [5F1A-5F29] arm the descent
+        g.fly_hold = 0x18
+        g.fly_timer = 0
+        p.y = (p.y - 3) & 0xFFFF
+        xvel = player_friction_dir(p.xvel & 0xFFFF, g.friction)  # [5F2E jmp 5F8C]
+        xvel = player_friction_dir(xvel, g.friction)            # [5F8F]
+        p.xvel = xvel
+        return be.writes
     return _jump_body(rb, rw)                                   # [5F41]
 
 
@@ -574,44 +602,47 @@ def player_fsm_flying(rb, rw) -> tuple:
     Only the ``[0x6BC7]&1 == 0`` branch is witnessed (the flying hold has not started): mask ``[0x6BC7]``,
     arm the descent flag when Yvel exceeds 0xA0, then dispatch. The input-driven hold bookkeeping (``5977``,
     over ``[0x6BC6]``/``[0x7B1A]`` from ``[0x27EA]``/``[0x27EB]``) is unwitnessed and fails loud."""
-    bc7 = rb(0x6BC7) & 1                                       # [596D] and [0x6BC7],1
-    out = {0x6BC7: bc7}
+    p, g, be = _views(rb, rw)
+    out = be.writes
+    bc7 = g.low_gravity & 1                                    # [596D] and (descend flag),1
+    g.low_gravity = bc7
     if bc7 == 0:                                              # [5972] not held -> 59FE then dispatch
-        if _s16(rw(0x4F2A)) > 0xA0:                            # [59FE-5A04] jg
-            out[0x6BC7] = 1                                    # [5A06]
+        if p.yvel > 0xA0:                                      # [59FE-5A04] jg
+            g.low_gravity = 1                                  # [5A06]
         return out, True                                      # [-> 5A0B] dispatch via cs:[0x7D6F]
 
-    # [5977] the flying hold is active ([0x6BC7]&1): bookkeeping over [0x6BC6]/[0x7B1A]; never dispatches.
-    ea, eb = rb(0x27EA), rb(0x27EB)
-    bc6, b1a = rb(0x6BC6), rb(0x7B1A)
+    # [5977] the flying hold is active (descend bit0): bookkeeping over fly_hold/tilt; never dispatches.
+    ea, eb = g.in_up, g.in_down
+    bc6, b1a = g.fly_hold, g.glider_tilt
     if ea != 0:                                               # [5977] held "up"
         if b1a == 6:                                          # [597E]
-            if _s16(rw(0x4F2A)) > 0x10:                       # [5985] jle 5997
+            if p.yvel > 0x10:                                 # [5985] jle 5997
                 bc7 |= 2                                      # [598C]
         else:
-            b1a = (b1a + 1) & 0xFF                            # [5993] inc [0x7B1A]
+            b1a = (b1a + 1) & 0xFF                            # [5993] inc the tilt
         if bc6 != 0:                                          # [5997] je 59B1
-            out[0x6BC6] = bc6 = (bc6 - 1) & 0xFF              # [599E]
-            out[0x6BC7] = bc7
-            out[0x7B1A] = b1a
+            bc6 = (bc6 - 1) & 0xFF                            # [599E]
+            g.fly_hold = bc6
+            g.low_gravity = bc7
+            g.glider_tilt = b1a
             if b1a >= 4:                                      # [59A2] jb 5A0F
-                out[0x4F2A] = 0xFFC0                          # [59A9]
+                p.yvel = 0xFFC0                               # [59A9]
             return out, False
-        out[0x6BC7] = bc7                                     # bc6 == 0 -> fall to 59B1
-        out[0x7B1A] = b1a
-    # [59B1] (ea==0, or held-up with [0x6BC6]==0)
+        g.low_gravity = bc7                                   # bc6 == 0 -> fall to 59B1
+        g.glider_tilt = b1a
+    # [59B1] (ea==0, or held-up with fly_hold==0)
     if eb == 0:                                               # [59B1] not held "down"
-        out[0x6BC6] = _dec_floor(bc6, 8)                      # [59B8] saturating dec
+        g.fly_hold = _dec_floor(bc6, 8)                       # [59B8] saturating dec
         return out, False
     if b1a != 0:                                              # [59C4] held "down"
-        b1a = (b1a - 1) & 0xFF                                # [59CB] dec [0x7B1A]
-    out[0x6BC7] = (out.get(0x6BC7, bc7) | 2)                  # [59CF] or [0x6BC7],2
-    out[0x7B1A] = b1a
+        b1a = (b1a - 1) & 0xFF                                # [59CB] dec the tilt
+    g.low_gravity = bc7 | 2                                   # [59CF] or (descend),2 (out value == bc7 on
+    g.glider_tilt = b1a                                       #   every path reaching here)
     if b1a > 1:                                               # [59D4] ja 5A0F
         return out, False
-    mag = abs(_s16(rw(0x4F22)) >> 4) & 0xFF                   # [59DC-59E9] |sar(Xvel,4)|
-    if bc6 < ((mag * 5) & 0xFF):                              # [59ED-59F5] cmp [0x6BC6],mag*5 ; jae
-        out[0x6BC6] = (bc6 + mag) & 0xFF                      # [59F7] add [0x6BC6],mag
+    mag = abs(p.xvel >> 4) & 0xFF                             # [59DC-59E9] |sar(Xvel,4)|
+    if bc6 < ((mag * 5) & 0xFF):                              # [59ED-59F5] cmp fly_hold,mag*5 ; jae
+        g.fly_hold = (bc6 + mag) & 0xFF                       # [59F7] add fly_hold,mag
     return out, False
 
 
@@ -635,16 +666,17 @@ def player_state_anim8(rb, rw) -> dict:
     (6333) leaves ``ax`` = the new Xvel, so the following ``set_anim_b`` (6374) is called with ``al`` = that
     Xvel's low byte (NOT the anim_id) and ``bx`` == 0x10 (anim_id*2) as the sequence index. Faithful to the
     ASM. ``rb``/``rw`` read entry memory; returns the dict of writes."""
-    xv = player_friction_dir(rw(0x4F22), rw(0x6BF6))           # [5CCE]
-    xv = player_friction_sym(xv, rb(0x4F24))                   # [5CD1] -> ax = xv
-    out = {0x4F22: xv}
-    state, ptr = player_set_anim(xv & 0xFF, 0x10, rb(0x4F27), rw(0x4F28), rw)   # [5CD4] al = xv low byte
-    out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)       # [5CD7]
-    out[0x4F28] = new_ptr
-    out[0x4F20] = frame
-    out[0x6BCF] = bcf
-    return out
+    p, g, be = _views(rb, rw)
+    xv = player_friction_dir(p.xvel & 0xFFFF, g.friction)      # [5CCE]
+    xv = player_friction_sym(xv, p.motion_mode)                # [5CD1] -> ax = xv
+    p.xvel = xv
+    state, ptr = player_set_anim(xv & 0xFF, 0x10, p.anim_b, p.anim_ptr, rw)     # [5CD4] al = xv low byte
+    p.anim_b = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, p.facing_lo, rw)             # [5CD7]
+    p.anim_ptr = new_ptr
+    p.sprite = frame
+    g.anim_hi = bcf
+    return be.writes
 
 
 def player_state_anim4(rb, rw) -> dict:
@@ -653,19 +685,23 @@ def player_state_anim4(rb, rw) -> dict:
     Always: ``[0x6BD3]=0``, ``[0x6BE1]=4``, ``charge_6bce``. Then on ``|Xvel| <= 0x20`` accelerate (limit 0x20)
     + ``set_anim_b`` + advance (``al`` = the clobbered ``|Xvel|`` low byte, ``bx``==8); otherwise fall through
     to the idle handler (bx==8), which — because ``[0x6BD3]`` was just zeroed — sees a fresh idle timer."""
-    out = {0x6BD3: 0, 0x6BE1: 4, 0x6BCE: player_charge_6bce(rb(0x6BCE))}   # [5E6C-5E76]
-    mag = abs(_s16(rw(0x4F22)))                                            # [5E79]
+    p, g, be = _views(rb, rw)
+    out = be.writes
+    g.idle_timer = 0                                                       # [5E6C]
+    g.drop_gate = 4                                                        # [5E71]
+    g.charge = player_charge_6bce(g.charge)                                # [5E76]
+    mag = abs(p.xvel)                                                      # [5E79]
     if mag <= 0x20:                                                        # [5E85-5E87] jbe -> accel
-        out[0x4F22] = player_accel(rw(0x4F22), rw(0x4F25), rb(0x4F24), rb(0x6BDB) != 0, 0x20)  # [5E8C]
-        state, ptr = player_set_anim(mag & 0xFF, 8, rb(0x4F27), rw(0x4F28), rw)   # [5E8F] al = clobbered |Xvel|
-        out[0x4F27] = state
-        frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)     # [5E92]
-        out[0x4F28] = new_ptr
-        out[0x4F20] = frame
-        out[0x6BCF] = bcf
+        p.xvel = player_accel(p.xvel & 0xFFFF, p.facing, p.motion_mode, g.input_lr != 0, 0x20)  # [5E8C]
+        state, ptr = player_set_anim(mag & 0xFF, 8, p.anim_b, p.anim_ptr, rw)     # [5E8F] al = clobbered |Xvel|
+        p.anim_b = state
+        frame, new_ptr, bcf = player_advance_anim(ptr, p.facing_lo, rw)           # [5E92]
+        p.anim_ptr = new_ptr
+        p.sprite = frame
+        g.anim_hi = bcf
         return out
-    # [5E89] jmp 5CDB — idle sees [0x6BD3]==0 (just written) and bx==8
-    rb2 = lambda o: 0 if o == 0x6BD3 else rb(o)
+    # [5E89] jmp 5CDB — idle sees idle_timer==0 (just written) and bx==8
+    rb2 = lambda o: 0 if o == 0x6BD3 else rb(o)                            # noqa: E731 — the just-written read shim
     out.update(player_state_idle(rb2, rw, entry_bx=8))
     return out
 
@@ -689,36 +725,39 @@ def player_fsm_frontend(rb, rw) -> tuple:
     facing word ``[0x4F25]`` (+/-1; resetting ``[0x6BEB]`` on a turn), and pack the 5-bit dispatch bitmask from
     bit0 of ``[0x27EC],[0x27ED],[0x27EA],[0x27EB],[0x27E8]``. Returns ``(bitmask, writes)`` where ``writes`` may
     include ``[0x6BDB],[0x6BDC],[0x4F25],[0x6BEB]``. Pure."""
-    ec, ed = rb(0x27EC), rb(0x27ED)
-    ea, eb, e8 = rb(0x27EA), rb(0x27EB), rb(0x27E8)
-    writes = {0x6BDB: ed | ec, 0x6BDC: ea | eb}                  # [58A7-58BB]
-    facing = rw(0x4F25)                                          # [58BF-58FC] facing update
+    p, g, be = _views(rb, rw)
+    ec, ed = g.in_right, g.in_left
+    ea, eb, e8 = g.in_up, g.in_down, g.in_fire
+    g.input_lr = ed | ec                                         # [58A7-58B0]
+    g.input_ud = ea | eb                                         # [58B4-58BB]
+    facing = p.facing & 0xFFFF                                   # [58BF-58FC] facing update (raw word compare)
     if ec != 0:
-        if ed == 0 and (facing & 0xFFFF) != 1:
-            writes[0x4F25] = 1
-            writes[0x6BEB] = 0
+        if ed == 0 and facing != 1:
+            p.facing = 1
+            g.run_count = 0
     elif ed != 0:
-        if (facing & 0xFFFF) != 0xFFFF:
-            writes[0x4F25] = 0xFFFF
-            writes[0x6BEB] = 0
+        if facing != 0xFFFF:
+            p.facing = 0xFFFF
+            g.run_count = 0
     bitmask = 0                                                  # [58FC-591F] pack bit0 of the 5 flags
     for flag in (ec, ed, ea, eb, e8):
         bitmask = ((bitmask << 1) | (flag & 1)) & 0xFF
-    return bitmask, writes
+    return bitmask, be.writes
 
 
 def player_fsm_step(rb, rw) -> tuple:
     """Compose the full per-frame player FSM ``1030:58A7..5A0B`` (the ``[0x6BC5]==0`` normal-play path):
     front-end -> ``select_anim_id`` -> dispatch to the recovered handler. Returns ``(writes, sfx, scroll)`` where
     ``scroll`` is ``None`` or ``"left"``/``"right"`` — the idle look-around (anim13) camera-pan request, which the
-    caller executes against the VM planes via :func:`pre2.bridge.camera_pan.apply_camera_pan`.
+    caller executes against the VM planes via :func:`pre2.views.camera_pan.apply_camera_pan`.
 
     Threads the intermediate writes the way the ASM does: the facing/state changes from the front-end and the
     ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``)."""
+    p0, g0, _be0 = _views(rb, rw)                               # read-only views over ENTRY memory
     bitmask, writes = player_fsm_frontend(rb, rw)               # [58A7-591F]
-    beb = writes.get(0x6BEB, rw(0x6BEB))
-    anim_id, sel_writes = player_select_anim_id(bitmask, rb(0x6BCD), rb(0x4F2D),  # [5921-595C]
-                                                rb(0x4F27), beb, rb)
+    beb = writes.get(0x6BEB, g0.run_count)
+    anim_id, sel_writes = player_select_anim_id(bitmask, g0.input_suppress, p0.death_state,  # [5921-595C]
+                                                p0.anim_b, beb, rb)
     writes.update(sel_writes)                                   # [0x4F1B], [0x6BEB], maybe [0x4F2C]
 
     # The handler reads back fields the front-end/selector just wrote — facing [0x4F25], the [0x4F2C] reset,
@@ -730,9 +769,9 @@ def player_fsm_step(rb, rw) -> tuple:
     def rw2(off):
         return (writes[off] & 0xFFFF) if off in writes else rw(off)
 
-    # [5960] flying gate: when [0x6BC5]!=0 the FSM runs the 596A state machine instead of the
+    # [5960] flying gate: when the glider is armed the FSM runs the 596A state machine instead of the
     # normal dispatch, then (if it falls through) dispatches the flying handler table cs:[0x7D6F].
-    if rb(0x6BC5) != 0:
+    if g0.glider != 0:
         mwrites, do_dispatch = player_fsm_flying(rb2, rw2)   # [596A]
         writes.update(mwrites)
         msfx: list = []
@@ -747,7 +786,7 @@ def player_fsm_step(rb, rw) -> tuple:
     # run the shared override tail 0x5F93 (== the attack body with al=[0x4F27]). The attack handler itself
     # (anim_id 3/6/7 = 5F96, the tail's own body) has no such prologue — it can't override into itself — and
     # anim_id 8 (5CCE) has none either; both dispatch normally.
-    if rb(0x6BD0) != 0 and anim_id not in (3, 6, 7, 8):         # [5F35-etc] -> 5F93 override
+    if g0.anim_gate != 0 and anim_id not in (3, 6, 7, 8):       # [5F35-etc] -> 5F93 override
         hw, sfx = player_state_attack(rb2(0x4F27), anim_id * 2, rb2, rw2)
     else:
         hw, sfx = player_dispatch_handler(anim_id, rb2, rw2)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
@@ -760,6 +799,7 @@ def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     """1030:6081 — map the current anim frame to the player render sprite via the phase's frame table (8-byte
     records {frame, sprite_id, x_off, y_off}, 0x55AA terminator). Sets [0x4F0E]/[0x4F0A]/[0x4F0C] with the
     facing flip; leaves them unchanged if the frame is not in the table."""
+    p, _g, _be = _views(rb, rw, out)                            # reads see the caller's pending writes (rw = overlay)
     base = rw(rec)                                              # [6081] si = phase.frametbl_ptr
     dh = (frame >> 8) & 0x80                                    # [6088-60A5] facing bit of the frame
     want = frame & 0x1FFF                                       # [6085-608A] frame, high byte masked to 0x1F
@@ -777,9 +817,9 @@ def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     if dh:                                                      # [60A5-60AC] facing flip
         sprid |= dh << 8
         cx = (-_s16(cx)) & 0xFFFF
-    out[0x4F0E] = sprid & 0xFFFF                                # [60AE]
-    out[0x4F0A] = (rw(0x4F1C) + (_s16(rw(0x4F22)) >> 4) - _s16(cx)) & 0xFFFF    # [60B1-60C4]
-    out[0x4F0C] = (rw(0x4F1E) + (_s16(rw(0x4F2A)) >> 4) - _s16(yoff)) & 0xFFFF  # [60C7-60DB]
+    p.slot0.sprite = sprid & 0xFFFF                             # [60AE] the player render sprite (slot 0)
+    p.slot0.x = (p.x + (p.xvel >> 4) - _s16(cx)) & 0xFFFF       # [60B1-60C4]
+    p.slot0.y = (p.y + (p.yvel >> 4) - _s16(yoff)) & 0xFFFF     # [60C7-60DB]
 
 
 def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
@@ -805,13 +845,14 @@ def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     cx = rw((bx - 4) & 0xFFFF)                                 # [6035] x offset
     yoff = rw((bx - 2) & 0xFFFF)                               # [6038]
     out[(si + 0xE) & 0xFFFF] = yoff                            # [603B]
-    if rb(0x4F25) & 0x80:                                      # [603E-6049] facing flip
+    p = PlayerView(DictBackend(rb, rw))
+    if p.facing_lo & 0x80:                                     # [603E-6049] facing flip
         sprid |= 0x8000
         cx = (-_s16(cx)) & 0xFFFF
     out[(si + 4) & 0xFFFF] = sprid & 0xFFFF                    # [604B]
     out[(si + 6) & 0xFFFF] = cx & 0xFFFF                       # [604E]
-    out[si] = (rw(0x4F0A) + (_s16(cx) >> 4)) & 0xFFFF          # [6051-605E] pos relative to the render sprite
-    out[(si + 2) & 0xFFFF] = (rw(0x4F0C) + (_s16(yoff) >> 4)) & 0xFFFF  # [6060-606D]
+    out[si] = (p.slot0.x + (_s16(cx) >> 4)) & 0xFFFF           # [6051-605E] pos relative to the render sprite
+    out[(si + 2) & 0xFFFF] = (p.slot0.y + (_s16(yoff) >> 4)) & 0xFFFF  # [6060-606D]
     return True
 
 
@@ -825,27 +866,28 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
     Common: set_anim_b + advance + friction_sym + sat_inc[0x6BD3]; ``[0x7B19]`` = phase.v19 (x4 if [0x6BCE]);
     ``[0x6BD0]`` = (~[0x6BCF])&0x40 (the advance_anim high byte's bit6) — which selects the branch:
     bit6 clear -> the 6081 render-sprite path; bit6 set -> the sound path (play_sfx, trail, Yvel nudge, spawn)."""
-    out: dict = {}
+    p, g, be = _views(rb, rw)
+    out = be.writes
     sfx: list = []
-    state, ptr = player_set_anim(al, bx, rb(0x4F27), rw(0x4F28), rw)          # [5F96]
-    out[0x4F27] = state
-    frame, new_ptr, bcf = player_advance_anim(ptr, rb(0x4F25) & 0xFF, rw)     # [5F99]
-    out[0x4F28] = new_ptr
-    out[0x4F20] = frame
-    out[0x6BCF] = bcf
-    out[0x4F22] = player_friction_sym(rw(0x4F22), rb(0x4F24))                 # [5F9C]
-    out[0x6BD3] = _sat_inc_byte(rb(0x6BD3))                                   # [5F9F]
+    state, ptr = player_set_anim(al, bx, p.anim_b, p.anim_ptr, rw)            # [5F96]
+    p.anim_b = state
+    frame, new_ptr, bcf = player_advance_anim(ptr, p.facing_lo, rw)           # [5F99]
+    p.anim_ptr = new_ptr
+    p.sprite = frame
+    g.anim_hi = bcf
+    p.xvel = player_friction_sym(p.xvel & 0xFFFF, p.motion_mode)              # [5F9C]
+    g.idle_timer = _sat_inc_byte(g.idle_timer)                                # [5F9F]
 
-    phase = rb(0x7B18)                                                        # [5FA9-5FAF]
+    phase = g.attack_phase                                                    # [5FA9-5FAF]
     rec = (ATTACK_PHASE_TABLE + 5 * phase) & 0xFFFF
     v19 = rb((rec + 3) & 0xFFFF)                                              # [5FB1] phase.v19
-    if rb(0x6BCE) != 0:                                                       # [5FB5-5FBE]
+    if g.charge != 0:                                                         # [5FB5-5FBE]
         v19 = (v19 << 2) & 0xFF
-    out[0x7B19] = v19                                                         # [5FC0]
+    g.attack_v19 = v19                                                        # [5FC0]
     bd0 = (~bcf) & 0x40                                                       # [5FC3-5FC8]
-    out[0x6BD0] = bd0
+    g.anim_gate = bd0
 
-    # The render-sprite/spawn read [0x4F22]/[0x4F2A] *after* this routine's friction (and the sound path's Yvel
+    # The render-sprite/spawn read Xvel/Yvel *after* this routine's friction (and the sound path's Yvel
     # nudge) wrote them — expose pending writes through an overlay.
     def rb_ov(off):
         return (out[off] & 0xFF) if off in out else rb(off)
@@ -858,7 +900,7 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
         return out, sfx
 
     # sound path [5FD2+]
-    out[0x6BCD] = rb((rec + 2) & 0xFFFF)                                      # [5FD2] phase.sfx
+    g.input_suppress = rb((rec + 2) & 0xFFFF)                                 # [5FD2] phase.sfx
     sfx.append(5 if phase == 0 else (0 if phase == 1 else 0x0A))             # [5FD9-5FEB] play_sfx dl
     a27 = out[0x4F27]                                                         # [5FF0] (post set_anim)
     if a27 == 6:                                                             # [5FF3-5FF5]
@@ -867,18 +909,18 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
         dy = (-0x20) & 0xFFFF
     else:                                                                    # [5FFE] dx=0xFFD0
         dy = (-0x30) & 0xFFFF
-        trail = player_emit_trail(rw(0x4F1C), rw(0x4F1E), rb(0x6BD5), rw(0x6BBE))  # [6001] call 5E11
+        trail = player_emit_trail(p.x, p.y, g.frame_blink, g.trail_ring)      # [6001] call 5E11
         if trail is not None:
             out.update(trail[0])
-            out[0x6BBE] = trail[1]
-    if rb(0x6BFE) == 0:                                                       # [6004-600B]
-        out[0x4F2A] = (rw(0x4F2A) + dy) & 0xFFFF
+            g.trail_ring = trail[1]
+    if g.unk_6BFE == 0:                                                       # [6004-600B]
+        p.yvel = ((p.yvel & 0xFFFF) + dy) & 0xFFFF
     if (rb((rec + 4) & 0xFFFF) & 1) and _attack_spawn(out, rec, rb_ov, rw_ov):  # [600F-6017] flag bit0 + free slot
-        out[0x4F0E] = 0xFFFF                                                  # [6070]
-    elif rb(0x6BD2) == 0:                                                     # [6075-607A]
+        p.slot0.sprite = 0xFFFF                                               # [6070] suppress the player draw
+    elif g.fall_frames == 0:                                                  # [6075-607A]
         _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)                  # [6081]
     else:
-        out[0x4F0E] = 0xFFFF                                                  # [607C]
+        p.slot0.sprite = 0xFFFF                                               # [607C]
     return out, sfx
 
 
@@ -916,16 +958,17 @@ def player_f1_suicide(rb) -> dict:
 
     Pure: reads via ``rb`` (byte reader); returns the DGROUP byte writes. Byte-exact to the ASM's read-after-write
     ordering (the 5875 dec observes 65B3's just-written timer)."""
-    writes: dict[int, int] = {}
-    if rb(LIVES) == 0:                       # [asm 65BA/65BF -> 65D0]
-        writes[GAMEOVER_FLAG] = 1
-        timer = rb(DEATH_TIMER)              # 65D0 leaves [0x6BE4] untouched (==0 here)
+    be = DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
+    g = PlayerGlobals(be)
+    if g.lives == 0:                         # [asm 65BA/65BF -> 65D0]
+        g.end_signal = 1
+        timer = g.respawn_state              # 65D0 leaves the timer untouched (==0 here)
     else:                                    # [asm 65C1-65CA]
-        writes[LIVES] = (rb(LIVES) - 1) & 0xFF
-        writes[_RESPAWN_SCRATCH] = 0
+        g.lives = g.lives - 1
+        g.energy = 0
         timer = 2
-    writes[DEATH_TIMER] = (timer - 1) & 0xFF  # [asm 5875] dec after the call (reads 65B3's write)
-    return writes
+    g.respawn_state = (timer - 1) & 0xFF     # [asm 5875] dec after the call (reads 65B3's write)
+    return be.writes
 
 
 def player_tick_timers(timers: dict) -> dict:

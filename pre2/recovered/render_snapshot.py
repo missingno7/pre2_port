@@ -1,6 +1,6 @@
 """Assemble a :class:`GameFrameSnapshot` (semantic render intent) from ``RendererState``.
 
-    RendererState (read from VM by pre2.bridge.render_state)
+    RendererState (read from VM by pre2.views.render_state)
       -> build_frame_snapshot
       -> GameFrameSnapshot (render commands: tiles, sprites, camera, palette, transition)
 

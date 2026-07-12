@@ -12,7 +12,7 @@ proof-of-concept. This documents what we have, the evidence, and the work to bui
   against the ASM (background ring buffer 0-div; `verify_render_frame.py`). It composes the
   recovered leaves: animated-grid + grid (tile background) → scroll → moving-sprite pass
   (`26FA`).
-- **`RendererState`** (built by `pre2/bridge/render_state.py`, read-only) bundles **all the
+- **`RendererState`** (built by `pre2/views/render_state.py`, read-only) bundles **all the
   positions** an interpolator needs:
   - **Camera**: `camera_x`/`camera_y` (tiles) + `fine_scroll` (sub-tile px) + `scroll_src`.
   - **Moving sprites**: `object_sprites` — the active-sprite list, each with **world `x`/`y`

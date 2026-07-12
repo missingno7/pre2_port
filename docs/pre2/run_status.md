@@ -137,7 +137,7 @@ native code is now part of the normal runtime.
   (`Pre2HybridGap`).
 - **Second recovered-native island: sprite-sheet decode** (`1030:4316` local +
   `1030:4389` shared) — the first **stateful** island and the first memory-view ↔
-  dataclass bridge (`pre2/bridge/sprites.py` ↔ `pre2/recovered/sprite_decode.py`).
+  dataclass bridge (`pre2/views/sprites.py` ↔ `pre2/recovered/sprite_decode.py`).
   The level-load demux of the decompressed sprite sheet into the planar VRAM cache
   (`0xA000:0x5E80`) is recovered and **verified byte-for-byte vs the ASM** (a
   load-time witness, since the mid-game snapshot's sheet RAM is freed and its cache
@@ -160,7 +160,7 @@ native code is now part of the normal runtime.
   full visible-grid redraw (`35A1`), the vertical scroll-copy (`3A27`), and the
   double-buffer page-flip (`3054`) — each composing the verified blit *directly*
   (recovered → recovered, no ASM contact point inside the draw), driven by the
-  `Camera`/`ScrollState`/`TileMap` bridge (`pre2/bridge/frame.py`). All four are
+  `Camera`/`ScrollState`/`TileMap` bridge (`pre2/views/frame.py`). All four are
   verified byte-for-byte vs a pure-ASM oracle (in-VM lockstep) and run live (8 native
   replacements). The compositor `3B40` is a static composition of these three and is
   documented but not wired (no available demo reaches it, so it can't be verified).

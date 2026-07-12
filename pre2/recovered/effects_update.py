@@ -11,7 +11,7 @@ walkers back-to-back, each ticking one list:
     0229  call 60DF   16-slot      @ 0x5450       — debris/effect pool lifetime  (pairs with spawn_debris_element 8875)
 
 Each leaf lands here as a pure ``rw -> {offset: (value, width)}`` write-contract (the
-:mod:`pre2.bridge.effects_update` seam reads DGROUP and applies the writes); recovered leaf-first with shadow
+:mod:`pre2.views.effects_update` seam reads DGROUP and applies the writes); recovered leaf-first with shadow
 proof, exactly like the object_tick / combat_interaction precedents.
 """
 from __future__ import annotations

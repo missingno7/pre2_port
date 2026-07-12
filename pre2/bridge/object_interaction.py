@@ -6,8 +6,8 @@ VM and performs the one render side-effect of the pass: the on-screen tile re-bl
 """
 from __future__ import annotations
 
-from pre2.bridge import frame as _frame
-from pre2.bridge import sprites as _spr
+from pre2.views import frame as _frame
+from pre2.views import sprites as _spr
 from pre2.recovered.renderer import blit_sprite
 
 DATA_SEG = 0x1A0F

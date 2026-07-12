@@ -6,7 +6,7 @@ struct-of-array views compose over either.
 """
 from __future__ import annotations
 
-from pre2.bridge.dgroup_view import (DGROUP_BASE, ByteBackend, DgroupView, OverlayBackend, StructArray,
+from pre2.views.dgroup_view import (DGROUP_BASE, ByteBackend, DgroupView, OverlayBackend, StructArray,
                                      StructView, _S16, _U8, _U16)
 
 

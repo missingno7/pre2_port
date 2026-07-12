@@ -16,8 +16,8 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.gameover_scene import _object_overlay, capture_background_fixture
-from pre2.bridge.render_state import read_renderer_state, retarget_page
+from pre2.views.gameover_scene import _object_overlay, capture_background_fixture
+from pre2.views.render_state import read_renderer_state, retarget_page
 from pre2.recovered.scene_compositor import SceneStatus, compose_scene
 from pre2.runtime import load_pre2_snapshot
 

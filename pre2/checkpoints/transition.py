@@ -6,7 +6,7 @@ for the current radius, 324B clears everything outside that circle (the shrinkin
 VM's interpreted per-pixel ``clear_span`` loop with the native recovered primitives —
 this is the slow part of the transition.
 
-Thin VM contact point: read the inputs via ``pre2.bridge.transition``, run the recovered
+Thin VM contact point: read the inputs via ``pre2.views.transition``, run the recovered
 ``build_scaled_columns`` + ``draw_scale_frame``, write the cleared four EGA planes (and
 the scaled-column tables) back, then continue at 32B0. The block is reached by a jump /
 fall-through (not a CALL), so there is no return address to pop — only ``ip`` advances.
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import transition as _tr
+from pre2.views import transition as _tr
 from pre2.recovered.transition import compose_iris
 
 from pre2.gaps import report

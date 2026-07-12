@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import effects_update as bridge
+from pre2.views import effects_update as bridge
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
 

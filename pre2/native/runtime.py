@@ -66,7 +66,7 @@ def _paint_player_over_iris(state, planes, page: int) -> None:
     compose_iris blacks everything outside the shrinking circle — including the player once the circle passes it —
     so re-paint the player after, targeting the just-composed display ``page``."""
     from dataclasses import replace
-    from pre2.bridge import object_render as _obj
+    from pre2.views import object_render as _obj
     from pre2.recovered.object_render import paint_sprite, plan_sprite
     spr = _obj.read_sprite(state, 0x4F1C)                     # the player render record
     if spr.sprite_id == 0xFFFF:
@@ -136,7 +136,7 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
     The count-up is byte-verified vs the VM on the level-1 exit witness (snapshot_pre2_20260702_111016): with the
     316F object-clear reproduced at the entry (below), the count adds exactly the VM's 100 (score 100 -> 200).
     Without that clear it over-counted (610) by also scanning the LEVEL's leftover [0x52E8] effect sprites."""
-    from pre2.bridge.tally_scene import build_tally_scene
+    from pre2.views.tally_scene import build_tally_scene
     from pre2.recovered.player import player_advance_anim
     _DS = (DATA_SEG << 4) & 0xFFFFF
     d = state.data

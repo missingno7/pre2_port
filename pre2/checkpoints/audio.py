@@ -1,7 +1,7 @@
 """Checkpoint for the software audio mixer (1030:218F per-channel mix).
 
 Thin VM contact point only: it reads the channel/instrument/volume state through the
-bridge (``pre2.bridge.audio``), runs the recovered ``mix_channel`` on the live DMA
+bridge (``pre2.views.audio``), runs the recovered ``mix_channel`` on the live DMA
 block, writes the updated channel state back, and returns. No mixer logic lives here.
 
 Live-hooked: in normal hybrid play the recovered mixer produces the per-channel mix
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import audio as _audio
+from pre2.views import audio as _audio
 from pre2.recovered.mixer import BLOCK_LEN, CHANNEL_OFF, mix_channel
 
 from pre2.gaps import report

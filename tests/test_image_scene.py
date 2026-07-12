@@ -1,4 +1,4 @@
-"""Tests for the mode-13h IMAGE-scene bridge (pre2.bridge.image_scene).
+"""Tests for the mode-13h IMAGE-scene bridge (pre2.views.image_scene).
 
 The byte-exact-vs-ASM proof is the live wiring (the faithful 13h path renders the identified image == the
 ASM A000 framebuffer Δ=0, both the title fade-in and steady phases). These lock the identification
@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # noqa: E402
 
-from pre2.bridge.image_scene import identify_image, render_image_scene  # noqa: E402
+from pre2.views.image_scene import identify_image, render_image_scene  # noqa: E402
 from pre2.codecs.sqz import unpack_sqz  # noqa: E402
 from pre2.recovered.title_image import render_title_image, title_background  # noqa: E402
 

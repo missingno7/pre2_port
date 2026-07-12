@@ -1,6 +1,6 @@
 """Checkpoint for the sprite-sheet decode (1030:4316 local + 1030:4389 shared).
 
-Recovered logic: ``pre2.recovered.sprite_decode``; data model: ``pre2.bridge.sprites``.
+Recovered logic: ``pre2.recovered.sprite_decode``; data model: ``pre2.views.sprites``.
 Merge target: the sprite/asset pipeline.
 
 Two co-dependent routines that demultiplex the decompressed sprite sheet into the
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import sprites as _spr
+from pre2.views import sprites as _spr
 from pre2.recovered.sprite_decode import PIXEL_BASE
 
 from pre2.gaps import _BUMP_PTR, _DATA_SEG, report

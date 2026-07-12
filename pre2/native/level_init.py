@@ -60,7 +60,7 @@ def native_52d2(state) -> None:
     210723 (L0xD) — die on collapsed scenery, respawn, walk back: the VM restored the 74 collapsed bytes at
     the respawn (tick 653) while native kept them, and the stale tile stopped the player as a phantom wall
     at tick 788 (the reported "camera inaccuracy")."""
-    from pre2.bridge.dgroup_view import ProximityView, SegmentBackend
+    from pre2.views.dgroup_view import ProximityView, SegmentBackend
     v = ProximityView(state)
     # The 41CA bank lives in VOLATILE [0x2875] scratch (the bump-allocator load top, never bumped past the
     # bank), so the original relies on nothing overwriting it for the life of the level. Its content is a pure

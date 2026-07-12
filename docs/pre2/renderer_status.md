@@ -82,7 +82,7 @@ faithful-visual scene gaps remain.** See bug-table #3 and `faithful_visual_layer
 
 ### LIVE FAITHFUL PATH (2026-06-23) — promoted from offline/test to a live authoritative renderer
 
-The gameplay renderer is no longer only an offline/snapshot/test island. `pre2/bridge/live_render.py`
+The gameplay renderer is no longer only an offline/snapshot/test island. `pre2/views/live_render.py`
 `render_gameplay_planes(mem, dos, game_root)` reads an explicit `RendererState` from live VM memory
 each frame and renders the visible frame into a CLEAN framebuffer via `render_frame(rebuild=True)`,
 deplanarized by `sdl_view.render_planar_rgb_from_planes`. This recovered renderer is now the **native** game's
@@ -164,7 +164,7 @@ The recovered leaves are consolidated into one VM-independent entry point — th
 - `pre2/recovered/render_frame.py`: `RendererState` (plain-data input contract) +
   `render_frame(state, planes, dac)`, composing the leaves in the original per-frame order
   **palette fade (6772) → animated-grid (3668) → grid (35A1) → scroll-copy (3A27)**.
-- `pre2/bridge/render_state.py`: `read_renderer_state(mem)` reconstructs `RendererState`
+- `pre2/views/render_state.py`: `read_renderer_state(mem)` reconstructs `RendererState`
   read-only (reuses the frame/palette readers).
 - A future native enhanced renderer drops in by reimplementing `render_frame` against the
   same `RendererState`.

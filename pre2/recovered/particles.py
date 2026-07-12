@@ -9,7 +9,7 @@ commit boundary.
 
 This recovers the DRAW only — the position advance + the single-pixel plot — **read-only** (no kill /
 writeback). The faithful renderer reproduces a frame's particles from a snapshot of the array taken at
-``4B8E`` entry (before the engine consumes them); see :mod:`pre2.bridge.particles`.
+``4B8E`` entry (before the engine consumes them); see :mod:`pre2.views.particles`.
 
 Pure: no ``cpu``/``mem``. The angle/speed sin·cos tables are passed in as bytes (the bridge reads them).
 """

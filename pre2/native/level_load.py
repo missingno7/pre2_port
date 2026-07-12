@@ -228,7 +228,7 @@ def _build_trigger_bank(d) -> None:
     52D2 restore (respawn / level-start un-collapse). Note the 4065 dup runs BEFORE this, so the [0x9203]
     backup keeps the pre-41CA ``[+6]`` (0xFFFF) — 5237's 5251 restore puts 0xFFFF back each respawn, exactly
     as observed in the L0xD snapshots."""
-    from pre2.bridge.dgroup_view import ProximityView, SegmentBackend
+    from pre2.views.dgroup_view import ProximityView, SegmentBackend
     v = ProximityView(d)
     bank = SegmentBackend(d, v.bank_seg)                             # [asm 41ca] es = [0x2875]
     game_map = SegmentBackend(d, v.map_seg)                          # [asm 41fc] ds = [0x2DDA]
@@ -305,7 +305,7 @@ def native_level_load_planar(state) -> None:
     and reads a bank that ``3ed6`` first decompresses via a separate codec ``call 0x492`` (cx=7) into ``[0x2ddc]``
     — not the simple per-frame ``[0x2dd8]`` bank the live bridge path uses. Recovering ``0x492`` + that gate is a
     follow-up; until then the shared/common sprites are left empty. See [[pre2-level-init-island]]."""
-    from pre2.bridge.sprites import compute_local_slots, write_slots
+    from pre2.views.sprites import compute_local_slots, write_slots
     d = state.data
     seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)
     level = d[_DS + 0x2D8A]
@@ -342,7 +342,7 @@ def native_level_load_classify(state) -> None:
     """4232: classify each populated cache slot into the type table ``[0x4DF8]`` (0 opaque / 1 empty / >=2 partial)
     and save the partial transparency masks compacted at ``[0x2DF8]`` — the contract the per-frame blit consumes.
     Reuses the recovered ``classify_sprites``; runs after the planar blit (it reads the cache)."""
-    from pre2.bridge.sprites import read_sprite_cache
+    from pre2.views.sprites import read_sprite_cache
     from pre2.recovered.sprite_classify import classify_sprites
     res = classify_sprites(read_sprite_cache(state))
     d = state.data
@@ -384,7 +384,7 @@ def native_level_load_shared(state, *, game_root: str) -> None:
     output is byte-identical), then every index-table sprite with code >= 0x100 demuxed into the planar cache via
     the recovered ``compute_shared_slots``. UNION is GLOBAL (same bank for every level), so this just loads it +
     fills the cache half the local pass leaves empty. ``[0x2ddc]`` is the bank base the shared pass addresses."""
-    from pre2.bridge.sprites import compute_shared_slots, write_slots
+    from pre2.views.sprites import compute_shared_slots, write_slots
     d = state.data
     # [asm 3fb1-3fb8] load UNION at a SMALL base so the 4389 segment arithmetic ((code-0x100)*8 + base) does not
     # wrap (a large bump segment wraps the high codes -> garbage). The original loads it over the level-data seg

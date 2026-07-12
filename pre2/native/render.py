@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from pre2.native.vga import _dac8
 
-from pre2.bridge.foreground_tiles import read_foreground_state
-from pre2.bridge.game_visual_state import capture_game_visual_state, render_game_visual_state
-from pre2.bridge.gameplay_effects import capture_gameplay_effects
-from pre2.bridge.particles import read_particles
+from pre2.views.foreground_tiles import read_foreground_state
+from pre2.views.game_visual_state import capture_game_visual_state, render_game_visual_state
+from pre2.views.gameplay_effects import capture_gameplay_effects
+from pre2.views.particles import read_particles
 
 _DS = 0x1A0F << 4
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
@@ -106,7 +106,7 @@ def native_apply_palette_fade(state, dos) -> None:
     is idempotent per render call, so the fade advances per game TICK exactly like the VM (it previously
     advanced per render call, i.e. at --fps rate, and its state was invisible to state-only verification —
     found by the safe-hooks demo 230900 at tick 382). No-op in the common case (no fade, lights on)."""
-    from pre2.bridge.dgroup_view import LightFadeView
+    from pre2.views.dgroup_view import LightFadeView
     fade = LightFadeView(state)
     if fade.active:
         step = fade.step                                             # [asm 677B]'s inc already ran in the tick

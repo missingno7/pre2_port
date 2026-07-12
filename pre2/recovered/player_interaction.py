@@ -11,10 +11,12 @@ Recovered so far (the shared keystones used by both loops + the loop2 handlers):
 """
 from __future__ import annotations
 
-from pre2.recovered.combat_interaction import (death_handler, hitbox_overlap, roll_bonus_sprite_id,
+from pre2.recovered.combat_interaction import (death_handler, hitbox_overlap, roll_bonus_sprite,
                                                spawn_effect_burst, _Overlay)
 from pre2.recovered.player_collision import _offcamera_trigger
 from pre2.recovered.prng import rng_lcg
+from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, PlayerView, RngView,
+                                    WidthContractBackend)
 
 SCORE = 0x6C0E              # [asm 888B] 32-bit player score (low 0x6C0E, high 0x6C10)
 SCORE_TABLE = 0xA353        # [asm 8887] score values, indexed ((id-0x4a)<<1); = (-0x5CAD)&0xFFFF
@@ -109,7 +111,8 @@ def _hurt(rb, rw, di):
         if (cnt & 1) == 0:                                 # [8360] shr/jnb -> only on even counts
             eff = rw((HURT_SFX_TABLE + cnt) & 0xFFFF)      # [8366]
             out.update(spawn_pickup_effect(rb, rw, eff, PLAYER))   # [836A]
-    yvel = 0xFF20 if rb(0x27EA) != 0 else 0xFFC0           # [836D/8377]
+    g = PlayerGlobals(DictBackend(rb, rw))
+    yvel = 0xFF20 if g.in_up != 0 else 0xFFC0              # [836D/8377]
     out.update(_knockback(rb, rw, yvel))
     return out, sfx
 
@@ -123,12 +126,14 @@ def _death(rb, rw, di):
     out[PLAYER_DEATH] = (0x2C, 1)                          # [8397]
     out[0x6BD0] = (0, 1)                                   # [839C]
     out[PLAYER_YVEL] = (0xFF80, 2)                         # [83A1]
-    out[0x4F22] = ((-((rw(0x4F22) << 2) & 0xFFFF)) & 0xFFFF, 2)   # [83A7] = -([0x4F22]<<2)
+    p = PlayerView(WidthContractBackend(rb, rw, out))
+    p.xvel = (-(((p.xvel & 0xFFFF) << 2) & 0xFFFF)) & 0xFFFF   # [83A7] = -(Xvel<<2)
     out[_ATTACK] = (0, 1)                                  # [83B3]
-    old = rb(0x6BC5)                                       # [83B8] cmp before the clear
+    g2 = PlayerGlobals(WidthContractBackend(rb, rw, out))
+    old = g2.glider                                        # [83B8] cmp before the clear
     out[0x6BC5] = (0, 1)                                   # [83BD]
     if old == 0:                                           # [83C2] jne skip
-        n = (rb(0x27D6) - 1) & 0xFF                        # [83C4] dec
+        n = (g2.energy - 1) & 0xFF                         # [83C4] dec
         out[0x27D6] = (n, 1)
         if n & 0x80:                                       # [83C8] jns skip -> call only if went negative
             # 65B3 returns byte-level {off:value}; out holds (val,width) tuples -> wrap as width-1
@@ -239,8 +244,9 @@ def _count_and_score(rb, rw, si, num):
     out[(ITEM_COUNT_TBL + idx) & 0xFFFF] = ((rb((ITEM_COUNT_TBL + idx) & 0xFFFF) + 1) & 0xFF, 1)
     out[ITEM_TOTAL] = ((rw(ITEM_TOTAL) + 1) & 0xFFFF, 2)
     eff = (rb((SCORE_SPR_LUT + idx) & 0xFFFF) + 0x4A) & 0xFFFF
-    if rw((si + 9) & 0xFFFF) != 0xFFFF:                     # [85CC] linked -> bump [0x2A7A]
-        out[0x2A7A] = ((rw(0x2A7A) + 1) & 0xFFFF, 2)
+    if rw((si + 9) & 0xFFFF) != 0xFFFF:                     # [85CC] linked -> bump the linked count
+        gl = PlayerGlobals(WidthContractBackend(rb, rw, out))
+        gl.collected_linked = (gl.collected_linked + 1) & 0xFFFF
     out.update(spawn_pickup_effect(rb, rw, eff, si))        # [860B] spawn at eff id
     return out
 
@@ -251,9 +257,7 @@ def _food_fountain(ov):
     entity (8D1B :func:`spawn_effect_burst`). ``ov`` is the bomb's read-through :class:`_Overlay`."""
     ax, dx = 0x20, 0xFF60                                  # [94F9/94FC] initial X/Y velocity
     for _ in range(4):                                    # [94F6] cx=4
-        sid, (a, b, c, d) = roll_bonus_sprite_id(         # [9504] 8C13 advances the rng state
-            (ov.rb(0x2CEC), ov.rb(0x2CED), ov.rb(0x2CEE), ov.rw(0x2CEF)))
-        ov.wb(0x2CEC, a); ov.wb(0x2CED, b); ov.wb(0x2CEE, c); ov.ww(0x2CEF, d)
+        sid = roll_bonus_sprite(RngView(ov))              # [9504] 8C13 advances the rng state (via the view)
         ov.ww(A33A, sid)                                  # [9507] burst sprite id
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [950B] 8D1B, one sprite
         ax = (-ax) & 0xFFFF                               # [950E] neg ax (alternating spread)
@@ -371,8 +375,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         if ydir < 0x80:                                   # low -> count + score (shared 85B6)
             return _count_and_score(rb, rw, si, num), [4]
         out = {(si + 0xE) & 0xFFFF: ((-ydir) & 0xFFFF, 2)}   # bounce up
-        a, b, c, d, ret = rng_lcg(rb(0x2CEC), rb(0x2CED), rb(0x2CEE), rw(0x2CEF))
-        out[0x2CEC] = (a, 1); out[0x2CED] = (b, 1); out[0x2CEE] = (c, 1); out[0x2CEF] = (d, 2)
+        ret = RngView(WidthContractBackend(rb, rw, out)).roll()   # [asm call 39DF] advance + write back the LCG
         xv = 0x20
         if ret & 1:
             xv = (-0x20) & 0xFFFF

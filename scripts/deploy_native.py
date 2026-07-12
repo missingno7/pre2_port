@@ -27,7 +27,12 @@ ENTRY = "scripts/play_native.py"
 
 # The VM / RE-workbench modules that must NOT ship. The runtime path never imports them (proven by the smoke
 # test); function-local imports of these in shipped files fail loud (ImportError) if a VM-needing flag is used.
+# The layering itself is enforced by scripts/lint.py (shipped layers never import these top-level): the TREE
+# is the boundary; this list is the belt-and-braces deploy assert.
 DENY = (
+    "pre2.bridge",                                  # the DETACHABLE verification workbench (VM glue, frame
+    #                                                 capture, fast-forwards). The product's state views live
+    #                                                 in pre2.views; the bridge plugs in only for verification.
     "pre2.runtime", "pre2.launch", "pre2.checkpoints", "pre2.probes", "pre2.replacements",
     "pre2.bootstrap_hooks", "pre2.analysis",
     "dos_re",                                       # the WHOLE emulator: native owns its VGA (pre2.native.vga)

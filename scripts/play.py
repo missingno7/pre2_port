@@ -508,7 +508,7 @@ def _run_view(rt, args: argparse.Namespace, *, playback: InputDemoPlayback | Non
             # the recovered native audio system (the SB is a detection stub; its PCM/IRQ
             # block production is gone).
             from sdl_view import SdlEnhancedAudio
-            from pre2.bridge.audio_commands import install_command_observers
+            from pre2.bridge.audio_hooks import install_command_observers
             # With the detection stub the game's audio ISR does not run during playback (no
             # block IRQ fires), so the recovered tracker/mixer checkpoints would never be hit
             # anyway; drop them so the lone detection-handshake IRQ can't touch the recovered

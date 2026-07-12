@@ -6,7 +6,7 @@ lives, [0x27D6] energy hearts. Snapshot 185902 was eyeballed = score 5300, lives
 """
 import sys; sys.path.insert(0, '.')
 from pre2.runtime import load_pre2_snapshot
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 
 # (snapshot, expected displayed score, lives, energy) — score read off the rendered HUD digits
 EXPECT = {

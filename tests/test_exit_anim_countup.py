@@ -38,7 +38,7 @@ def test_exit_anim_countup_matches_vm(monkeypatch):
     """native_exit_anim counts the one collected item up 100 -> 200 (the VM oracle) — not 610 (over-count) or
     100 (no count). Verifies the 316F object-clear + the refill/termination loop shape together."""
     from dos_re.dos import DOSMachine
-    import pre2.bridge.tally_scene as tally_scene
+    import pre2.views.tally_scene as tally_scene
     from pre2.native.runtime import native_exit_anim
 
     # stub the tally render (the fixture is the DGROUP only; the count-up state math needs no pixels)

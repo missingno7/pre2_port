@@ -17,6 +17,7 @@ from pre2.native.input import init_keyboard_input
 from pre2.native.level_init import native_level_start
 from pre2.native.sprite_bank import native_build_sprite_bank
 from pre2.native.state import NativeGameState
+from pre2.views.dgroup_view import LoaderGlobals, PlayerGlobals
 
 _DS = 0x1A0F << 4
 _LEVEL_SEL = 0x2D8A                  # [asm] the selected level (0-based)
@@ -32,15 +33,15 @@ def native_cold_boot(game_root: str, *, level: int = 0) -> NativeGameState:
     # boot constants carry the state at OLDIES entry (before this load), so cold-boot must reproduce it: without
     # it the level loads 0x519 paragraphs too low and the parallax over-reads the wrong memory (black sky).
     _front_seg = load_sqz(state, "FRONT.SQZ", game_root=game_root)  # [asm 107B] permanent front-panel load (bumps [0x2875])
-    state.data[_DS + 0x3B] = _front_seg & 0xFF                    # [asm 0123] the FOREGROUND tile-gfx bank the 3721 front
-    state.data[_DS + 0x3C] = (_front_seg >> 8) & 0xFF            # pass reads (foliage-in-front); missing = no foreground
+    ldr = LoaderGlobals(state)
+    ldr.fg_bank = _front_seg                                      # [asm 0123] the FOREGROUND tile-gfx bank the 3721 front
+    #                                                               pass reads (foliage-in-front); missing = no foreground
     native_build_sprite_bank(state, game_root=game_root)          # the shared SPRITES.SQZ 5-plane bank
-    _top = state.data[_DS + 0x2875] | (state.data[_DS + 0x2876] << 8)   # [asm 0129-012c] the per-level alloc RESET
-    state.data[_DS + 0x39] = _top & 0xFF                          # base ([0x39]=[0x2875] after the front-end assets)
-    state.data[_DS + 0x3A] = (_top >> 8) & 0xFF
+    ldr.reset_base = ldr.load_top                                 # [asm 0129-012c] the per-level alloc RESET base
+    #                                                                 ([0x39]=[0x2875] after the front-end assets)
     from pre2.native.audio import native_load_sfx_bank
     native_load_sfx_bank(state, game_root)                        # [asm 07C9] the SFX sample bank (so effects PLAY)
     init_keyboard_input(state)                                    # boot joystick-detect outcome (keyboard play)
-    state.data[_DS + _LEVEL_SEL] = level & 0xFF
+    PlayerGlobals(state).level = level
     native_level_start(state, game_root=game_root)                # load + init + the level-start block (lives, etc.)
     return state

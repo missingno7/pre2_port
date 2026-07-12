@@ -2,7 +2,7 @@
 
 Thin VM contact point only: it reads the playback state + the 4 voices + the current
 pattern / order table / period table / instruments through the bridge
-(``pre2.bridge.audio``), runs the recovered ``tracker_tick``, writes the updated
+(``pre2.views.audio``), runs the recovered ``tracker_tick``, writes the updated
 playback + per-voice state back, and returns. No sequencer logic lives here.
 
 Live-hooked: in normal hybrid play the recovered tracker advances the song (the SB
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import audio as _audio
+from pre2.views import audio as _audio
 from pre2.recovered.tracker import NUM_VOICES, tracker_tick
 
 from pre2.gaps import report

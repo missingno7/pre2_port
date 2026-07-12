@@ -10,7 +10,7 @@ the interpolation in ``pre2.recovered.render_interp``.
 """
 from __future__ import annotations
 
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.recovered.render_interp import interpolate_frame
 from pre2.recovered.render_snapshot import build_frame_snapshot
 

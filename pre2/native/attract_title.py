@@ -17,8 +17,8 @@ demo-playback path, it is a self-contained scripted scene."""
 from __future__ import annotations
 
 from pre2.native.vga import _dac8
-from pre2.bridge.image_scene import title_planar_image
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.image_scene import title_planar_image
+from pre2.views.render_state import read_renderer_state
 from pre2.native.state import DATA_SEG
 from pre2.recovered.object_render import (Sprite, paint_sprite, plan_frame,
                                           plan_sprite_command)

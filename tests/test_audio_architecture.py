@@ -15,7 +15,7 @@ import numpy as np
 from pre2.audio.assets import Module, SampleAsset
 from pre2.audio.events import PlaySfx, StopSong
 from pre2.audio.faithful_backend import FaithfulBackend, audio_state_from_module
-from pre2.bridge import audio_commands as AC
+from pre2.views import audio_commands as AC
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "assets"

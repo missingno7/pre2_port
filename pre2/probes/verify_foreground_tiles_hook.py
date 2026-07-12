@@ -13,7 +13,7 @@ from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.foreground_tiles import read_foreground_state
+from pre2.views.foreground_tiles import read_foreground_state
 from pre2.checkpoints.foreground_tiles import foreground_tiles
 from pre2.runtime import load_pre2_snapshot
 

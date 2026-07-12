@@ -7,7 +7,7 @@ composer. It reuses the SAME recovered functions the checkpoints/probes verify (
 ``render_frame`` (gameplay) and ``compose_iris`` (the end-level iris over the gameplay frame).
 
 Pure: no ``cpu``/``mem`` imports. The bridge derives the :class:`SceneKind` + the per-scene inputs
-(``pre2.bridge.scene_state``) and feeds them here. ``render_visual`` itself composes ``GAMEPLAY`` and
+(``pre2.views.scene_state``) and feeds them here. ``render_visual`` itself composes ``GAMEPLAY`` and
 ``IRIS`` from recovered leaves; for ``IMAGE``/``SCENE`` it raises :class:`FaithfulVisualGap`. The viewer's
 faithful path (``scripts/play.py``) catches that and composes the RECOVERED non-gameplay scenes from their
 own recovered leaves — 13h images (``bridge.image_scene.render_image_scene``), game-over / tally / OLDIES

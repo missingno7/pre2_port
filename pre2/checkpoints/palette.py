@@ -1,7 +1,7 @@
 """Checkpoint for the palette fade (1030:6772 — one step of a linear DAC palette fade).
 
 Thin VM contact point: it reads the fade state + source/target palettes through the
-bridge (``pre2.bridge.palette``), runs the recovered :func:`fade_palette`, writes the
+bridge (``pre2.views.palette``), runs the recovered :func:`fade_palette`, writes the
 new 48-component DAC + the fade counter/flags back, and near-returns. No fade logic
 lives here.
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import palette as _pal
+from pre2.views import palette as _pal
 from pre2.recovered.transition import fade_palette
 
 from pre2.gaps import report

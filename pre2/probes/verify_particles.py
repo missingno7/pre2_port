@@ -14,8 +14,8 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.live_render import render_visual_planes
-from pre2.bridge.particles import read_particles
+from pre2.views.live_render import render_visual_planes
+from pre2.views.particles import read_particles
 from pre2.recovered.particles import draw_particles
 from pre2.runtime import load_pre2_snapshot
 

@@ -53,6 +53,27 @@ TICK_HZ = 70.0 / 3.0          # the game's own tick rate: the 1C6F frame limiter
 #                               default of 24 was a ~3% -fast approximation of this.
 
 
+class _DemoEvent:
+    """One recorded input event — the native reader's row (kind 'scan' = a make/break scancode)."""
+
+    __slots__ = ("boundary", "seq", "kind", "value")
+
+    def __init__(self, boundary, seq, kind, value):
+        self.boundary, self.seq, self.kind, self.value = boundary, seq, kind, value
+
+
+def load_demo_events(demo_dir) -> "list[_DemoEvent]":
+    """Read a recorded demo's input events NATIVELY (no dos_re): ``input_demo.json`` is plain data — a list of
+    events keyed to the recorder's present-frame ``boundary`` counter. Demo REPLAY is a PRODUCT feature (this
+    reader + the deterministic tick replay); only RECORDING a demo needs the workbench (the VM does the playing)."""
+    import json
+    manifest = json.loads((Path(demo_dir) / "input_demo.json").read_text(encoding="utf-8"))
+    events = [_DemoEvent(int(e["boundary"]), int(e.get("seq", 0)), str(e["kind"]), int(e["value"]))
+              for e in manifest.get("events", [])]
+    events.sort(key=lambda e: (e.boundary, e.seq))
+    return events
+
+
 class DemoInput:
     """Replay a recorded input demo's scancodes into the VM-less runtime for HANDS-FREE watching.
 
@@ -65,8 +86,8 @@ class DemoInput:
 
     STD = (0x39, 0x48, 0x50, 0x4D, 0x4B, 0x02, 0x03)   # fire, up, down, right, left, '1', '2' (DC1 sources)
 
-    def __init__(self, playback):
-        self.events = list(playback.events)            # already sorted by (boundary, seq)
+    def __init__(self, events):
+        self.events = list(events)                     # sorted by (boundary, seq)
         self.i = 0
         self.boundary = 0
         self.held: set[int] = set()
@@ -134,6 +155,7 @@ def main(argv=None) -> int:
     from pre2.native.boot_data import build_boot_memory
     from pre2.native.cold_boot import native_cold_boot
     from pre2.native.front_end import native_carte_and_load, native_front_end
+    from pre2.views.dgroup_view import PlayerGlobals
     from pre2.native.input import init_keyboard_input, set_key
     from pre2.native.render import native_load_level_palette
     from pre2.native.runtime import (native_exit_anim, native_frame_step, native_frame_step_tagged,
@@ -159,19 +181,12 @@ def main(argv=None) -> int:
         if not _tick_exists:
             # APPROXIMATE scancode fallback — the deterministic tick replay doesn't need the input demo (it has
             # its own exact per-tick keys, gtd.keys, covering the WHOLE gameplay recording — see the loop below).
-            # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud).
-            from dos_re.input_demo import InputDemoPlayback
-            demo = DemoInput(InputDemoPlayback.load(args.play_demo))
+            demo = DemoInput(load_demo_events(args.play_demo))   # native reader: replay never needs the workbench
             print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
         elif _fe_portion:
             # tick file + a cold-start recording: load the scancode events so the replay can SHOW the front end
-            # first (drive_input merges demo.held); the tick replay then reseeds gameplay byte-exactly. Soft-fail:
-            # without the input plumbing (standalone) the tick replay still works, just without the front end.
-            try:
-                from dos_re.input_demo import InputDemoPlayback
-                demo = DemoInput(InputDemoPlayback.load(args.play_demo))
-            except ImportError:
-                print("cold-start demo: input-demo plumbing unavailable here -- tick replay only (no front end)")
+            # first (drive_input merges demo.held); the tick replay then reseeds gameplay byte-exactly.
+            demo = DemoInput(load_demo_events(args.play_demo))   # native reader: no workbench needed
 
     # DPI awareness BEFORE any window exists: on Windows with display scaling (e.g. 150%) an un-aware process
     # gets the LOGICAL desktop size, so a borderless-fullscreen window doesn't cover the physical screen and
@@ -424,7 +439,7 @@ def main(argv=None) -> int:
 
     def _room_for(state) -> bool:
         """Widescreen ROOM mode for the current level (centred 320, black margins, no margin content)."""
-        return state.data[DS + 0x2D8A] in _WS_ROOM_LEVELS
+        return PlayerGlobals(state).level in _WS_ROOM_LEVELS
 
     def _room_locked(state) -> bool:
         """True when the widescreen view must black its margins (room_mode): a whole-room LEVEL (LEVEL6/F), OR a
@@ -436,13 +451,13 @@ def main(argv=None) -> int:
         scrolling-gameplay spot (including standing still), so a fixed camera is authoritatively distinguished
         from a merely-parked one — no heuristic, no false positives, and it catches death-pit rooms a wall-jam
         test never could (the whole point: it's the flag the game itself uses to stop scrolling)."""
-        return (state.data[DS + 0x2D8A] in _WS_ROOM_LEVELS
-                or state.data[DS + 0x6BD9] != 0
-                or (state.data[DS + 0x8166] & 2) != 0)
+        return (PlayerGlobals(state).level in _WS_ROOM_LEVELS
+                or PlayerGlobals(state).unk_6BD9 != 0
+                or (PlayerGlobals(state).level_flags & 2) != 0)
 
     def _margin_for(state) -> int:
         """wide_margin(), but forced to 0 on levels that can't be widescreened at all (LEVEL A boss)."""
-        if state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
+        if PlayerGlobals(state).level in _WS_EXCLUDE_LEVELS:
             return 0
         return wide_margin()
 
@@ -815,8 +830,8 @@ def main(argv=None) -> int:
         matching the last displayed gameplay frame so a transition doesn't jump the view; it extracts the CROP
         margin, composes at that camera, and crops it back to the display width. ``sprite_dx`` is the offset to
         add to an efs sprite's screen_x to place it in the returned (possibly cropped) frame (0 unless eased)."""
-        from pre2.bridge.foreground_tiles import read_foreground_state
-        from pre2.bridge.gameplay_effects import capture_gameplay_effects
+        from pre2.views.foreground_tiles import read_foreground_state
+        from pre2.views.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.native_background import TileTextureCache, _HudCache
@@ -825,7 +840,7 @@ def main(argv=None) -> int:
         if _tx["tex"] is None:
             _tx["tex"] = SpriteTextureCache()
             _tx["bg"] = (TileTextureCache(), _HudCache())
-        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        disp = PlayerGlobals(state).display_page
         fg = read_foreground_state(state)
         fg.page = disp & 0xFFFF
         fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
@@ -853,8 +868,8 @@ def main(argv=None) -> int:
     def _cam_bottom_px(state):
         """The smooth camera's bottom (max cam_y) limit: the DOS [0x2CF5] bottom, tightened by any level-specific
         virtual edge (level 13's staged under-floor earthquake pillars)."""
-        b = max(0, state.data[DS + 0x2CF5] - 0xB) * 16.0
-        if state.data[DS + 0x2D8A] == 13:
+        b = max(0, PlayerGlobals(state).map_rows - 0xB) * 16.0
+        if PlayerGlobals(state).level == 13:
             b = min(b, 149.0)
         return b
 
@@ -935,7 +950,7 @@ def main(argv=None) -> int:
         appearing instantly. Driven once at every level start (cold boot + between-levels)."""
         if _smooth_active() and _present_smooth_reveal(state, dos):
             return
-        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        disp = PlayerGlobals(state).display_page
         for planes, page in native_level_reveal(state, dos, disp, game_root=gr):
             present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _TRANSITION_FPS,
                     "PRE2 VM-less — level start")
@@ -1084,7 +1099,7 @@ def main(argv=None) -> int:
             # front-end scenes are per-retrace (70Hz), but GAME-TICK-paced scenes run at the game rate
             # (args.fps ~23Hz) or they play ~3x too fast: the ATTRACT demo ([0x2879]=1, GAMEPLAY) and the
             # attract TITLE ANIMATION (scene.game_paced — the VM presents it via 44FB's 3-retrace 1C6F wait).
-            fps = args.fps if (state.data[DS + 0x2879] == 1 or scene.game_paced) else _FRONT_END_FPS
+            fps = args.fps if (PlayerGlobals(state).input_source == 1 or scene.game_paced) else _FRONT_END_FPS
             ref["fe_screen"] = scene.screen                        # per-screen touch mapping (see drive_input)
             present_front_scene(scene, fps, caption)
             pump()
@@ -1124,8 +1139,8 @@ def main(argv=None) -> int:
                 return False
             if isinstance(result, tuple):
                 level, expert = result
-                state.data[DS + 0x2D8A] = level & 0xFF             # the chosen checkpoint (a valid password's [0x2D8A])
-                state.data[DS + 0xB197] = 1 if expert else 0       # beginner / expert path
+                PlayerGlobals(state).level = level & 0xFF             # the chosen checkpoint (a valid password's [0x2D8A])
+                PlayerGlobals(state).mode = 1 if expert else 0       # beginner / expert path
                 return True
             cs.draw(disp)
             pace(_FRONT_END_FPS)
@@ -1180,14 +1195,14 @@ def main(argv=None) -> int:
         # [asm 4C69] the level-end dispatch (level_end_takes_tally): a warp INTO a bonus level (4C8F) and a bonus
         # level's own end (4CC1) do `call 30C6` (the vertical close-curtain — the same visual as the cave
         # transition) + `jmp 4F65` (plain reload): NO exit anim, NO tally, NO carte.
-        mode = state.data[DS + 0x6BE6]
-        level = state.data[DS + 0x2D8A]
+        mode = PlayerGlobals(state).level_end_mode
+        level = PlayerGlobals(state).level
         if not level_end_takes_tally(mode, level):                 # [asm 4c93 / 4cc1] the curtain (cave-style) exit
             from pre2.native.audio import native_level_song_name
             from pre2.native.render import native_render, native_sync_render_state
             from pre2.native.runtime import _vfade_frame
             print("  level exit -> BONUS-warp curtain (30C6 close, no tally) -> next level")
-            disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+            disp = PlayerGlobals(state).display_page
             native_sync_render_state(state)
             base_planes, base_page = native_render(state, dos, disp, game_root=gr, force_gameplay=True)
             for k in range(1, 10):                                 # [asm 30C6] 9-step vertical fade to black
@@ -1204,7 +1219,7 @@ def main(argv=None) -> int:
             return
 
         print("  level complete -> IRIS close -> exit-anim (walk-in + food-throw score count-up + walk-off) -> carte")
-        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        disp = PlayerGlobals(state).display_page
         # freeze the iris at the eased camera when the smooth camera is on, so the view doesn't jump on close
         _pcam = ref.get("last_pcam") if settings["smooth_camera"] else None
         smooth = compose_wide_now(state, dos, present_cam=_pcam) if _smooth_active() else None
@@ -1212,7 +1227,7 @@ def main(argv=None) -> int:
             # SMOOTH iris: drain native_iris_close for its STATE work (reading the recovered iris centre off the
             # first frame), then present-time animate a true circle 0xE6->0 over the frozen wide frame at the
             # display rate (frame-rate-independent), the player held on top.
-            from pre2.bridge.render_state import read_renderer_state
+            from pre2.views.render_state import read_renderer_state
             from pre2.enhanced.compositor import _blit
             from pre2.enhanced.transitions import apply_iris
             rgb, m, efs, sdx, cdx = smooth                        # sdx/cdx: eased-camera offsets (sprite / centre)
@@ -1265,7 +1280,7 @@ def main(argv=None) -> int:
             native_load_song(state, "BRAVO.TRK", gr)               # the tally jingle
         except Exception:                                          # noqa: BLE001 — no audio -> silent tally
             pass
-        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        disp = PlayerGlobals(state).display_page
         for planes, page in native_exit_anim(state, dos, disp, game_root=gr):   # walk-in + food + count-up + walk-off
             present(render_planar_rgb_from_planes(planes, page, dos.vga_palette), _TRANSITION_FPS,
                     "PRE2 VM-less — LEVEL COMPLETED")   # a main-loop (~23Hz) animation, NOT a 70Hz retrace scene
@@ -1404,14 +1419,14 @@ def main(argv=None) -> int:
         """[asm 247B->2505] The dev-credits cheat combo (Ctrl+Alt+W/Z, no other key). Show the OLDIES-style
         developer-credits screen over black, hold for fire (0BBE), restore the level palette (0BA0), and RESUME
         the same level (the combo is a pure overlay — gameplay state is untouched)."""
-        from pre2.bridge.oldies_scene import build_credits_scene
+        from pre2.views.oldies_scene import build_credits_scene
         from pre2.native.front_end import WAIT_PRESS, native_scene_wait
         from pre2.native.render import native_load_dac_palette
         from pre2.native.front_end import FrontEndScene
         from pre2.recovered.scene import MODE_PLANAR
         print("  CHEAT COMBO -> developer credits (247B); press fire to resume")
         native_load_dac_palette(state, dos, 0x287E)                # [asm 0b92] the OLDIES green/yellow palette
-        disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+        disp = PlayerGlobals(state).display_page
         phase = WAIT_PRESS
         while ref["running"]:
             planes, _ = build_credits_scene(state, page=disp)      # [asm 2505] the dev-name text over black
@@ -1702,8 +1717,8 @@ def main(argv=None) -> int:
         ref["frontend"] = False       # gameplay: touch BASH is level (hold to keep attacking), not edge-triggered
         ref["state"] = state          # register the live state so the F11 debug hotkey (in pump) can snapshot it
         from time import perf_counter
-        from pre2.bridge.foreground_tiles import read_foreground_state
-        from pre2.bridge.gameplay_effects import capture_gameplay_effects
+        from pre2.views.foreground_tiles import read_foreground_state
+        from pre2.views.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from dataclasses import replace as _dc_replace
@@ -1765,7 +1780,7 @@ def main(argv=None) -> int:
             # DEATH: while a death-bounce is armed ([0x6be4]==1 respawn / [0x6be5]!=0 game-over — NOT the boss-hit
             # counter [0x6be4]==2, where the player is alive + flashing), FREEZE the camera. The dying player arcs
             # up then falls THROUGH the floor; the band would chase the corpse off-screen. Hold the pre-death view.
-            dying = state.data[DS + 0x6BE4] == 1 or state.data[DS + 0x6BE5] != 0
+            dying = PlayerGlobals(state).respawn_state == 1 or PlayerGlobals(state).end_signal != 0
             if pc is None or dying:                                        # no player this frame (rare) / dying ->
                 return (s[0] - ml_cur, s[1]) if s is not None else None     # hold X+Y (back in window space)
             pp = next((i for i in prev.sprites if i.handle == ("player",)), None)
@@ -1781,7 +1796,7 @@ def main(argv=None) -> int:
                 pvy = dy_t * TICK_HZ
             if s is None:
                 s = enh["scam"] = [float(dosx), float(dosy), 0.0]         # seed at the current view; glide in
-            w8164 = state.data[DS + 0x8164] | (state.data[DS + 0x8165] << 8)
+            w8164 = PlayerGlobals(state).cam_left
             # m_disp = the displayed margin (clamp the whole widescreen window inside the world -> no edge void);
             # crop = the extracted over-coverage (must cover pinning at the edge). Both live off the window size.
             s[0] = smooth_cam_x(s[0], pwx, pvx, dt, cam0, world_max_px(w8164, pwx),
@@ -1796,7 +1811,7 @@ def main(argv=None) -> int:
             # _cam_bottom_px caps the camera at 149 (the resting DOS cam_y 160 - 11px, native_snap 220659) to hide
             # the under-level area. (Shared with the reveal's _settled_scam so both frame the level identically.)
             bottom_px = _cam_bottom_px(state)
-            forced = float(dosy) if (state.data[DS + 0x8166] & 4) else None
+            forced = float(dosy) if (PlayerGlobals(state).level_flags & 4) else None
             s[1], s[2] = smooth_cam_y(s[1], s[2], pwy, pvy, dt, cury_free, bottom_px, dos_follow=forced,
                                       tau=y_smooth_tau(settings["camera_smoothing"]))
             return (s[0] - ml_cur, s[1])                                    # back to WINDOW space for compose
@@ -1808,7 +1823,7 @@ def main(argv=None) -> int:
             # Widescreen-excluded levels (LEVEL A/F boss) render the GAMEPLAY faithfully (4:3, black borders) but
             # still get a WIDE HUD when Widescreen is on — "some widescreen feeling" without the tile-bleed / boss
             # issues. Pure post-process on the finished 320 frame, so the fight's render + timing are untouched.
-            if settings["widescreen"] and state.data[DS + 0x2D8A] in _WS_EXCLUDE_LEVELS:
+            if settings["widescreen"] and PlayerGlobals(state).level in _WS_EXCLUDE_LEVELS:
                 rgb = _widehud_frame(np.asarray(rgb, np.uint8), wide_margin())
             n += 1
             present(rgb, args.fps, None if n % 20 else f"PRE2 VM-less gameplay — {clock.get_fps():.0f} fps")
@@ -1823,7 +1838,7 @@ def main(argv=None) -> int:
             # native_render already consumed the one-shots, so use the *_last stashes it leaves): point
             # particles (spider threads/sparkles), foreground tiles (z-order OVER sprites), fireflies, snow.
             nonlocal n
-            disp2 = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+            disp2 = PlayerGlobals(state).display_page
             fg = read_foreground_state(state)
             fg.page = disp2 & 0xFFFF
             fx = capture_gameplay_effects(state, particle_frame=getattr(state, "particle_capture_last", None),
@@ -1832,7 +1847,7 @@ def main(argv=None) -> int:
             # the wall-clock SnowField drawn over the whole (possibly wide) presented frame. The gameplay tick
             # still ran the real scroll_script_snow (its shared-rng advance is byte-exact-critical); only the
             # DRAWING is swapped. Off -> the faithful plots render via the overlay exactly as before.
-            _wind = state.data[DS + 0x6BF6] | (state.data[DS + 0x6BF7] << 8)
+            _wind = PlayerGlobals(state).friction
             _snow_on = settings["smooth_transitions"] and _wind > 0
             if _snow_on and fx.snow is not None:
                 fx = _dc_replace(fx, snow=None)
@@ -2001,7 +2016,7 @@ def main(argv=None) -> int:
             if ref["switch_level"] is not None:                    # Develop tab: jump/restart (a --debug cheat)
                 lvl = ref["switch_level"]
                 ref["switch_level"] = None
-                lvl = state.data[DS + 0x2D8A] if lvl == "restart" else lvl
+                lvl = PlayerGlobals(state).level if lvl == "restart" else lvl
                 print(f"menu: switching to level id {lvl:#04x}")
                 state = native_cold_boot(gr, level=lvl)
                 native_load_level_palette(state, dos)
@@ -2010,8 +2025,8 @@ def main(argv=None) -> int:
                 #                                                              previous level's music keeps playing)
                 reveal_level(state, dos)
             if args.debug and settings["god"]:                     # Develop tab: keep the energy topped up
-                state.data[DS + 0x27D6] = 3                        # [asm 52a8] full hearts, refreshed pre-tick
-            record_reached(progress, state.data[DS + 0x2D8A], bool(state.data[DS + 0xB197]), gr)  # unlock this
+                PlayerGlobals(state).energy = 3                        # [asm 52a8] full hearts, refreshed pre-tick
+            record_reached(progress, PlayerGlobals(state).level, bool(PlayerGlobals(state).mode), gr)  # unlock this
             #    checkpoint on the CONTINUE screen (cheap no-op unless it advanced the furthest level on this path)
             drive_input(state)
             # WIDESCREEN ZONES: widen the state-level projection culls so entities go LIVE across the margins (one
@@ -2028,7 +2043,7 @@ def main(argv=None) -> int:
             _wm = (_margin_for(state)
                    if (settings["true_widescreen"] and settings["widescreen"] and not _room_locked(state)) else 0)
             if _wm:
-                _cpx = (state.data[DS + 0x2DE4] | (state.data[DS + 0x2DE5] << 8)) * 16   # camera X in px
+                _cpx = PlayerGlobals(state).cam_col_word * 16   # camera X in px
                 _ml = min(_wm, _cpx)
                 _ml = max(_ml, 2 * _wm - max(0, 0x1000 - (_cpx + 320)))
                 _ml = min(max(_ml, 0), 2 * _wm)
@@ -2045,7 +2060,7 @@ def main(argv=None) -> int:
             # from Y_V_PAD (the smooth-cam vertical coverage), only while the smooth camera drives (else 0 = faithful).
             _vz = (Y_V_PAD // 16 + 1) if _smooth_extra(state) else 0
             set_item_zone_y_margins(_vz, _vz)
-            disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)
+            disp = PlayerGlobals(state).display_page
 
             def stream_frame(planes, page):
                 """One faithful frame of a (possibly multi-frame) tick — today's path, per-frame audio."""
@@ -2065,7 +2080,7 @@ def main(argv=None) -> int:
                 # Some levels ALWAYS render faithfully (no enhanced compose / interpolation / smooth transitions):
                 # LEVEL A (0x09) is the gorilla boss whose fight only plays right in the plain 4:3 pipeline
                 # (widescreen also bleeds its boss-face tiles). Matches the verified-working non-widescreen case.
-                enhance_ok = state.data[DS + 0x2D8A] not in _WS_EXCLUDE_LEVELS
+                enhance_ok = PlayerGlobals(state).level not in _WS_EXCLUDE_LEVELS
                 # When the enhanced compositor will present the normal tick, its own compose rebuilds the frame,
                 # so native_frame_step_tagged can SKIP the ~7ms faithful raster for that tick (the biggest per-tick
                 # cost). Transitions + the faithful fallback still raster.
@@ -2154,8 +2169,7 @@ def main(argv=None) -> int:
                         # native's clock, so an un-pinned menu idles out into the ATTRACT demo (user: "it plays that
                         # ingame demo"). This presentation is DISCARDED (gtd.seed reseeds gameplay), so hold the
                         # idle counter low -> the menu waits cleanly instead of drifting into attract.
-                        fe_state.data[DS + 0x27F0] = 0
-                        fe_state.data[DS + 0x27F1] = 0
+                        PlayerGlobals(fe_state).idle_clock = 0
                         yield scene
                 try:
                     run_menu_flow(fe_state, fe_dos, "PRE2 VM-less — cold-start demo (front-end)",
@@ -2178,7 +2192,7 @@ def main(argv=None) -> int:
             while ref["running"] and i < gtd.n_ticks:
                 pump()
                 _inject(state, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
-                dpage = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)   # display PAGE (int) — NOT the
+                dpage = PlayerGlobals(state).display_page   # display PAGE (int) — NOT the
                 #   `disp` Display object: this block runs in main()'s body, so binding `disp` here would shadow
                 #   the Display and break blit_frame (disp.integer_scale) for the replay AND the live hand-over.
                 try:
@@ -2260,8 +2274,8 @@ def main(argv=None) -> int:
     if args.snapshot is not None:
         # ---- DEBUG path: seed gameplay from a savestate's raw memory (VM-less), then run native forward ----
         state = NativeGameState(bytearray((Path(args.snapshot) / "memory_1mb.bin").read_bytes()))
-        lvl = state.data[DS + 0x2D8A]
-        frame_ctr = state.data[DS + 0x6BD5] | (state.data[DS + 0x6BD6] << 8)
+        lvl = PlayerGlobals(state).level
+        frame_ctr = PlayerGlobals(state).frame_stamp
         player_zero = not any(state.data[DS + 0x4F1C:DS + 0x4F20])   # X+Y both zero
         if frame_ctr == 0 and player_zero:
             # A savestate taken DURING a level-load / transition (F12 mid-curtain): the gameplay DGROUP is not
