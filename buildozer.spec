@@ -29,7 +29,7 @@ source.dir = .
 source.include_exts = py,png
 source.exclude_dirs = assets,tests,dos_re,artifacts,docs,dist,bin,.git,.github,.idea,.pytest_cache,pre2/probes,venv,.venv
 
-version = 0.3.2
+version = 0.4.0
 
 # numpy + pygame are the ONLY runtime deps (README) — both have p4a recipes. dos_re / cffi are oracle-only
 # and never shipped, so nothing exotic to cross-compile.
