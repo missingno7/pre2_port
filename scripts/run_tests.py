@@ -48,9 +48,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.no_lint:
-        lint_result = subprocess.run([sys.executable, str(ROOT / "scripts" / "lint.py")])
-        if lint_result.returncode != 0:
-            return lint_result.returncode
+        for linter in ("lint.py", "offset_lint.py"):        # import-boundary + the offset-ban ratchet
+            lint_result = subprocess.run([sys.executable, str(ROOT / "scripts" / linter)])
+            if lint_result.returncode != 0:
+                return lint_result.returncode
 
     patterns = args.patterns or SCOPES[args.scope]
     cases = discover_tests(ROOT, patterns, name_globs=tuple(args.name or ["test_*"]))
