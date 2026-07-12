@@ -863,9 +863,9 @@ class ObjectSlot(RenderSlot):
     xvel     = _U16(0x08)    # X velocity, 12.4 fixed [object_tick _obj_view]
     yvel     = _U16(0x0A)    # Y velocity, 12.4 fixed
     anim_ptr = _U16(0x0C)    # the anim-script cursor
-    state    = _U8(0x0E)     # the behavior state byte (handlers dispatch on it)
-    aux_f    = _U8(0x0F)     # per-type aux byte (a _BYTE_FIELDS union member) [object_inject]
-    hits     = _U8(0x10)     # hit accumulator: the hurt handler reads >>2 and caps at 0xB [asm 834E]
+    state    = _U8(0x0E)     # the behavior state byte (0xFF = dead; handlers dispatch on it) [asm 8310/8CB7]
+    hp       = _U8(0x0F)     # hit points; the damage handler subtracts into it [asm 8C48]
+    hits     = _U8(0x10)     # hit accumulator: the hurt handler reads >>2/>>3 and caps [asm 834E/8C7A]
 
 
 class TerrainEntity(StructView):
