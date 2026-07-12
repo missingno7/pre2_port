@@ -367,7 +367,11 @@ class PlayerGlobals(DgroupView):
     end_signal    = _U8(0x6BE5)   # 1 = game over (no lives) [65D0]; 0xFF = game complete (level 0xE) [5B1F];
     #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
     map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
-    level         = _U8(0x2D8A)   # the current level index [5B18]
+    level         = _U8(0x2D8A)   # the current level index [5B18]; 0xFF = none chosen yet [8ee9]
+    mode          = _U8(0xB197)   # 0 = BEGINNER / 1 = EXPERT — the mode-select toggle [9941/8ee9]
+    mode_copy     = _U8(0xB198)   # the committed copy the loader reads [994E]
+    attract_mode  = _U8(0x083D)   # the attract-demo header's mode byte (set with the commit) [994E]
+    attract_level = _U8(0x083E)   # the attract/default level header [8E98]
     level_flags   = _U8(0x8166)   # bit0 = suppress the hard-land bounce [64BA]; bit1 = no idle camera-pan
     #                               [5D95]; bit2 = top-kill fence [5AF1]
     unk_6BFE      = _U8(0x6BFE)   # post-worker: nonzero -> the 64DF soft-land tail instead of air physics
@@ -419,6 +423,21 @@ class PlayerGlobals(DgroupView):
 
 #: Back-compat alias — the class began as the collision island's globals and grew into the player's.
 CollisionGlobals = PlayerGlobals
+
+
+class LoaderGlobals(DgroupView):
+    """The asset-loader / boot layout fields (main's 0107..0155 block + the 107B stacking loader) — the
+    load-buffer bookkeeping the VM-less cold boot and front end reproduce byte-exactly."""
+
+    __slots__ = ()
+
+    load_top   = _U16(0x2875)   # the SQZ stacking top segment (107B bumps it per load) [107B/0129]
+    reset_base = _U16(0x0039)   # the per-level allocation RESET base (= load_top after the front-end assets;
+    #                             a restart frees back to here) [asm 0129-012C]
+    fg_bank    = _U16(0x003B)   # the FOREGROUND tile-gfx bank segment (the 3721 foliage-in-front pass reads
+    #                             it; missing = no foreground) [asm 0123]
+    year       = _U16(0x0037)   # the DOS clock year captured at boot (the creators-photo gate: < 0x7CA
+    #                             (1994) skips it) [asm 25F6]
 
 
 class RngView(DgroupView):

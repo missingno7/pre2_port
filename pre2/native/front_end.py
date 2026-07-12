@@ -33,6 +33,7 @@ from pre2.views.image_scene import image_palette, render_image_scene
 from pre2.views.input_decode import apply_ds, readers
 from pre2.views.oldies_scene import build_oldies_scene
 from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
+from pre2.views.dgroup_view import LoaderGlobals, PlayerGlobals
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
@@ -304,16 +305,16 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, i
     #     low and its parallax over-reads the wrong memory. (The Python title renders don't bump [0x2875].) ---
     from pre2.native.assets import load_sqz
     _front_seg = load_sqz(state, "FRONT.SQZ", game_root=game_root)  # [asm 107B] permanent front-panel load
-    state.data[_DS + 0x3B] = _front_seg & 0xFF                     # [asm 0123] mov [0x3b],ax — the FOREGROUND tile-gfx
-    state.data[_DS + 0x3C] = (_front_seg >> 8) & 0xFF             # bank the front pass (3721) reads; missing = no foliage
+    LoaderGlobals(state).fg_bank = _front_seg                      # [asm 0123] mov [0x3b],ax — the FOREGROUND tile-gfx
+    #                                                                 bank the front pass (3721) reads; missing = no foliage
     # --- 2dfa: decode the shared SPRITES.SQZ sprite bank into the game state (the title is still on screen — no new
     #     visible frame). This is the bank the world-map + gameplay need. Verified byte-exact (native_build_sprite_bank,
     #     [[pre2-front-end-flow]]); composes from the post-FRONT state ([0x2875] 0x2cd7 -> 0x5cc1, the VM's level seg). ---
     from pre2.native.sprite_bank import native_build_sprite_bank
     native_build_sprite_bank(state, game_root=game_root)
-    _top = state.data[_DS + 0x2875] | (state.data[_DS + 0x2876] << 8)   # [asm 0129-012c] mov ax,[0x2875]; mov [0x39],ax
-    state.data[_DS + 0x39] = _top & 0xFF                                # save the post-front-end load-top as the
-    state.data[_DS + 0x3A] = (_top >> 8) & 0xFF                        # per-level allocation RESET base (restart frees to here)
+    ldr = LoaderGlobals(state)                                          # [asm 0129-012c] mov ax,[0x2875]; mov [0x39],ax
+    ldr.reset_base = ldr.load_top                                       # save the post-front-end load-top as the per-level
+    #                                                                     allocation RESET base (restart frees to here)
 
     # --- 8e45 onward (press-1/2 menu -> mode-select/password map -> carte -> loader): shared with the
     #     GAME-OVER restart (main 011C re-enters the flow HERE — 447d -> 8e45 -> carte -> level reload). ---
@@ -369,9 +370,9 @@ def native_menu_flow(state, dos, game_root: str):
         #     Pixel-exact VM-less (the caveman-tiled map scrolling with the text stamped on top). ---
         native_load_song(state, "CODE.TRK", game_root)          # the map song (starts on entering 96d5, not the menu)
         if choice == LS_PASSWORD:
-            state.data[_DS + 0x2D8A] = 0xFF                     # [asm 8ee9] no level chosen yet (the match writes it)
+            PlayerGlobals(state).level = 0xFF                   # [asm 8ee9] no level chosen yet (the match writes it)
             yield from _native_menu_map(state, dos, game_root, "password")
-            if state.data[_DS + 0x2D8A] & 0x80:                 # [asm 8ef1-8ef8] fire with NO valid code -> back to
+            if PlayerGlobals(state).level & 0x80:               # [asm 8ef1-8ef8] fire with NO valid code -> back to
                 continue                                        #   the press-1/2 menu (jmp 8e45), NOT stuck on ----
             break                                               # a matched code chose its level -> the carte/loader
         yield from _native_menu_map(state, dos, game_root, "mode_select")
@@ -518,6 +519,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     from pre2.codecs.sqz import unpack_sqz
     from pre2.native.assets import resolve_game_path
     from pre2.native.render import native_load_dac_palette
+    g = PlayerGlobals(state)                               # named DGROUP access (mode/level commits)
     from pre2.recovered.menu_scene import MenuScenePage, build_shifted_font
     from pre2.recovered.present import scroll_shift_frame
     from pre2.recovered.text import draw_string
@@ -578,21 +580,21 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
             arrow_sc = (0x48 if rb(0x27EA) else 0x50 if rb(0x27EB) else       # up / down
                         0x4D if rb(0x27EC) else 0x4B if rb(0x27ED) else 0)    # right / left
             if arrow_sc and not prev_arrow and mode_select_input(arrow_sc, False).toggle:
-                state.data[_DS + 0xB197] ^= 1                  # flip the selection (the text re-renders next frame)
+                g.mode ^= 1                                    # flip the selection (the text re-renders next frame)
             prev_arrow = bool(arrow_sc)
         elif kind == "password":                               # [asm 9985] accumulate the typed hex code
             m = _password_step(state)
             if m is not None:                                  # a VALID 4-char code AUTO-ADVANCES (no separate
                 matched = m                                    # confirm) — [0x2D8A]/[0xB197] hold the matched level.
-                state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
-                state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
+                g.mode_copy = g.mode
+                g.attract_mode = g.mode
                 yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte + loader for the chosen level
         if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm / leave
             if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
-                state.data[_DS + 0xB198] = state.data[_DS + 0xB197]
-                state.data[_DS + 0x83D] = state.data[_DS + 0xB197]
-                state.data[_DS + 0x2D8A] = 0                    # BEGINNER/EXPERT both begin at level 1
+                g.mode_copy = g.mode
+                g.attract_mode = g.mode
+                g.level = 0                                     # BEGINNER/EXPERT both begin at level 1
                 yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte (its own palette) scrolls in
             # password: FIRE with no valid code EXITS the screen too — [0x2D8A] stays 0xFF (set at entry, 8EE9)
@@ -618,8 +620,8 @@ def _native_carte(state, dos, game_root: str):
     rb, rw = readers(state)
     saved_top = rw(0x2875)                                       # [asm 9530] MAP.SQZ loads at the top...
     seg = load_sqz(state, "MAP.SQZ", game_root=game_root)
-    state.data[_DS + 0x2875] = saved_top & 0xFF                  # ...but is transient — restore the load pointer so
-    state.data[_DS + 0x2876] = (saved_top >> 8) & 0xFF          # the loader stacks the level exactly where the VM does
+    LoaderGlobals(state).load_top = saved_top                    # ...but is transient — restore the load pointer so
+    #                                                                the loader stacks the level exactly where the VM does
     master = bytes(state.data[(seg << 4):(seg << 4) + 0xFA00])   # the 4-plane map master (planes @0/3E80/7D00/BB80)
     # [asm 9543-95CD] stamp the per-level 'you are here' marker (the player's caveman on the map) into the master.
     lv = rb(0x2D8A)                                              # the level index picks its map (x,y) + the marker
@@ -758,7 +760,7 @@ def native_creators_screen(state, game_root: str):
     Native decodes the two SQZ assets directly (the VM's 12h planar blit needs no CRTC emulation) and hands the
     four 640x480 bit-planes + the grey palette to the runner, which deplanarizes them (like the 0Dh screens but
     at 640-wide). No DGROUP writes — a pure render scene, so it needs no oracle."""
-    if (state.data[_DS + 0x37] | (state.data[_DS + 0x38] << 8)) < 0x7CA:   # [asm 25F6] year < 1994 -> skip
+    if LoaderGlobals(state).year < 0x7CA:                                   # [asm 25F6] year < 1994 -> skip
         return
     from pre2.codecs.sqz import unpack_sqz
     import os
