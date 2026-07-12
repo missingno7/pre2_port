@@ -18,6 +18,7 @@ record, so per-slot behaviour stays byte-exact; a full cross-slot whole-memory r
 those emitters (the next recovery target)."""
 from __future__ import annotations
 
+from pre2.views.dgroup_view import ObjectSlot
 from pre2.recovered.object_update import (ObjectScaleUnsupported, advance_animation, apply_velocity,
                                           handle_object_75c4, handle_object_760f, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7898,
@@ -45,13 +46,15 @@ class Pre2ObjectGap(Exception):
 
 
 def _obj_view(mem, si):
-    return {"x": mem.rw(si), "y": mem.rw(si + 2), "id": mem.rw(si + 4), "xvel": mem.rw(si + 8),
-            "yvel": mem.rw(si + 0xA), "anim_ptr": mem.rw(si + 0xC), "state": mem.rb(si + 0xE)}
+    s = ObjectSlot(mem, si)
+    return {"x": s.x, "y": s.y, "id": s.sprite, "xvel": s.xvel,
+            "yvel": s.yvel, "anim_ptr": s.anim_ptr, "state": s.state}
 
 
 def _write_obj(mem, si, o):
-    mem.ww(si, o["x"]); mem.ww(si + 2, o["y"]); mem.ww(si + 4, o["id"]); mem.ww(si + 8, o["xvel"])
-    mem.ww(si + 0xA, o["yvel"]); mem.ww(si + 0xC, o["anim_ptr"]); mem.wb(si + 0xE, o["state"])
+    s = ObjectSlot(mem, si)
+    s.x = o["x"]; s.y = o["y"]; s.sprite = o["id"]; s.xvel = o["xvel"]
+    s.yvel = o["yvel"]; s.anim_ptr = o["anim_ptr"]; s.state = o["state"]
 
 
 # def-record fields: name -> (offset, is_word). The same offset is a type-specific union (see object_update),
@@ -100,23 +103,23 @@ def object_tick(mem) -> None:
     """
     for slot in range(OBJ_COUNT):                                # [asm 6851/690D loop over 12 slots]
         si = OBJ_BASE + slot * OBJ_STRIDE
-        if mem.rw(si + 4) == 0xFFFF:                             # [asm 6856-685E] empty slot -> skip
+        s = ObjectSlot(mem, si)
+        if s.sprite == 0xFFFF:                                   # [asm 6856-685E] empty slot -> skip
             continue
-        nx, ny = apply_velocity(mem.rw(si), mem.rw(si + 2), mem.rw(si + 8), mem.rw(si + 0xA))   # [6861-6873]
-        mem.ww(si, nx); mem.ww(si + 2, ny)
-        d = mem.rw(si + 6)
+        nx, ny = apply_velocity(s.x, s.y, s.xvel, s.yvel)        # [6861-6873]
+        s.x = nx; s.y = ny
+        d = s.def_ptr
         if mem.rb(d + 4) & 8:                                    # [6875-687E] terrain collision gate
-            o = {"x": mem.rw(si), "y": mem.rw(si + 2), "xvel": mem.rw(si + 8), "yvel": mem.rw(si + 0xA),
-                 "anim_ptr": mem.rw(si + 0xC)}
+            o = {"x": s.x, "y": s.y, "xvel": s.xvel, "yvel": s.yvel, "anim_ptr": s.anim_ptr}
             df = {"d4": mem.rb(d + 4)}
             terrain_collision(o, df, mem.read_map, mem.prop_a, mem.prop_b, mem.slope, mem.rw)
-            mem.ww(si, o["x"]); mem.ww(si + 2, o["y"]); mem.ww(si + 8, o["xvel"])
-            mem.ww(si + 0xA, o["yvel"]); mem.ww(si + 0xC, o["anim_ptr"]); mem.wb(d + 4, df["d4"])
+            s.x = o["x"]; s.y = o["y"]; s.xvel = o["xvel"]
+            s.yvel = o["yvel"]; s.anim_ptr = o["anim_ptr"]; mem.wb(d + 4, df["d4"])
         try:                                                     # [6881-68E6] animation advance
-            anim = advance_animation(mem.rw(si + 0xC), mem.rw, mem.rw(si + 4), mem.rb(si + 9), mem.scale())
+            anim = advance_animation(s.anim_ptr, mem.rw, s.sprite, mem.rb(si + 9), mem.scale())
         except ObjectScaleUnsupported as e:
             raise Pre2ObjectGap(f"slot {slot}: {e}") from e
-        mem.ww(si + 4, anim.sprite_id); mem.ww(si + 0xC, anim.script_ptr); mem.wb(0xA340, anim.attr_a340)
+        s.sprite = anim.sprite_id; s.anim_ptr = anim.script_ptr; mem.wb(0xA340, anim.attr_a340)
         if anim.shake:                                           # [asm 68B1] zoom level 7 ([0x6BE2]==7) arms the
             mem.wb(0x6BEA, 9)                                    #   screen shake (recovered apply_camera_shake reads it)
 
