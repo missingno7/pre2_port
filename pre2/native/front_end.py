@@ -330,6 +330,16 @@ def native_menu_flow(state, dos, game_root: str):
     native_load_song(state, "PRESENTA.TRK", game_root)   # [asm 015a/0107 ax=3] the title/MENU song — the shared
     #   restart path (main 0x141) reloads it before 8e45, so a return here from THE END (FINAL.TRK) or the game-over
     #   scene (BOULA.TRK) switches back to the menu music. Idempotent on the cold boot (the PRESENT title just set it).
+    # --- [asm 0141..0155] the FRESH-start block runs BEFORE the menu (every 8E45 entry: the cold start and the
+    #     0199/012F restarts all pass through it): lives=2, BONUS-letters/utensils masks cleared, damage reset.
+    #     native_level_start re-applies the same values at the load (outcome-identical), but writing them HERE
+    #     matches the VM's state at menu entry byte-for-byte (the front-end transition witness reads it). ---
+    d = state.data
+    d[_DS + 0x27D8] = 0x02                                # [asm 0141] lives
+    d[_DS + 0x6CA7] = 0x00                                # [asm 0146] BONUS-letters mask
+    d[_DS + 0x7B19] = 0x14                                # [asm 014B] damage/energy
+    d[_DS + 0x7B18] = 0x00                                # [asm 0150]
+    d[_DS + 0x6CA8] = 0x00                                # [asm 0155] utensils mask
     # --- 8e45: the "press 1/2" difficulty screen (MENU.SQZ = resource 8, a 13h image) faded in over 0xA0 DAC
     #     entries ([asm 8e67 cl=0xA0] -> 919f), then held while the dispatch waits for a choice. Pixel-exact vs the
     #     VM. The dispatch flags [0x27f6]/[0x27f7] ARE the '1'/'2' key-table entries (0x27f4 + scancode 2/3); fire =
