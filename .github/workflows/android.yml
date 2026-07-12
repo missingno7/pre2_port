@@ -19,7 +19,7 @@ name: Android APK
 on:
   workflow_dispatch: {}
   push:
-    branches: [android-touch-port]
+    branches: [main, android-touch-port]
     paths:
       - "pre2/**"
       - "scripts/**"

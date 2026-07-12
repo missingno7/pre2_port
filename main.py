@@ -7,9 +7,11 @@ on-screen touch controls auto-enabled (``play_native`` detects the p4a ``ANDROID
 Desktop users keep launching ``python scripts/play_native.py`` directly; this file exists only for the
 mobile package, so the desktop entry point is untouched.
 
-Game data: the *.SQZ / *.TRK files are bundled in the APK, but if you drop your own copy into the app's
-external files dir (``/sdcard/Android/data/org.pre2port.pre2/files/``) they take precedence — a
-zero-UI stand-in for the eventual first-run importer.
+Game data: the APK ships NO game data (``buildozer.spec`` bundles only ``py,png`` and excludes ``assets``)
+— the user provides their own legally-owned ``*.SQZ / *.TRK`` files. On first launch without data, the
+SAF importer (below) opens the Android folder picker and copies the chosen folder's files into the app's
+private dir; a copy dropped straight into the external files dir
+(``/sdcard/Android/data/org.pre2port.pre2/files/``) is also picked up.
 
 On any crash we write the full traceback to ``pre2_crash.log`` in that same external dir (retrievable with
 a file manager, no adb) and show it on screen, so a silent close becomes diagnosable.

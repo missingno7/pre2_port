@@ -1081,7 +1081,7 @@ def main(argv=None) -> int:
                 t = ev.type
                 if t == pygame.QUIT:
                     ref["running"] = False
-                elif t == pygame.VIDEORESIZE and not view.get("fs"):
+                elif t == pygame.VIDEORESIZE and not settings["fullscreen"]:
                     disp.resize(ev.w, ev.h)
                 elif t == pygame.KEYDOWN and (ev.key == pygame.K_ESCAPE or ev.key == _K_BACK):
                     return False
