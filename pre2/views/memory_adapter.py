@@ -16,7 +16,12 @@ DATA_SEG = 0x1A0F
 
 
 def readers(mem):
-    """``(rb, rw)`` byte/word readers over DGROUP (``DATA_SEG``). ``mem`` exposes a ``.data`` bytearray."""
+    """``(rb, rw)`` byte/word DGROUP readers. Routes through ``mem.backend`` when present (the NativeGameState
+    seam — so reads follow the swappable backend, e.g. a hybrid store), else straight to ``mem.data``."""
+    be = getattr(mem, "backend", None)
+    if be is not None and getattr(be, "_IS_DGROUP_BACKEND", False):
+        return be.rb, be.rw
+
     base = (DATA_SEG << 4) & 0xFFFFF
 
     def rb(o):

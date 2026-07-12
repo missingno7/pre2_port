@@ -1050,3 +1050,52 @@ class FieldBackend:
     def owner(self, off: int) -> str:
         """The declared name covering ``off`` — the readable answer to 'what is this byte?'."""
         return self._map[off & 0xFFFF][0]
+
+
+class HybridBackend:
+    """The field-backed flip's store: named DGROUP bytes live in a :class:`FieldBackend`, everything else
+    (read-only tables, the tilemap pointer, boot constants, the untouched span) stays in a residue byte image.
+
+    This is the product's state-of-record once flipped — there is no single contiguous mutable image; the
+    named mutable state has no offset home, only the residue keeps bytes. It presents the same offset-keyed
+    rb/rw/wb/ww API, so ``NativeGameState.backend`` swaps to it with nothing else changing: every read of a
+    named offset resolves to the FieldBackend, every write of a named offset lands there and NOT in the image.
+    (The residue image is still needed for the read-only content until Phase 5 migrates it to loaded objects.)
+
+    ``materialize(data)`` writes the FieldBackend's named bytes back over an image — the serialisation the
+    renderer and the verifier need (a contiguous DGROUP image), proving the split is lossless."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("fields", "_img", "_named")
+
+    def __init__(self, field_backend: "FieldBackend", residue_data):
+        self.fields = field_backend
+        self._img = residue_data                               # the 1 MB image (its named-offset bytes go stale)
+        self._named = field_backend._map                      # offset -> covering (name, base, width)
+
+    def rb(self, off: int) -> int:
+        off &= 0xFFFF
+        if off in self._named:
+            return self.fields._bytes.get(off, 0)
+        return self._img[DGROUP_BASE + off]
+
+    def wb(self, off: int, v: int) -> None:
+        off &= 0xFFFF
+        if off in self._named:
+            self.fields._bytes[off] = v & 0xFF
+        else:
+            self._img[DGROUP_BASE + off] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v & 0xFF)
+        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+
+    def materialize(self, data=None) -> None:
+        """Write the FieldBackend's named bytes back over ``data`` (default: the residue image) so it becomes
+        a full contiguous DGROUP image again — for the renderer / the byte-exact digest."""
+        data = self._img if data is None else data
+        for off, val in self.fields._bytes.items():
+            data[DGROUP_BASE + off] = val & 0xFF
