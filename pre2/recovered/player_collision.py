@@ -202,6 +202,31 @@ def collision_land(rb, rw, read_es, di: int) -> dict:
     return out
 
 
+def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
+    """[asm 668B] The Yvel==0 head-bump branch — the "push out of a solid ceiling" nudge.
+
+    It pushes the object pointed to by ``[0x6BB1]`` (the game's current-object pointer) one tile toward the open
+    side. The catch: on the PLAYER's own collision ``[0x6BB1]`` is never populated — it is NULL (0) — so the
+    routine dereferences low DGROUP (``[0x0000]``/``[0x0002]``) as a bogus X/Y, lands on a cell far off the map
+    (a 0xFF border tile that is never ceiling-solid), and returns without writing. So for the player this is a
+    latent **no-op / dead code** in the original game (the intended un-stick never actually runs). Transcribed
+    LITERALLY rather than hardcoded to ``{}`` so the null-pointer computation stays byte-exact vs the VM even in
+    the theoretical state where the bogus cell *is* ceiling-solid (then it writes ``[[0x6BB1]] += dx`` exactly as
+    the ASM does). anim ``[0x4F20]`` in ``{0x0A, 0x15}`` skips it outright. Pure."""
+    if (rw(0x4F20) & 0xFF) in (0x0A, 0x15):                      # [668E/6692] two anim states -> no push-out
+        return {}
+    ptr = rw(0x6BB1)                                             # [6698] di = [0x6BB1] (NULL on the player path)
+    col = (_s16(rw(ptr)) >> 4) & 0xFF                            # [66A5-66A9] sar (X word),4
+    row = (_s16(rw((ptr + 2) & 0xFFFF)) >> 4) & 0xFF            # [669E-66A3] sar (Y word),4
+    cell = ((row << 8) | col) & 0xFFFF                           # [66AB] di = (row<<8)|col
+    if not (rb((TILE_CEIL_SOLID_TABLE + read_es(cell)) & 0xFFFF) & 1):   # [66B4-66BA] this cell not solid -> nothing
+        return {}
+    dx = 0x10                                                   # [66BC] default: push right one tile
+    if not (rb((TILE_CEIL_SOLID_TABLE + read_es((cell - 1) & 0xFFFF)) & 0xFFFF) & 1):  # [66BF-66C6] left tile open?
+        dx = -0x10                                              # [66C8] neg -> push toward the open (left) side
+    return {ptr: (rw(ptr) + dx) & 0xFFFF}                       # [66CA-66CE] add [ [0x6BB1] ], dx
+
+
 def collision_ceiling(rb, rw, read_es, di: int) -> dict:
     """Recover the player ceiling (head-bump) collision ``1030:5C16..5C76`` (part of 5B81, runs when the player
     is rising into the tile above). ``read_es(off)`` reads map byte ``es:[off]``; ``di`` is the tile-above
@@ -223,8 +248,8 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
         if _s16(rw(0x4F2A)) != 0:                               # [6678] rising -> zero Yvel + snap below ceiling
             out[0x4F2A] = 0                                     # [667A]
             out[0x4F1E] = ((rw(0x4F1E) & 0xFFF0) + 0x10) & 0xFFFF  # [6680-6685]
-        else:                                                   # [668B] Yvel==0: push-out-of-solid-ceiling, unwitnessed
-            raise NotImplementedError("ceiling head-bump Yvel==0 push-out (668B) not witnessed")
+        else:                                                   # [668B] Yvel==0: the "push out of a solid ceiling"
+            out.update(_ceiling_headbump_pushout(rb, rw, read_es))  #   branch (a null-pointer no-op for the player)
     elif idx == 2:                                              # [65AF -> 65B3] hazard ceiling: off-camera death trigger
         out.update(_offcamera_trigger(rb))                      # (the SAME routine the ground idx6 dispatches to)
     elif idx != 0:                                              # idx 3-15 still unwitnessed
