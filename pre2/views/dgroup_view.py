@@ -452,6 +452,51 @@ class PlayerGlobals(DgroupView):
 
     collected_linked = _U16(0x2A7A)  # the LINKED-item collected count (tally percent = [0x2A76]+this) [85CC/5139]
 
+    # --- score + the camera/scroll engine scalars (the 0x6BC0..0x6C11 band) ---
+    score_lo      = _U16(0x6C0E)  # the 32-bit score, low word [asm 5139/85B6]
+    score_hi      = _U16(0x6C10)  # ... high word
+    scale_level   = _U16(0x6BE2)  # object_update's sprite scale level; doubles as player_interaction's
+    #                               instadeath gate; timer-decremented (TIMER_WORD) [asm 5A82]
+    hurt_cooldown = _U8(0x6BC9)   # the crush-damage cooldown (reload 5; a life on underflow) [asm 8254]
+    bonus_flash   = _U8(0x6C00)   # the bonus-collect flash timer (render_state; timer-decremented) [5A7E]
+    fine_scroll   = _U8(0x6BC4)   # sub-tile pixel scroll 0..15 (the frame engine) [frame VAR_FINE_SCROLL]
+    col_ring      = _U16(0x2DE8)  # the background column ring index (camera_x % ring) [frame VAR_COL_RING]
+    unk_2DEA      = _U16(0x2DEA)  # written alongside col_ring; exact role not yet evidenced
+    firefly_scratch_a = _U8(0x6BC0)  # the firefly pass's per-frame scratch pair [firefly_sim]
+    firefly_scratch_b = _U8(0x6BC1)
+    row_factor    = _U16(0x6BF8)  # the row-stride factor (0x28 * this) the shake writes [frame/camera_shake]
+    unk_6BFA      = _U16(0x6BFA)  # shake-adjacent state; role not yet evidenced
+    unk_6BFC      = _U16(0x6BFC)
+    timer_6BE8    = _U8(0x6BE8)   # one of the 5A47 countdown timers (TIMER_BYTES); consumer not yet mapped
+    unk_6BED      = _U16(0x6BED)  # scroll-adjacent state; role not yet evidenced
+    unk_6BF1      = _U16(0x6BF1)
+    scroll_phase  = _U8(0x6C05)   # the camera/scroll phase counter (757A sat-inc) [asm 757A/8131]
+    scroll_vx     = _U16(0x6C06)  # the scroll-cursor X velocity [asm 70FE/815E]
+    scroll_vy     = _U16(0x6C08)  # ... Y velocity (gravity 0x10, cap 0xE0) [asm 7118/8144]
+    script_last   = _U16(0x6C0A)  # camera-script pointer last seen; a change resets script_cursor [asm 7537]
+
+    # --- the spawner / camera-sequencer scalars (object_spawn + combat_interaction's globals) ---
+    hit_detail    = _U16(0xA331)  # vertical penetration depth when hit_flag set [asm 8D7B]
+    spawned_ptr   = _U16(0xA33E)  # the just-spawned burst-slot pointer (8C72 reads it back) [asm 88B9]
+    anim_ready    = _U8(0xA340)   # object_update's per-step anim-ready scratch byte
+    spawn_offset_ring = _U16(0xA341)  # 16-slot ring index into the spawn X-offset table [object_inject]
+    spawn_count   = _U16(0x91FC)  # the level spawn param (>>3 = spawn count; boss damage decrements)
+    cam_state     = _U8(0x91FE)   # the camera sequencer's 8-state machine state (0xFF = disabled)
+    cursor_x      = _U16(0x91FF)  # the spawn/camera cursor position
+    cursor_y      = _U16(0x9201)
+    cam_timer     = _U16(0xA3F7)  # the sequencer's per-state frame timer
+    cmd_byte      = _U8(0xA3F9)   # the camera-script command byte (bit6 = a vertical nudge)
+    dist_dir      = _U8(0xA3FA)   # 1 if the cursor is left of the player
+    dist_x        = _U16(0xA3FB)  # |player_X - cursor_X|
+    script_cursor = _U16(0xA3FF)  # the live camera-script cursor (into the 0xA427+ bytecode)
+    script_ptr    = _U16(0xA401)  # the active camera-script pointer (script_last detects changes)
+    cursor_latch_x = _U16(0xA403)  # cursor pos latched per script command [asm 7585 head]
+    cursor_latch_y = _U16(0xA405)
+    cam_param_e   = _U16(0xA41F)  # the 5th camera-target param word (no position pair) [asm 93B2]
+    cam_target_ptr = _U16(0xA421)  # camera target record-ptr (93CE's di latch)
+    target_a      = _U16(0xA423)  # camera target record-ptr A (free 0x19C/0x19D sprites that hit it)
+    target_b      = _U16(0xA425)  # camera target record-ptr B
+
     # --- the six decoded input flags (DC1's outputs [0x27E8..0x27ED]) ---
     in_fire       = _U8(0x27E8)   # fire/jump held (space/enter sources) [0bc6/58FC]
     in_aux        = _U8(0x27E9)   # the sixth flag (single scancode source 0x2840) — idle-gate input [5D50]
@@ -780,6 +825,71 @@ class L6Projectile(StructView):
         return self.sprite == 0xFFFF                     # [asm 6D4F/6EC1]
 
 
+class ObjectSlot(RenderSlot):
+    """One active object/enemy record (the 12-slot list at 0x4FD0 + the 32-slot effect/burst pool at 0x50A8,
+    stride 0x12) — the object walker's own view of the same 0x12-stride render-record family. Fields per
+    object_tick's byte-exact view (684E): free when ``sprite`` (the id word) is 0xFFFF."""
+
+    __slots__ = ()
+
+    def_ptr  = _U16(0x06)    # -> the type-definition record (the read-only def table) [asm: [di+6]]
+    xvel     = _U16(0x08)    # X velocity, 12.4 fixed [object_tick _obj_view]
+    yvel     = _U16(0x0A)    # Y velocity, 12.4 fixed
+    anim_ptr = _U16(0x0C)    # the anim-script cursor
+    state    = _U8(0x0E)     # the behavior state byte (handlers dispatch on it)
+    aux_f    = _U8(0x0F)     # per-type aux byte (a _BYTE_FIELDS union member) [object_inject]
+    hits     = _U8(0x10)     # hit accumulator: the hurt handler reads >>2 and caps at 0xB [asm 834E]
+
+
+class TerrainEntity(StructView):
+    """One terrain / moving-entity SOURCE record (the 16-slot list at 0x9107, stride 0xF; 4907's walk).
+    Free when ``sprite`` is 0xFFFF. Two movement families share the record: type-8 fall/settle uses the
+    ``fall_vel`` word at +0xB; the 8-direction platform uses ``osc`` (its high byte) as the oscillation
+    counter — the established two-names-for-two-widths convention."""
+
+    __slots__ = ()
+
+    x            = _U16(0x00)   # world X (12.4-ish; column = >>4) [asm 498F/4A67]
+    y            = _U16(0x02)   # world Y [asm 4936/49EA]
+    sprite       = _U16(0x04)   # sprite id; 0xFFFF = free slot [asm 4AF0 walk]
+    type_dir     = _U8(0x06)    # &0xF type (8 = faller); &7 platform heading; bit6 = hold [asm 4950/49D5]
+    speed_ramp   = _U8(0x07)    # the ramping speed/accel byte (toward ``speed``) [asm 4942/4976/4A0D]
+    unk_8        = _U8(0x08)    # not accessed by the recovered pass; role not yet evidenced
+    settle_reload = _U8(0x09)   # reload value for ``settle_timer`` [asm 49E0]
+    state        = _U8(0x0A)    # type-8 state machine: 0 wait/brake, 1 fall, 2 settle [asm 4939]
+    fall_vel     = _U16(0x0B)   # type-8 fall velocity word [asm 4936/4988]
+    osc          = _U8(0x0C)    # width alias of fall_vel's high byte: the platform oscillation counter
+    settle_timer = _U8(0x0D)    # settle frame countdown [asm 4956/49CF]
+    speed        = _U8(0x0E)    # the platform's target speed [asm 49FB/4A0D]
+
+
+class CamTarget(StructView):
+    """One camera-target geometry record (the 4-slot stride-6 block at 0xA407 the camera script fills):
+    param word (bit15 flips when facing) + target X/Y [asm 93B2 block, object_spawn camera_target_geometry]."""
+
+    __slots__ = ()
+
+    param = _U16(0)
+    x     = _U16(2)
+    y     = _U16(4)
+
+
+class Particle(StructView):
+    """One 4B8E particle (the 20-slot array at 0x7DE6, stride 6): X.w Y.w angle.b speed.b; the X word is
+    0xFFFF when the slot is dead [asm 4C1D]."""
+
+    __slots__ = ()
+
+    x     = _U16(0)
+    y     = _U16(2)
+    angle = _U8(4)           # indexes the cos/sin tables (0x6F90/0x7090)
+    speed = _U8(5)
+
+    @property
+    def dead(self) -> bool:
+        return self.x == 0xFFFF                          # [asm 4C1D]
+
+
 # ---- the fixed slot LISTS (StructArrays: indexed named records instead of pointer walks). Attached to
 # PlayerGlobals here because RenderSlot/ProjectileSlot are defined below it in the file. ----
 PlayerGlobals.render_slots = StructArray(0x4F0A, 0x12, 116, RenderSlot)     # the on-screen records
@@ -792,4 +902,17 @@ PlayerGlobals.wall_markers = StructArray(0x6EA9, 8, 20, WallMarker)         # th
 PlayerGlobals.l6_projectiles = StructArray(0x7DAF, 0xB, 5, L6Projectile)    # the L6 tree-boss projectiles
 PlayerGlobals.l6_render_slots = StructArray(0x55EE, 0x12, 5, RenderSlot)    # ...their projected render slots
 PlayerGlobals.boss_targets = StructArray(0x5648, 0x12, 5, RenderSlot)       # the boss/camera-target records
+PlayerGlobals.enemy_slots = StructArray(0x4FD0, 0x12, 12, ObjectSlot)       # the 12 active object/enemy slots
+PlayerGlobals.burst_slots = StructArray(0x50A8, 0x12, 32, ObjectSlot)       # the effect/score-burst pool
+#     (0x50A8..0x52E8 — the free pool after the 12 main objects; same record family)
+PlayerGlobals.particles = StructArray(0x7DE6, 6, 20, Particle)              # the 4B8E particle array
+PlayerGlobals.terrain_entities = StructArray(0x9107, 0xF, 16, TerrainEntity)  # the 4907 source list
+PlayerGlobals.cam_targets = StructArray(0xA407, 6, 4, CamTarget)            # the camera-script geometry block
+
+#: Named MUTABLE regions that are dynamic-record ARENAS, not fixed-stride arrays — the flip keeps each as an
+#: owned byte-buffer behind its manager (the variable-stride record layout lives with the owning island).
+ARENAS = {
+    # corpus high-water 0x86EA; the bound is provisional until a longer-level demo firms it
+    "entity_arena (the 2nd-pass live-entity records; entry 0 = the player; variable stride)": (0x8489, 0x8708),
+}
 #     (x/y/sprite per record; +5 = the flash flags byte; boss_x/boss_y alias record 0's x/y) [6E42/7113]

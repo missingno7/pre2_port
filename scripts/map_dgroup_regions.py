@@ -75,6 +75,9 @@ def harvest_views():
                     ebase = base + d.off + i * d.stride
                     for fname, off, width in field_descs(d.struct_cls):
                         mark(ebase + off, width, f"{cls_name}.{aname}[{i}].{fname}")
+    # named mutable ARENAS (variable-stride record regions the flip keeps as owned byte-buffers)
+    for label, (lo, hi) in getattr(dv, "ARENAS", {}).items():
+        mark(lo, hi - lo + 1, f"ARENA {label}")
     return named
 
 
@@ -188,30 +191,26 @@ def main() -> int:
         writes |= w
 
     accessed = reads | writes
-    # a READ-ONLY accessed range whose nearest anchor is a *_TABLE/_LUT/_LIST/_SEQ style constant is DATA,
-    # not unmapped state — the flip keeps tables as tables (extracted or a bytes blob), not fields.
-    import re as _re
-    table_rx = _re.compile(r"TABLE|_LUT|_LIST|_SEQ|IMPULSE|HEIGHT|_ROW|FONT|SINE|PALETTE|CHAR")
 
-    def is_table_byte(o):
-        if o in writes:
-            return False
-        a = next((k for k in range(o, max(o - 0x800, -1), -1) if k in anchors), None)
-        return a is not None and table_rx.search(anchors[a]) is not None
-
+    # THE FLIP RULE: mutable state must become fields; data gameplay never WRITES stays data (readable
+    # through a TableView over the boot-constants blob). So read-only accessed bytes classify as data, and
+    # the true gap = WRITTEN-and-unnamed. (Corpus caveat: rarely-written state can hide as read-only —
+    # widen the demo set to firm the boundary.)
     classes = {}
     for o in range(0x10000):
         if o in named:
             c = "field/array"
         elif o in masked:
             c = "masked (render/audio/input)"
-        elif o in accessed:
-            c = "table (read-only)" if is_table_byte(o) else "ACCESSED-UNNAMED"
+        elif o in writes:
+            c = "WRITTEN-UNNAMED"
+        elif o in reads:
+            c = "read-only data (tables/defs)"
         else:
             c = "untouched"
         classes.setdefault(c, set()).add(o)
 
-    gap = classes.get("ACCESSED-UNNAMED", set())
+    gap = classes.get("WRITTEN-UNNAMED", set())
     gap_ranges = compress(gap)
 
     lines = ["# DGROUP region map — the field-backed flip's cartography",
@@ -224,10 +223,10 @@ def main() -> int:
              "",
              "| class | bytes | % |",
              "|---|---|---|"]
-    for c in ("field/array", "masked (render/audio/input)", "table (read-only)", "ACCESSED-UNNAMED", "untouched"):
+    for c in ("field/array", "masked (render/audio/input)", "read-only data (tables/defs)", "WRITTEN-UNNAMED", "untouched"):
         n = len(classes.get(c, ()))
         lines.append(f"| {c} | {n:,} | {n / 655.36:.1f}% |")
-    lines += ["", f"## The gap — {len(gap):,} accessed-unnamed bytes in {len(gap_ranges)} ranges", "",
+    lines += ["", f"## The gap — {len(gap):,} WRITTEN-unnamed bytes in {len(gap_ranges)} ranges", "",
               "| range | bytes | R/W | nearest anchor at/below |", "|---|---|---|---|"]
     for lo, hi in gap_ranges:
         n = hi - lo + 1
@@ -239,7 +238,7 @@ def main() -> int:
     out = ROOT / "docs" / "pre2" / "dgroup_region_map.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="")
     print(f"\nwrote {out}")
-    for c in ("field/array", "masked (render/audio/input)", "table (read-only)", "ACCESSED-UNNAMED", "untouched"):
+    for c in ("field/array", "masked (render/audio/input)", "read-only data (tables/defs)", "WRITTEN-UNNAMED", "untouched"):
         print(f"  {c:32s} {len(classes.get(c, ())):6,}")
     return 0
 
