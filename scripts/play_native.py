@@ -2141,7 +2141,7 @@ def main(argv=None) -> int:
                 # input track; neither is available VM-lessly here. Since this presentation is DISCARDED (gtd.seed
                 # reseeds gameplay below), cap it so a cold-start demo ALWAYS reaches its byte-exact gameplay replay
                 # instead of hanging at the menu. If the menu does complete first, run_menu_flow returns earlier.
-                _FE_PRESENT_CAP = 1800     # ~native's full intro (~1300 frames) + a short menu window
+                _FE_PRESENT_CAP = 1200     # ~native's full intro (~900 frames) + a short menu window
 
                 def _capped_frontend(gen, n):
                     for k, scene in enumerate(gen):
@@ -2149,6 +2149,13 @@ def main(argv=None) -> int:
                             print(f"  front-end presentation reached the {n}-frame cap (the recorded menu "
                                   f"navigation is not reproducible VM-lessly) -- handing to the gameplay replay")
                             return
+                        # Pin the menu ATTRACT idle-timeout OFF ([asm 8E90] [0x27F0] >= 0x10E -> 8E98 auto-advances
+                        # to the in-game demo). The recorded scancodes can't land the press-1/level-select on
+                        # native's clock, so an un-pinned menu idles out into the ATTRACT demo (user: "it plays that
+                        # ingame demo"). This presentation is DISCARDED (gtd.seed reseeds gameplay), so hold the
+                        # idle counter low -> the menu waits cleanly instead of drifting into attract.
+                        fe_state.data[DS + 0x27F0] = 0
+                        fe_state.data[DS + 0x27F1] = 0
                         yield scene
                 try:
                     run_menu_flow(fe_state, fe_dos, "PRE2 VM-less — cold-start demo (front-end)",
