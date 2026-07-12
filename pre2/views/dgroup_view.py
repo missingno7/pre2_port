@@ -367,6 +367,9 @@ class PlayerGlobals(DgroupView):
     end_signal    = _U8(0x6BE5)   # 1 = game over (no lives) [65D0]; 0xFF = game complete (level 0xE) [5B1F];
     #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
     map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
+    display_page  = _U16(0x2DD6)  # the CRTC display-start PAGE the present flips [2DD6; read at every present]
+    input_source  = _U8(0x2879)   # DC1's source: 0 live keyboard / 1 demo-attract playback / 2 record [0DC1]
+    level_end_mode = _U8(0x6BE6)  # the 4C69 level-end dispatch mode: 1 normal end / >1 warp [4C69/4C74]
     level         = _U8(0x2D8A)   # the current level index [5B18]; 0xFF = none chosen yet [8ee9]
     mode          = _U8(0xB197)   # 0 = BEGINNER / 1 = EXPERT — the mode-select toggle [9941/8ee9]
     mode_copy     = _U8(0xB198)   # the committed copy the loader reads [994E]
