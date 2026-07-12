@@ -659,6 +659,40 @@ def _native_title_screen(game_root: str, name: str, *, n_entries: int, hold: int
         yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
 
 
+def native_expert_eater(state, game_root: str):
+    """[asm 0163->0178] The "YOU MUST BE AN EXPERT EATER" wall.
+
+    When a BEGINNER ([0xB197]==0) advances into level 8 or 9 ([0x2D8A] in {8,9}), main's 0x0163 gate shows
+    CASTLE.SQZ (resource 0x2C, ``dx=0x2c`` -> 107B) INSTEAD of loading the level: fade it IN (919F, ``cl=0xFF``
+    = the full 256-entry DAC), HOLD it while the scene-wait (0BBE) waits for the fire key press+release, then
+    re-enter the press-1/2 MENU (0199 ``mov ax,1``; jmp 012F -> 8E45). There is NO fade-OUT (unlike THE END).
+
+    A GENERATOR yielding :class:`FrontEndScene` frames; the caller re-enters ``native_menu_flow`` when it returns.
+    Same 13h-image + fade + 0BBE-wait primitives as :func:`native_the_end`, reused rather than re-derived."""
+    image = render_image_scene("CASTLE.SQZ", game_root)                # [asm 0178->107B res 0x2c] 64000-byte 13h image
+    pal6 = image_palette("CASTLE.SQZ", game_root)                      # the 256-entry DAC at the asset's head
+    fade_in = fade_in_frames(pal6, 0xFF)                              # [asm 018C cl=0xFF -> 919F] black -> target
+    held = fade_in[-1]
+    for p6 in fade_in:                                                 # [asm 919F] fade-in retrace frames
+        yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=image)
+    held8 = _expand_palette6(held)
+    phase = WAIT_PRESS                                                 # [asm 0196 -> 0BBE] wait for fire press+release
+    while True:
+        yield FrontEndScene(MODE_LINEAR, palette=held8, linear=image)
+        phase, done = native_scene_wait(state, phase)
+        if done:
+            break
+    # [asm 0199 mov ax,1 / jmp 012F -> 8E45] no fade-out — the caller re-enters the press-1/2 menu directly.
+
+
+def is_expert_eater_wall(state) -> bool:
+    """[asm 0163-0176] True when a BEGINNER (``[0xB197]==0``) has advanced to level 8 or 9 (``[0x2D8A]`` in
+    {8, 9}) — where main's 0x0163 gate shows the CASTLE "expert eater" wall (:func:`native_expert_eater`)
+    instead of loading the level. Beginner can only PLAY levels 0..7; 8 (penguin) is the expert-only wall."""
+    d = state.data
+    return d[_DS + 0x2D8A] in (8, 9) and d[_DS + 0xB197] == 0
+
+
 def native_the_end(state, game_root: str):
     """[asm 5034] THE END — the game-complete screen (the player cleared the final level 0xE, [0x6be5]==0xFF).
 

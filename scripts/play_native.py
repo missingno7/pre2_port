@@ -1135,7 +1135,7 @@ def main(argv=None) -> int:
         carte too). The full 4CCB exit-anim cutscene (iris + player walk + food-throw count-up) is deferred; the
         tally TEXT is shown."""
         from pre2.native.audio import native_load_song
-        from pre2.native.front_end import _native_carte
+        from pre2.native.front_end import _native_carte, is_expert_eater_wall
         from pre2.native.level_state import level_end_takes_tally, native_level_end
 
         # [asm 4C69] the level-end dispatch (level_end_takes_tally): a warp INTO a bonus level (4C8F) and a bonus
@@ -1237,6 +1237,9 @@ def main(argv=None) -> int:
             if not ref["running"]:
                 return
         native_level_end(state, game_root=gr)
+        if is_expert_eater_wall(state):                            # [asm 0163] beginner advanced into level 8/9 ->
+            return                                                 #   skip the carte; the gameplay-loop top shows the
+            #                                                        CASTLE 'expert eater' wall + re-enters the menu
         for scene in _native_carte(state, dos, gr):                # fire (press after release) advances
             present_front_scene(scene, _FRONT_END_FPS, "PRE2 VM-less — world map")
             pump()
@@ -1287,6 +1290,24 @@ def main(argv=None) -> int:
             return                                                 # (full touch support: buttons + CONTINUE picker)
         native_load_level_palette(state, dos)                      # the level palette after the carte DAC
         reveal_level(state, dos)                                    # 3054 center-out curtain into the level
+
+    def expert_eater_screen(state, dos):
+        """[asm 0163->0178] A BEGINNER advanced into level 8/9 -> the CASTLE 'YOU MUST BE AN EXPERT EATER' wall
+        (no level load), then back to the press-1/2 menu. Modeled on game_over_restart: present the scene, then
+        re-enter the menu flow so the player can restart as EXPERT, then load the chosen level."""
+        from pre2.native.front_end import native_expert_eater
+        print("  EXPERT-EATER wall (beginner reached level 8/9) -> CASTLE.SQZ -> menu")
+        for scene in native_expert_eater(state, gr):               # [asm 0178] fade-in + wait-for-fire
+            present(front_end_scene_to_rgb(scene), _FRONT_END_FPS, "PRE2 VM-less — EXPERT EATER")
+            pump(); drive_input(state)
+            if native_audio is not None:
+                native_audio.poll(state)
+            if not ref["running"]:
+                return
+        if not run_menu_flow(state, dos, "PRE2 VM-less — restart"):   # [asm 0160 -> 8E45] menu -> map -> carte -> loader
+            return
+        native_load_level_palette(state, dos)
+        reveal_level(state, dos)
 
     def the_end_restart(state, dos):
         """[asm 5034 -> main 0x12f] THE END: the player cleared the final level 0xE ([0x6be5]==0xFF). Show the
@@ -1913,9 +1934,15 @@ def main(argv=None) -> int:
                     _animate(state, _REVEAL_S, lambda p: _curtain_frame(base, p))
 
         ref["p_prev"] = True    # a Start/P still held from the menu-in must not read as an instant pause edge
+        from pre2.native.front_end import is_expert_eater_wall
         while ref["running"]:
             pump()
             pause_check(state)                                     # [asm 6294] P freezes here until P resumes
+            if is_expert_eater_wall(state):                        # [asm 0163] a BEGINNER entered level 8/9 (any path:
+                expert_eater_screen(state, dos)                    #   progression, menu, password, CONTINUE) -> the
+                if not ref["running"]:                             #   CASTLE 'YOU MUST BE AN EXPERT EATER' wall, then
+                    break                                          #   the menu. Beginner never plays 8/9 (penguin is
+                continue                                           #   expert-only); re-checks until a valid level loads.
             if ref["exit_to_menu"]:                                # Back dialog: abandon the level -> main menu
                 ref["exit_to_menu"] = False
                 quit_to_menu(state, dos)                           # menu -> map -> carte -> fresh level loaded
