@@ -7,7 +7,7 @@ the level to its checkpoint and continues the gameplay loop. The death (5063) / 
 """
 from __future__ import annotations
 
-from pre2.gaps import Pre2GameOverTransition, Pre2HybridGap
+from pre2.gaps import Pre2ExpertEater, Pre2GameOverTransition, Pre2HybridGap
 from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
@@ -195,6 +195,12 @@ def native_level_end(state, *, game_root: str) -> None:
         # native collapses that erase to its end state here — matching the VM's LEVELG entry.
         for o in range(0x4F0A, 0x4F1C):
             d[_DS + o] = 0xFF
+    # [asm 0163] the EXPERT-EATER gate — main checks it AFTER 4F65 advanced [0x2d8a] (above) but BEFORE the loader
+    # (447d, below): a BEGINNER ([0xB197]==0) who advanced into level 8/9 (the penguin is expert-only) is shown
+    # CASTLE.SQZ and sent back to the menu, so the next level is NEVER loaded. Raise here (post-advance, pre-load) so
+    # the flow driver drives the wall + re-enters the menu; the 3ED6 load is skipped (matches the VM — no load).
+    if d[_DS + 0x2D8A] in (8, 9) and d[_DS + 0xB197] == 0:       # == is_expert_eater_wall (inlined to avoid a cycle)
+        raise Pre2ExpertEater()
     keep = {o: d[_DS + o] for o in (0x27D8, 0x6CA7, 0x6CA8, 0x7B19, 0x7B18)}
     native_level_start(state, game_root=game_root)               # [asm 0x13e..0155] load + re-init + level-start flags
     for o, v in keep.items():                                    # restore the persistent player state the VM keeps

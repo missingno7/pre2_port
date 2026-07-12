@@ -32,7 +32,7 @@ from pre2.native.vga import _dac8
 from pre2.bridge.image_scene import image_palette, render_image_scene
 from pre2.bridge.input_decode import apply_ds, readers
 from pre2.bridge.oldies_scene import build_oldies_scene
-from pre2.gaps import Pre2HybridGap
+from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
@@ -379,6 +379,12 @@ def native_carte_and_load(state, dos, game_root: str):
     FrontEndScene frames; on return the level is loaded and ready for ``native_frame_step``. Factored out of
     :func:`native_menu_flow` so a host that picks a level directly (the CONTINUE screen) reaches the loader without
     re-driving the press-1/2 menu."""
+    # --- [asm 0163] the EXPERT-EATER gate: main checks it AFTER the level is committed (the menu / a password match /
+    #     the CONTINUE picker all wrote [0x2d8a]/[0xB197] already) but BEFORE the carte (9520) and the loader (447d).
+    #     A BEGINNER who chose level 8/9 (the penguin is expert-only) is shown CASTLE.SQZ and sent back to the menu,
+    #     so we must raise BEFORE yielding the carte / loading — the flow driver catches this and drives the wall. ---
+    if is_expert_eater_wall(state):
+        raise Pre2ExpertEater()
     # --- 9520 CARTE: the world-map scroll-in the real flow shows between the mode-select and the loader (main 0x01A8).
     #     Loads MAP.SQZ (the map master), stamps the per-level 'you are here' marker (the player's position) onto it =
     #     the de-planarize [0x667a]:[0x62da] (byte-exact vs the VM master), then scrolls the map in via the recovered +

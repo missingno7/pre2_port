@@ -58,6 +58,17 @@ class Pre2LevelEndTransition(Pre2HybridGap):
     step" — catch it FIRST where the transition is actually driven."""
 
 
+class Pre2ExpertEater(Pre2HybridGap):
+    """Signal (not a gap): main's 0x0163 gate fired — a BEGINNER ([0xB197]==0) advanced (progression) or committed
+    (menu / password / mobile CONTINUE) into level 8 or 9 ([0x2d8a] in {8,9}); the penguin is expert-only. The VM
+    checks this AFTER the level is committed/advanced (4F65 / the menu) but BEFORE the carte (9520) and the level
+    loader (447d), so when it fires it shows CASTLE.SQZ (resource 0x2C, 0x0178) and jumps back to the press-1/2 menu
+    (jmp 012F -> 8E45) WITHOUT loading the level. Raised at the two loader chokes (``native_carte_and_load`` and
+    ``native_level_end``, post-advance/pre-load) so the flow driver shows the wall and re-enters the menu instead of
+    running the carte + load. Subclasses Pre2HybridGap so existing ``except Pre2HybridGap`` sites still treat it as
+    "not a plain per-frame step" — catch it FIRST where the wall is actually driven."""
+
+
 class Pre2GameOverTransition(Pre2HybridGap):
     """Signal (not a gap): the per-frame gameplay step reached the DEATH -> GAME-OVER-RESTART transition (4C69's
     [0x6be5]==1 -> 5063). The death-bounce plays out (509d, 60 rendered frames), then the game resets to level 1

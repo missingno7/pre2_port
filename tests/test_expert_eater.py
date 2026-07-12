@@ -38,6 +38,30 @@ def test_wall_gate_beginner_only_levels_8_and_9():
     assert not is_expert_eater_wall(_state(9, 1))
 
 
+def test_carte_and_load_raises_before_yielding_any_carte_frame():
+    # [asm 0163] the gate is checked BEFORE the carte (9520) and the loader (447d). A beginner who chose level 8
+    # must NOT see the world-map scroll-in or the level load: native_carte_and_load raises on the FIRST next(),
+    # before it yields a single carte FrontEndScene. (This is the bug the user hit — the wall showed AFTER the
+    # carte + level reveal because the old gate was at the top of the gameplay loop, past the load.)
+    from pre2.gaps import Pre2ExpertEater
+    from pre2.native.front_end import native_carte_and_load
+    gen = native_carte_and_load(_state(8, 0), None, str(ASSETS))
+    with pytest.raises(Pre2ExpertEater):
+        next(gen)                                          # raises before any carte frame is produced
+
+
+def test_native_level_end_raises_after_advance_before_load():
+    # progression: finishing beginner level 7 advances [0x2D8A] 7->8, then the gate fires BEFORE native_level_start
+    # loads level 8. Assert it raised (so no load ran) AND the advance happened (so the wall condition is real).
+    from pre2.gaps import Pre2ExpertEater
+    from pre2.native.level_state import native_level_end
+    st = _state(7, 0)                                      # beginner, on level 7 (the last playable beginner level)
+    st.data[_DS + 0x6BE6] = 1                              # [asm 4C69] a normal end (+1), not a warp
+    with pytest.raises(Pre2ExpertEater):
+        native_level_end(st, game_root=str(ASSETS))
+    assert st.data[_DS + 0x2D8A] == 8                      # advanced into the penguin -> the wall (level never loaded)
+
+
 @pytest.mark.skipif(not (ASSETS / "CASTLE.SQZ").exists(), reason="game assets not present")
 def test_native_expert_eater_renders_castle_scene():
     from pre2.native.front_end import MODE_LINEAR, native_expert_eater
