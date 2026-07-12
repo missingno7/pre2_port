@@ -13,7 +13,7 @@ faithful renderer instead of ASM-populated VRAM.
 import sys; sys.path.insert(0, '.')
 
 from pre2.runtime import load_pre2_snapshot
-from pre2.bridge.live_render import render_gameplay_planes
+from pre2.views.live_render import render_gameplay_planes
 from dos_re.runtime import enable_sound_blaster
 from dos_re.interrupts import deliver_interrupt
 from dos_re.cpu import IF

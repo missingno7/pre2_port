@@ -11,14 +11,14 @@ runs. So the faithful visual layer **derives** the scene kind from observable VM
 * SCENE — mode 0Dh otherwise (menu / map / loading / tally / game-over).
 
 OPEN sub-problem: the GAMEPLAY-vs-SCENE 0Dh split currently rides the (imperfect)
-:func:`pre2.bridge.live_render.is_gameplay_frame` heuristic — no clean data flag exists; a robust
+:func:`pre2.views.live_render.is_gameplay_frame` heuristic — no clean data flag exists; a robust
 signal (or scene-routine-entry tracking) is future work. IMAGE/SCENE leaves are not recovered yet, so
 those frames fall back to the VM. Offsets stay here (bridge); the recovered dispatcher consumes the
 typed :class:`~pre2.recovered.faithful_visual.SceneKind`.
 """
 from __future__ import annotations
 
-from pre2.bridge.live_render import is_gameplay_frame
+from pre2.views.live_render import is_gameplay_frame
 from pre2.recovered.faithful_visual import SceneKind
 
 _DS = 0x1A0F

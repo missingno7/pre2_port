@@ -1,7 +1,7 @@
 """Checkpoint for the moving-sprite renderer (1030:26FA — draw the active sprite list).
 
 Thin VM contact point: it reads the active-sprite list + per-sprite attributes +
-camera through the bridge (``pre2.bridge.object_render``), runs the recovered planner
+camera through the bridge (``pre2.views.object_render``), runs the recovered planner
 + planar blit straight onto the four EGA shadow planes (in place — no 256 KiB copy),
 writes the routine's record-mutation contract back, and near-returns. No renderer
 logic lives here.
@@ -15,7 +15,7 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge import object_render as _obj
+from pre2.views import object_render as _obj
 from pre2.recovered.object_render import paint_sprite, plan_record_update, plan_sprite
 
 from pre2.gaps import report

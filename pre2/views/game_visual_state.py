@@ -26,8 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from pre2.native.vga import EGA_PLANE_STRIDE
-from pre2.bridge.render_state import read_renderer_state, retarget_page
-from pre2.bridge.scene_state import derive_scene_kind
+from pre2.views.render_state import read_renderer_state, retarget_page
+from pre2.views.scene_state import derive_scene_kind
 from pre2.recovered.faithful_visual import SceneKind, render_visual
 
 
@@ -48,7 +48,7 @@ def capture_game_visual_state(mem, dos, display_page: int, *, game_root, effects
     """Capture the GameVisualState for the committed (displayed) page. Call ONLY at the frame-commit
     boundary (1030:6772) so the read is consistent with ``display_page``. ``display_page`` is the
     CRTC ``ega_display_start`` at that instant (the page on screen). ``effects`` is the captured
-    :class:`~pre2.bridge.gameplay_effects.GameplayEffects` overlay bundle (drawn after the core frame).
+    :class:`~pre2.views.gameplay_effects.GameplayEffects` overlay bundle (drawn after the core frame).
 
     ``force_gameplay`` overrides the SceneKind heuristic to GAMEPLAY. The VM-less runtime sets it because it
     only calls this on a KNOWN gameplay frame (native_frame_step's normal/respawn/reveal paths — real scenes
@@ -69,7 +69,7 @@ def capture_game_visual_state(mem, dos, display_page: int, *, game_root, effects
         rs = retarget_page(read_renderer_state(mem, dos, game_root=game_root, frame_pre_inc=False),
                            page)                               # target the DISPLAYED page, not [0x2DD8]
         if kind == SceneKind.IRIS:
-            from pre2.bridge import transition as _tr
+            from pre2.views import transition as _tr
             iris = replace(_tr.read_iris_inputs(mem), page=page)
     return GameVisualState(scene_kind=kind, renderer_state=rs, committed_page=page, iris=iris,
                            effects=effects if kind == SceneKind.GAMEPLAY else None)
@@ -84,6 +84,6 @@ def render_game_visual_state(gvs: GameVisualState):
     planes = [bytearray(EGA_PLANE_STRIDE) for _ in range(4)]
     render_visual(gvs.scene_kind, gvs.renderer_state, planes, iris=gvs.iris)
     if gvs.effects is not None:
-        from pre2.bridge.gameplay_effects import apply_gameplay_effects
+        from pre2.views.gameplay_effects import apply_gameplay_effects
         apply_gameplay_effects(planes, gvs.committed_page, gvs.effects)
     return planes, gvs.committed_page

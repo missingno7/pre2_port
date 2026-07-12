@@ -10,7 +10,7 @@ sys.path.insert(0, "scripts")
 from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.object_render import LIST_BASE, LIST_TOP, RECORD_BYTES
+from pre2.views.object_render import LIST_BASE, LIST_TOP, RECORD_BYTES
 from pre2.runtime import load_pre2_snapshot
 
 _6772 = (0x1030, 0x6772)

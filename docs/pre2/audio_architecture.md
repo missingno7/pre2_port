@@ -6,7 +6,7 @@ longer dictates *how* the DOS mixer mixes it.
 
 ```
 original VM / recovered game state
-   -> recovered audio command layer        (pre2/bridge/audio_commands.py)
+   -> recovered audio command layer        (pre2/views/audio_commands.py)
    -> semantic GameAudioEvent stream        (pre2/audio/events.py)
    -> live:   SdlEnhancedAudio              (scripts/sdl_view.py — SDL_mixer plays the .TRK)
       oracle: FaithfulBackend               (pre2/audio/faithful_backend.py — byte-exact)
@@ -16,7 +16,7 @@ The recovered original mixer/tracker is **not** the final abstraction — it is 
 archaeological reference and the verification oracle. The final abstraction is the
 game-level audio command stream.
 
-## 1. Recovered audio command layer  (`pre2/bridge/audio_commands.py`)
+## 1. Recovered audio command layer  (`pre2/views/audio_commands.py`)
 
 Knows the *layout* of the original command interface and emits semantic events; no
 mixer internals leak past it. Command roots (GOG build, seg 1030):

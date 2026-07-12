@@ -19,7 +19,7 @@ sys.path.insert(0, ".")
 sys.path.insert(0, "scripts")
 
 import numpy as np
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.recovered.render_frame import render_frame
 from pre2.recovered.render_snapshot import build_frame_snapshot
 from pre2.runtime import load_pre2_snapshot

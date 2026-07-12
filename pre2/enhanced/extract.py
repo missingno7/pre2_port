@@ -17,9 +17,9 @@ from dataclasses import replace
 
 import numpy as np
 
-from pre2.bridge.gameplay_effects import apply_gameplay_effects
-from pre2.bridge.object_render import read_attr as _read_attr
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.gameplay_effects import apply_gameplay_effects
+from pre2.views.object_render import read_attr as _read_attr
+from pre2.views.render_state import read_renderer_state
 from time import perf_counter as _perf
 
 from pre2.enhanced.frame_state import EnhancedFrameState, SpriteInstance

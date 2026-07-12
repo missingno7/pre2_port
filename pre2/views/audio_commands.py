@@ -23,7 +23,7 @@ import glob
 import os
 import traceback
 
-from pre2.bridge import audio as _a
+from pre2.views import audio as _a
 from pre2.audio.assets import SOURCE_RATE, Module, SampleAsset
 from pre2.audio.events import PlaySfx, SetMusicEnabled, StartSong, StopSong
 from pre2.codecs.audio import ModModule, load_trk
@@ -67,7 +67,7 @@ def sfx_enabled(mem) -> bool:
 
 
 def music_enabled(mem) -> bool:
-    """Music ON == cs:[3] bit 0x40 clear (matches :func:`pre2.bridge.audio.music_on`)."""
+    """Music ON == cs:[3] bit 0x40 clear (matches :func:`pre2.views.audio.music_on`)."""
     return _a.music_on(mem)
 
 

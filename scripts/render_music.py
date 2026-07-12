@@ -1,7 +1,7 @@
 """Render PRE2 music to a WAV through the faithful (byte-exact) audio oracle.
 
     snapshot VM memory
-      -> pre2.bridge.audio_commands.capture_module   (recovered command layer)
+      -> pre2.views.audio_commands.capture_module   (recovered command layer)
       -> FaithfulBackend                              (recovered tracker + mixer)
       -> WAV
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from pre2.audio.assets import SOURCE_RATE
 from pre2.audio.faithful_backend import FaithfulBackend
-from pre2.bridge import audio_commands as AC
+from pre2.views import audio_commands as AC
 from pre2.runtime import load_pre2_snapshot
 
 OUT_RATE = 44100

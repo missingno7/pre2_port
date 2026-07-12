@@ -10,7 +10,7 @@ gameplay snapshots 185902/212037 — see ``docs/pre2/renderer_status.md``):
 ``RendererState`` is the stable INPUT contract: a plain-data snapshot of everything the
 renderer reads (tile map + attribute tables, camera/scroll bookkeeping, the current
 animation-frame remap, and the palette-fade step). It is reconstructed from VM memory by
-``pre2.bridge.render_state`` (read-only, one place); ``render_frame`` itself touches no
+``pre2.views.render_state`` (read-only, one place); ``render_frame`` itself touches no
 ``cpu``/``mem``/``dos_re`` — so a future *native enhanced renderer* (frame interpolation,
 higher fidelity, …) drops in by reimplementing ``render_frame`` against the same
 ``RendererState``.
@@ -55,7 +55,7 @@ class IrisState:
     """The circular-iris transition's per-frame state (the ``1030:31D0`` end-level loop):
     the shrinking ``radius`` and the circle centre (the player). ``None`` when no iris is
     running. Grounded in the verified iris recovery — ``radius``/``center_*`` are exactly the
-    inputs ``pre2.bridge.transition.read_iris_inputs`` feeds ``build_scaled_columns``."""
+    inputs ``pre2.views.transition.read_iris_inputs`` feeds ``build_scaled_columns``."""
     radius: int       # [0x2DD0] low byte, shrinks 0xE6 -> 0 over the transition
     center_x: int     # [0x2DC6] signed — circle centre X (player)
     center_y: int     # [0x2DC8] signed — circle centre Y (player)
@@ -65,7 +65,7 @@ class IrisState:
 class RendererState:
     """Stable, VM-independent input contract for one rendered frame.
 
-    Plain data only (no ``mem``); reconstructed by ``pre2.bridge.render_state``.
+    Plain data only (no ``mem``); reconstructed by ``pre2.views.render_state``.
     """
     # --- tile map + per-tile attribute tables (all indexed by tile id) ---
     tiles: bytes            # level tile indices (row-major, stride 0x100)

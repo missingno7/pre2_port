@@ -6,8 +6,8 @@ counter, and writes the EGA planes. The blit/scroll *math* lives in
 """
 from __future__ import annotations
 
-from pre2.bridge.object_render import read_planes  # noqa: F401 — re-export
-from pre2.bridge.sprites import plane_views  # noqa: F401 — re-export (writable VRAM views)
+from pre2.views.object_render import read_planes  # noqa: F401 — re-export
+from pre2.views.sprites import plane_views  # noqa: F401 — re-export (writable VRAM views)
 
 _DS = 0x1A0F                # DGROUP segment (GOG build)
 _SCROLL_X = 0xB19D         # horizontal scroll counter (pre-increment value drives this frame)

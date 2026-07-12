@@ -58,7 +58,7 @@ class FaithfulBackend:
         """Begin playing a PRE2 in-memory module (the oracle's native input).
 
         The faithful path consumes the PRE2 ``assets.Module`` captured from VM memory
-        (``pre2.bridge.audio_commands.capture_module``), not the standard ``.TRK``
+        (``pre2.views.audio_commands.capture_module``), not the standard ``.TRK``
         carried by ``StartSong`` — reproducing the original 8-bit mixer from a standard
         module would require the recovered ``.TRK``->in-memory loader (0x02cc), which
         is a separate, deeper recovery. Live playback uses the SDL enhanced path."""

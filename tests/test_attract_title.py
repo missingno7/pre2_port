@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from pre2.bridge.image_scene import title_planar_image
+from pre2.views.image_scene import title_planar_image
 from pre2.native.attract_title import native_attract_title
 from pre2.native.cold_boot import native_cold_boot
 

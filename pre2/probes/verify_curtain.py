@@ -19,7 +19,7 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.live_render import compose_curtain_planes, render_visual_planes
+from pre2.views.live_render import compose_curtain_planes, render_visual_planes
 from pre2.runtime import load_pre2_snapshot
 
 _DB = 0x1A0F << 4

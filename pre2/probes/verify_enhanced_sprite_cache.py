@@ -13,7 +13,7 @@ sys.path.insert(0, "scripts")
 
 import numpy as np
 
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.enhanced.compositor import compose
 from pre2.enhanced.extract import extract_enhanced_frame
 from pre2.enhanced.sprite_cache import SpriteTextureCache

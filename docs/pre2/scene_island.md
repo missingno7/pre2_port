@@ -134,7 +134,7 @@ leaves in z-order: background → text → cursor, with the palette applied to t
 | `cursor: MenuHighlight` | the selected menu item | menu state (border) | `draw_cursor` (TBD) |
 | `page_visible` / `page_draw` | double-buffer pages (faithful page flip) | CRTC start-address `9600` | present (faithful only) |
 
-`SceneState` is **plain data** (no `mem`), reconstructed read-only by `pre2/bridge/scene_state.py`
+`SceneState` is **plain data** (no `mem`), reconstructed read-only by `pre2/views/scene_state.py`
 — the single bridge, exactly like `render_state.py` for gameplay.
 
 ## Scene logic vs. renderer leaves (the border test)
@@ -237,7 +237,7 @@ gives witnesses for the image present, the palette install, and the menu cursor.
   (scene logic) is the border.
 * **Iris wired live (VERIFIED).** The whole per-frame block `1030:31F4..32B0` (build column
   table → clear outside the circle) is replaced natively by `pre2/checkpoints/transition.py`
-  (bridge `pre2/bridge/transition.py`): read radius/centre/clamp/page + cos·sin tables, run the
+  (bridge `pre2/views/transition.py`): read radius/centre/clamp/page + cos·sin tables, run the
   recovered `build_scaled_columns` + `draw_scale_frame`, write the four EGA planes +
   scaled-column tables back, continue at `32B0` (an inline fall-through block — only `ip`
   advances, no stack change). The controller after `32B0` reads only `[0x2DC2]/[0x2DC0]/[0x2DD0]`

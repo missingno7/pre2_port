@@ -1,6 +1,6 @@
 """Semantic game-audio events — the boundary contract.
 
-The recovered command layer (:mod:`pre2.bridge.audio_commands`) emits these as the
+The recovered command layer (:mod:`pre2.views.audio_commands`) emits these as the
 game issues its original audio commands; the backends consume them. They describe
 *what* the game wants to hear, not *how* the DOS mixer produced it — no segment
 pointers, no fill buffers, no DMA/ISR/block sizes leak across this boundary.
@@ -46,7 +46,7 @@ class StartSong(GameAudioEvent):
     """Start playing the song the loader (@ 1030:02cc) just installed.
 
     ``module`` is the matching standard ProTracker ``.TRK`` asset, identified from the loaded
-    order table by :func:`pre2.bridge.audio_commands.identify_song` (``None`` when
+    order table by :func:`pre2.views.audio_commands.identify_song` (``None`` when
     unidentified). The live enhanced player plays this whole module on its own clock; the
     recovery layer's only job here is to discover *which* song started. ``name`` is the source
     ``.TRK`` filename (diagnostics)."""

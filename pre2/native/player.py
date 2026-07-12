@@ -16,7 +16,7 @@ Verified byte-exact (DGROUP) vs the ASM 5850->5A95 over the demos: pre2/probes/p
 """
 from __future__ import annotations
 
-from pre2.bridge.input_decode import apply_ds, readers
+from pre2.views.input_decode import apply_ds, readers
 from pre2.gaps import Pre2CheatCredits, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.input_decode import Pre2InputGap, decode_input
@@ -109,7 +109,7 @@ def native_player_step(state) -> None:
     from pre2.native.audio import native_emit_sfx, player_sfx_x
     native_emit_sfx(state, sfx, player_sfx_x(state))                   # emit the FSM's play_sfx commands (jump/throw)
     if scroll:                                                         # idle look-around pan (anim13)
-        from pre2.bridge.camera_pan import apply_camera_pan
+        from pre2.views.camera_pan import apply_camera_pan
         apply_camera_pan(state, scroll)
 
     _w(state, _PX, player_x_integrate(rw(_PX), rw(_XVEL), rw(_CAM_LEFT)), 2)   # [asm 5A0F]

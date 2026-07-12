@@ -19,9 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from pre2.bridge.fireflies import FireflyState, read_fireflies
-from pre2.bridge.foreground_tiles import ForegroundState
-from pre2.bridge.particles import ParticleFrame
+from pre2.views.fireflies import FireflyState, read_fireflies
+from pre2.views.foreground_tiles import ForegroundState
+from pre2.views.particles import ParticleFrame
 from pre2.recovered.fireflies import draw_fireflies
 from pre2.recovered.foreground_tiles import render_foreground_tiles
 from pre2.recovered.particles import draw_particles

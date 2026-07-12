@@ -815,8 +815,8 @@ def main(argv=None) -> int:
         matching the last displayed gameplay frame so a transition doesn't jump the view; it extracts the CROP
         margin, composes at that camera, and crops it back to the display width. ``sprite_dx`` is the offset to
         add to an efs sprite's screen_x to place it in the returned (possibly cropped) frame (0 unless eased)."""
-        from pre2.bridge.foreground_tiles import read_foreground_state
-        from pre2.bridge.gameplay_effects import capture_gameplay_effects
+        from pre2.views.foreground_tiles import read_foreground_state
+        from pre2.views.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from pre2.enhanced.native_background import TileTextureCache, _HudCache
@@ -1212,7 +1212,7 @@ def main(argv=None) -> int:
             # SMOOTH iris: drain native_iris_close for its STATE work (reading the recovered iris centre off the
             # first frame), then present-time animate a true circle 0xE6->0 over the frozen wide frame at the
             # display rate (frame-rate-independent), the player held on top.
-            from pre2.bridge.render_state import read_renderer_state
+            from pre2.views.render_state import read_renderer_state
             from pre2.enhanced.compositor import _blit
             from pre2.enhanced.transitions import apply_iris
             rgb, m, efs, sdx, cdx = smooth                        # sdx/cdx: eased-camera offsets (sprite / centre)
@@ -1404,7 +1404,7 @@ def main(argv=None) -> int:
         """[asm 247B->2505] The dev-credits cheat combo (Ctrl+Alt+W/Z, no other key). Show the OLDIES-style
         developer-credits screen over black, hold for fire (0BBE), restore the level palette (0BA0), and RESUME
         the same level (the combo is a pure overlay — gameplay state is untouched)."""
-        from pre2.bridge.oldies_scene import build_credits_scene
+        from pre2.views.oldies_scene import build_credits_scene
         from pre2.native.front_end import WAIT_PRESS, native_scene_wait
         from pre2.native.render import native_load_dac_palette
         from pre2.native.front_end import FrontEndScene
@@ -1702,8 +1702,8 @@ def main(argv=None) -> int:
         ref["frontend"] = False       # gameplay: touch BASH is level (hold to keep attacking), not edge-triggered
         ref["state"] = state          # register the live state so the F11 debug hotkey (in pump) can snapshot it
         from time import perf_counter
-        from pre2.bridge.foreground_tiles import read_foreground_state
-        from pre2.bridge.gameplay_effects import capture_gameplay_effects
+        from pre2.views.foreground_tiles import read_foreground_state
+        from pre2.views.gameplay_effects import capture_gameplay_effects
         from pre2.enhanced.compositor import compose
         from pre2.enhanced.extract import extract_enhanced_frame
         from dataclasses import replace as _dc_replace

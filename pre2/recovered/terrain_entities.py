@@ -18,7 +18,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
-from pre2.bridge.dgroup_view import OverlayBackend, RenderSlot
+from pre2.views.dgroup_view import OverlayBackend, RenderSlot
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
 

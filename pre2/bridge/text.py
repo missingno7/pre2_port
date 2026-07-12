@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pre2.bridge.object_render import read_planes  # noqa: F401 — re-export
-from pre2.bridge.sprites import plane_views  # noqa: F401 — re-export (writable VRAM views)
+from pre2.views.object_render import read_planes  # noqa: F401 — re-export
+from pre2.views.sprites import plane_views  # noqa: F401 — re-export (writable VRAM views)
 from pre2.recovered.text import glyph_index
 
 _DS = 0x1A0F                # DGROUP segment (GOG build) — the text state block + string

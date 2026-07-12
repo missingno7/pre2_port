@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import play
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge import audio as _a
+from pre2.views import audio as _a
 from pre2.bridge.audio_system import capture_audio_state
 from pre2.recovered.audio_system import AudioSystem
 from pre2.runtime import load_pre2_snapshot

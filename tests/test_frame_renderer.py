@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from pre2.bridge.frame import TILEMAP_STRIDE, TileMap  # noqa: E402
+from pre2.views.frame import TILEMAP_STRIDE, TileMap  # noqa: E402
 from pre2.recovered.frame_renderer import (  # noqa: E402
     RowFlags, calc_scroll_source, draw_grid, draw_tile_row,
 )

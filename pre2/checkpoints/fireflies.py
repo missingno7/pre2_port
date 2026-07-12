@@ -19,7 +19,7 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge.firefly_sim import read_firefly_sim_state, write_firefly_sim_state
+from pre2.views.firefly_sim import read_firefly_sim_state, write_firefly_sim_state
 from pre2.recovered.firefly_sim import render_step_into, step_fireflies
 
 from pre2.gaps import report

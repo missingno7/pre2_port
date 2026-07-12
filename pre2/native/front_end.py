@@ -29,9 +29,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pre2.native.vga import _dac8
-from pre2.bridge.image_scene import image_palette, render_image_scene
-from pre2.bridge.input_decode import apply_ds, readers
-from pre2.bridge.oldies_scene import build_oldies_scene
+from pre2.views.image_scene import image_palette, render_image_scene
+from pre2.views.input_decode import apply_ds, readers
+from pre2.views.oldies_scene import build_oldies_scene
 from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames

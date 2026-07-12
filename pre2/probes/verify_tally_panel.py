@@ -14,7 +14,7 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.tally_panel import read_tally_panel
+from pre2.views.tally_panel import read_tally_panel
 from pre2.recovered.tally_panel import render_tally_panel
 from pre2.runtime import load_pre2_snapshot
 

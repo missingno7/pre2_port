@@ -2,18 +2,18 @@
 
 Read-only, one place. This is the single bridge between original memory and the
 consolidated, VM-independent :func:`pre2.recovered.render_frame.render_frame`. It reuses
-the per-leaf readers in :mod:`pre2.bridge.frame` and :mod:`pre2.bridge.palette` so the
+the per-leaf readers in :mod:`pre2.views.frame` and :mod:`pre2.views.palette` so the
 field semantics stay in one spot.
 """
 from __future__ import annotations
 
 from dataclasses import replace as _replace
 
-from pre2.bridge import frame as _frame
-from pre2.bridge import object_render as _obj
-from pre2.bridge import palette as _pal
+from pre2.views import frame as _frame
+from pre2.views import object_render as _obj
+from pre2.views import palette as _pal
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge.hud_chrome import load_hud_chrome
+from pre2.views.hud_chrome import load_hud_chrome
 from pre2.recovered.animation import AnimStep
 from pre2.recovered.hud import effective_bonus_mask
 from pre2.recovered.render_frame import ASSET_HI, ASSET_LO, FadeStep, IrisState, RendererState
@@ -84,7 +84,7 @@ def _hud_chrome(mem) -> HudChromeAsset:
     """Fallback: capture the HUD chrome from the loaded chrome segment ([0x3d]=0x252B) in VM memory —
     the status-bar bitmap (0x0B48) and glyph font (0x1610). This is the *transient* runtime copy
     (reused after the level-start blit), so it is only valid on a level-start snapshot; prefer the
-    persistent :func:`pre2.bridge.hud_chrome.load_hud_chrome` (ALLFONTS.SQZ) when a game_root is
+    persistent :func:`pre2.views.hud_chrome.load_hud_chrome` (ALLFONTS.SQZ) when a game_root is
     available. Segment/offset knowledge stays here."""
     base = (_rw(mem, _HUD_CHROME_SEG) << 4) & 0xFFFFF
     return HudChromeAsset(
@@ -163,11 +163,11 @@ def read_renderer_state(mem, dos=None, *, game_root=None, frame_pre_inc: bool = 
     ``frame_pre_inc`` matches the object renderer's +1 to [0x6BD5] applied at 26FA entry
     (capture this state *before* that increment to see the value the engine will use).
     Pass ``dos`` to also capture the full palette state machine (displayed DAC colours +
-    phase + base index) via :func:`pre2.bridge.palette.read_palette_state`; without it the
+    phase + base index) via :func:`pre2.views.palette.read_palette_state`; without it the
     snapshot carries only the fade step (no displayed colours).
 
     Pass ``game_root`` (the assets dir) to source the static HUD chrome from its persistent asset
-    (``ALLFONTS.SQZ``) via :func:`pre2.bridge.hud_chrome.load_hud_chrome`, so the HUD renders from
+    (``ALLFONTS.SQZ``) via :func:`pre2.views.hud_chrome.load_hud_chrome`, so the HUD renders from
     *any* snapshot; without it the chrome falls back to the transient in-VM copy (:func:`_hud_chrome`,
     valid only on a level-start snapshot)."""
     tm = _frame.read_tilemap(mem)

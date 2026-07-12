@@ -15,7 +15,7 @@ play_sfx writes), the VM-less equivalent of the 0x0282 entry hook.
 """
 from __future__ import annotations
 
-from pre2.bridge.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
+from pre2.views.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
 
 _DS = 0x1A0F << 4
 _CS = 0x1030 << 4

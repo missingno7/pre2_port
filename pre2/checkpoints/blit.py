@@ -1,6 +1,6 @@
 """Checkpoint for the per-frame sprite blit (1030:3B88).
 
-Recovered logic: ``pre2.recovered.renderer``; data model: ``pre2.bridge.sprites``.
+Recovered logic: ``pre2.recovered.renderer``; data model: ``pre2.views.sprites``.
 Merge target: the renderer.
 
 Renders one 16x16 sprite/tile from the planar VRAM cache, dispatching on the type
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import sprites as _spr
+from pre2.views import sprites as _spr
 from pre2.recovered.renderer import blit_sprite, dest_rows
 
 from pre2.gaps import Pre2HybridGap, report

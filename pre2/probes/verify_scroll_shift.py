@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
-from pre2.bridge.object_render import read_planes
+from pre2.views.object_render import read_planes
 from pre2.recovered.present import scroll_shift_frame
 from pre2.runtime import load_pre2_snapshot
 

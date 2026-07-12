@@ -11,7 +11,7 @@ sys.path.insert(0, "scripts")
 
 import numpy as np
 
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.enhanced.compositor import compose
 from pre2.enhanced.extract import (_ID_PAL, _render_backdrop, _zero_base, VIEWPORT_H,
                                    extract_enhanced_frame)

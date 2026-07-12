@@ -22,8 +22,8 @@ sys.path.insert(0, str(ROOT))
 
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
-from pre2.bridge import sprites as spr
-from pre2.bridge.frame import (
+from pre2.views import sprites as spr
+from pre2.views.frame import (
     DATA_SEG, read_blit_type_table, read_mask_region, read_tilemap,
 )
 from pre2.checkpoints import uninstall_pre2_replacements

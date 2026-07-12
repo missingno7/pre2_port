@@ -126,7 +126,7 @@ class MenuHighlight:
 class SceneState:
     """Stable, VM-independent description of one non-gameplay screen (a small display list).
 
-    Plain data only (no ``mem``); reconstructed by ``pre2.bridge.scene_state``."""
+    Plain data only (no ``mem``); reconstructed by ``pre2.views.scene_state``."""
     scene_id: int = SCENE_UNKNOWN
     phase: str = ""
     video_mode: int = MODE_PLANAR

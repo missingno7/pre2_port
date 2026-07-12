@@ -44,7 +44,7 @@ decides what "reading state" *means* at that moment — live image, or an accumu
 The logic does not know or care. This is exactly the *"one implementation, many adapters"* the
 architecture doc calls for, made concrete.
 
-Everything lives in **`pre2/bridge/dgroup_view.py`** — the *only* file that writes down a DGROUP
+Everything lives in **`pre2/views/dgroup_view.py`** — the *only* file that writes down a DGROUP
 offset for a migrated island. That is the "layout bridge": pure Python (no `cpu`/`mem`/`dos_re`),
 importable by both recovered logic and the VM adapters.
 

@@ -9,8 +9,8 @@ iris error). This probe is the routing + no-crash check.
 import sys; sys.path.insert(0, '.')
 
 from pre2.runtime import load_pre2_snapshot
-from pre2.bridge.scene_state import derive_scene_kind
-from pre2.bridge.live_render import render_visual_planes
+from pre2.views.scene_state import derive_scene_kind
+from pre2.views.live_render import render_visual_planes
 from pre2.recovered.faithful_visual import SceneKind, FaithfulVisualGap
 
 _SNAPS = [

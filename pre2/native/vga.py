@@ -2,7 +2,7 @@
 
 The recovered game touches exactly three pieces of "VGA hardware": the 256-entry DAC palette (read by the
 renderer, programmed through the 3C7/3C8/3C9 port protocol by the recovered fade/palette code via
-``pre2.bridge.palette.write_dac``), the 6→8-bit DAC component expansion, and the EGA plane-shadow layout
+``pre2.views.palette.write_dac``), the 6→8-bit DAC component expansion, and the EGA plane-shadow layout
 inside the 1.25 MB native memory image. This module owns all three so the standalone runtime has zero
 emulator dependency; the WORKBENCH's ``dos_re.dos.DOSMachine`` exposes the identical surface (attribute
 names + port semantics), so every bridge/native module works over either.

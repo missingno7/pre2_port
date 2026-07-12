@@ -260,7 +260,7 @@ def test_menu_press12_screen_render():
     # A000xDAC separately). The '1'/'2' dispatch itself is covered by tests/test_world_map.
     import hashlib
 
-    from pre2.bridge.image_scene import image_palette, render_image_scene
+    from pre2.views.image_scene import image_palette, render_image_scene
     from pre2.native.front_end import _expand_palette6
     from pre2.recovered.front_end_fade import fade_in_frames
 

@@ -184,7 +184,8 @@ pre2/                   Prehistorik 2-specific recovery layer
   bootstrap_hooks.py    bootstrap helpers only (LZEXE/AdLib), no gameplay
   codecs/               recovered VM-independent asset codecs (sqz.py)
   recovered/            recovered VM-independent gameplay/render logic (the leaves)
-  bridge/               memory views: VM memory <-> recovered dataclasses [stateful]
+  views/                memory views: game state <-> recovered dataclasses (SHIPPED state seam)
+  bridge/               the DETACHABLE verification workbench: VM capture/fast-forward glue [never shipped]
   checkpoints/          the replacement adapters (thin hooks) + verify wiring; one module per subsystem
   probes/               temporary observation/diagnostic tools    [as needed]
   launch.py / cli.py    PRE2 entry points

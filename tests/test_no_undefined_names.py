@@ -15,7 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1] / "pre2"
 # the shipped recovered code (probes are throwaway scaffolding, excluded)
-DIRS = ("recovered", "checkpoints", "bridge", "codecs")
+DIRS = ("recovered", "checkpoints", "bridge", "views", "codecs")
 _BUILTINS = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__class__", "__all__", "self", "cls"}
 
 

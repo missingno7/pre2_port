@@ -18,7 +18,7 @@ from __future__ import annotations
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge.tally_panel import read_tally_panel
+from pre2.views.tally_panel import read_tally_panel
 from pre2.recovered.tally_panel import render_tally_panel
 
 from pre2.gaps import report

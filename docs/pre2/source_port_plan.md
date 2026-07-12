@@ -58,7 +58,7 @@ verification rising from bytes → state → PCM:
    standard ProTracker **M.K.** module (all 12 parse, layout closes exactly); `SAMPLE.SQZ` = SQZ-"other" →
    60768-byte 8-bit PCM SFX bank. (SQZ decode itself was already recovered.)
 2. **Data model** — `SampleBank`/`Module`/`Pattern`/`Instrument`/`ChannelState`/… (`ModModule`/`ModSample`
-   exist); raw layout → `pre2/bridge/audio.py`.
+   exist); raw layout → `pre2/views/audio.py`.
 3. **Tracker/playback** — sequencer `1030:227C` → `pre2/recovered/tracker.py` (only effects PRE2 uses).
 4. **Mixer** — per-channel `1030:218F` + SFX `20AB-20F3` + DMA-refill ISR `20AB` → `pre2/recovered/mixer.py`;
    verify same state+SFX+timing → same PCM block vs `sb.pcm_out`.
@@ -79,7 +79,7 @@ verification rising from bytes → state → PCM:
   from VM memory and (when replacing) writes them back. Verification rises from
   byte/buffer diffs to semantic state contracts over time.
 - **Gameplay logic speaks human-named fields, not raw offsets.** The DGROUP layout is
-  quarantined in one view layer (`pre2/bridge/dgroup_view.py`) with swappable backends
+  quarantined in one view layer (`pre2/views/dgroup_view.py`) with swappable backends
   (byte / overlay / write-contract); the recovered logic is agnostic to which is behind it.
   The byte-backed representation is a legitimate release citizen — it is not the EXE, not a
   VM, and not a fallback — and keeps behaviour + verification the *same bytes*. Full design +

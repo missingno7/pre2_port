@@ -44,7 +44,7 @@ This is the **game-side** PCM mixer that fills the SB DMA buffer (distinct from 
 which is done in `dos_re`). A clean DSP island, NOT gameplay logic.
 
 **RECOVERED + VERIFIED 2026-06-21** → `pre2/recovered/mixer.py` (`mix_channel` = 218F, `mix_sfx`, `mix_block`)
-+ `pre2/bridge/audio.py` (ChannelState/Instrument/Sfx). Verified byte-exact vs the ASM in-VM:
++ `pre2/views/audio.py` (ChannelState/Instrument/Sfx). Verified byte-exact vs the ASM in-VM:
 `pre2/probes/verify_mixer.py` (218F per-channel: 200 mixes, 0 div) and `pre2/probes/verify_mixer_block.py`
 (full SFX + 4-channel block: 120 blocks, complete 168-byte PCM + channel/SFX state, 0 div); unit tests
 `tests/test_audio_mixer.py`. `OracleLink` (1030:218F, VERIFIED). NOTE the volume row is **`volume << 6`**
@@ -60,7 +60,7 @@ rest. Remaining for a fully recovered AudioSystem (Layer 5 detach): driving audi
 
 **Layer 3 — tracker/sequencer `1030:227C` RECOVERED + VERIFIED + WIRED LIVE 2026-06-21**
 → `pre2/recovered/tracker.py` (`tracker_tick` = 227C, `_process_note` = 22AF, `_apply_effect`) + bridge
-readers/writers in `pre2/bridge/audio.py` (PlaybackState/TrackerVoice/TrackerInstrument). One sequencer
+readers/writers in `pre2/views/audio.py` (PlaybackState/TrackerVoice/TrackerInstrument). One sequencer
 tick: per-channel volume slides (`[+0xBC0]` delta → `[+0xBB8]` clamped 0..0x40), tick countdown `[0xB83]`,
 and every `speed` `[0xB82]` ticks process the current pattern row's 4 channels via `22AF` (decode the 4-byte
 in-memory cell: `sample=(b2>>4)|(b1&0x10)` triggers the note → pos=0/end=instr length `[idx*16+0xBD0]`/vol=
@@ -88,7 +88,7 @@ DMA kept streaming (music played on) — i.e. the level-end tally screen never a
 | `1030:218F` | **per-channel MOD mixer** (called 4× from `20FE`-`2119`, `bx=ch*2`). Resample+volume+additive: `lodsb` sample (es:si = instrument far ptr `[idx*16+0xBD8]` + pos) → `xlatb` volume table `0x12BD` → `add [di],al` into the 168B block; advance pos by fractional **period** `[+0xBA8]` via accumulator `[+0xBC8]`; loop/end via `[idx*16+0xBD4]` loop-start / `[+0xBD6]` loop-len | OBSERVED | (mix kernel) | — | exact period→step + volume-table layout |
 | per-channel state (ds=1A13, `ch*2`) | `[+0xB88]`=sample pos (`0xFFFF`=off), `[+0xB90]`=length/end, `[+0xB98]`=instrument idx, `[+0xBA8]`=period/step, `[+0xBC8]`=frac accumulator; instrument table `0xBD8` stride 16 (far ptr/loop start/loop len); volume tables `0x12BD` | OBSERVED | data | — | channel count = 4; sample-rate fixed 8403 |
 
-**Recover (renderer-of-audio):** `pre2/bridge/audio.py` (channel state / instrument table / SFX state /
+**Recover (renderer-of-audio):** `pre2/views/audio.py` (channel state / instrument table / SFX state /
 buffers) → `pre2/recovered/audio_mixer.py` (`mix_channel` = 218F, `mix_sfx`, `mix_block` = SFX + 4 channels)
 → thin checkpoint at the ISR's mix section → **verify by 168-byte PCM-block diff vs the ASM**. The `.TRK`
 module SQZ decompression is already recovered (`unpack_sqz`); the sequencer `227C` (pattern/row advance) is
@@ -201,7 +201,7 @@ source-skip, dest `[26F1]`). Dest VRAM off = `screenX>>3 + [2DD8]` (display page
   func per mode; verify byte-exact via lockstep at `2DF9`.
 - **Phase A (driver) + Phase B (blit) RECOVERED + VERIFIED byte-exact (2026-06-21)** →
   `pre2/recovered/object_render.py` (`plan_sprite`/`plan_frame`/`paint_sprite`/`_phase`),
-  bridge `pre2/bridge/object_render.py`, committed test `tests/test_object_render.py`.
+  bridge `pre2/views/object_render.py`, committed test `tests/test_object_render.py`.
   Driver (cull/position/clip) 120/120 + blit 0 divergent bytes (all modes, shifts 0-7,
   left/right clip incl byte_width==0 sliver, AND **H-flip** via bit-reverse table CS:0x2F34).
   **LIVE-HOOKED** at `pre2/checkpoints/object_render.py` (verify-mode 0 divergence) →
@@ -292,7 +292,7 @@ lightweight list (the *emitters* are already recovered: combat_interaction 0x50A
 | `1030:6210` | projectiles `0x4F2E` (4 slots) | thrown-weapon walker: X/Y integrate, anim-script ptr `[+0xC]`, `[+4]`=script\|facing, DS:0x79EC dispatch (idx0 Yvel+=0x20 / idx1 Yvel-=0x10) | **VERIFIED + live** (`effects_update.tick_projectiles`; witness 233821, 1204 writes 0 mismatch; idx0 from the trivial handler) |
 | `1030:4907` | terrain entities `0x9107` (16 slots, **source stride 0xF**) | SEPARATE sub-island: falling objects (type-8 3-state) + 8-dir moving platforms the player rides (collision 4B05/8D7B); render-projects to 0x5570 (max 7) | **VERIFIED + live** (`terrain_entities.tick_terrain_entities`; whole-DGROUP shadow 0 div / 1116 calls / 3 demos excl audio-ISR; live-hooked + verify-mode; see [[pre2-terrain-entities-island]]) |
 
-Module: `pre2/recovered/effects_update.py` (pure), `pre2/bridge/effects_update.py` (DGROUP seam),
+Module: `pre2/recovered/effects_update.py` (pure), `pre2/views/effects_update.py` (DGROUP seam),
 `pre2/checkpoints/effects_update.py` (live hook + verify), `tests/test_effects_update.py` (whole-window goldens).
 
 ### Object-system RUNTIME STATUS (what is actually installed + firing in hybrid — see `pre2/probes/hook_audit.py`)
@@ -319,7 +319,7 @@ Module: `pre2/recovered/effects_update.py` (pure), `pre2/bridge/effects_update.p
 NOT object animation. The full hook audit: `python pre2/probes/hook_audit.py <snapshot> [frames]`.
 
 - **`object_tick` — the COMPOSED walker `1030:684E..6913`. VERIFIED + LIVE** (the coastline collapse).
-  Live-hooked at `pre2/checkpoints/object_tick.py` (bridge `pre2/bridge/object_tick.py`): in production one hook
+  Live-hooked at `pre2/checkpoints/object_tick.py` (bridge `pre2/views/object_tick.py`): in production one hook
   replaces the WHOLE per-slot walker with the recovered pass and resumes at `0x6913` (inline — no CALL/RET),
   subsuming the per-leaf `object_velocity` hook; in verify mode it steps aside so the per-leaf oracles still
   fire (--verify-hooks 0 divergences incl. object_velocity). NOT instruction-count-transparent (runs in one
@@ -388,8 +388,8 @@ offsets; `[0x2DD6]`=tilesheet segment; `[0x2CF1]`=level height in rows; `[0x2DF0
 `[0x2DEE]`=accumulated tile-type flags; `0x3F40`=ring-buffer wrap base; xlat `0x6984`→`[0x6BB9]`,
 `0x805A`→`[0x2DEE]`, type table `0x4DF4`→`[0x2DF0]`.
 
-**WITNESSED + BRIDGED 2026-06-20.** `pre2/bridge/frame.py` reconstructs this as `Camera`/`ScrollState`
-dataclasses + memory views (mirrors `pre2/bridge/sprites.py`); `tests/test_frame_bridge.py` (3 pass).
+**WITNESSED + BRIDGED 2026-06-20.** `pre2/views/frame.py` reconstructs this as `Camera`/`ScrollState`
+dataclasses + memory views (mirrors `pre2/views/sprites.py`); `tests/test_frame_bridge.py` (3 pass).
 Witness `pre2/probes/capture_frame_state.py` (saved `artifacts/frame_state_witness/`) recorded the state
 block per frame of gameplay demo 091827 and **confirmed**: `[0x2DE6] row_ring == camera_y % 12` exactly as
 camera panned 0→0x21; `[0x2DF1]` counts tile-rows scrolled per frame (reset after redraw); `[0x2DDC]` carries
@@ -402,7 +402,7 @@ caller passes `ah=camera_y, al=camera_x` so `si = camera_y*256 + camera_x` (`33E
 for the bottom fill row). Same segment also holds the three per-tile attribute tables `348D` xlats by tile
 index: `0x6984`→`[0x6BB9]` (plane/attr), `0x805A`→`[0x2DEE]` (tile flags), `0x4DF4`→`[0x2DF0]` (type/dirty);
 then `al`=tile index → `call 3B88` (recovered blit). Confirmed by dump: row 33 = `21 44 6B 21 44 1D 1E 46 7E…`
-(`7E`=sky, matches the all-`7E` top rows). Modelled as `TileMap` in `pre2/bridge/frame.py` (`read_tilemap`,
+(`7E`=sky, matches the all-`7E` top rows). Modelled as `TileMap` in `pre2/views/frame.py` (`read_tilemap`,
 reproduces the witnessed row byte-exact); `tests/test_frame_bridge.py`. **NOTE:** the three attribute
 tables `348D` xlats are in the DATA segment 1A13 (the xlatb carry an `es:` override, es=1A13), NOT the
 level block — and the third (`1A13:0x4DF4`) IS the same sprite-type table the blit dispatches on.
@@ -479,7 +479,7 @@ blit:
 | `1030:3D65` | **background restore** — copy 2B/row (4-plane latch copy) from bg buffer `[0x2DF2] - 0x28*[0x6BC0]` into the sprite rows, source linear, dest stride `0x28` with vertical **wrap** `di≥0x5D40 → di-=0x1E00` (circular bg, 0x1E00=192 rows) | **VERIFIED** | replacement | same (type 1 path + masked phase 0) | — |
 | `1030:3B75` | per-sprite **type dispatch** on `[0x4DF4+idx]` (0=plain / 1=solid / ≥2=masked) — the classifier `4232` output; masked path also reads the compacted sprite bytes the classifier saved at `[0x2DF4+id*0x20]` | OBSERVED | (branch) | — | depends on classifier `4232` (task #7) |
 | `1030:3A60`–`3AAB` | **background scroll/copy** (VRAM→VRAM `rep movsb`, off-screen→visible) | OBSERVED | (draw) | — | exact scroll geometry |
-| `1030:4316` | **sprite decode (local bank)** — demux 256 slots into planar cache `0x5E80`; `code<0x100` → 4 planes×32B from `sheet[0x200+code*128]` via map-mask. Side effects: `[0x2CF1]=mult`, `[0x2871]=src_seg`, copy index table → `[0x25CA]`. Exit contract: `si=0x200+0x80*nlocal`, `ds=src_seg`. RET `4369` | **VERIFIED** | replacement | `pre2/recovered/sprite_decode.py` + `pre2/bridge/sprites.py` + `pre2/checkpoints/`; `tests/test_sprite_decode.py`; in-VM lockstep `pre2/probes/verify_sprite_decode.py` (native==ASM, hybrid cache byte-exact 211 slots) | src-seg `[0x2DD6]+([[0x2D86]+0x2D2C]<<4)` confirmed |
+| `1030:4316` | **sprite decode (local bank)** — demux 256 slots into planar cache `0x5E80`; `code<0x100` → 4 planes×32B from `sheet[0x200+code*128]` via map-mask. Side effects: `[0x2CF1]=mult`, `[0x2871]=src_seg`, copy index table → `[0x25CA]`. Exit contract: `si=0x200+0x80*nlocal`, `ds=src_seg`. RET `4369` | **VERIFIED** | replacement | `pre2/recovered/sprite_decode.py` + `pre2/views/sprites.py` + `pre2/checkpoints/`; `tests/test_sprite_decode.py`; in-VM lockstep `pre2/probes/verify_sprite_decode.py` (native==ASM, hybrid cache byte-exact 211 slots) | src-seg `[0x2DD6]+([[0x2D86]+0x2D2C]<<4)` confirmed |
 | `1030:4389` | **sprite decode (shared/union bank)** — same demux for **all** `code>=0x100` (no upper bound), source seg `((code-0x100)*8 + [0x2DD8]) & 0xFFFF` (segment arith, wraps); index from `[0x25CA]` copy. `code==0xFFFF` = unused-slot sentinel → wrapped garbage (never blitted). RET `43B2` | **VERIFIED** | replacement | same test/probe (182 in-bank shared slots byte-exact; sentinel reproduced live from VM mem) | `[0x2DD8]` bank loaded by `1030:047A` |
 | `1030:3F00` | **sprite-load parent** — calls `107B`(decompress sheet→`[0x2DD6]`) → `4316` → `047A`(load shared bank→`[0x2DD8]`, decompresses UNION) → `4389`; manages `[0x2871]` save/restore around the pair | OBSERVED | (caller) | — | `[0x2871]` reused as both SQZ bump and sprite src-seg scratch |
 | `1030:4580` | **static HUD bar blit** — 320×23 planar status-bar bitmap → page+`0x1B80` (`rep movsb 0x398`/plane). RET `45AA` | **VERIFIED** | replacement | `recovered/hud.py:draw_status_bar`; `tests/test_hud_chrome.py` | — |

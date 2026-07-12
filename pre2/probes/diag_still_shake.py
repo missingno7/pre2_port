@@ -10,7 +10,7 @@ sys.path.insert(0, "scripts")
 from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.recovered.object_render import plan_sprite_command
 from pre2.runtime import load_pre2_snapshot
 

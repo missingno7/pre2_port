@@ -18,8 +18,8 @@ sys.path.insert(0, str(ROOT))
 
 from dos_re.input_demo import InputDemoPlayback
 from dos_re.interrupts import deliver_scancode
-from pre2.bridge import sprites as spr
-from pre2.bridge.frame import DATA_SEG
+from pre2.views import sprites as spr
+from pre2.views.frame import DATA_SEG
 from pre2.checkpoints import uninstall_pre2_replacements
 from pre2.recovered.frame_renderer import panel_copy
 from pre2.runtime import load_pre2_snapshot

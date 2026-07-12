@@ -19,7 +19,7 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.gameover_scene import build_gameover_scene, load_gameover_asset
+from pre2.views.gameover_scene import build_gameover_scene, load_gameover_asset
 from pre2.recovered.gameover_background import render_gameover_background
 from pre2.recovered.scene_compositor import RecoveredBackground, SceneStatus
 from pre2.runtime import load_pre2_snapshot

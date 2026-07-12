@@ -16,7 +16,7 @@ recovered — see docs/pre2/scene_island.md; rendering them faithfully is future
 from __future__ import annotations
 
 from pre2.native.vga import EGA_PLANE_STRIDE
-from pre2.bridge.render_state import read_renderer_state, retarget_page
+from pre2.views.render_state import read_renderer_state, retarget_page
 from pre2.recovered.render_frame import render_frame
 
 _DS = 0x1A0F
@@ -74,8 +74,8 @@ def render_visual_planes(mem, dos, *, game_root, display_page=None):
     back buffer ``[0x2DD8]`` (they differ during a page-flip / curtain reveal). Default ``None`` keeps
     the engine back page (for the byte-exact offline proof)."""
     from dataclasses import replace as _replace
-    from pre2.bridge.scene_state import derive_scene_kind
-    from pre2.bridge import transition as _tr
+    from pre2.views.scene_state import derive_scene_kind
+    from pre2.views import transition as _tr
     from pre2.recovered.faithful_visual import SceneKind, render_visual
 
     kind = derive_scene_kind(mem, dos)

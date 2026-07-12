@@ -87,7 +87,7 @@ def test_demux_sprite_is_four_planes_of_thirtytwo_bytes():
 # recovery; the committed golden + this adapter test are the permanent checks.)
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE  # noqa: E402
 
-from pre2.bridge.sprites import DATA_SEG, CACHE_OFF, read_slot  # noqa: E402
+from pre2.views.sprites import DATA_SEG, CACHE_OFF, read_slot  # noqa: E402
 from pre2.recovered.sprite_decode import PIXEL_BASE, SPRITE_BYTES  # noqa: E402
 from pre2 import checkpoints as R  # noqa: E402
 

@@ -165,7 +165,7 @@ def _audio_mix_channel_ignore(cpu):
     (7) MECHANISM-ONLY: the spills are dead the instant the routine returns (overwritten before the next
         read); the overrun byte is past the DMA-played block and re-based by the next mix_sfx — neither is
         audible nor read downstream."""
-    from pre2.bridge import audio as _audio
+    from pre2.views import audio as _audio
     data = (0x1A0F << 4) & 0xFFFFF
     fb = _audio.fill_buffer_flat(cpu.mem)              # phys addr of the 0xA8 fill block
     return [

@@ -12,7 +12,7 @@ sys.path.insert(0, "scripts")
 
 import numpy as np
 
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.enhanced.extract import _ID_PAL, _BASE_OFF, _render_backdrop, _zero_base, VIEWPORT_H
 from pre2.recovered.frame_renderer import (build_background_ring, redraw_animated_grid, scroll_copy)
 from pre2.recovered.render_frame import ASSET_LO, _TileMapView

@@ -12,7 +12,7 @@ sys.path.insert(0, "scripts")
 
 import numpy as np
 
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.enhanced.extract import _ID_PAL, _zero_base
 from pre2.recovered.render_frame import render_frame
 from pre2.recovered.renderer import CACHE_BASE, blit_sprite

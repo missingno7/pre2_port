@@ -1,4 +1,4 @@
-"""The renderer's persistent palette state machine (pre2.bridge.palette.read_palette_state).
+"""The renderer's persistent palette state machine (pre2.views.palette.read_palette_state).
 
 A palette fade is renderer-owned semantic state that evolves each frame (e.g. an item-pickup
 fade while gameplay runs), not a VGA side effect. `read_palette_state` exposes it as a
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pre2.bridge.palette import _DS, read_palette_state
+from pre2.views.palette import _DS, read_palette_state
 from pre2.recovered.render_model import FadePhase, PaletteState
 
 _BASE = _DS << 4

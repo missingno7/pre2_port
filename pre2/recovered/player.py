@@ -711,7 +711,7 @@ def player_fsm_step(rb, rw) -> tuple:
     """Compose the full per-frame player FSM ``1030:58A7..5A0B`` (the ``[0x6BC5]==0`` normal-play path):
     front-end -> ``select_anim_id`` -> dispatch to the recovered handler. Returns ``(writes, sfx, scroll)`` where
     ``scroll`` is ``None`` or ``"left"``/``"right"`` — the idle look-around (anim13) camera-pan request, which the
-    caller executes against the VM planes via :func:`pre2.bridge.camera_pan.apply_camera_pan`.
+    caller executes against the VM planes via :func:`pre2.views.camera_pan.apply_camera_pan`.
 
     Threads the intermediate writes the way the ASM does: the facing/state changes from the front-end and the
     ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``)."""

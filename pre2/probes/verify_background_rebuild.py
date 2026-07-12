@@ -22,7 +22,7 @@ from dos_re.runtime import enable_sound_blaster
 from dos_re.interrupts import deliver_interrupt
 from dos_re.cpu import IF
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge.render_state import read_renderer_state
+from pre2.views.render_state import read_renderer_state
 from pre2.recovered.render_frame import render_frame
 from pre2.recovered.frame_renderer import SCROLL_HEIGHT
 from sdl_view import render_planar_rgb

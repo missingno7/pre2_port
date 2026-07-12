@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
-from pre2.bridge.render_state import read_hud_state
+from pre2.views.render_state import read_hud_state
 from pre2.recovered.hud import (
     HUD_BONUS_DI, HUD_ENERGY_DI, HUD_GLYPH_ROWS, HUD_LIVES_DI, HUD_MAX_HEARTS, HUD_SCORE_DI, draw_hud,
 )

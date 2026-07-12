@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge.particles import (PARTICLE_BASE, apply_particle_writeback,
+from pre2.views.particles import (PARTICLE_BASE, apply_particle_writeback,
                                    read_particle_consume_inputs)
-from pre2.bridge.sprites import plane_views
+from pre2.views.sprites import plane_views
 from pre2.recovered.particles import PARTICLE_COUNT, PARTICLE_STRIDE, consume_particles
 
 from pre2.gaps import report

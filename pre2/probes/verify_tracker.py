@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from dos_re.interrupts import deliver_scancode
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge import audio as A
+from pre2.views import audio as A
 from pre2.recovered.tracker import NUM_VOICES, tracker_tick
 from pre2.runtime import create_pre2_runtime
 

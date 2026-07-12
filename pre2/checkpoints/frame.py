@@ -1,7 +1,7 @@
 """Checkpoints for the frame renderer (1030:348D / 35A1 / 3A27 / 3054).
 
 Thin VM contact points only: each adapter reads the original VM state **through the
-bridge** (``pre2.bridge.frame`` Camera/ScrollState/TileMap dataclasses + readers —
+bridge** (``pre2.views.frame`` Camera/ScrollState/TileMap dataclasses + readers —
 the bridge owns every segment:offset), calls the recovered renderer function, writes
 the contract back through the bridge, and returns to original flow. No renderer logic
 and no raw memory offsets live here; that all lives in ``pre2/recovered`` and
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.bridge import frame as _frame
-from pre2.bridge import sprites as _spr
+from pre2.views import frame as _frame
+from pre2.views import sprites as _spr
 from pre2.recovered.frame_renderer import (
     BG_PTR_BIAS,
     VISIBLE_COLS,

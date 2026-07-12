@@ -91,7 +91,7 @@ one direction — higher layers depend on lower ones, never the reverse.
    └──────────────────────────────┬──────────────────────────────┘
                                   │ reads / writes game state through
    ┌──────────────────────────────▼──────────────────────────────┐
-   │  pre2/bridge/     the state seam: human-named views ⇄ the    │
+   │  pre2/views/      the state seam: human-named views ⇄ the    │
    │                   DGROUP memory layout (dgroup_view.py)       │
    └──────────────────────────────┬──────────────────────────────┘
                                   │ calls
@@ -113,7 +113,8 @@ one direction — higher layers depend on lower ones, never the reverse.
 | Layer | Directory | What it holds | The rule that keeps it clean |
 |---|---|---|---|
 | **The game** | `pre2/recovered/`, `pre2/codecs/` | The recovered gameplay + render + audio logic and asset decoders — the actual source port. | **Pure.** No `cpu`/`mem`/`dos_re` imports. Reads state as human-named fields, never raw offsets. |
-| **The state seam** | `pre2/bridge/` | Human-named *views* (`player.x`, `slot.sprite`) over the DOS data-segment layout, plus dataclass readers. | The **one place** a DGROUP byte offset is written down. Swappable backends (live image / verify overlay). |
+| **The state seam** | `pre2/views/` | Human-named *views* (`player.x`, `slot.sprite`) over the DOS data-segment layout, plus dataclass readers. | The **one place** a DGROUP byte offset is written down. Swappable backends (live image / verify overlay). |
+| **The workbench** | `pre2/bridge/` | The DETACHABLE verification side: VM frame capture, timing fast-forwards, hook glue. | Never shipped (deploy denies it; `scripts/lint.py` forbids product imports). Plugs in only when verifying. |
 | **The runtime** | `pre2/native/` | `NativeGameState` (the memory image), the per-frame driver, native VGA + audio, and the boot constants that replace the EXE. | Owns the machine so the recovered layer doesn't have to. VM-free. |
 | **The oracle** | `dos_re/` | A reusable 8086 + hardware emulator. | **Verification only.** Knows nothing about Prehistorik 2. Never in the shipped game. |
 
@@ -122,7 +123,7 @@ Four invariants define the separation — and they're enforced, not aspirational
 1. **Dependency points down.** The pure game logic never reaches back to the VM, CPU, or segmented memory.
    The VM sits at the bottom as an oracle; nothing above it depends on it to *run*.
 2. **Offsets are quarantined.** Gameplay code speaks `player.x` / `slot.sprite`; the DOS memory layout lives
-   only in `pre2/bridge/dgroup_view.py`. See [`docs/pre2/state_view_layer.md`](docs/pre2/state_view_layer.md).
+   only in `pre2/views/dgroup_view.py`. See [`docs/pre2/state_view_layer.md`](docs/pre2/state_view_layer.md).
 3. **The VM is an oracle, not the engine.** It replays the original ASM to *check* the recovered code; it is
    never started to *play* the game. No EXE, no emulator, no boot image at runtime.
 4. **Everything is proven.** Each recovered routine is byte-exact against the original — carried in an

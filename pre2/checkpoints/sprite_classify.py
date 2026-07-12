@@ -20,8 +20,8 @@ green over a real level load.
 from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
-from pre2.bridge import frame as _frame
-from pre2.bridge import sprites as _spr
+from pre2.views import frame as _frame
+from pre2.views import sprites as _spr
 from pre2.recovered.sprite_classify import FIRST_PARTIAL_ID, classify_sprites
 from pre2.recovered.sprite_decode import SLOT_BYTES
 

@@ -16,7 +16,7 @@ credits / the scrolling mode-select+password map / the carte / gameplay HUD) are
 """
 from __future__ import annotations
 
-from pre2.bridge.image_scene import _IMAGE_OFF, _fingerprint
+from pre2.views.image_scene import _IMAGE_OFF, _fingerprint
 
 # the mode-13h image assets the front end shows (title / menu / wall); fingerprinted by their first 256 image bytes
 # (palette-independent, so a mid-fade frame still names correctly once the image bytes are copied in). THEEND.SQZ is

@@ -9,7 +9,7 @@ top (di 0x0000…) where they bled over the HUD band instead of changing the doo
 from __future__ import annotations
 
 import pre2.bridge.object_interaction as oi
-from pre2.bridge.frame import SCROLL_BASE
+from pre2.views.frame import SCROLL_BASE
 
 
 def test_redraw_tiles_targets_scroll_staging(monkeypatch):

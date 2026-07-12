@@ -60,7 +60,7 @@ The commit boundary is **`1030:6772`** (palette-fade entry — the LAST op in th
 AFTER the page flip). There `ega_display_start` is the just-committed frame and the scroll/camera state
 has not yet advanced, so `render_frame(state)@display_start == display_start`.
 
-`pre2/bridge/game_visual_state.py`: `GameVisualState` (scene_kind + RendererState with dest_page =
+`pre2/views/game_visual_state.py`: `GameVisualState` (scene_kind + RendererState with dest_page =
 committed page + iris) + `capture_game_visual_state(mem, dos, display_page, game_root)` (capture ONLY
 at 6772) + `render_game_visual_state(gvs)` (reuses `render_visual` → the same recovered leaves). This is
 the canonical verification substrate.

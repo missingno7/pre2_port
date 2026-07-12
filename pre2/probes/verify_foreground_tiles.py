@@ -14,7 +14,7 @@ from dos_re.cpu import IF
 from dos_re.interrupts import deliver_interrupt, deliver_scancode
 from dos_re.memory import EGA_APERTURE, EGA_PLANE_STRIDE
 from dos_re.runtime import enable_sound_blaster
-from pre2.bridge.foreground_tiles import read_foreground_state
+from pre2.views.foreground_tiles import read_foreground_state
 from pre2.recovered.foreground_tiles import render_foreground_tiles
 from pre2.runtime import load_pre2_snapshot
 
