@@ -145,13 +145,19 @@ of ours), so both recovered logic and the VM adapters may use it without a cycle
 and verification machinery are dev-time only and are already stripped from the native deployment
 (`deploy_native.py`; no `dos_re`, no EXE, no boot image ship).
 
-**What is *not* (yet) optional:** the **layout** (item 1). Native runs on the byte-backed view, which
-*is* the offset map, so the offset table is linked in the shipped game. Making it physically removable
-would require a **field-backed backend** (plain Python attributes, no offsets) behind the same view API —
-which in turn needs a lossless DGROUP↔fields serializer for verification. **This is deliberately not
-pursued:** for a faithful port whose state genuinely *is* a memory image, the byte backend already
-delivers clean logic *and* exact verification, and a few KB of always-linked layout is a non-issue. The
-field-backed backend remains a clean future option (the seam is designed for it) but is not a goal.
+**The layout (item 1) — resolved by the field-backed campaign** (`milestone/field-backed-state`). The
+shipped views (`pre2/views/dgroup_view.py` — the file moved out of the bridge to the shipped `views/`
+layer) remain the single human-readable declaration: every mutable DGROUP byte is covered by a named
+field, StructArray element, or declared arena (the cartography `scripts/map_dgroup_regions.py` proves
+WRITTEN-unnamed = 0). The machine-readable half **generates INTO the bridge**
+(`scripts/gen_field_registry.py` → `pre2/bridge/field_registry.py`), where the serializer
+(`pre2/bridge/state_fields.py`) converts a live image ↔ a named snapshot losslessly and diffs two states
+by field name. `scripts/verify_field_flip.py` proves it over the full tick corpus: round-trip identity,
+mutation coverage (no gameplay state escapes the names), and `FieldBackend == ByteBackend` over every
+field. The **byte image itself stays** — it is the game's *heap* (record pointers, script cursors and
+back-refs are offsets stored IN game state; that is original semantics, not debt), and a `bytearray` +
+named views is pure Python with exact `memcmp` verification. `FieldBackend` (shipped) is the fail-loud
+name-covered store for image-free named-state use.
 
 ## What this does and does not buy — and the enhancement foundation
 
