@@ -130,6 +130,23 @@ Four invariants define the separation — and they're enforced, not aspirational
    `@oracle_link(...)` tag and auto-collected into [`docs/pre2/recovered_islands.md`](docs/pre2/recovered_islands.md)
    (a test fails if the code and the manifest drift). That manifest is the source of truth for what's recovered.
 
+### The detachable workbench — which features need it
+
+The PRODUCT (`pre2native`) never imports `pre2/bridge/` or `dos_re/` — not even lazily
+(`scripts/lint.py` fails the build on any such import in shipped code; `deploy_native.py`
+additionally denies the packages and its smoke test asserts none entered `sys.modules`).
+The workbench imports the product, never the reverse. Feature by feature:
+
+| Feature | Product (VM-free) | Workbench (the bridge to original game memory) |
+|---|---|---|
+| Play the game | ✅ `play_native.py` | — |
+| **Replay** a demo | ✅ native event reader + the byte-exact tick replay | — |
+| **Record** a demo | — | `play.py --record-demo` (the VM plays it) |
+| Native snapshots | ✅ `--snapshot` / F11 (raw memory files) | — |
+| VM snapshots | — | `play.py` F12 / `--save-snapshot` |
+| Verify vs the original | — | `verify_native_tick_demo.py`, `verify_native_frontend.py`, the hook/frame oracles |
+| Probe / disassemble | — | `pre2/probes/`, `dos_re/tools/` |
+
 ## What runs today
 
 `play_native.py` cold-boots the entire game from the boot constants + the GOG assets, with no emulator:

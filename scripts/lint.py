@@ -25,16 +25,14 @@ ROOT = Path(__file__).resolve().parents[1]
 # in its own tests/tools/examples, which dos_re's own lint already covers.
 PACKAGE_ROOTS = (ROOT / "dos_re" / "dos_re", ROOT / "pre2", ROOT / "scripts")
 
-# SHIPPED pre2 layers -> the workbench prefixes they must not import ("top" = top-level only, lazy allowed
-# under the fail-loud convention; "any" = never, even lazily).
+# SHIPPED code -> the workbench prefixes it must NEVER import, not even lazily. The product's every feature
+# (gameplay, tick-demo REPLAY, native snapshots, the front end) is VM-free; recording/verification live in
+# the workbench, which imports the product — never the reverse.
 _FORBIDDEN = ("pre2.bridge", "dos_re")
-_SHIPPED_LAYERS = {
-    "recovered": "any",
-    "views": "top",
-    "native": "top",
-    "enhanced": "top",
-    "codecs": "any",
-}
+_SHIPPED_LAYERS = ("recovered", "views", "native", "enhanced", "codecs")
+# the shipped entry scripts join the same boundary (scripts/ otherwise hosts the workbench CLIs)
+_SHIPPED_SCRIPTS = {"play_native.py", "sdl_view.py", "render_frame.py", "overlay_menu.py",
+                    "android_menu.py", "android_host.py", "main_android.py"}
 
 
 def iter_py_files():
@@ -65,23 +63,21 @@ def main() -> int:
                     for name in names:
                         if name == "pre2" or name.startswith("pre2."):
                             errors.append(f"{path.relative_to(ROOT)}:{node.lineno}: dos_re must not import pre2")
-        # the SHIPPED-layer boundary: product code never depends on the detachable workbench (pre2.bridge)
-        # or the emulator (dos_re) — top-level always; lazily too where the layer's rule is "any".
-        for layer, strictness in _SHIPPED_LAYERS.items():
-            if not path.is_relative_to(ROOT / "pre2" / layer):
-                continue
+        # the SHIPPED boundary: product code never depends on the detachable workbench (pre2.bridge) or the
+        # emulator (dos_re) — not even lazily. Recording/verification import the product, never the reverse.
+        shipped = any(path.is_relative_to(ROOT / "pre2" / layer) for layer in _SHIPPED_LAYERS) \
+            or (path.parent == ROOT / "scripts" and path.name in _SHIPPED_SCRIPTS)
+        if shipped:
             for node in ast.walk(tree):
                 if not isinstance(node, (ast.Import, ast.ImportFrom)):
                     continue
-                if strictness == "top" and node.col_offset != 0:
-                    continue                                   # lazy import: the fail-loud convention allows it
                 names = [a.name for a in node.names] if isinstance(node, ast.Import) else \
                         ([node.module] if node.module else [])
                 for name in names:
                     if any(name == f or name.startswith(f + ".") for f in _FORBIDDEN):
-                        how = "" if strictness == "any" else " at top level"
-                        errors.append(f"{path.relative_to(ROOT)}:{node.lineno}: shipped layer pre2.{layer} "
-                                      f"must not import {name}{how} (the workbench is detachable)")
+                        errors.append(f"{path.relative_to(ROOT)}:{node.lineno}: SHIPPED code must not import "
+                                      f"{name} (the workbench is detachable; it imports the product, never "
+                                      f"the reverse)")
     if errors:
         print("lint failed:")
         for err in errors:

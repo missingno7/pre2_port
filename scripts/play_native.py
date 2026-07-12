@@ -53,6 +53,27 @@ TICK_HZ = 70.0 / 3.0          # the game's own tick rate: the 1C6F frame limiter
 #                               default of 24 was a ~3% -fast approximation of this.
 
 
+class _DemoEvent:
+    """One recorded input event — the native reader's row (kind 'scan' = a make/break scancode)."""
+
+    __slots__ = ("boundary", "seq", "kind", "value")
+
+    def __init__(self, boundary, seq, kind, value):
+        self.boundary, self.seq, self.kind, self.value = boundary, seq, kind, value
+
+
+def load_demo_events(demo_dir) -> "list[_DemoEvent]":
+    """Read a recorded demo's input events NATIVELY (no dos_re): ``input_demo.json`` is plain data — a list of
+    events keyed to the recorder's present-frame ``boundary`` counter. Demo REPLAY is a PRODUCT feature (this
+    reader + the deterministic tick replay); only RECORDING a demo needs the workbench (the VM does the playing)."""
+    import json
+    manifest = json.loads((Path(demo_dir) / "input_demo.json").read_text(encoding="utf-8"))
+    events = [_DemoEvent(int(e["boundary"]), int(e.get("seq", 0)), str(e["kind"]), int(e["value"]))
+              for e in manifest.get("events", [])]
+    events.sort(key=lambda e: (e.boundary, e.seq))
+    return events
+
+
 class DemoInput:
     """Replay a recorded input demo's scancodes into the VM-less runtime for HANDS-FREE watching.
 
@@ -65,8 +86,8 @@ class DemoInput:
 
     STD = (0x39, 0x48, 0x50, 0x4D, 0x4B, 0x02, 0x03)   # fire, up, down, right, left, '1', '2' (DC1 sources)
 
-    def __init__(self, playback):
-        self.events = list(playback.events)            # already sorted by (boundary, seq)
+    def __init__(self, events):
+        self.events = list(events)                     # sorted by (boundary, seq)
         self.i = 0
         self.boundary = 0
         self.held: set[int] = set()
@@ -160,19 +181,12 @@ def main(argv=None) -> int:
         if not _tick_exists:
             # APPROXIMATE scancode fallback — the deterministic tick replay doesn't need the input demo (it has
             # its own exact per-tick keys, gtd.keys, covering the WHOLE gameplay recording — see the loop below).
-            # Lazy import: dos_re.input_demo is VM-side plumbing the deployed standalone doesn't ship (fails loud).
-            from dos_re.input_demo import InputDemoPlayback
-            demo = DemoInput(InputDemoPlayback.load(args.play_demo))
+            demo = DemoInput(load_demo_events(args.play_demo))   # native reader: replay never needs the workbench
             print(f"--play-demo: replaying {len(demo.events)} input events (hands-free; live keys merged, ESC quits)")
         elif _fe_portion:
             # tick file + a cold-start recording: load the scancode events so the replay can SHOW the front end
-            # first (drive_input merges demo.held); the tick replay then reseeds gameplay byte-exactly. Soft-fail:
-            # without the input plumbing (standalone) the tick replay still works, just without the front end.
-            try:
-                from dos_re.input_demo import InputDemoPlayback
-                demo = DemoInput(InputDemoPlayback.load(args.play_demo))
-            except ImportError:
-                print("cold-start demo: input-demo plumbing unavailable here -- tick replay only (no front end)")
+            # first (drive_input merges demo.held); the tick replay then reseeds gameplay byte-exactly.
+            demo = DemoInput(load_demo_events(args.play_demo))   # native reader: no workbench needed
 
     # DPI awareness BEFORE any window exists: on Windows with display scaling (e.g. 150%) an un-aware process
     # gets the LOGICAL desktop size, so a borderless-fullscreen window doesn't cover the physical screen and
