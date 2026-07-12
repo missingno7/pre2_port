@@ -154,6 +154,36 @@ class DictBackend:
         self.writes[off & 0xFFFF] = v & 0xFFFF
 
 
+def apply_contract(state, writes, *, word_fields=None) -> None:
+    """THE single seam every island write-contract crosses to reach live state.
+
+    Applies a recovered write-contract to the game state through a :class:`ByteBackend`. The three contract
+    conventions are handled uniformly:
+
+    * ``{offset: (value, width)}`` — a tuple value is self-describing (the width-contract islands);
+    * ``{offset: value}`` with ``word_fields`` — a plain value is a WORD iff its offset is in the set
+      (the FSM convention, ``FSM_WORD_FIELDS``);
+    * ``{offset: value}`` without ``word_fields`` — plain values are BYTES (the byte-level overlay
+      contracts: collision, terrain).
+
+    Sentinel keys (strings like SONG_REQUEST/SCROLL_REQUEST) must be popped by the caller BEFORE applying —
+    a string key here is a bug and raises.
+
+    THE FLIP POINT: when the product's state becomes field-backed, this function (plus the read half,
+    the backends) is where the offset world ends — the contract application resolves through the generated
+    field registry instead of a byte image, and this module's offset map moves to the detachable bridge."""
+    be = ByteBackend(state)
+    for off, v in writes.items():
+        if isinstance(v, tuple):
+            val, width = v
+        else:
+            val, width = v, (2 if word_fields is not None and off in word_fields else 1)
+        if width == 2:
+            be.ww(off, val)
+        else:
+            be.wb(off, val)
+
+
 # ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
 
 class _U16:
@@ -300,6 +330,13 @@ class StructView:
         self._backend = backend
         self._base = base
 
+    @property
+    def offset(self) -> int:
+        """The struct's DGROUP base offset — TRANSITIONAL interop for the offset-keyed helpers a slot is
+        passed to during the field-backed migration (e.g. ``hitbox_overlap(rb, rw, slot.offset, di)``).
+        New code should pass the VIEW, not the offset; this property is the migration seam, not the API."""
+        return self._base
+
 
 def _coerce_backend(source):
     """A backend passes through — the package's own backends plus anything marked ``_IS_DGROUP_BACKEND``
@@ -414,6 +451,57 @@ class PlayerGlobals(DgroupView):
     boss_y        = _U16(0x564A)  # ... origin Y [74B1/704A]
 
     collected_linked = _U16(0x2A7A)  # the LINKED-item collected count (tally percent = [0x2A76]+this) [85CC/5139]
+
+    # --- score + the camera/scroll engine scalars (the 0x6BC0..0x6C11 band) ---
+    score_lo      = _U16(0x6C0E)  # the 32-bit score, low word [asm 5139/85B6]
+    score_hi      = _U16(0x6C10)  # ... high word
+    scale_level   = _U16(0x6BE2)  # object_update's sprite scale level; doubles as player_interaction's
+    #                               instadeath gate; timer-decremented (TIMER_WORD) [asm 5A82]
+    hurt_cooldown = _U8(0x6BC9)   # the crush-damage cooldown (reload 5; a life on underflow) [asm 8254]
+    bonus_flash   = _U8(0x6C00)   # the bonus-collect flash timer (render_state; timer-decremented) [5A7E]
+    fine_scroll   = _U8(0x6BC4)   # sub-tile pixel scroll 0..15 (the frame engine) [frame VAR_FINE_SCROLL]
+    col_ring      = _U16(0x2DE8)  # the background column ring index (camera_x % ring) [frame VAR_COL_RING]
+    unk_2DEA      = _U16(0x2DEA)  # written alongside col_ring; exact role not yet evidenced
+    firefly_scratch_a = _U8(0x6BC0)  # the firefly pass's per-frame scratch pair [firefly_sim]
+    firefly_scratch_b = _U8(0x6BC1)
+    row_factor    = _U16(0x6BF8)  # the row-stride factor (0x28 * this) the shake writes [frame/camera_shake]
+    unk_6BFA      = _U16(0x6BFA)  # shake-adjacent state; role not yet evidenced
+    unk_6BFC      = _U16(0x6BFC)
+    timer_6BE8    = _U8(0x6BE8)   # one of the 5A47 countdown timers (TIMER_BYTES); consumer not yet mapped
+    unk_6BED      = _U16(0x6BED)  # scroll-adjacent state; role not yet evidenced
+    unk_6BF1      = _U16(0x6BF1)
+    scroll_phase  = _U8(0x6C05)   # the camera/scroll phase counter (757A sat-inc) [asm 757A/8131]
+    scroll_vx     = _U16(0x6C06)  # the scroll-cursor X velocity [asm 70FE/815E]
+    scroll_vy     = _U16(0x6C08)  # ... Y velocity (gravity 0x10, cap 0xE0) [asm 7118/8144]
+    script_last   = _U16(0x6C0A)  # camera-script pointer last seen; a change resets script_cursor [asm 7537]
+
+    bonus_letters = _U8(0x6CA7)   # the collected BONUS-letters bitmask (0x1F = all five -> reward) [67D7]
+    utensils_mask = _U8(0x6CA8)   # the collected-utensils bitmask (fresh start zeroes it) [asm 0155]
+    quake_dist_lo = _U16(0xA30E)  # the boss-quake player-distance^2 scratch, low word [object_update 724]
+    quake_dist_hi = _U16(0xA310)  # ... high word (must be 0 for the quake proximity test)
+    sprite_bank_lo = _U16(0x8C89)  # entity sprite-ref bank base A (level_load 4182 rebases against it)
+    sprite_bank_hi = _U16(0x8C8B)  # ... bank base B (reset to 0x35/0x138 after the rebase)
+    # --- the spawner / camera-sequencer scalars (object_spawn + combat_interaction's globals) ---
+    hit_detail    = _U16(0xA331)  # vertical penetration depth when hit_flag set [asm 8D7B]
+    spawned_ptr   = _U16(0xA33E)  # the just-spawned burst-slot pointer (8C72 reads it back) [asm 88B9]
+    anim_ready    = _U8(0xA340)   # object_update's per-step anim-ready scratch byte
+    spawn_offset_ring = _U16(0xA341)  # 16-slot ring index into the spawn X-offset table [object_inject]
+    spawn_count   = _U16(0x91FC)  # the level spawn param (>>3 = spawn count; boss damage decrements)
+    cam_state     = _U8(0x91FE)   # the camera sequencer's 8-state machine state (0xFF = disabled)
+    cursor_x      = _U16(0x91FF)  # the spawn/camera cursor position
+    cursor_y      = _U16(0x9201)
+    cam_timer     = _U16(0xA3F7)  # the sequencer's per-state frame timer
+    cmd_byte      = _U8(0xA3F9)   # the camera-script command byte (bit6 = a vertical nudge)
+    dist_dir      = _U8(0xA3FA)   # 1 if the cursor is left of the player
+    dist_x        = _U16(0xA3FB)  # |player_X - cursor_X|
+    script_cursor = _U16(0xA3FF)  # the live camera-script cursor (into the 0xA427+ bytecode)
+    script_ptr    = _U16(0xA401)  # the active camera-script pointer (script_last detects changes)
+    cursor_latch_x = _U16(0xA403)  # cursor pos latched per script command [asm 7585 head]
+    cursor_latch_y = _U16(0xA405)
+    cam_param_e   = _U16(0xA41F)  # the 5th camera-target param word (no position pair) [asm 93B2]
+    cam_target_ptr = _U16(0xA421)  # camera target record-ptr (93CE's di latch)
+    target_a      = _U16(0xA423)  # camera target record-ptr A (free 0x19C/0x19D sprites that hit it)
+    target_b      = _U16(0xA425)  # camera target record-ptr B
 
     # --- the six decoded input flags (DC1's outputs [0x27E8..0x27ED]) ---
     in_fire       = _U8(0x27E8)   # fire/jump held (space/enter sources) [0bc6/58FC]
@@ -689,3 +777,248 @@ class PlayerView(RenderSlot):
             return (v >> 4) & 0xFF
         return ((sar4(self._backend.rw(self._base + 2)) << 8)
                 | sar4(self._backend.rw(self._base))) & 0xFFFF
+
+
+class ProjectileSlot(RenderSlot):
+    """One thrown-weapon projectile slot (the 4-slot list at 0x4F2E, stride 0x12) — free when ``sprite`` is
+    0xFFFF. The attack handler spawns the club hitbox into the first free one [asm 627D/6017-6070]; the
+    camera-target scans test each active one [80E6/6FDE]."""
+
+    __slots__ = ()
+
+    xoff      = _U16(0x06)   # the spawn record's X offset word (facing-negated) [asm 604E]
+    kind      = _U8(0x08)    # (phase flag >> 1) & 3 [asm 601C]
+    spawn_ptr = _U16(0x0C)   # the spawn record ptr (past the frame table's terminator) [asm 6030]
+    yoff      = _U16(0x0E)   # the spawn record's Y offset word [asm 603B]
+
+    @property
+    def free(self) -> bool:
+        return self.sprite == 0xFFFF                        # [asm 6285/6FE4] the free/active test
+
+
+class WallMarker(StructView):
+    """One 8-byte wall-impact marker (the list at 0x6EA9); free when the leading word is 0x55AA [asm 64FA]."""
+
+    __slots__ = ()
+
+    x  = _U16(0)             # player X << 3 [asm 6505-650A]
+    y  = _U16(2)             # player Y << 3 [asm 650C-6511]
+    b4 = _U8(4)              # zeroed on registration [asm 6514]
+    b5 = _U8(5)              # zeroed [asm 6518]
+    b7 = _U8(7)              # zeroed [asm 651C]
+
+    @property
+    def free(self) -> bool:
+        return self.x == 0x55AA                             # [asm 64FD]
+
+
+class L6Projectile(StructView):
+    """One level-6 tree-boss falling projectile (the 5-slot list at 0x7DAF, stride 0xB) — free when
+    ``sprite`` is 0xFFFF. Integrated per frame (Y by ``fall_vel>>4``, X by the oscillating drift
+    accumulator) and projected into its 0x55EE render slot [asm 6D40..6DDD / 6E92..6F37]."""
+
+    __slots__ = ()
+
+    x          = _U16(0x0)   # world X [asm 6DB7]
+    y          = _U16(0x2)   # world Y [asm 6D80]
+    sprite     = _U16(0x4)   # anim/id; 0xFFFF = free [asm 6D4F/6ED4]
+    fall_vel   = _U16(0x6)   # Y velocity, 12.4 fixed [asm 6EF6/6D80]
+    drift_acc  = _U16(0x8)   # the oscillating X-drift accumulator [asm 6D8B/6F05]
+    drift_step = _U8(0xA)    # per-frame drift step, negated at the +/-0x20 extents [asm 6D95/6F0A]
+
+    @property
+    def free(self) -> bool:
+        return self.sprite == 0xFFFF                     # [asm 6D4F/6EC1]
+
+
+class ObjectSlot(RenderSlot):
+    """One active object/enemy record (the 12-slot list at 0x4FD0 + the 32-slot effect/burst pool at 0x50A8,
+    stride 0x12) — the object walker's own view of the same 0x12-stride render-record family. Fields per
+    object_tick's byte-exact view (684E): free when ``sprite`` (the id word) is 0xFFFF."""
+
+    __slots__ = ()
+
+    def_ptr  = _U16(0x06)    # -> the type-definition record (the read-only def table) [asm: [di+6]]
+    xvel     = _U16(0x08)    # X velocity, 12.4 fixed [object_tick _obj_view]
+    yvel     = _U16(0x0A)    # Y velocity, 12.4 fixed
+    anim_ptr = _U16(0x0C)    # the anim-script cursor
+    state    = _U8(0x0E)     # the behavior state byte (handlers dispatch on it)
+    aux_f    = _U8(0x0F)     # per-type aux byte (a _BYTE_FIELDS union member) [object_inject]
+    hits     = _U8(0x10)     # hit accumulator: the hurt handler reads >>2 and caps at 0xB [asm 834E]
+
+
+class TerrainEntity(StructView):
+    """One terrain / moving-entity SOURCE record (the 16-slot list at 0x9107, stride 0xF; 4907's walk).
+    Free when ``sprite`` is 0xFFFF. Two movement families share the record: type-8 fall/settle uses the
+    ``fall_vel`` word at +0xB; the 8-direction platform uses ``osc`` (its high byte) as the oscillation
+    counter — the established two-names-for-two-widths convention."""
+
+    __slots__ = ()
+
+    x            = _U16(0x00)   # world X (12.4-ish; column = >>4) [asm 498F/4A67]
+    y            = _U16(0x02)   # world Y [asm 4936/49EA]
+    sprite       = _U16(0x04)   # sprite id; 0xFFFF = free slot [asm 4AF0 walk]
+    type_dir     = _U8(0x06)    # &0xF type (8 = faller); &7 platform heading; bit6 = hold [asm 4950/49D5]
+    speed_ramp   = _U8(0x07)    # the ramping speed/accel byte (toward ``speed``) [asm 4942/4976/4A0D]
+    unk_8        = _U8(0x08)    # not accessed by the recovered pass; role not yet evidenced
+    settle_reload = _U8(0x09)   # reload value for ``settle_timer`` [asm 49E0]
+    state        = _U8(0x0A)    # type-8 state machine: 0 wait/brake, 1 fall, 2 settle [asm 4939]
+    fall_vel     = _U16(0x0B)   # type-8 fall velocity word [asm 4936/4988]
+    osc          = _U8(0x0C)    # width alias of fall_vel's high byte: the platform oscillation counter
+    settle_timer = _U8(0x0D)    # settle frame countdown [asm 4956/49CF]
+    speed        = _U8(0x0E)    # the platform's target speed [asm 49FB/4A0D]
+
+
+class CamTarget(StructView):
+    """One camera-target geometry record (the 4-slot stride-6 block at 0xA407 the camera script fills):
+    param word (bit15 flips when facing) + target X/Y [asm 93B2 block, object_spawn camera_target_geometry]."""
+
+    __slots__ = ()
+
+    param = _U16(0)
+    x     = _U16(2)
+    y     = _U16(4)
+
+
+class Particle(StructView):
+    """One 4B8E particle (the 20-slot array at 0x7DE6, stride 6): X.w Y.w angle.b speed.b; the X word is
+    0xFFFF when the slot is dead [asm 4C1D]."""
+
+    __slots__ = ()
+
+    x     = _U16(0)
+    y     = _U16(2)
+    angle = _U8(4)           # indexes the cos/sin tables (0x6F90/0x7090)
+    speed = _U8(5)
+
+    @property
+    def dead(self) -> bool:
+        return self.x == 0xFFFF                          # [asm 4C1D]
+
+
+# ---- the fixed slot LISTS (StructArrays: indexed named records instead of pointer walks). Attached to
+# PlayerGlobals here because RenderSlot/ProjectileSlot are defined below it in the file. ----
+PlayerGlobals.render_slots = StructArray(0x4F0A, 0x12, 116, RenderSlot)     # the on-screen records
+#     (0x4F0A..0x5732, slot 1 = the player); 116 = the span the forward oracle masks
+PlayerGlobals.projectiles = StructArray(0x4F2E, 0x12, 4, ProjectileSlot)    # the 4 thrown-weapon slots [627D]
+PlayerGlobals.trail_ring_slots = StructArray(0x4F76, 0x12, 5, RenderSlot)   # the trail/dust ring (the cursor
+#     g.trail_ring walks DOWN with wrap 0x4F76 -> 0x4FBE) [5E2E-5E37]
+PlayerGlobals.effect_row = StructArray(0x56A2, 0x12, 8, RenderSlot)         # the 7585 effect/boss-health row
+PlayerGlobals.wall_markers = StructArray(0x6EA9, 8, 20, WallMarker)         # the 64FA wall-impact list
+PlayerGlobals.l6_projectiles = StructArray(0x7DAF, 0xB, 5, L6Projectile)    # the L6 tree-boss projectiles
+PlayerGlobals.l6_render_slots = StructArray(0x55EE, 0x12, 5, RenderSlot)    # ...their projected render slots
+PlayerGlobals.boss_targets = StructArray(0x5648, 0x12, 5, RenderSlot)       # the boss/camera-target records
+PlayerGlobals.enemy_slots = StructArray(0x4FD0, 0x12, 12, ObjectSlot)       # the 12 active object/enemy slots
+PlayerGlobals.burst_slots = StructArray(0x50A8, 0x12, 32, ObjectSlot)       # the effect/score-burst pool
+#     (0x50A8..0x52E8 — the free pool after the 12 main objects; same record family)
+PlayerGlobals.particles = StructArray(0x7DE6, 6, 20, Particle)              # the 4B8E particle array
+PlayerGlobals.terrain_entities = StructArray(0x9107, 0xF, 16, TerrainEntity)  # the 4907 source list
+PlayerGlobals.cam_targets = StructArray(0xA407, 6, 4, CamTarget)            # the camera-script geometry block
+
+#: Named MUTABLE regions that are dynamic-record ARENAS, not fixed-stride arrays — the flip keeps each as an
+#: owned byte-buffer behind its manager (the variable-stride record layout lives with the owning island).
+ARENAS = {
+    # the stride-terminated list ([si] <= 0x32 walks; level_load 4182) ends before the sprite-bank
+    # words at 0x8C89 -- that is the arena's hard bound; corpus write high-water 0x8845
+    "entity_arena (the 2nd-pass live-entity records; entry 0 = the player; variable stride)": (0x8489, 0x8C88),
+}
+#     (x/y/sprite per record; +5 = the flash flags byte; boss_x/boss_y alias record 0's x/y) [6E42/7113]
+
+
+# ---- FieldBackend: the name-covered store (the field-backed seam's shipped half) ----------------------------
+
+def _named_map():
+    """offset -> the covering field's ``(name, base_offset, width)``, harvested from THIS module's
+    declarations (every DgroupView subclass + PlayerView + their StructArrays). Cached; built lazily so the
+    walk sees the post-class array attachments."""
+    import sys
+    mod = sys.modules[__name__]
+    if getattr(mod, "_NAMED_MAP", None) is not None:
+        return mod._NAMED_MAP
+
+    def field_descs(cls):
+        seen = set()
+        for klass in cls.__mro__:
+            for name, d in vars(klass).items():
+                if name not in seen and isinstance(d, (_U8, _S8, _U16, _S16)):
+                    seen.add(name)
+                    yield name, d.off, (2 if isinstance(d, (_U16, _S16)) else 1)
+
+    out: dict[int, tuple[str, int, int]] = {}
+
+    def mark(name, off, width):
+        for k in range(width):
+            out.setdefault((off + k) & 0xFFFF, (name, off & 0xFFFF, width))
+
+    for cls_name in dir(mod):
+        cls = getattr(mod, cls_name)
+        if not (isinstance(cls, type) and issubclass(cls, StructView)):
+            continue
+        base = 0 if (issubclass(cls, DgroupView) and cls is not DgroupView) else \
+            (PLAYER_BASE if cls is PlayerView else None)
+        if base is None:
+            continue
+        for fname, off, width in field_descs(cls):
+            mark(f"{cls_name}.{fname}", base + off, width)
+        for aname, d in vars(cls).items():
+            if isinstance(d, StructArray):
+                for i in range(d.length):
+                    ebase = base + d.off + i * d.stride
+                    for fname, off, width in field_descs(d.struct_cls):
+                        mark(f"{cls_name}.{aname}[{i}].{fname}", ebase + off, width)
+    for label, (lo, hi) in ARENAS.items():
+        for o in range(lo, hi + 1):
+            out.setdefault(o, (label, lo, hi - lo + 1))
+    mod._NAMED_MAP = out
+    return out
+
+
+_NAMED_MAP = None
+
+
+class FieldBackend:
+    """The NAME-COVERED state store: the same offset-keyed backend API as :class:`ByteBackend`, but storage
+    is sparse and every access must land inside a DECLARED field or arena — anything else raises (fail-loud).
+
+    This is the field-backed seam's shipped half: pure named-state code (and its tests) can run over it with
+    no memory image at all, and any hidden raw-offset dependency outside the declarations surfaces as an
+    immediate ``KeyError`` instead of silently reading a zero. The bridge's serializer
+    (``pre2.bridge.state_fields``, built on the MACHINE-GENERATED registry) converts a live image to/from the
+    same named space; scripts/verify_field_flip.py is the corpus proof that the named space covers every
+    mutated gameplay byte."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("_bytes", "_map")
+
+    def __init__(self, seed=None):
+        self._map = _named_map()
+        self._bytes: dict[int, int] = {}
+        if seed is not None:                                   # a whole image / NativeGameState
+            data = getattr(seed, "data", seed)
+            for o in self._map:
+                self._bytes[o] = data[DGROUP_BASE + o]
+
+    def _check(self, off):
+        if off not in self._map:
+            raise KeyError(f"FieldBackend: offset 0x{off:04X} is outside every declared field/arena")
+
+    def rb(self, off: int) -> int:
+        off &= 0xFFFF
+        self._check(off)
+        return self._bytes.get(off, 0)
+
+    def wb(self, off: int, v: int) -> None:
+        off &= 0xFFFF
+        self._check(off)
+        self._bytes[off] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v & 0xFF)
+        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+
+    def owner(self, off: int) -> str:
+        """The declared name covering ``off`` — the readable answer to 'what is this byte?'."""
+        return self._map[off & 0xFFFF][0]

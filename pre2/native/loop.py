@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from pre2.views.dgroup_view import apply_contract
 from pre2.views.object_spawn import apply_ds, readers, tile_reader
 from pre2.views.object_tick import LiveWalkerMem
 from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
@@ -33,10 +34,8 @@ from pre2.native.player import native_player_interaction, native_player_step
 
 
 def _apply_bytes(state, writes) -> None:
-    """Apply a byte-level ``{offset: value}`` DGROUP contract (e.g. tick_terrain_entities' overlay writes)."""
-    base = DATA_SEG << 4
-    for off, val in writes.items():
-        state.data[(base + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
+    """Apply a byte-level ``{offset: value}`` DGROUP contract (via THE contract seam in views)."""
+    apply_contract(state, writes)
 
 
 class _NativeCpuView:

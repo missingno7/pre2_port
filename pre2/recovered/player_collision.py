@@ -404,23 +404,22 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
 
 
 def _wall_marker_push(rw) -> dict:
-    """The wall-impact marker registration ``1030:64FA``: drop ``(X<<3, Y<<3)`` into the first free 8-byte slot
-    of the list at ``0x6EA9`` (free = leading word ``0x55AA``). Returns the slot's word/byte writes, or ``{}`` if
-    the list is full. Slot offsets are genuinely dynamic (an array walk), so they stay raw here — a MarkerSlot
-    ``StructArray`` is the eventual home. NOTE: never reached in any current demo (the side-solid ``0x805E&0x10``
-    tile never occurs; walls block via ``collision_hblock``) — transcribed from the ASM at ASM_MATCHED
-    confidence, not lockstep VERIFIED."""
-    p = PlayerView(DictBackend(lambda o: rw(o) & 0xFF, rw))       # named player reads (word fields only)
-    si = WALL_MARKER_LIST
-    while si < WALL_MARKER_END:                                    # [64FD-6529]
-        if rw(si) == 0x55AA:                                       # [64FD] free slot
-            return {si: (p.x << 3) & 0xFFFF,                       # [6505-650A] X<<3 (word)
-                    (si + 2) & 0xFFFF: (p.y << 3) & 0xFFFF,         # [650C-6511] Y<<3 (word)
-                    (si + 4) & 0xFFFF: 0,                          # [6514] byte
-                    (si + 5) & 0xFFFF: 0,                          # [6518] byte
-                    (si + 7) & 0xFFFF: 0}                          # [651C] byte
-        si += 8                                                    # [6522]
-    return {}
+    """The wall-impact marker registration ``1030:64FA``: drop ``(X<<3, Y<<3)`` into the first free marker
+    slot (free = leading word ``0x55AA``). Returns the slot's word/byte writes, or ``{}`` if the list is
+    full. NOTE: never reached in any current demo (the side-solid ``0x805E&0x10`` tile never occurs; walls
+    block via ``collision_hblock``) — transcribed from the ASM at ASM_MATCHED confidence, not lockstep
+    VERIFIED."""
+    be = DictBackend(lambda o: rw(o) & 0xFF, rw)
+    p, g = PlayerView(be), PlayerGlobals(be)
+    for marker in g.wall_markers:                                  # [64FD-6529] the 64FA slot scan
+        if marker.free:                                            # [64FD] leading word == 0x55AA
+            marker.x = (p.x << 3) & 0xFFFF                         # [6505-650A] X<<3 (word)
+            marker.y = (p.y << 3) & 0xFFFF                         # [650C-6511] Y<<3 (word)
+            marker.b4 = 0                                          # [6514]
+            marker.b5 = 0                                          # [6518]
+            marker.b7 = 0                                          # [651C]
+            return be.writes
+    return {}                                                      # [6522/6529] list full
 
 
 def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:

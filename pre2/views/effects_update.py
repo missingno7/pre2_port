@@ -30,9 +30,6 @@ def tile_reader(mem):
 
 
 def apply_ds(mem, writes) -> None:
-    """Apply a recovered ``{offset: (value, width)}`` DGROUP write contract."""
-    base = (DATA_SEG << 4) & 0xFFFFF
-    for off, (val, width) in writes.items():
-        mem.data[(base + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
-        if width == 2:
-            mem.data[(base + ((off + 1) & 0xFFFF)) & 0xFFFFF] = (val >> 8) & 0xFF
+    """Apply a recovered ``{offset: (value, width)}`` DGROUP write contract (via THE contract seam)."""
+    from pre2.views.dgroup_view import apply_contract
+    apply_contract(mem, writes)
