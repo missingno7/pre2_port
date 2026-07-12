@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from pre2.recovered.player_collision import (
+    collision,
     collision_airborne,
     collision_bridge_dip,
     collision_ceiling,
@@ -41,6 +42,44 @@ def test_slope_offset_disasm_formula():
     assert collision_slope_offset(0x25, 9) == 5 - 3
     # down-slope with a negative result sign-extends to a word: quot=15//3=5, low=0 -> -5
     assert collision_slope_offset(0x20, 15) == (-5) & 0xFFFF
+
+
+def test_offtop_worker_runs_air_physics_and_skips_tiles():
+    # Issue #4: a high bounce (e.g. off the right spider in the first cave) launches the player above the
+    # level ceiling ([0x4F1E] <= -1). The 5B81 worker's off-top branch (5B8B) must run the in-air physics,
+    # mark the player firmly airborne, and skip ALL tile interaction — not fail loud. Transcribed from disasm:
+    #   5B84 cmp [4F1E],-1 / 5B89 jg 5B96 ; 5B8B call 63B5 ; 5B8E mov byte [6BF3],0xFF ; 5B93 jmp 5C77 (ret).
+    # collision() reads via a byte-addressable overlay (a word = two consecutive bytes), so lay the state out
+    # as bytes — storing a word at its address alone would read its high byte back as 0 (a -0x20 Y that the
+    # overlay reconstructs as a positive 0x00E0, silently missing the off-top branch this test targets).
+    mem: dict[int, int] = {}
+
+    def setw(a, v):
+        mem[a] = v & 0xFF
+        mem[a + 1] = (v >> 8) & 0xFF
+
+    setw(0x4F1E, (-0x20) & 0xFFFF)   # Y above the top of the level
+    setw(0x4F1C, 0x0800)             # X
+    setw(0x4F22, (-0x30) & 0xFFFF)   # Xvel
+    setw(0x4F2A, (-0x40) & 0xFFFF)   # Yvel (rising)
+    setw(0x2DE4, 0x80)               # camera X near the player -> _out_of_camera_range stays quiet
+    setw(0x2DE6, 0x00)               # camera Y
+    for addr, val in {0x2CF5: 0x30, 0x8166: 0, 0x6BF3: 1, 0x6BFE: 0, 0x6BC5: 0,
+                      0x6BD0: 0, 0x6BD2: 5, 0x6BE0: 0}.items():
+        mem[addr] = val              # byte fields
+    rb = lambda o: mem.get(o, 0) & 0xFF                                     # noqa: E731
+    rw = lambda o: (mem.get(o, 0) & 0xFF) | ((mem.get(o + 1, 0) & 0xFF) << 8)  # noqa: E731
+    expect_air = collision_airborne(rw, rb)      # the 63B5 air physics for this exact state
+
+    ds, mp, redraws = collision(rb, rw, lambda o: 0)   # must NOT raise (the reported freeze)
+
+    dsw = lambda a: (ds.get(a, 0) & 0xFF) | ((ds.get(a + 1, 0) & 0xFF) << 8)   # noqa: E731 (byte-dict -> word)
+    for k, v in expect_air.items():              # the air physics (drift + gravity + fall anim) ran
+        assert dsw(k) == v
+    assert ds[0x6BF3] == 0xFF                     # [5B8E] firmly airborne (full-byte 0xFF, not the |1 elsewhere)
+    assert ds[0x6BD2] == 0                        # post-worker else-branch [5B54] (6BF3 != 1)
+    assert mp == {} and redraws == []            # NO tile interaction: no bridge dip, no map writes, no redraws
+    assert 0x6BAB not in ds                       # the bridge-dip current-cell write never happened
 
 
 def test_land_rising_sets_airborne():

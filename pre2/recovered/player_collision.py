@@ -434,8 +434,16 @@ def _offcamera_trigger(rb) -> dict:
 def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
     """The tile-interaction worker ``1030:5B81`` composed onto the overlay ``ov`` (``cell_bx`` = the tile one row
     above the foot). Off-top (`Y<=-1`) + foot-tile remap + bridge-dip + ground dispatch + ceiling."""
-    if _s16(ov.rw(0x4F1E)) <= -1:                                  # [5B84] above the top of the level
-        raise NotImplementedError("collision worker off-top (5B8B, Y<=-1) not witnessed")
+    if _s16(ov.rw(0x4F1E)) <= -1:                                  # [5B84 cmp [4F1E],-1 / 5B89 jg 5B96]
+        # Off-top: the player is above the level ceiling (e.g. a high bounce off a spider). There is no tile
+        # up here, so the worker skips ALL tile interaction and just runs the in-air physics, marks the player
+        # firmly airborne, and returns. Transcribed from the 5B8B branch (disasm):
+        #   5B8B  call 63B5            -> collision_airborne (air drift + gravity + fall anim; already recovered)
+        #   5B8E  mov byte [6BF3],FFh  -> airborne flag = 0xFF (a full byte, not the |1 used elsewhere)
+        #   5B93  jmp 5C77             -> the worker epilogue (pop bp/bx/ax; ret) = skip the tile body
+        ov.apply_ds(collision_airborne(ov.rw, ov.rb))             # [5B8B -> 63B5]
+        ov.apply_ds({0x6BF3: 0xFF})                               # [5B8E]
+        return                                                     # [5B93]
     di = (cell_bx + 0x100) & 0xFFFF                                # [5B97] foot tile
     foot_tile = ov.read_es(di) if ov.rb(0x2CF5) > (di >> 8) else 0  # [5B9D-5BA6] map-bounds clamp
     idx = ov.rb((GROUND_REMAP_TABLE + foot_tile) & 0xFFFF)         # [5BA8] cs:[0x7D9B] index
