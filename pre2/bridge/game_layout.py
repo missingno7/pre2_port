@@ -12,21 +12,26 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import (Actor, ArenaEntity, ByteBuffer, Camera, EffectSlot, Input, LevelState, Motion,
-                             Player, PlayerState, Progress, Rng, Scroll, WallMarker)
+from pre2.game.model import (Actor, ArenaEntity, AttackState, AttractState, Boss, ByteBuffer, Camera,
+                             CameraScript, DifficultyMode, EffectSlot, HitScratch, Input, LevelState, Motion,
+                             Player, PlayerState, Progress, Rng, SceneryState, Scroll, SpawnCursor, WallMarker)
 
 # named working-memory buffers the tick scribbles as raw bytes: (attr, base, length). Modeled as a bytearray,
 # not fields (transient scratch, not records). These finish draining the mutable state off the image.
 _BUFFERS = [
     ("level_scratch_lo", 0x003F, 0x6D - 0x3F), ("level_scratch_mid", 0x0535, 0x1E),
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
-    ("proj_slot_scratch", 0xA32E, 0x13), ("camera_target_scratch", 0xA3F7, 0x30),
-    ("effect_source_camera", 0x8F1D, 0x9203 - 0x8F1D),   # effect-sprite source records + camera-engine state
+    # proj_slot_scratch (0xA32E..0xA340) split around the now-named hit_flag/hit_detail/burst_*/spawned_ptr/
+    # anim_ready fields (SpawnCursor/HitScratch): the 3 residual un-named ranges.
+    ("proj_slot_scratch_a", 0xA32E, 2), ("proj_slot_scratch_b", 0xA333, 3), ("proj_slot_scratch_c", 0xA33C, 2),
+    # camera_target_scratch (0xA3F7..0xA426) trimmed to the un-named middle (CameraScript covers both ends)
+    ("camera_target_scratch", 0xA407, 0xA41F - 0xA407),
+    # effect_source_camera trimmed to end right before the now-named SpawnCursor fields (0x91FC..0x9202)
+    ("effect_source_camera", 0x8F1D, 0x91FC - 0x8F1D),
     ("effect_pool_5570", 0x5570, 0x5648 - 0x5570),       # the 0x5570 effect/particle pool region
     ("boot_scratch_1004", 0x1004, 0x04),
     ("keyboard_demo_state", 0x2804, 0x2879 - 0x2804),    # the keyboard scan + demo-cursor state
     ("demo_input_buffer", 0x00D6, 0x0125 - 0x00D6),      # the demo/idle input record buffer
-    ("spawn_offset_ring", 0xA341, 2),
     ("low_scratch_2ea", 0x02EA, 0x0311 - 0x02EA),
     ("trigger_bank_scratch", 0x0553, 0x065E - 0x0553),   # the 41CA trigger/scenery bump-alloc bank
     ("low_scratch_727", 0x0727, 2),
@@ -39,13 +44,16 @@ _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 # sparse working buffers: the last scattered scratch bytes, woven BETWEEN routed fields (so not contiguous).
 # Each groups a list of specific offsets into one named bytearray. Offsets live here in the bridge, as intended.
 _SPARSE = [
-    ("input_scratch", (0x27E9, 0x27F0, 0x27F1, 0x27F2, 0x27F3, 0x287A, 0x287B)),
-    ("render_ptr_scratch", (0x2DBA, 0x2DBB, 0x2DBE, 0x2DBF, 0x2DE8, 0x2DE9, 0x2DEA, 0x2DEB, 0x2DF2, 0x2DF5,
-                            0x2DF6, 0x2DF7)),
-    ("player_flag_scratch", (0x6BBD, 0x6BC0, 0x6BC1, 0x6BD6, 0x6BE8, 0x6BED, 0x6BEE, 0x6BF1, 0x6BF2, 0x6BFA,
-                             0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE)),
-    ("camera_hud_scratch", (0x7B18, 0x7B19, 0xA30E, 0xA30F, 0xA310, 0xA311, 0xA312)),
-    ("misc_scratch", (0x083E, 0x2A7A, 0x2A7B, 0x2DE0, 0x2DE1, 0x6BAB, 0x6BAC, 0x6BFF)),
+    # input_scratch trimmed: in_aux (0x27E9) + idle_clock (0x27F0-1) are now named (AttractState)
+    ("input_scratch", (0x27F2, 0x27F3, 0x287A, 0x287B)),
+    # render_ptr_scratch trimmed: col_ring (0x2DE8-9) is now named (SceneryState)
+    ("render_ptr_scratch", (0x2DBA, 0x2DBB, 0x2DBE, 0x2DBF, 0x2DEA, 0x2DEB, 0x2DF2, 0x2DF5, 0x2DF6, 0x2DF7)),
+    # player_flag_scratch trimmed: page_dirty/firefly_scratch_a/b (0x6BBD/0x6BC0/0x6BC1) now named (SceneryState);
+    # folded in the lone leftover from misc_scratch (0x6BFF)
+    ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BED, 0x6BEE, 0x6BF1, 0x6BF2, 0x6BFA, 0x6BFB, 0x6BFC, 0x6BFD,
+                             0x6BFE, 0x6BFF)),
+    # camera_hud_scratch fully consumed by AttackState + HitScratch -> removed
+    # misc_scratch fully consumed by AttractState/SceneryState (0x6BFF folded above) -> removed
 ]
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
@@ -93,6 +101,35 @@ MOTION_LAYOUT = [
     ("idle_timer", 0x6BD3, 1, False), ("anim_gate", 0x6BD0, 1, False), ("charge", 0x6BCE, 1, False),
     ("hurt_cooldown", 0x6BC9, 1, False),
 ]
+ATTACK_STATE_LAYOUT = [("attack_phase", 0x7B18, 1, False), ("attack_v19", 0x7B19, 1, False),
+                       ("glider_tilt", 0x7B1A, 1, False)]
+HIT_SCRATCH_LAYOUT = [("quake_dist_lo", 0xA30E, 2, False), ("quake_dist_hi", 0xA310, 2, False),
+                      ("hit_pass_full", 0xA312, 1, False), ("hit_flag", 0xA330, 1, False),
+                      ("hit_detail", 0xA331, 2, False)]
+SPAWN_CURSOR_LAYOUT = [
+    ("spawn_count", 0x91FC, 2, False), ("cam_state", 0x91FE, 1, False), ("cursor_x", 0x91FF, 2, False),
+    ("cursor_y", 0x9201, 2, False), ("burst_x", 0xA336, 2, False), ("burst_y", 0xA338, 2, False),
+    ("burst_sprite", 0xA33A, 2, False), ("spawned_ptr", 0xA33E, 2, False), ("anim_ready", 0xA340, 1, False),
+    ("spawn_offset_ring", 0xA341, 2, False),
+]
+CAMERA_SCRIPT_LAYOUT = [
+    ("cam_timer", 0xA3F7, 2, False), ("cmd_byte", 0xA3F9, 1, False), ("dist_dir", 0xA3FA, 1, False),
+    ("dist_x", 0xA3FB, 2, False), ("hit_debounce", 0xA3FD, 2, False), ("script_cursor", 0xA3FF, 2, False),
+    ("script_ptr", 0xA401, 2, False), ("cursor_latch_x", 0xA403, 2, False), ("cursor_latch_y", 0xA405, 2, False),
+    ("cam_param_e", 0xA41F, 2, False), ("cam_target_ptr", 0xA421, 2, False), ("target_a", 0xA423, 2, False),
+    ("target_b", 0xA425, 2, False),
+]
+SCENERY_STATE_LAYOUT = [
+    ("map_rows", 0x2CF5, 1, False), ("dipping_tile", 0x6BAB, 2, False), ("current_object", 0x6BB1, 2, False),
+    ("page_dirty", 0x6BBD, 1, False), ("grid_dirty_token", 0x2DE0, 2, False), ("col_ring", 0x2DE8, 2, False),
+    ("sprite_bank_lo", 0x8C89, 2, False), ("sprite_bank_hi", 0x8C8B, 2, False),
+    ("firefly_scratch_a", 0x6BC0, 1, False), ("firefly_scratch_b", 0x6BC1, 1, False),
+    ("collected_linked", 0x2A7A, 2, False), ("display_page", 0x2DD6, 2, False), ("cam_left", 0x8164, 2, False),
+]
+ATTRACT_STATE_LAYOUT = [("attract_mode", 0x083D, 1, False), ("attract_level", 0x083E, 1, False),
+                        ("in_aux", 0x27E9, 1, False), ("idle_clock", 0x27F0, 2, False)]
+DIFFICULTY_MODE_LAYOUT = [("mode", 0xB197, 1, False), ("mode_copy", 0xB198, 1, False)]
+BOSS_LAYOUT = [("boss_phase", 0xA326, 2, False)]
 # the 12-slot object/enemy list at 0x4FD0 (stride 0x12); the offsets are relative to each slot
 ACTOR_LAYOUT = [
     ("x", 0x00, 2, False), ("y", 0x02, 2, False), ("sprite", 0x04, 2, False), ("def_ptr", 0x06, 2, False),
@@ -197,6 +234,14 @@ _ROUTES = [
     ("motion", Motion, MOTION_LAYOUT, 0, 1, 0),
     ("player_state", PlayerState, PLAYER_STATE_LAYOUT, 0, 1, 0),
     ("scroll", Scroll, SCROLL_LAYOUT, 0, 1, 0),
+    ("attack_state", AttackState, ATTACK_STATE_LAYOUT, 0, 1, 0),
+    ("hit_scratch", HitScratch, HIT_SCRATCH_LAYOUT, 0, 1, 0),
+    ("spawn_cursor", SpawnCursor, SPAWN_CURSOR_LAYOUT, 0, 1, 0),
+    ("camera_script", CameraScript, CAMERA_SCRIPT_LAYOUT, 0, 1, 0),
+    ("scenery_state", SceneryState, SCENERY_STATE_LAYOUT, 0, 1, 0),
+    ("attract_state", AttractState, ATTRACT_STATE_LAYOUT, 0, 1, 0),
+    ("difficulty_mode", DifficultyMode, DIFFICULTY_MODE_LAYOUT, 0, 1, 0),
+    ("boss", Boss, BOSS_LAYOUT, 0, 1, 0),
     ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
     ("projectiles", EffectSlot, EFFECT_SLOT_LAYOUT, _PROJECTILE_BASE, _PROJECTILE_COUNT, 0x12),
     ("popup_ring", EffectSlot, EFFECT_SLOT_LAYOUT, _RING_BASE, _RING_COUNT, 0x12),

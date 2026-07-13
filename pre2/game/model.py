@@ -386,3 +386,106 @@ class LevelState:
     @level_end_mode.setter
     def level_end_mode(self, v: int) -> None:
         self.end_mode = v
+
+
+@dataclass
+class AttackState:
+    """The player's club-attack phase + the glider tilt (adjacent DOS bytes, same combat-input family)."""
+
+    attack_phase: int = 0    # index into the 5-byte attack-phase record table
+    attack_v19: int = 0      # the phase's projectile damage/tolerance value
+    glider_tilt: int = 3     # glider tilt/pitch 0..6, neutral 3
+
+
+@dataclass
+class HitScratch:
+    """Per-frame hitbox/quake scratch the combat + boss-quake code shares."""
+
+    quake_dist_lo: int = 0   # boss-quake player-distance^2, low word
+    quake_dist_hi: int = 0   # ... high word (must be 0 for the proximity test)
+    hit_pass_full: int = 0   # set across a pass -> hitbox_overlap uses the FULL (un-halved) tolerance
+    hit_flag: int = 0        # hitbox_overlap's vertical-detail hit flag
+    hit_detail: int = 0      # vertical penetration depth when hit_flag is set
+
+
+@dataclass
+class SpawnCursor:
+    """The level-spawn / effect-burst cursor state."""
+
+    spawn_count: int = 0       # the level spawn param (>>3 = spawn count; boss damage decrements)
+    cam_state: int = 0         # the camera sequencer's 8-state machine state (0xFF = disabled)
+    cursor_x: int = 0          # the spawn/camera cursor position
+    cursor_y: int = 0
+    burst_x: int = 0           # spawn_effect_burst origin X
+    burst_y: int = 0           # ... origin Y
+    burst_sprite: int = 0      # ... the burst sprite id
+    spawned_ptr: int = 0       # the just-spawned burst-slot pointer
+    anim_ready: int = 0        # object_update's per-step anim-ready scratch byte
+    spawn_offset_ring: int = 0  # 16-slot ring index into the spawn X-offset table
+
+
+@dataclass
+class CameraScript:
+    """The scripted-camera sequencer: its per-state timer, the live script cursor, and the 4 target-record
+    pointers the script positions the camera against."""
+
+    cam_timer: int = 0         # the sequencer's per-state frame timer
+    cmd_byte: int = 0          # the camera-script command byte (bit6 = a vertical nudge)
+    dist_dir: int = 0          # 1 if the cursor is left of the player
+    dist_x: int = 0            # |player_X - cursor_X|
+    hit_debounce: int = 0      # frame stamp of the last camera-target hit (debounce window)
+    script_cursor: int = 0     # the live camera-script cursor (into the bytecode)
+    script_ptr: int = 0        # the active camera-script pointer (script_last detects changes)
+    cursor_latch_x: int = 0    # cursor pos latched per script command
+    cursor_latch_y: int = 0
+    cam_param_e: int = 0       # the 5th camera-target param word (no position pair)
+    cam_target_ptr: int = 0    # camera target record-ptr latch
+    target_a: int = 0          # camera target record-ptr A (free sprites that hit it)
+    target_b: int = 0          # camera target record-ptr B
+
+
+@dataclass
+class SceneryState:
+    """Scattered level/scenery bookkeeping: the map bound, sagging-bridge tracking, the FSM's current-object
+    pointer, redraw flags, the sprite-ref rebase banks, and the render-mirror display page."""
+
+    map_rows: int = 0            # the map's bottom row bound
+    dipping_tile: int = 0        # map offset of the currently-sagging bridge tile; 0x55AA = none
+    current_object: int = 0      # the FSM's current-object pointer; NULL outside object-vs-object collision
+    page_dirty: int = 0          # one-tile direct re-blit page flag
+    grid_dirty_token: int = 0    # the whole-grid-dirty companion token (0x55AA)
+    col_ring: int = 0            # the background column ring index
+    sprite_bank_lo: int = 0      # entity sprite-ref rebase bank base A
+    sprite_bank_hi: int = 0      # ... bank base B
+    firefly_scratch_a: int = 0   # the firefly pass's per-frame scratch pair
+    firefly_scratch_b: int = 0
+    collected_linked: int = 0    # the LINKED-item collected count
+    display_page: int = 0        # the CRTC display-start page the present flips
+    cam_left: int = 0            # camera-left tile — the X-integrate right bound
+
+
+@dataclass
+class AttractState:
+    """The attract-mode / demo-header state."""
+
+    attract_mode: int = 0     # the attract-demo header's mode byte
+    attract_level: int = 0    # the attract/default level header
+    in_aux: int = 0           # the sixth input flag (single scancode source) — idle-gate input
+    idle_clock: int = 0       # the PIT-fed idle counter (the fidget selector reads &0x1FF)
+
+
+@dataclass
+class Boss:
+    """The level-6/boss fight phase. ``boss_x``/``boss_y`` (the boss's own position) are NOT duplicated here —
+    they physically overlay ``target_records[0].x``/``.y`` (a DOS memory alias, two names for one word), so
+    they are already real fields, just reached through the camera-target array rather than this dataclass."""
+
+    boss_phase: int = 0   # advances every 7 hits
+
+
+@dataclass
+class DifficultyMode:
+    """The BEGINNER/EXPERT difficulty toggle."""
+
+    mode: int = 0        # 0 = BEGINNER / 1 = EXPERT
+    mode_copy: int = 0   # the committed copy the loader reads
