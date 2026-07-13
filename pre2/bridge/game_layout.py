@@ -21,6 +21,7 @@ _BUFFERS = [
     ("level_scratch_lo", 0x0043, 0x2A), ("level_scratch_mid", 0x0535, 0x1E),
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
     ("proj_slot_scratch", 0xA32E, 0x13), ("camera_target_scratch", 0xA3F7, 0x30),
+    ("effect_source_camera", 0x8F1D, 0x9203 - 0x8F1D),   # effect-sprite source records + camera-engine state
 ]
 _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 
@@ -87,7 +88,9 @@ _RING_BASE, _RING_COUNT = 0x4F76, 5                 # the sparkle / popup trail 
 _BURST_BASE, _BURST_COUNT = 0x50A8, 20              # the score/effect-burst free object pool (0x50A8..0x52E8)
 _DST_BASE, _DST_COUNT = 0x52E8, 20                  # the DST effect-particle pool (0x52E8..0x5450)
 _DEBRIS_BASE, _DEBRIS_COUNT = 0x5450, 16            # the debris-element pool
+_SLOT0_BASE, _SLOT0_COUNT = 0x4F0A, 1               # render slot 0 (the one below the player)
 _EFFECT_ROW_BASE, _EFFECT_ROW_COUNT = 0x56A2, 8     # the horizontal effect-row sprites
+_TARGET_BASE, _TARGET_COUNT = 0x5648, 5             # the 5 camera-target flash records
 # the wall-impact marker table (0x6EA9..0x6F49, 20 x 8-byte records = four words each)
 WALL_MARKER_LAYOUT = [("token", 0, 2, False), ("map_off", 2, 2, False), ("data0", 4, 2, False),
                       ("data1", 6, 2, False)]
@@ -178,6 +181,8 @@ _ROUTES = [
     ("dst_pool", EffectSlot, EFFECT_SLOT_LAYOUT, _DST_BASE, _DST_COUNT, 0x12),
     ("debris", EffectSlot, EFFECT_SLOT_LAYOUT, _DEBRIS_BASE, _DEBRIS_COUNT, 0x12),
     ("effect_row", EffectSlot, EFFECT_SLOT_LAYOUT, _EFFECT_ROW_BASE, _EFFECT_ROW_COUNT, 0x12),
+    ("target_records", EffectSlot, EFFECT_SLOT_LAYOUT, _TARGET_BASE, _TARGET_COUNT, 0x12),
+    ("slot0", EffectSlot, EFFECT_SLOT_LAYOUT, _SLOT0_BASE, _SLOT0_COUNT, 0x12),
     ("wall_markers", WallMarker, WALL_MARKER_LAYOUT, _WALL_MARKER_BASE, _WALL_MARKER_COUNT, 8),
 ]
 
