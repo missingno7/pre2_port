@@ -25,6 +25,14 @@ _BUFFERS = [
     ("effect_pool_5570", 0x5570, 0x5648 - 0x5570),       # the 0x5570 effect/particle pool region
     ("boot_scratch_1004", 0x1004, 0x04),
     ("keyboard_demo_state", 0x2804, 0x2879 - 0x2804),    # the keyboard scan + demo-cursor state
+    ("demo_input_buffer", 0x00D6, 0x0125 - 0x00D6),      # the demo/idle input record buffer
+    ("spawn_offset_ring", 0xA341, 2),
+    ("low_scratch_2ea", 0x02EA, 0x0311 - 0x02EA),
+    ("trigger_bank_scratch", 0x0553, 0x065E - 0x0553),   # the 41CA trigger/scenery bump-alloc bank
+    ("low_scratch_727", 0x0727, 2),
+    ("item_collect_state", 0x6C12, 0x6CA0 - 0x6C12),     # per-item collected counts + totals
+    ("prop_scratch_7e0a", 0x7E0A, 0x7E1C - 0x7E0A),
+    ("prop_scratch_846b", 0x846B, 0x847E - 0x846B),
 ]
 _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 
@@ -37,6 +45,7 @@ _SPARSE = [
     ("player_flag_scratch", (0x6BBD, 0x6BC0, 0x6BC1, 0x6BD6, 0x6BE8, 0x6BED, 0x6BEE, 0x6BF1, 0x6BF2, 0x6BFA,
                              0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE)),
     ("camera_hud_scratch", (0x7B18, 0x7B19, 0xA30E, 0xA30F, 0xA310, 0xA311, 0xA312)),
+    ("misc_scratch", (0x2A7A, 0x2A7B, 0x2DE0, 0x2DE1, 0x6BAB, 0x6BAC, 0x6BFF)),
 ]
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
@@ -213,11 +222,14 @@ class DataclassBackend:
     """
 
     _IS_DGROUP_BACKEND = True
-    __slots__ = ("_img", "_objs", "_map", "_arena", "_sparse")
+    __slots__ = ("_img", "_objs", "_map", "_arena", "_sparse", "_readonly_image")
 
-    def __init__(self, seed):
+    def __init__(self, seed, readonly_image=False):
+        # readonly_image=True asserts the invariant that the gameplay tick writes NOTHING to the image (all
+        # mutable state is on the object graph); any fallback write then raises. The image is pure loaded data.
         data = getattr(seed, "data", seed)
         self._img = data
+        self._readonly_image = readonly_image
         self._objs: dict[str, object] = {}
         # absolute dgroup offset -> (object, field, byte_index, width, signed) — mapped straight to the instance
         self._map: dict[int, tuple] = {}
@@ -288,6 +300,9 @@ class DataclassBackend:
         val &= 0xFF
         m = self._map.get(off)
         if m is None:
+            if self._readonly_image:
+                raise AssertionError(f"gameplay tick wrote to the read-only image at 0x{off:04X} — an "
+                                     f"un-routed mutable byte (the object graph is not the complete store)")
             self._img[DGROUP_BASE + off] = val
             return
         inst, f, k, w, s = m

@@ -17,8 +17,13 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "dos_re"))
 
 DGROUP_BASE = 0x1A0F << 4
 
-CORPUS = ["artifacts/demo_pre2_full_gorilla_20260628_203423", "artifacts/demo_pre2_20260706_020106",
-          "artifacts/demo_pre2_20260712_121135", "artifacts/demo_cold_20260712_172030"]
+def _corpus():
+    import glob
+    return sorted(set(glob.glob(str(ROOT / "artifacts" / "demo_pre2_*"))
+                      + glob.glob(str(ROOT / "artifacts" / "demo_cold_*"))))
+
+
+CORPUS = _corpus()
 
 
 def run_demo(demo_dir: Path) -> int:
@@ -30,7 +35,9 @@ def run_demo(demo_dir: Path) -> int:
     gtd = GameTickDemo.load(demo_dir / "game_tick_demo.bin")
     ref = NativeGameState(bytearray(gtd.seed))
     obj = NativeGameState(bytearray(gtd.seed))
-    obj.backend = DataclassBackend(obj)
+    # readonly_image=True asserts the gap-#1 invariant: the tick writes NOTHING to the image (all mutable state
+    # is on the object graph). Any un-routed mutable write raises instead of silently passing.
+    obj.backend = DataclassBackend(obj, readonly_image=True)
 
     n = 0
     for i in range(gtd.n_ticks):
