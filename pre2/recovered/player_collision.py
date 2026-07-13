@@ -40,12 +40,34 @@ WALL_MARKER_LIST = 0x6EA9         # [asm 64FA] 10x 8-byte wall-impact markers; s
 WALL_MARKER_END = 0x6F49          # [asm 6525] one past the last marker slot
 PLAYER_ANIM_HEIGHT_TABLE = 0x7191  # [asm 5AAF] anim frame -> player vertical extent (scan-loop row count)
 
+# player-record + player-state byte fields the collision handlers write (named once; the width-contract set
+# below lists them). The player-record bytes are relative to the player slot base; the rest are the
+# PlayerGlobals state bytes (= the like-named PlayerView/PlayerGlobals fields in dgroup_view).
+PLAYER_SLOT = 0x4F1C        # the player render/physics record base (= PLAYER_BASE)
+PLAYER_Y = PLAYER_SLOT + 2  # player Y
+FALL_FRAMES = 0x6BD2        # descending-fall counter
+FALL_LATCH = 0x6BD1         # fall-started latch
+ANIM_GATE = 0x6BD0          # hold-current-anim / FSM-route gate
+FALL_GRACE = 0x6BE0         # coyote-time / fall grace
+PENDING_PICKUP = 0x6BE1     # queued pickup id
+SHAKE_MAGNITUDE = 0x6BEA    # screen-shake magnitude
+LOW_GRAVITY = 0x6BC7        # low-gravity / attack-invuln flag
+FLY_TIMER = 0x6BC8          # flight timer
+END_SIGNAL = 0x6BE5         # level-end signal
+GRID_DIRTY = 0x2DF4         # whole-grid redraw request
+PAGE_DIRTY = 0x6BBD         # one-tile direct re-blit page-dirty byte
+RESPAWN_STATE = 0x6BE4      # respawn-pending state
+ENERGY = 0x27D6             # player energy (0..3)
+LIVES = 0x27D8              # 1-up count
+
 # The byte-width DS fields the collision handlers write; every other DS write is a 16-bit word. Used by the
 # composition's byte-level overlay so a later read sees an earlier write at the correct width.
 COLLISION_BYTE_FIELDS = frozenset({
-    0x4F24, 0x4F25, 0x6BF3, 0x6BD2, 0x6BD1, 0x6BD0, 0x6BE0, 0x6BE1, 0x6BEA, 0x6BC7, 0x6BC8, 0x6BE5, 0x2DF4,
-    0x6BBD,                  # bridge-dip 653D direct-redraw page-dirty byte (mov byte [0x6bbd],1)
-    0x6BE4, 0x27D6, 0x27D8,  # off-camera trigger (65B3)
+    PLAYER_SLOT + 8, PLAYER_SLOT + 9,   # the player Xvel word, written a byte at a time
+    AIRBORNE_FLAG, FALL_FRAMES, FALL_LATCH, ANIM_GATE, FALL_GRACE, PENDING_PICKUP, SHAKE_MAGNITUDE,
+    LOW_GRAVITY, FLY_TIMER, END_SIGNAL, GRID_DIRTY,
+    PAGE_DIRTY,                       # bridge-dip 653D direct-redraw page-dirty byte (mov byte [0x6bbd],1)
+    RESPAWN_STATE, ENERGY, LIVES,     # off-camera trigger (65B3)
     # wall-marker slot trailing bytes (+4/+5/+7 of each 8-byte record)
     *(s + d for s in range(WALL_MARKER_LIST, WALL_MARKER_END, 8) for d in (4, 5, 7)),
 })
@@ -282,7 +304,7 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
     elif idx != 0:                                              # idx 3-15 still unwitnessed
         raise NotImplementedError(f"ceiling handler idx {idx} not recovered")
 
-    if solid and _s16(be.writes.get(0x4F1E, p.y)) > 0:           # [5C38-5C42] solid + Y>0 -> corner-slip nudge
+    if solid and _s16(be.writes.get(PLAYER_Y, p.y)) > 0:           # [5C38-5C42] solid + Y>0 -> corner-slip nudge
         dx = -1 if p.xvel > 0 else 1                             # [5C44-5C51] step away from the facing edge
         n1 = Tables(rb).ceil_props[read_es((di + dx + 0x100) & 0xFFFF)]  # [5C54-5C5C]
         if n1 == 0:                                              # [5C5E] this side is open -> slip into it
@@ -313,9 +335,9 @@ def _ground_snap_or_fall(rb, rw, read_es, di: int) -> dict:
         g.airborne = collision_fall(g.airborne)
         return be.writes
     stepped_y = (p.y + 0x10) & 0xFFFF                                # [660F] drop one tile row
-    rw2 = lambda o: stepped_y if o == 0x4F1E else rw(o)             # noqa: E731 — the stepped-Y read shim
+    rw2 = lambda o: stepped_y if o == PLAYER_Y else rw(o)             # noqa: E731 — the stepped-Y read shim
     out = collision_land(rb, rw2, read_es, (di + 0x100) & 0xFFFF)   # [660B/6614 -> 0x641F] land on the row below
-    out.setdefault(0x4F1E, stepped_y)
+    out.setdefault(PLAYER_Y, stepped_y)
     return out
 
 
