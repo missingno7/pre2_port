@@ -12,7 +12,10 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import (Actor, Camera, EffectSlot, Input, LevelState, Motion, Player, Progress, Rng)
+from pre2.game.model import (Actor, ArenaEntity, Camera, EffectSlot, Input, LevelState, Motion, Player,
+                             Progress, Rng)
+
+_ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
 
 DGROUP_BASE = 0x1A0F << 4
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
@@ -157,7 +160,7 @@ class DataclassBackend:
     """
 
     _IS_DGROUP_BACKEND = True
-    __slots__ = ("_img", "_objs", "_map")
+    __slots__ = ("_img", "_objs", "_map", "_arena")
 
     def __init__(self, seed):
         data = getattr(seed, "data", seed)
@@ -173,6 +176,26 @@ class DataclassBackend:
                 for f, off, w, s in layout:
                     for bk in range(w):
                         self._map[(b0 + off + bk) & 0xFFFF] = (inst, f, bk, w, s)
+        # the variable-stride entity arena (0x8489): parse once (boundaries stable during a tick) and route each
+        # record's header fields + body bytes. A body byte is marked with width 0 (index into ``inst.body``).
+        self._arena: list[tuple[int, ArenaEntity]] = []
+        i = _ARENA_LO
+        while i <= _ARENA_HI:
+            b = DGROUP_BASE + i
+            st = data[b]
+            if st == 0 or st >= _ARENA_STRIDE_END:
+                break
+            e = ArenaEntity(st, data[b + 1], data[b + 2] | (data[b + 3] << 8), data[b + 4],
+                            bytearray(data[b + 5:b + st]))
+            self._arena.append((i, e))
+            hdr = [("stride", 0, 1), ("flags1", 1, 1), ("sprite_ref", 2, 2), ("skip", 4, 1)]
+            for f, off, w in hdr:
+                for bk in range(w):
+                    self._map[(i + off + bk) & 0xFFFF] = (e, f, bk, w, False)
+            for k in range(st - 5):
+                self._map[(i + 5 + k) & 0xFFFF] = (e, "body", k, 0, False)
+            i += st
+        self._objs["entities"] = [e for _, e in self._arena]
 
     # convenience accessors
     player = property(lambda self: self._objs["player"])
@@ -180,6 +203,7 @@ class DataclassBackend:
     camera = property(lambda self: self._objs["camera"])
     progress = property(lambda self: self._objs["progress"])
     actors = property(lambda self: self._objs["actors"])
+    entities = property(lambda self: self._objs["entities"])
 
     def rb(self, off: int) -> int:
         off &= 0xFFFF
@@ -187,6 +211,8 @@ class DataclassBackend:
         if m is None:
             return self._img[DGROUP_BASE + off]
         inst, f, k, w, _s = m
+        if w == 0:                                  # a variable-length record body byte
+            return inst.body[k]
         return (getattr(inst, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
 
     def wb(self, off: int, val: int) -> None:
@@ -197,6 +223,9 @@ class DataclassBackend:
             self._img[DGROUP_BASE + off] = val
             return
         inst, f, k, w, s = m
+        if w == 0:                                  # a variable-length record body byte
+            inst.body[k] = val
+            return
         v = getattr(inst, f) & ((1 << (8 * w)) - 1)
         v = (v & ~(0xFF << (8 * k))) | (val << (8 * k))
         if s and v & (1 << (8 * w - 1)):
@@ -216,3 +245,11 @@ class DataclassBackend:
             insts = self._objs[attr] if count > 1 else [self._objs[attr]]
             for k, inst in enumerate(insts):
                 _obj_to_image(inst, layout, data, base + k * stride)
+        for start, e in self._arena:
+            b = DGROUP_BASE + start
+            data[b] = e.stride & 0xFF
+            data[b + 1] = e.flags1 & 0xFF
+            data[b + 2] = e.sprite_ref & 0xFF
+            data[b + 3] = (e.sprite_ref >> 8) & 0xFF
+            data[b + 4] = e.skip & 0xFF
+            data[b + 5:b + 5 + len(e.body)] = e.body

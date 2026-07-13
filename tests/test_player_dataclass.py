@@ -28,6 +28,8 @@ def test_tick_runs_with_player_as_a_live_dataclass():
     assert isinstance(obj.backend.player, Player) and isinstance(obj.backend.rng, Rng)
     assert isinstance(obj.backend.camera, Camera) and isinstance(obj.backend.progress, Progress)
     assert len(obj.backend.actors) == 12 and all(isinstance(a, Actor) for a in obj.backend.actors)
+    from pre2.game.model import ArenaEntity
+    assert obj.backend.entities and all(isinstance(e, ArenaEntity) for e in obj.backend.entities)
 
     for i in range(min(gtd.n_ticks, 15)):
         idle = gtd.idle[i] if i < len(gtd.idle) else None

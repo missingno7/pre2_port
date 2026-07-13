@@ -14,7 +14,7 @@ The bridge's serialiser is what re-projects these onto the overlapping original 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -98,6 +98,26 @@ class EffectSlot:
     yvel: int = 0
     aux_10: int = 0
     life: int = 0          # life / substate byte
+
+
+@dataclass
+class ArenaEntity:
+    """One record of the variable-stride 2nd-pass entity list (0x8489). The header is named; ``body`` holds the
+    handler-specific bytes past it. Entry 0 is the player. ``sprite_ref == 0xFFFF`` means empty."""
+
+    stride: int            # record length in bytes
+    flags1: int            # bit7 = off-screen cull, bits0-6 = handler index
+    sprite_ref: int        # the sprite/anim reference word
+    skip: int              # [+4] bit2 = skip
+    body: bytearray = field(default_factory=bytearray)
+
+    @property
+    def handler_idx(self) -> int:
+        return self.flags1 & 0x7F
+
+    @property
+    def empty(self) -> bool:
+        return self.sprite_ref == 0xFFFF
 
 
 @dataclass

@@ -66,8 +66,9 @@ def main(argv) -> int:
         c = run_demo(p)
         total += c
         print(f"  PASS: {d} — {c} ticks with {len(_ROUTES)} live dataclasses, byte-identical")
-    print(f"\ntick-on-dataclasses: the gameplay tick runs with {n_objs} offset-free dataclass instances across "
-          f"{len(_ROUTES)} structures ({names}) — {total} ticks across {len(demos)} demos, byte-identical")
+    print(f"\ntick-on-dataclasses: the gameplay tick runs with {n_objs}+ offset-free dataclass instances across "
+          f"{len(_ROUTES)} structures ({names}) PLUS the variable-stride entity arena — "
+          f"{total} ticks across {len(demos)} demos, byte-identical")
     return 0
 
 
