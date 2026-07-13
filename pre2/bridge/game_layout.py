@@ -22,6 +22,9 @@ _BUFFERS = [
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
     ("proj_slot_scratch", 0xA32E, 0x13), ("camera_target_scratch", 0xA3F7, 0x30),
     ("effect_source_camera", 0x8F1D, 0x9203 - 0x8F1D),   # effect-sprite source records + camera-engine state
+    ("effect_pool_5570", 0x5570, 0x5648 - 0x5570),       # the 0x5570 effect/particle pool region
+    ("boot_scratch_1004", 0x1004, 0x04),
+    ("keyboard_demo_state", 0x2804, 0x2879 - 0x2804),    # the keyboard scan + demo-cursor state
 ]
 _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 
