@@ -18,7 +18,7 @@ from pre2.game.model import (Actor, ArenaEntity, ByteBuffer, Camera, EffectSlot,
 # named working-memory buffers the tick scribbles as raw bytes: (attr, base, length). Modeled as a bytearray,
 # not fields (transient scratch, not records). These finish draining the mutable state off the image.
 _BUFFERS = [
-    ("level_scratch_lo", 0x0043, 0x2A), ("level_scratch_mid", 0x0535, 0x1E),
+    ("level_scratch_lo", 0x003F, 0x6D - 0x3F), ("level_scratch_mid", 0x0535, 0x1E),
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
     ("proj_slot_scratch", 0xA32E, 0x13), ("camera_target_scratch", 0xA3F7, 0x30),
     ("effect_source_camera", 0x8F1D, 0x9203 - 0x8F1D),   # effect-sprite source records + camera-engine state
@@ -45,7 +45,7 @@ _SPARSE = [
     ("player_flag_scratch", (0x6BBD, 0x6BC0, 0x6BC1, 0x6BD6, 0x6BE8, 0x6BED, 0x6BEE, 0x6BF1, 0x6BF2, 0x6BFA,
                              0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE)),
     ("camera_hud_scratch", (0x7B18, 0x7B19, 0xA30E, 0xA30F, 0xA310, 0xA311, 0xA312)),
-    ("misc_scratch", (0x2A7A, 0x2A7B, 0x2DE0, 0x2DE1, 0x6BAB, 0x6BAC, 0x6BFF)),
+    ("misc_scratch", (0x083E, 0x2A7A, 0x2A7B, 0x2DE0, 0x2DE1, 0x6BAB, 0x6BAC, 0x6BFF)),
 ]
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
