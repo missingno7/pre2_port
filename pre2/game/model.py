@@ -82,6 +82,25 @@ class Actor:
 
 
 @dataclass
+class EffectSlot:
+    """One slot of a projectile / burst / debris sprite list — a short-lived moving sprite. ``sprite == 0xFFFF``
+    (free) or the alive flag in the sprite word's high byte gates it. Covers the whole 18-byte record; a couple
+    of bytes (``aux_b``/``aux_10``) are record scratch the views don't individually name."""
+
+    x: int = 0
+    y: int = 0
+    sprite: int = 0xFFFF
+    xvel: int = 0
+    kind: int = 0          # phase/kind byte
+    source: int = 0        # back-reference to the spawning slot
+    aux_b: int = 0
+    anim_ptr: int = 0      # anim cursor / lifetime word
+    yvel: int = 0
+    aux_10: int = 0
+    life: int = 0          # life / substate byte
+
+
+@dataclass
 class Camera:
     """The scrolling camera — its cell column/row and the fine sub-cell scroll state."""
 

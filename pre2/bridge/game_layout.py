@@ -12,7 +12,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import Actor, Camera, Input, LevelState, Motion, Player, Progress, Rng
+from pre2.game.model import (Actor, Camera, EffectSlot, Input, LevelState, Motion, Player, Progress, Rng)
 
 DGROUP_BASE = 0x1A0F << 4
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
@@ -52,6 +52,15 @@ ACTOR_LAYOUT = [
     ("state", 0x0E, 1, False), ("hp", 0x0F, 1, False), ("hits", 0x10, 1, False), ("life", 0x11, 1, False),
 ]
 ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE = 0x4FD0, 12, 0x12
+# projectile / burst / debris sprite lists (all stride 0x12, RenderSlot + velocity layout)
+EFFECT_SLOT_LAYOUT = [
+    ("x", 0x00, 2, False), ("y", 0x02, 2, False), ("sprite", 0x04, 2, False), ("xvel", 0x06, 2, False),
+    ("kind", 0x08, 1, False), ("source", 0x09, 2, False), ("aux_b", 0x0B, 1, False),
+    ("anim_ptr", 0x0C, 2, False), ("yvel", 0x0E, 2, False), ("aux_10", 0x10, 1, False), ("life", 0x11, 1, False),
+]
+_PROJECTILE_BASE, _PROJECTILE_COUNT = 0x4F2E, 4     # the player's thrown-weapon projectiles
+_BURST_BASE, _BURST_COUNT = 0x50A8, 20              # the score/effect-burst free object pool (0x50A8..0x52E8)
+_DEBRIS_BASE, _DEBRIS_COUNT = 0x5450, 16            # the debris-element pool
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
 PLAYER_LAYOUT = [
@@ -130,6 +139,9 @@ _ROUTES = [
     ("level_state", LevelState, LEVEL_STATE_LAYOUT, 0, 1, 0),
     ("motion", Motion, MOTION_LAYOUT, 0, 1, 0),
     ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
+    ("projectiles", EffectSlot, EFFECT_SLOT_LAYOUT, _PROJECTILE_BASE, _PROJECTILE_COUNT, 0x12),
+    ("bursts", EffectSlot, EFFECT_SLOT_LAYOUT, _BURST_BASE, _BURST_COUNT, 0x12),
+    ("debris", EffectSlot, EFFECT_SLOT_LAYOUT, _DEBRIS_BASE, _DEBRIS_COUNT, 0x12),
 ]
 
 
