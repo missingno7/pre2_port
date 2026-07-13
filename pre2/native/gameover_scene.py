@@ -17,6 +17,7 @@ this module recovers the STATE side:
 [0x2879]!=0 (demo playback) skips the whole scene, exactly as the ASM's 9B2C gate."""
 from __future__ import annotations
 
+from pre2.views.dgroup_view import PlayerGlobals
 from pre2.views.memory_adapter import apply_ds, readers
 from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
@@ -66,8 +67,9 @@ def native_gameover_setup(state) -> None:
     """[asm 9B35..9C5F] Build the scene state (camera, slots, letters, tableau, birds). The GAMEOVER.SQZ
     image + palette are the render/runner side (bridge gameover_background + the 0xAFE8 DAC load)."""
     d = state.data
-    _ww(d, 0x2DE4, 0); _ww(d, 0x2DE6, 0); _ww(d, 0x6BF8, 0)        # [9B35-9B3B] camera reset
-    d[_DS + 0x6BC4] = 0                                            # [9B3E] scroll = top
+    g = PlayerGlobals(state)
+    g.cam_col_word = 0; g.cam_row_word = 0; g.row_factor = 0       # [9B35-9B3B] camera reset
+    g.fine_scroll = 0                                              # [9B3E] scroll = top
     for i in range(0x74):                                          # [9B8C-9B9B] free every object slot
         _ww(d, 0x4F0A + i * 0x12 + 4, 0xFFFF)
     # --- the 8 GAME/OVER letters [9B9D-9BF1]: ids [0xB018+i]+0xB0, X staggered 0x18 (+0x30 gap after 4),
@@ -95,16 +97,17 @@ def native_gameover_setup(state) -> None:
         base = _BIRD_BASE + k * 0x12
         d[_DS + base + 8] = phase
         _ww(d, base + 0xC, script)
-    _ww(d, 0x27F0, 0)                                              # [9C5C] reset the idle/timeout counter
+    g.idle_clock = 0                                               # [9C5C] reset the idle/timeout counter
 
 
 def native_gameover_tick(state) -> None:
     """[asm 9CC0..9DD9] One scene frame: scroll, caveman-cry anim, letter bounce, bird orbits + sort +
     near-side handoff. Transcribed instruction-for-instruction."""
     d = state.data
-    if d[_DS + 0x6BC4] < 0xB9:                                     # [9CC6-9CCD] scroll down to the tableau
-        d[_DS + 0x6BC4] += 1
-    if (_rd(d, 0x6BD5) & 3) == 0:                                  # [9CD1-9CD6] every 4th frame
+    g = PlayerGlobals(state)
+    if g.fine_scroll < 0xB9:                                       # [9CC6-9CCD] scroll down to the tableau
+        g.fine_scroll += 1
+    if (g.frame_stamp & 3) == 0:                                   # [9CD1-9CD6] every 4th frame
         ax = _rd(d, 0x5088)                                        # [9CD8] the crying caveman's sprite id
         ax = ((ax & 0x1FFF) + 1) & 0xFFFF                          # [9CDB-9CDE] and ah,0x1f ; inc
         if ax >= 0x6E:                                             # [9CDF-9CE4] cycle 0x68..0x6D
@@ -175,11 +178,12 @@ def native_gameover_scene(state, dos, game_root: str):
     from pre2.recovered.front_end_fade import fade_out_frames
 
     d = state.data
-    if d[_DS + 0x2879] != 0:                                       # [9B2C-9B32] demo mode: no scene
+    g = PlayerGlobals(state)
+    if g.input_source != 0:                                        # [9B2C-9B32] demo mode: no scene
         return
     native_gameover_setup(state)
     native_load_dac_palette(state, dos, 0xAFE8)                    # [9B7F-9B8A] int10 AX=1012 from DS:0xAFE8
-    d[_DS + 0x6BD5] = 0; d[_DS + 0x6BD6] = 0                       # deterministic anim phase for the cry cycle
+    g.frame_stamp = 0                                             # deterministic anim phase for the cry cycle
     rb, rw = readers(state)
     last = None
     # [9C74] The idle timeout is [0x27F0] >= 0x276, and [0x27F0] is bumped by the 70Hz TIMER ISR — but each scene
@@ -190,7 +194,7 @@ def native_gameover_scene(state, dos, game_root: str):
     # the ~9s wall-clock duration is preserved.
     for frame in range(_TIMEOUT // 3):                            # [9C74] 0x276/3 presents (timer +3 per iteration)
         native_gameover_tick(state)                                # [9C62] 9CC0
-        _ww(d, 0x6BD5, (_rd(d, 0x6BD5) + 1) & 0xFFFF)              # the frame counter the cry cycle reads
+        g.frame_stamp = (g.frame_stamp + 1) & 0xFFFF              # the frame counter the cry cycle reads
         _ww(d, 0x27F0, (_rd(d, 0x27F0) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
         planes, _status = build_gameover_scene(state, dos, game_root=game_root, page=0)  # [9C65/9C68] 9C87+26FA
         last = planes

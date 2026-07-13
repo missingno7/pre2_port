@@ -500,8 +500,9 @@ def _password_step(state):
 
     if m is not None:                                      # [asm 9A9B-9AAA] a level matched -> commit + advance
         level, expert = m
-        wb(0x2D8A, level)                                  # [asm 9AA6] the selected level
-        wb(0xB197, 1 if expert else 0)                     # [asm 9AAA] beginner / expert
+        g = PlayerGlobals(state)
+        g.level = level                                    # [asm 9AA6] the selected level
+        g.mode = 1 if expert else 0                        # [asm 9AAA] beginner / expert
         return m
 
     ww(_PW_HIST[0], si)                                    # [asm 9A81-9A94] miss -> shift this group into the
