@@ -57,3 +57,30 @@ class Rng:
     lcg_c: int = 0
     lcg_d: int = 0
     ror: int = 0
+
+
+@dataclass
+class Camera:
+    """The scrolling camera — its cell column/row and the fine sub-cell scroll state."""
+
+    col: int = 0          # camera cell column (the level-map X the viewport starts at)
+    row: int = 0          # camera cell row
+    fine_scroll: int = 0  # sub-cell pixel scroll
+    row_factor: int = 0   # the row-stride factor the renderer multiplies by
+
+
+@dataclass
+class Progress:
+    """The player's run progress / HUD state — scattered across the DOS globals, one object here."""
+
+    score_lo: int = 0
+    score_hi: int = 0     # score is the 32-bit (score_hi << 16 | score_lo)
+    lives: int = 0
+    energy: int = 0       # hearts (0..3)
+    level: int = 0        # current level number
+    bonus_letters: int = 0  # the collected BONUS-letters bitmask
+    utensils_mask: int = 0  # the collected utensils/tools bitmask
+
+    @property
+    def score(self) -> int:
+        return (self.score_hi << 16) | self.score_lo

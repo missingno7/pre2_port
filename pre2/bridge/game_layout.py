@@ -12,12 +12,24 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import Player, Rng
+from pre2.game.model import Camera, Player, Progress, Rng
 
 DGROUP_BASE = 0x1A0F << 4
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
 _RNG_LCG = 0x2CEC             # the 4-byte LCG mixer
 _ROR = 0x28C1                 # the 1-word rotate generator
+
+# absolute-offset layouts (field, dgroup offset, width, signed) — the scattered original homes of the objects'
+# fields. This mapping is the ONLY place the offsets live; the game model (pre2/game/model.py) has none.
+CAMERA_LAYOUT = [
+    ("col", 0x2DE4, 2, False), ("row", 0x2DE6, 2, False),
+    ("fine_scroll", 0x6BC4, 1, False), ("row_factor", 0x6BF8, 2, False),
+]
+PROGRESS_LAYOUT = [
+    ("score_lo", 0x6C0E, 2, False), ("score_hi", 0x6C10, 2, False),
+    ("lives", 0x27D8, 1, False), ("energy", 0x27D6, 1, False), ("level", 0x2D8A, 1, False),
+    ("bonus_letters", 0x6CA7, 1, False), ("utensils_mask", 0x6CA8, 1, False),
+]
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
 PLAYER_LAYOUT = [
@@ -73,50 +85,80 @@ def rng_to_image(rng: Rng, data) -> None:
         _wr(data, 0, off, w, getattr(rng, f))
 
 
-class DataclassBackend:
-    """Run the game with the PLAYER's live state as a real :class:`Player` dataclass, not bytes.
+def _obj_from_image(cls, layout, data, base=0):
+    data = getattr(data, "data", data)
+    return cls(**{f: _rd(data, base, off, w, s) for f, off, w, s in layout})
 
-    A north-star step: ``NativeGameState.backend`` swaps to this and the gameplay tick runs unchanged, but every
-    read/write to the player record (0x4F1C..0x4F2D) is routed — via the bridge layout — to/from the fields of a
-    live ``Player`` object (``self.player.x``, ``.sprite``, ...). Everything else stays in the image. So the
-    player is a genuine object graph node during the tick; the offsets live ONLY here in the bridge mapping, not
-    in the game logic or the store. ``materialize`` folds the player object back to bytes for the digest.
+
+def _obj_to_image(obj, layout, data, base=0):
+    data = getattr(data, "data", data)
+    for f, off, w, _s in layout:
+        _wr(data, base, off, w, getattr(obj, f))
+
+
+# the structures routed to live dataclasses: (attribute, class, layout, base). Everything else stays in the
+# image. Grows toward the endpoint (whole tick on objects) one structure at a time.
+_ROUTES = [
+    ("player", Player, PLAYER_LAYOUT, PLAYER_BASE),
+    ("rng", Rng, RNG_LAYOUT, 0),
+    ("camera", Camera, CAMERA_LAYOUT, 0),
+    ("progress", Progress, PROGRESS_LAYOUT, 0),
+]
+
+
+class DataclassBackend:
+    """Run the game with named structures' live state as real offset-free dataclasses, not bytes.
+
+    The north-star mechanism: ``NativeGameState.backend`` swaps to this and the gameplay tick runs UNCHANGED,
+    but every read/write that lands in a routed structure's byte range is redirected — via the bridge layout —
+    to/from the fields of a live dataclass (``self.player.x``, ``self.camera.col``, ``self.progress.lives``,
+    ...). Everything else stays in the image. The offsets live ONLY here in the bridge mapping, not in the game
+    logic or the store. Each structure added to ``_ROUTES`` shrinks the image's live surface. ``materialize``
+    folds the objects back to bytes for the digest.
     """
 
     _IS_DGROUP_BACKEND = True
-    __slots__ = ("player", "_img", "_pmap")
+    __slots__ = ("_img", "_objs", "_map")
 
     def __init__(self, seed):
         data = getattr(seed, "data", seed)
         self._img = data
-        self.player = player_from_image(data)
-        # player record byte offset (relative to PLAYER_BASE) -> (field, byte_index, width, signed)
-        self._pmap: dict[int, tuple] = {}
-        for f, off, w, s in PLAYER_LAYOUT:
-            for k in range(w):
-                self._pmap[off + k] = (f, k, w, s)
+        self._objs: dict[str, object] = {}
+        # absolute dgroup offset -> (attr, field, byte_index, width, signed)
+        self._map: dict[int, tuple] = {}
+        for attr, cls, layout, base in _ROUTES:
+            self._objs[attr] = _obj_from_image(cls, layout, data, base)
+            for f, off, w, s in layout:
+                for k in range(w):
+                    self._map[(base + off + k) & 0xFFFF] = (attr, f, k, w, s)
+
+    # convenience accessors
+    player = property(lambda self: self._objs["player"])
+    rng = property(lambda self: self._objs["rng"])
+    camera = property(lambda self: self._objs["camera"])
+    progress = property(lambda self: self._objs["progress"])
 
     def rb(self, off: int) -> int:
         off &= 0xFFFF
-        m = self._pmap.get((off - PLAYER_BASE) & 0xFFFF)
+        m = self._map.get(off)
         if m is None:
             return self._img[DGROUP_BASE + off]
-        f, k, w, _s = m
-        return (getattr(self.player, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
+        attr, f, k, w, _s = m
+        return (getattr(self._objs[attr], f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
 
     def wb(self, off: int, val: int) -> None:
         off &= 0xFFFF
         val &= 0xFF
-        m = self._pmap.get((off - PLAYER_BASE) & 0xFFFF)
+        m = self._map.get(off)
         if m is None:
             self._img[DGROUP_BASE + off] = val
             return
-        f, k, w, s = m
-        v = getattr(self.player, f) & ((1 << (8 * w)) - 1)
+        attr, f, k, w, s = m
+        v = getattr(self._objs[attr], f) & ((1 << (8 * w)) - 1)
         v = (v & ~(0xFF << (8 * k))) | (val << (8 * k))
         if s and v & (1 << (8 * w - 1)):
             v -= 1 << (8 * w)
-        setattr(self.player, f, v)
+        setattr(self._objs[attr], f, v)
 
     def rw(self, off: int) -> int:
         return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
@@ -126,4 +168,6 @@ class DataclassBackend:
         self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
 
     def materialize(self, data=None) -> None:
-        player_to_image(self.player, self._img if data is None else data)
+        data = self._img if data is None else data
+        for attr, _cls, layout, base in _ROUTES:
+            _obj_to_image(self._objs[attr], layout, data, base)

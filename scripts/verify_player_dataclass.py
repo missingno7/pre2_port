@@ -62,9 +62,9 @@ def main(argv) -> int:
             continue
         c = run_demo(p)
         total += c
-        print(f"  PASS: {d} — {c} ticks with the player as a live Player dataclass, byte-identical")
-    print(f"\nplayer-on-dataclass: the gameplay tick runs with the player's state as an offset-free Player "
-          f"object ({total} ticks across {len(demos)} demos, byte-identical)")
+        print(f"  PASS: {d} — {c} ticks with player+rng+camera+progress as live dataclasses, byte-identical")
+    print(f"\ntick-on-dataclasses: the gameplay tick runs with the player, RNG, camera and progress state as "
+          f"offset-free dataclasses ({total} ticks across {len(demos)} demos, byte-identical)")
     return 0
 
 

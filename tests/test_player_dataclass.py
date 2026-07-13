@@ -9,7 +9,7 @@ DGROUP_BASE = 0x1A0F << 4
 
 def test_tick_runs_with_player_as_a_live_dataclass():
     from pre2.bridge.game_layout import DataclassBackend
-    from pre2.game.model import Player
+    from pre2.game.model import Camera, Player, Progress, Rng
     from pre2.native.game_tick_demo import GameTickDemo, _inject
     from pre2.native.loop import native_gameplay_frame
     from pre2.native.state import NativeGameState
@@ -23,7 +23,9 @@ def test_tick_runs_with_player_as_a_live_dataclass():
     ref = NativeGameState(bytearray(gtd.seed))
     obj = NativeGameState(bytearray(gtd.seed))
     obj.backend = DataclassBackend(obj)
-    assert isinstance(obj.backend.player, Player)      # the live store is a real dataclass
+    # the live store routes several structures to real offset-free dataclasses
+    assert isinstance(obj.backend.player, Player) and isinstance(obj.backend.rng, Rng)
+    assert isinstance(obj.backend.camera, Camera) and isinstance(obj.backend.progress, Progress)
 
     for i in range(min(gtd.n_ticks, 15)):
         idle = gtd.idle[i] if i < len(gtd.idle) else None
