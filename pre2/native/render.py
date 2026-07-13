@@ -19,7 +19,6 @@ from pre2.views.game_visual_state import capture_game_visual_state, render_game_
 from pre2.views.gameplay_effects import capture_gameplay_effects
 from pre2.views.particles import read_particles
 
-_DS = 0x1A0F << 4
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
 
 
@@ -28,12 +27,11 @@ def native_load_dac_palette(state, dos, table_off: int, count: int = 0x10) -> No
     into DAC colours 0..count-1 (``int 10h ax=0x1012, bx=0, cx=count`` from ``DS:table_off``). The runner owns the
     DAC, so it reproduces the load. Used by the per-level palette (0ba0) and the OLDIES screen (0xb92 -> the
     green/yellow table at 0x287e). Values are 6-bit; the VGA DAC expands them (``_dac8``)."""
-    d = state.data
     if len(dos.vga_palette) < 256:                                  # ensure a full DAC (snapshots carry 256)
         dos.vga_palette = list(dos.vga_palette) + [(0, 0, 0)] * (256 - len(dos.vga_palette))
     for i in range(count):
-        b0 = _DS + ((table_off + i * 3) & 0xFFFF)
-        dos.vga_palette[i] = (_dac8(d[b0]), _dac8(d[b0 + 1]), _dac8(d[b0 + 2]))
+        b0 = (table_off + i * 3) & 0xFFFF                          # the 6-bit RGB triple in the DGROUP palette table
+        dos.vga_palette[i] = (_dac8(state.rb(b0)), _dac8(state.rb(b0 + 1)), _dac8(state.rb(b0 + 2)))
 
 
 def native_load_level_palette(state, dos) -> None:
@@ -44,9 +42,8 @@ def native_load_level_palette(state, dos) -> None:
     what ``0ba0`` does via int 10h ax=0x1012/cx=0x10 (``native_load_dac_palette``). native_level_init skips 0ba0 as
     'render' (it touches no DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap
     snapshot's palette. The per-level palettes are global in DGROUP, so this just selects the right one."""
-    d = state.data
     level = PlayerGlobals(state).level
-    table_off = d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8)
+    table_off = state.rw(0x2D00 + level * 2)              # [0x2D00 + level*2] the per-level palette pointer table
     native_load_dac_palette(state, dos, table_off, 0x10)
 
 
@@ -59,23 +56,20 @@ def native_sync_render_state(state) -> None:
     [0x2DE6]) but not these render mirrors, so a standalone runner must re-derive them here — otherwise the
     renderer reads a stale ring index and the tiles corrupt the moment the camera scrolls. (Render-only, so it
     lives outside ``native_gameplay_frame`` and never perturbs the byte-exact gameplay verify.)"""
-    d = state.data
     g = PlayerGlobals(state)
     cam_x = g.cam_col_word
     cam_y = g.cam_row_word
     for off, val in ((0x2DE8, cam_x % _RING_COLS), (0x2DEA, cam_y % _RING_ROWS),
                      (0x2DE0, cam_x), (0x2DE2, cam_y)):
-        d[_DS + off] = val & 0xFF
-        d[_DS + off + 1] = (val >> 8) & 0xFF
+        state.ww(off, val)                                 # the render-mirror ring indices + prev-camera cells
     # Also re-derive the scroll-copy SOURCE [0x2DBA] (the ring offset build_background_ring places tiles at)
     # from the freshly-derived ring indices. native_camera_follow sets it during normal gameplay, but a camera
     # JUMP that bypasses the follow — the death-respawn checkpoint (native_3af2) or a level start at a non-origin
     # camera — leaves it pointing at the OLD ring position, so the rebuild lays the correct tiles at the wrong
     # column offset (the level-6 respawn glitch: a narrow tree top rendered full-width + a garbage band).
     from pre2.recovered.frame_renderer import calc_scroll_source
-    src = calc_scroll_source(d[_DS + 0x2DE8] | (d[_DS + 0x2DE9] << 8), d[_DS + 0x2DEA]) & 0xFFFF
-    d[_DS + 0x2DBA] = src & 0xFF
-    d[_DS + 0x2DBB] = (src >> 8) & 0xFF
+    src = calc_scroll_source(state.rw(0x2DE8), state.rb(0x2DEA)) & 0xFFFF
+    state.ww(0x2DBA, src)
 
     # Advance the animated-tile remap cycle (1030:367D) — the render-cluster step the gameplay pass omits. The
     # VM steps [0x6BC2]/[0x6BD4] once per redraw, BEFORE the grid walk reads the current remap table, so without
@@ -84,14 +78,13 @@ def native_sync_render_state(state) -> None:
     # render-state ([0x6BC2]/[0x6BD4] are excluded from the gameplay verify), so it belongs here — run exactly
     # once per displayed frame, matching the VM's per-redraw cadence.
     from pre2.recovered.animation import advance_animation
-    fp = d[_DS + 0x6BC2] | (d[_DS + 0x6BC3] << 8)
-    thr = d[_DS + 0x6BD4]
+    fp = state.rw(0x6BC2)                                  # the animated-tile remap frame pointer + threshold
+    thr = state.rb(0x6BD4)
     active = g.page_dirty != 0
     speed = g.friction
     fp, thr, _ = advance_animation(fp, thr, active, speed)
-    d[_DS + 0x6BC2] = fp & 0xFF
-    d[_DS + 0x6BC3] = (fp >> 8) & 0xFF
-    d[_DS + 0x6BD4] = thr & 0xFF
+    state.ww(0x6BC2, fp)
+    state.wb(0x6BD4, thr)
 
 
 _LIGHT_DARK_PAL = 0xACB7   # [asm 6791] the fixed "lights off" dark 16-colour palette (6-bit RGB)
@@ -190,15 +183,14 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     # leaving the flag set would desync the next frame's carried-forward state from the VM's cleared record.
     saved = None
     if flash:
-        d = state.data
-        saved = [(off, d[_DS + off + 5]) for off in flash]
+        saved = [(off, state.rb(off + 5)) for off in flash]       # the render-slot flags byte (opaque-flash bit)
         for off in flash:
-            d[_DS + off + 5] |= 0x40
+            state.wb(off + 5, state.rb(off + 5) | 0x40)
     try:
         gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx,
                                         force_gameplay=force_gameplay)
     finally:
         if saved is not None:
             for off, v in saved:
-                state.data[_DS + off + 5] = v
+                state.wb(off + 5, v)
     return render_game_visual_state(gvs)

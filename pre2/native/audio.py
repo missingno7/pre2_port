@@ -18,8 +18,7 @@ from __future__ import annotations
 from pre2.views.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 
-_DS = 0x1A0F << 4
-_CS = 0x1030 << 4
+_CS = 0x1030 << 4      # code segment — the SFX device-flag reads (native_play_sfx) are CS-relative, not DGROUP
 _SONG_LENGTH = 0xDC2      # [asm 22FE] number of order positions
 _ORDER_TABLE = 0xDC7      # [asm 22B3] order table (pattern sequence)
 _SFX_DEV_FLAGS = (0x1D6C, 0x1D6D)   # cs: digital-device-present flags (either == 1 -> the SB/digital path)
@@ -54,12 +53,12 @@ def native_play_sfx(state, dl: int, x: "int | None" = None) -> None:
     d = state.data
     dl &= 0xFF
     if d[_CS + _SFX_DEV_FLAGS[0]] == 1 or d[_CS + _SFX_DEV_FLAGS[1]] == 1:   # [asm 0282/028a] digital present
-        bx = dl * 4
-        d[_DS + 0x1004] = d[_DS + 0x1009 + bx]; d[_DS + 0x1005] = d[_DS + 0x100A + bx]   # [asm 02b7-02bb] src
-        d[_DS + 0x1006] = d[_DS + 0x100B + bx]; d[_DS + 0x1007] = d[_DS + 0x100C + bx]   # [asm 02be-02c2] len
+        bx = dl * 4                                                          # the SB {src,len} descriptor table
+        state.wb(0x1004, state.rb(0x1009 + bx)); state.wb(0x1005, state.rb(0x100A + bx))   # [asm 02b7-02bb] src
+        state.wb(0x1006, state.rb(0x100B + bx)); state.wb(0x1007, state.rb(0x100C + bx))   # [asm 02be-02c2] len
     else:                                                                   # [asm 0292-02a1] PC-speaker note ptr
         ptr = (0x1037 + dl * 0xA) & 0xFFFF
-        d[_DS + 0x1035] = ptr & 0xFF; d[_DS + 0x1036] = (ptr >> 8) & 0xFF
+        state.ww(0x1035, ptr)
     q = getattr(state, "sfx_queue", None)                                   # every CALL is a distinct trigger (a
     if q is not None:                                                       #   repeated identical effect re-fires)
         q.append((dl, x))                                                   # x = trigger SCREEN X (0..320) or None
@@ -94,13 +93,13 @@ def native_load_sfx_bank(state, game_root: str, *, seg: int = _SFX_BANK_SEG) -> 
         pcm = unpack_sqz(f.read())
     d = state.data
     base = (seg << 4) & 0xFFFFF
-    d[base:base + len(pcm)] = pcm                            # the decoded sample bank
-    d[_DS + 0x0B59] = seg & 0xFF; d[_DS + 0x0B5A] = (seg >> 8) & 0xFF        # [0x0B59] = sample segment
+    d[base:base + len(pcm)] = pcm                            # the decoded sample bank (segment 0xC000, not DS)
+    state.ww(0x0B59, seg)                                    # [0x0B59] = sample segment
     src = 0
     for dl in range(11):                                    # fill each effect's src = running offset into the bank
-        t = _DS + 0x1009 + dl * 4
-        length = d[t + 2] | (d[t + 3] << 8)                # the len is already in the table (static)
-        d[t] = src & 0xFF; d[t + 1] = (src >> 8) & 0xFF
+        t = 0x1009 + dl * 4                                 # the {src,len} descriptor table entry (DS-relative)
+        length = state.rw(t + 2)                            # the len is already in the table (static)
+        state.ww(t, src)
         src = (src + length) & 0xFFFF
     d[_CS + _SFX_DEV_FLAGS[0]] = 1                          # digital device present -> the SB/digital path
 
@@ -144,11 +143,10 @@ def native_load_song(state, name: str, game_root: str) -> None:
     from pre2.codecs.audio import load_trk
     with open(os.path.join(game_root, name), "rb") as f:
         mod = load_trk(f.read())
-    d = state.data
     order = mod.order
-    d[_DS + _SONG_LENGTH] = len(order) & 0xFF
+    state.wb(_SONG_LENGTH, len(order) & 0xFF)
     for i, o in enumerate(order[:0x100]):
-        d[_DS + _ORDER_TABLE + i] = o & 0xFF
+        state.wb(_ORDER_TABLE + i, o & 0xFF)
 
 
 class NativeAudio:
