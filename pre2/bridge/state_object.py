@@ -21,6 +21,75 @@ from pre2.bridge.field_registry import ARENAS, FIELDS
 
 DGROUP_BASE = 0x1A0F << 4
 
+_ENTITY_ARENA_KEY = next(iter(ARENAS))          # the sole variable-stride arena in the registry
+_ENTITY_STRIDE_END = 0x32                        # a stride byte >= this terminates the walk [asm 6916]
+
+
+@dataclass
+class EntityRecord:
+    """One record of the 2nd-pass entity list — the variable-stride linked-list entry the tick walks
+    (``second_pass_tick``). ``data`` is the record's exact ``stride`` bytes; the typed properties name the
+    known header fields (``[+0]`` stride, ``[+1]`` flags/handler, ``[+2]`` sprite-ref word, ``[+4]`` skip
+    flags). The body past the header is handler-specific and stays bytes until each handler's layout is
+    mapped — but the record is now an OBJECT in a list, not an anonymous slice of a blob."""
+
+    data: bytes
+
+    @property
+    def stride(self) -> int:
+        return self.data[0]
+
+    @property
+    def flags1(self) -> int:
+        return self.data[1]
+
+    @property
+    def handler_idx(self) -> int:
+        return self.data[1] & 0x7F
+
+    @property
+    def off_screen_cull(self) -> bool:
+        return bool(self.data[1] & 0x80)
+
+    @property
+    def sprite_ref(self) -> int:
+        return self.data[2] | (self.data[3] << 8)
+
+    @property
+    def empty(self) -> bool:
+        return self.sprite_ref == 0xFFFF
+
+    @property
+    def skip(self) -> int:
+        return self.data[4]
+
+
+@dataclass
+class EntityArena:
+    """The 2nd-pass entity list as a LIST of records (entry 0 = the player) + the tail — the stale bytes from
+    the terminator to the arena end, preserved verbatim so the region round-trips byte-exact. Replaces the
+    opaque byte blob: the arena is now a structured object graph node."""
+
+    records: list[EntityRecord]
+    tail: bytes
+
+    def to_bytes(self) -> bytes:
+        return b"".join(r.data for r in self.records) + self.tail
+
+
+def _parse_entity_arena(blob: bytes) -> EntityArena:
+    """Walk the variable-stride list exactly as the tick does: each record is ``stride`` bytes; a stride byte
+    ``>= 0x32`` (or 0, or an overrun) terminates. Everything from there is the tail."""
+    records: list[EntityRecord] = []
+    i, n = 0, len(blob)
+    while i < n:
+        stride = blob[i]
+        if stride == 0 or stride >= _ENTITY_STRIDE_END or i + stride > n:
+            break
+        records.append(EntityRecord(bytes(blob[i:i + stride])))
+        i += stride
+    return EntityArena(records=records, tail=bytes(blob[i:]))
+
 # CollisionGlobals declares the same offset set as PlayerGlobals (verified identical) — one graph node, two
 # view names. Merge it so the graph has a single canonical globals node rather than a duplicated one.
 _ALIASED_NODES = {"CollisionGlobals": "PlayerGlobals"}
@@ -61,10 +130,10 @@ class Node:
 
 @dataclass
 class GameState:
-    """The whole game state as a graph: named-field nodes + the named arenas. No byte image."""
+    """The whole game state as a graph: named-field nodes + the STRUCTURED entity arena. No byte image."""
 
     nodes: dict[str, Node]
-    arenas: dict[str, bytes]
+    entity_arena: EntityArena
 
     # convenience accessors for the structured record nodes (the interesting, non-globals ones)
     @property
@@ -79,6 +148,11 @@ class GameState:
     def rng(self) -> Node:
         return self.nodes["RngView"]
 
+    @property
+    def entities(self) -> list[EntityRecord]:
+        """The live 2nd-pass entity records (entry 0 = the player)."""
+        return self.entity_arena.records
+
 
 def from_image(data) -> GameState:
     """Read a live DGROUP image into the object graph (the bridge deserialiser)."""
@@ -90,8 +164,9 @@ def from_image(data) -> GameState:
             b = DGROUP_BASE + off
             values[field] = data[b] if width == 1 else data[b] | (data[b + 1] << 8)
         nodes[cls] = Node(values)
-    arenas = {name: bytes(data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1]) for name, (lo, hi) in ARENAS.items()}
-    return GameState(nodes=nodes, arenas=arenas)
+    lo, hi = ARENAS[_ENTITY_ARENA_KEY]
+    entity_arena = _parse_entity_arena(bytes(data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1]))
+    return GameState(nodes=nodes, entity_arena=entity_arena)
 
 
 def to_image(gs: GameState, data) -> None:
@@ -108,8 +183,8 @@ def to_image(gs: GameState, data) -> None:
             data[b] = v & 0xFF
             if width == 2:
                 data[b + 1] = (v >> 8) & 0xFF
-    for name, (lo, hi) in ARENAS.items():
-        blob = gs.arenas[name]
-        if len(blob) != hi - lo + 1:
-            raise ValueError(f"arena {name!r}: expected {hi - lo + 1} bytes, got {len(blob)}")
-        data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1] = blob
+    lo, hi = ARENAS[_ENTITY_ARENA_KEY]
+    blob = gs.entity_arena.to_bytes()
+    if len(blob) != hi - lo + 1:
+        raise ValueError(f"entity arena: expected {hi - lo + 1} bytes, got {len(blob)}")
+    data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1] = blob
