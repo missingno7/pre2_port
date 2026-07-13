@@ -33,6 +33,41 @@ def test_recovered_rng_logic_runs_byte_exact_on_the_offset_free_dataclass():
     assert type(dc).__mro__[1] is object
 
 
+def test_a_real_composed_recovered_function_runs_identically_on_both_backends():
+    """The key gap-#3 mechanism proof: a real, non-trivial recovered function (not a toy example) — one that
+    rolls the RNG 4 times via RngView + spawns 4 effect bursts, returning a 37-entry write contract — produces
+    IDENTICAL writes and an identical resulting DGROUP whether called through the offset-backed ByteBackend or
+    the offset-free DataclassBackend, with ZERO code changes. This is because ``readers(mem)`` already routes
+    through ``mem.backend`` (memory_adapter.readers), so the existing pure-function/write-contract architecture
+    is ALREADY compatible with the object graph — no per-callsite rewiring is needed for the tick to run on it
+    (proven end-to-end by verify_object_full.py); what remained was field-name parity, now done."""
+    from pre2.bridge.game_layout import DataclassBackend
+    from pre2.native.game_tick_demo import GameTickDemo
+    from pre2.native.state import NativeGameState
+    from pre2.recovered.object_spawn import boss_death_burst_94f3
+    from pre2.views.memory_adapter import apply_ds, readers
+
+    demo = ROOT / "artifacts" / "demo_cold_20260712_172030" / "game_tick_demo.bin"
+    if not demo.exists():
+        import pytest
+        pytest.skip("cold demo corpus not present")
+    gtd = GameTickDemo.load(demo)
+    DGROUP_BASE = 0x1A0F << 4
+
+    byte_st = NativeGameState(bytearray(gtd.seed))
+    obj_st = NativeGameState(bytearray(gtd.seed))
+    obj_st.backend = DataclassBackend(obj_st, readonly_image=True)
+
+    w1 = boss_death_burst_94f3(*readers(byte_st))
+    w2 = boss_death_burst_94f3(*readers(obj_st))
+    assert w1 == w2 and len(w1) > 30
+
+    apply_ds(byte_st, w1)
+    apply_ds(obj_st, w2)
+    obj_st.backend.materialize()
+    assert byte_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000] == obj_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
+
+
 def _view_fields(dv, cls):
     import re
     body = dv.split(f"class {cls}")[1].split("\nclass ")[0]
