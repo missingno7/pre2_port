@@ -15,6 +15,9 @@ from pre2.native.camera_scroll import (SCROLL_DONE_FLAG, _h_follow, _sar16, _v_f
 from pre2.gaps import Pre2HybridGap
 from pre2.native.level_load import native_level_load, native_player_init
 from pre2.native.state import DATA_SEG
+from pre2.native.dgroup_offsets import (BOSS_STATE, DECOR_RNG_TABLE, LEVEL_INIT_FLAG_6BCC, PENDING_KEY,
+                                        POPUP_RING_HEAD, RNG_STATE, SCROLL_SCRIPT_PTR, SCROLL_SCRIPT_PTR2,
+                                        SCROLL_SCRIPT_TABLE, WALL_MARKER_TABLE)
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 from pre2.recovered.prng import rng_lcg
 
@@ -104,26 +107,28 @@ def native_5237(state) -> None:
     d[_DS + 0x6BC4:_DS + 0x6BC4 + 0x48] = b"\x00" * 0x48              # [asm 5247] zero the timer/state block
     d[_DS + 0x815E:_DS + 0x815E + 0x10A5] = bytes(d[_DS + 0x9203:_DS + 0x9203 + 0x10A5])  # [asm 5251] restore dbl-buffer
     pv.run_flag = 0                                                  # [asm 525c]
-    state.ww(0x2DE0, 0x55AA)                                         # [asm 525f]
-    state.ww(0x6BBE, 0x4F76)                                         # [asm 5265] popup-ring head
+    g.grid_dirty_token = 0x55AA                                      # [asm 525f]
+    state.ww(POPUP_RING_HEAD, 0x4F76)                               # [asm 5265] popup-ring head
     native_player_init(state)                                       # [asm 526e] 55fc (ax=0xffff)
     # [asm 5271] 0ba0 VGA palette (int 10h) — render, skipped (no DGROUP)
-    a, b, c, dd = state.rb(0x2CEC), state.rb(0x2CED), state.rb(0x2CEE), state.rw(0x2CEF)  # [5274] fill [0x6ca9]
-    di = 0x6CA9
+    a, b, c, dd = (state.rb(RNG_STATE), state.rb(RNG_STATE + 1),
+                   state.rb(RNG_STATE + 2), state.rw(RNG_STATE + 3))     # [5274] fill the decor RNG table
+    di = DECOR_RNG_TABLE
     for _ in range(0x100):
         a, b, c, dd, _r1 = rng_lcg(a, b, c, dd)                     # [asm 527a] dh (advances the RNG, discarded)
         a, b, c, dd, r2 = rng_lcg(a, b, c, dd)                      # [asm 527f] ah = al = the 2nd return byte
         state.ww(di, (r2 << 8) | r2); di += 2                      # [asm 5284] stosw (the byte duplicated)
-    state.wb(0x2CEC, a); state.wb(0x2CED, b); state.wb(0x2CEE, c); state.ww(0x2CEF, dd)   # advanced RNG state back
-    for i in range(0x50):                                           # [asm 5287] [0x6ea9..] = 0x55aa x 0x50
-        state.ww(0x6EA9 + i * 2, 0x55AA)
+    state.wb(RNG_STATE, a); state.wb(RNG_STATE + 1, b)              # advanced RNG state back
+    state.wb(RNG_STATE + 2, c); state.ww(RNG_STATE + 3, dd)
+    for i in range(0x50):                                           # [asm 5287] the wall-marker table = 0x55aa x 0x50
+        state.ww(WALL_MARKER_TABLE + i * 2, 0x55AA)
     native_52d2(state)                                               # [asm 5292] restore the pristine scenery map blocks
     d[_DS + 0x7DE6:_DS + 0x7DE6 + 0x78] = b"\xFF" * 0x78             # [asm 5295]
     d[_DS + 0x7DAF:_DS + 0x7DAF + 0x37] = b"\xFF" * 0x37             # [asm 52a0]
     g.energy = 3                                                     # [asm 52a8] energy / hearts
-    state.ww(0xA517, 0xFFFF)                                         # [asm 52ad] boss state reset
-    state.ww(0x2DBC, state.rw((g.level * 2 + 0x2D40) & 0xFFFF))     # [asm 52b3] per-level scroll-script ptr
-    state.ww(0x2DBE, 0)                                             # [asm 52c2]
+    state.ww(BOSS_STATE, 0xFFFF)                                    # [asm 52ad] boss state reset
+    state.ww(SCROLL_SCRIPT_PTR, state.rw((g.level * 2 + SCROLL_SCRIPT_TABLE) & 0xFFFF))  # [asm 52b3] scroll-script ptr
+    state.ww(SCROLL_SCRIPT_PTR2, 0)                                 # [asm 52c2]
 
 
 def native_level_init(state, *, game_root: str) -> None:
@@ -142,10 +147,11 @@ def native_level_init(state, *, game_root: str) -> None:
     native_3af2(state)                                             # [asm 01e3] camera-init
     # [asm 01e6-01ec] 454e sprite-save / 3a27 scroll-copy / 44fb CRTC — render
     g.spawn_offset_ring = 0                                        # [asm 01ef] [0xa341]=0 (word)
-    state.wb(0x6BCC, 0)                                            # [asm 01f5]
-    state.wb(0x2CEC, 5); state.wb(0x2CED, 0x22); state.wb(0x2CEE, 0x86)  # [asm 01fa] re-seed the RNG to the
-    state.wb(0x2CEF, 0x8D); state.wb(0x2CF0, 0xE5)                 # fixed level-start (a,b,c,d=0xe58d)
-    state.wb(0x2874, 0)                                            # [asm 020f]
+    state.wb(LEVEL_INIT_FLAG_6BCC, 0)                             # [asm 01f5]
+    state.wb(RNG_STATE, 5); state.wb(RNG_STATE + 1, 0x22)         # [asm 01fa] re-seed the RNG to the fixed
+    state.wb(RNG_STATE + 2, 0x86); state.wb(RNG_STATE + 3, 0x8D)  # level-start value (a,b,c,d = 0xe58d)
+    state.wb(RNG_STATE + 4, 0xE5)
+    state.wb(PENDING_KEY, 0)                                       # [asm 020f]
 
 
 def native_level_start(state, *, game_root: str) -> None:
