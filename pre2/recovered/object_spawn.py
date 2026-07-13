@@ -34,6 +34,52 @@ def _sar16(v, n):
     return (_s16(v) >> n) & 0xFFFF
 
 
+# --- named DGROUP offsets this island reads/writes (the author bypassed some already-defined names below;
+#     these are the remaining ones, named once here) --------------------------------------------------------
+P_MOTION = 0x4F24            # player kinematics mode/shift byte (PLAYER_X + 8)
+P_DEATH = 0x4F2D             # player death/hurt state byte (PLAYER_X + 0x11)
+ANIM_GATE = 0x6BD0           # hold-current-anim / FSM-route gate
+LOW_GRAVITY = 0x6BC7         # low-gravity / attack-invuln flag
+HIT_VDETAIL = 0xA330         # the hitbox vertical-detail hit flag (8D7B writes it)
+BOSS_HITBOX = 0x5690         # the L6 sub-enemy hitbox record base (hitbox_overlap target)
+BOSS_HITBOX_ALT = 0x567E     # the alternate (6F54) hitbox record base
+# camera-script entry pointers: values stored into SCRIPT_PTR (addresses in the 0xA4xx camera-script region);
+# the scripted-camera sequencer jumps SCRIPT_PTR between these. Named by their asm set-site / role.
+CAM_SCRIPT_INTRO = 0xA427    # [71BF]
+CAM_SCRIPT_PAN = 0xA434      # [7203]
+CAM_SCRIPT_SPAWN = 0xA43B    # [7290]
+CAM_SCRIPT_IDLE = 0xA45E     # the recurring default/idle entry
+CAM_SCRIPT_IDLE_HI = 0xA460  # the spawn_count >= 0x64 branch
+CAM_SCRIPT_IDLE_LO = 0xA462  # the spawn_count < 0x64 branch
+CAM_SCRIPT_73A4 = 0xA464     # [73A4]
+CAM_SCRIPT_73D1 = 0xA46B     # [73D1]
+CAM_SCRIPT_73DA = 0xA470     # [73DA]
+CAM_SCRIPT_743D = 0xA475     # [743D]
+CAM_SCRIPT_7471 = 0xA47E     # [7471]
+CAM_SCRIPT_7481 = 0xA480     # [7481]
+CAM_CMD_TABLE = 0xA571       # [755D] per-command records (stride 0x14)
+BOSS_SCRIPT_HIT = 0xA534     # [6B64] boss hit-reaction script entry
+BOSS_SCRIPT_CYCLE = 0xA540   # [6B84] boss every-4th-hit script entry
+BOSS_SCRIPT_M9 = 0xA4F9      # [6AEE] the M9 boss-script entry
+L6_SUB_B_TABLE = 0xA4B5      # [6DEE] L6 sub-B record table (stride 0xC)
+L6_SUB_A_TABLE = 0xA485      # [6E12] L6 sub-A record table (stride 0xC)
+L6_ANIM_TABLE = 0xA4E5       # [6E36] L6 anim record table (stride 6)
+# the 4 camera-target records (two param words + per-target X/Y) the 94E9 layout fills
+CAM_PARAM_1 = 0xA407
+CAM_PARAM_2 = 0xA40D
+CAM_T0_X = 0xA409
+CAM_T0_Y = 0xA40B
+CAM_T1_PARAM = 0xA413
+CAM_T1_X = 0xA40F
+CAM_T1_Y = 0xA411
+CAM_T2_PARAM = 0xA419
+CAM_T2_X = 0xA415
+CAM_T2_Y = 0xA417
+CAM_T3_PARAM = 0xA41F
+CAM_T3_X = 0xA41B
+CAM_T3_Y = 0xA41D
+
+
 # --- 7585: the 8-slot effect-row list at 0x56A2 (a horizontal row of sprite-0x135 effects + a sound) ---
 EFFECT_ROW_LO = 0x56A2
 EFFECT_ROW_N = 8             # [asm 758E] cap
@@ -136,7 +182,8 @@ def _target_collision(rb, rw, si, writes):
     return hit
 
 
-FLASH_RECORDS = (0x564D, 0x565F, 0x5671, 0x5683, 0x5695)   # the 5 camera-target records' sprite-id high byte
+FLASH_RECORD_LO = 0x564D   # base of the 5 camera-target flash records (stride 0x12)
+FLASH_RECORDS = tuple(FLASH_RECORD_LO + k * 0x12 for k in range(5))   # their sprite-id high byte
 
 
 @oracle_link("1030:80DE",
@@ -186,7 +233,7 @@ def scan_camera_targets(rb, rw):
         writes[SCROLL_VX] = (dx, 2)                       # [asm 815E]
         writes[SCROLL_VY] = (0xFF80 if _s16(g.scroll_vy) > 0 else 0xFFC0, 2)        # [asm 8162-816E]
         writes[CAM_STATE] = (5, 1)                        # [asm 8171]
-    writes[0xA3F7] = (0, 2)                               # [asm 8176]
+    writes[CAM_TIMER] = (0, 2)                               # [asm 8176]
     RenderSlot(WidthContractBackend(rb, rw, writes), si_hit).sprite = 0xFFFF   # [asm 817C] free the hitting slot
     return writes
 
@@ -372,13 +419,13 @@ def camera_target_bounce(rb, rw, di):
     r = (PlayerGlobals(DictBackend(rb, rw)).scroll_phase - al) & 0xFF   # [asm 820C] sub [0x6C05],al
     writes[SCROLL_PHASE] = (0 if (r & 0x80) else r, 1)   # [asm 8210] jns -> clamp to 0
     writes.update(hurt_effect(rb, rw))               # [asm 8217] 824D
-    writes[0x4F2D] = (0x2C, 1)                        # [asm 8220]
-    writes[0x6BD0] = (0, 1)                           # [asm 8225]
+    writes[P_DEATH] = (0x2C, 1)                        # [asm 8220]
+    writes[ANIM_GATE] = (0, 1)                           # [asm 8225]
     writes[PLAYER_YVEL] = (0xFF80, 2)                 # [asm 822A]
-    writes[0x4F24] = (3, 1)                           # [asm 8230]
+    writes[P_MOTION] = (3, 1)                           # [asm 8230]
     bvx = 0x80 if _s16(rw(PLAYER_X)) >= _s16(rw(CURSOR_X)) else 0xFF80   # [asm 8235-8242] toward the player
     writes[PLAYER_XVEL] = (bvx, 2)                    # [asm 8244]
-    writes[0x6BC7] = (0, 1)                           # [asm 8247]
+    writes[LOW_GRAVITY] = (0, 1)                           # [asm 8247]
     return writes
 
 
@@ -447,7 +494,7 @@ def camera_boundary_collision(rb, rw):
     ov.apply(camera_target_bounce(ov.rb, ov.rw, ov.rw(CAM_TARGET_B)))   # [asm 81C5] 81F3
     hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, ov.rw(CAM_TARGET_C))   # [asm 81D0] 8D7B
     ov.apply(hb)
-    if hit and hb[0xA330][0] != 0:                    # [asm 81D3 jae / 81D5 cmp [0xA330],0]
+    if hit and hb[HIT_VDETAIL][0] != 0:                    # [asm 81D3 jae / 81D5 cmp [0xA330],0]
         ax = 0xFF80 if ov.rb(CRUSH_SFX_FLAG) != 0 else 0xFFC0   # [asm 81DC-81E6] (+ sfx 3 when set)
         ov.apply({PLAYER_YVEL: (ax, 2)})              # [asm 81EF]
     return ov.writes
@@ -462,7 +509,7 @@ def _cam_scroll_velocity(rb, rw):
     """[asm 7301-7346] ramp the scroll velocity [0x6C08]/[0x6C06] from the cursor-player gap, capped by
     [0x91FB]*0x50; direction is toward the player."""
     bx = (rb(SCROLL_PUSH) * 0x50) & 0xFFFF               # [asm 7301-7308]
-    w = {SCRIPT_PTR: (0xA45E, 2)}                         # [asm 730A]
+    w = {SCRIPT_PTR: (CAM_SCRIPT_IDLE, 2)}                         # [asm 730A]
     _be = DictBackend(rb, rw)
     diff = (PlayerGlobals(_be).cursor_x - PlayerView(_be).x) & 0xFFFF   # [asm 7310-7313]
     adist = _abs16(diff)                                  # [asm 7318-731A]
@@ -490,7 +537,7 @@ def boss_death_burst_94f3(rb, rw):
     ax, dx = 0x20, 0xFF60                                  # [asm 94F9-94FC]
     for _ in range(4):                                     # [asm 94F6 cx=4]
         sid = roll_bonus_sprite(RngView(ov))               # [asm 9504] 8C13 (advances the rng via the view)
-        ov.apply({0xA33A: (sid, 2)})                       # [asm 9507] the burst sprite id
+        ov.apply({HURT_FX_SPRITE: (sid, 2)})                       # [asm 9507] the burst sprite id
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [asm 950B] 8D1B (one sprite)
         ax = (-ax) & 0xFFFF                                # [asm 950E] neg ax
         if not (ax & 0x8000):                              # [asm 9510] js -> skip the step
@@ -509,7 +556,7 @@ def boss_death_burst_94f3(rb, rw):
 def camera_state6_finale(rb, rw):
     """[asm 7491..74E9] Returns the ``{offset: (value, width)}`` write contract for the boss-reach finale."""
     ov = _Ov(rb, rw)
-    ov.apply({0x91FE: (0xFF, 1)})                          # [asm 7491] disable the camera state machine
+    ov.apply({CAM_STATE: (0xFF, 1)})                          # [asm 7491] disable the camera state machine
     for tgt in PlayerGlobals(ov).boss_targets:            # [asm 7496-74A5] clear the 5 target render records
         tgt.sprite = 0xFFFF
     g = PlayerGlobals(ov)
@@ -549,7 +596,7 @@ def camera_state_machine(rb, rw):
     if state == 0:                                        # [asm 71AB]
         if dist >= 0xFA:                                  # [asm 71B2] jb
             w[SCROLL_PHASE] = (0, 1)                       # [asm 71BA]
-            w[SCRIPT_PTR] = (0xA427, 2)                    # [asm 71BF]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_INTRO, 2)                    # [asm 71BF]
         else:
             w[CAM_TIMER] = (0, 2)                          # [asm 71C8]
             w[CAM_STATE] = (1, 1)                          # [asm 71CE]
@@ -564,7 +611,7 @@ def camera_state_machine(rb, rw):
         if g0.spawn_count < 0x3C:                         # [asm 71F4] jae 7203
             w[CAM_STATE] = (2, 1)                          # [asm 71FB]
             return w
-        w[SCRIPT_PTR] = (0xA434, 2)                        # [asm 7203]
+        w[SCRIPT_PTR] = (CAM_SCRIPT_PAN, 2)                        # [asm 7203]
         if t >= 0x6E:                                      # [asm 7209] jb 7221
             w[CAM_STATE] = (2, 1)                          # [asm 7210]
             w.update(inc_scroll_phase(rb))                # [asm 7215] 757A
@@ -586,7 +633,7 @@ def camera_state_machine(rb, rw):
         if t < 0x2C:                                       # [asm 7270/7277]
             w.update(camera_boundary_collision(rb, rw))   # [asm 7279] 81B4
             if dist >= 0x4B:                               # [asm 727C] jae 7290
-                w[SCRIPT_PTR] = (0xA43B, 2)                # [asm 7290]
+                w[SCRIPT_PTR] = (CAM_SCRIPT_SPAWN, 2)                # [asm 7290]
             else:
                 w[CAM_STATE] = (3, 1); w[CAM_TIMER] = (0, 2)   # [asm 7283]
             return w
@@ -595,11 +642,11 @@ def camera_state_machine(rb, rw):
             w[SCROLL_VY] = (0xFF20, 2)                     # [asm 729C]
             if g0.spawn_count < 0x28 and dist < 0x50:      # [asm 72A2/72A9]
                 w[CAM_STATE] = (4, 1); w[CAM_TIMER] = (0, 2)   # [asm 72B0/72B5]
-            w[SCRIPT_PTR] = (0xA45E, 2)                    # [asm 72BB]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_IDLE, 2)                    # [asm 72BB]
             return w
         # t > 0x2C  [asm 72C4]
         if _s16(g0.scroll_vy) > 0:                        # [asm 72C4] jle 72DB
-            w[SCRIPT_PTR] = (0xA460 if g0.spawn_count >= 0x64 else 0xA462, 2)   # [asm 72CB-72D8]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_IDLE_HI if g0.spawn_count >= 0x64 else CAM_SCRIPT_IDLE_LO, 2)   # [asm 72CB-72D8]
         if dist > 0x50:                                    # [asm 72DB] ja 72F5
             if t < 0x58:                                   # [asm 72F5] jae 72FF
                 return w
@@ -622,10 +669,10 @@ def camera_state_machine(rb, rw):
             return w
         vy = _s16(g0.scroll_vy)                            # [asm 7392]
         if vy < 0:                                          # [asm 7397 je / 7399 jg]
-            w[SCRIPT_PTR] = (0xA45E, 2)                    # [asm 739B]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_IDLE, 2)                    # [asm 739B]
             return w
         if vy > 0:
-            w[SCRIPT_PTR] = (0xA464, 2)                    # [asm 73A4]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_73A4, 2)                    # [asm 73A4]
             return w
         a = g0.dist_x                                      # [asm 73AD] vy == 0
         if a >= 0x64:                                       # [asm 73B0] jae 73F1
@@ -633,14 +680,14 @@ def camera_state_machine(rb, rw):
             dx = 0x50 if _s16(pv.x) > _s16(g0.cursor_x) else (-0x50) & 0xFFFF   # [asm 73FA-7403]
             w[SCROLL_VX] = (dx, 2)                          # [asm 7405]
         elif a <= 0x19:                                     # [asm 73B5] jbe 73DA
-            w[SCRIPT_PTR] = (0xA470, 2)                    # [asm 73DA]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_73DA, 2)                    # [asm 73DA]
         elif a <= 0x23:                                     # [asm 73BA] jbe 73E3
             w[CAM_STATE] = (4, 1); w[CAM_TIMER] = (0, 2)    # [asm 73E3]
         else:                                               # [asm 73BF] 0x24..0x63
             sp = w[SCROLL_PHASE][0] if SCROLL_PHASE in w else g0.scroll_phase   # 81B4 may have knocked it down
             if sp == 0:                                     # [asm 73BF] jne 73D1
                 w[CAM_STATE] = (7, 1); w[CAM_TIMER] = (0, 2)   # [asm 73C6]
-            w[SCRIPT_PTR] = (0xA46B, 2)                    # [asm 73D1]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_73D1, 2)                    # [asm 73D1]
         return w
 
     if state == 4:                                        # [asm 741A]
@@ -650,9 +697,9 @@ def camera_state_machine(rb, rw):
         if t > 0x42:                                       # [asm 7428] jbe 743D
             w[CAM_STATE] = (3, 1); w[CAM_TIMER] = (0, 2)    # [asm 742F]
             return w
-        w[SCRIPT_PTR] = (0xA475, 2)                        # [asm 743D]
+        w[SCRIPT_PTR] = (CAM_SCRIPT_743D, 2)                        # [asm 743D]
         if g0.scroll_vy == 0:                             # [asm 7443] jne 744F
-            w[0x6BEA] = (4, 1)                             # [asm 744A]
+            w[SCROLL_STOP_FLAG] = (4, 1)                             # [asm 744A]
         return w
 
     if state == 5:                                        # [asm 7452]
@@ -661,11 +708,11 @@ def camera_state_machine(rb, rw):
         if t > 0x13:                                       # [asm 745D] jbe 7471
             w[CAM_TIMER] = (0, 2); w[CAM_STATE] = (1, 1)    # [asm 7464-7469]
         else:
-            w[SCRIPT_PTR] = (0xA47E, 2)                    # [asm 7471]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_7471, 2)                    # [asm 7471]
         return w
 
     if state == 6:                                        # [asm 747A]
-        w[SCRIPT_PTR] = (0xA480, 2)                        # [asm 7481]
+        w[SCRIPT_PTR] = (CAM_SCRIPT_7481, 2)                        # [asm 7481]
         if _s16(g0.scroll_vy) < 0:                        # [asm 7487] jge 7491
             return w
         for off, vw in camera_state6_finale(rb, rw).items():   # [asm 7491-74E9] the boss-reach death finale
@@ -678,14 +725,14 @@ def camera_state_machine(rb, rw):
         if t > 0x2C:                                       # [asm 74F5] jbe 7503
             w[CAM_STATE] = (1, 1)                          # [asm 74FC]
             return w
-        w[SCRIPT_PTR] = (0xA45E, 2)                        # [asm 7503]
+        w[SCRIPT_PTR] = (CAM_SCRIPT_IDLE, 2)                        # [asm 7503]
         vy = g0.scroll_vy
         if vy == 0:                                        # [asm 7509] je 751A
             w[SCROLL_VY] = (0xFF9F, 2)                      # [asm 751A]
             dx = 0xFFD0 if _s16(pv.x) > _s16(g0.cursor_x) else 0x30   # [asm 7523-752C]
             w[SCROLL_VX] = (dx, 2)                          # [asm 752E]
         elif _s16(vy) > 0:                                 # [asm 7510] jl 7534
-            w[SCRIPT_PTR] = (0xA460, 2)                    # [asm 7512]
+            w[SCRIPT_PTR] = (CAM_SCRIPT_IDLE_HI, 2)                    # [asm 7512]
         return w
 
     return w                                               # [asm 74EF jne 7534] states >= 8 / 0xFF: no-op
@@ -747,10 +794,10 @@ def camera_target_geometry(rb, rw, si):
     off = camera_offset_lookup(rw, p1, p2)               # [asm 9403] 94DC
     t0x = (cx + (-_cbw(off) if face else _cbw(off))) & 0xFFFF    # [asm 9406-9412]
     t0y = (cy + _cbw(off >> 8)) & 0xFFFF                  # [asm 9419-941C]
-    w[0xA407] = (flip(p1), 2); w[0xA40D] = (flip(p2), 2)
-    w[0xA409] = (t0x, 2); w[0xA40B] = (t0y, 2)
+    w[CAM_PARAM_1] = (flip(p1), 2); w[CAM_PARAM_2] = (flip(p2), 2)
+    w[CAM_T0_X] = (t0x, 2); w[CAM_T0_Y] = (t0y, 2)
 
-    for poff, txo, tyo in ((0xA413, 0xA40F, 0xA411), (0xA419, 0xA415, 0xA417), (0xA41F, 0xA41B, 0xA41D)):
+    for poff, txo, tyo in ((CAM_T1_PARAM, CAM_T1_X, CAM_T1_Y), (CAM_T2_PARAM, CAM_T2_X, CAM_T2_Y), (CAM_T3_PARAM, CAM_T3_X, CAM_T3_Y)):
         p = rw(si); si = (si + 2) & 0xFFFF               # [asm 9427/944F/9477] lodsw
         off = camera_offset_lookup(rw, p2, p)            # [asm 942B/9453/947B] 94DC (shared first key p2)
         tx = (t0x + (-_cbw(off) if face else _cbw(off))) & 0xFFFF    # relative to target 0
@@ -758,10 +805,10 @@ def camera_target_geometry(rb, rw, si):
         w[poff] = (flip(p), 2); w[txo] = (tx, 2); w[tyo] = (ty, 2)
 
     if rb(CMD_BYTE) & 0x40:                               # [asm 949B-94AF] vertical nudge
-        w[0xA40B] = ((w[0xA40B][0] + 2) & 0xFFFF, 2)
-        w[0xA411] = ((w[0xA411][0] + 1) & 0xFFFF, 2)
-        w[0xA417] = ((w[0xA417][0] + 1) & 0xFFFF, 2)
-        w[0xA41D] = ((w[0xA41D][0] + 1) & 0xFFFF, 2)
+        w[CAM_T0_Y] = ((w[CAM_T0_Y][0] + 2) & 0xFFFF, 2)
+        w[CAM_T1_Y] = ((w[CAM_T1_Y][0] + 1) & 0xFFFF, 2)
+        w[CAM_T2_Y] = ((w[CAM_T2_Y][0] + 1) & 0xFFFF, 2)
+        w[CAM_T3_Y] = ((w[CAM_T3_Y][0] + 1) & 0xFFFF, 2)
     return w, si
 
 
@@ -786,12 +833,12 @@ def camera_script_command(rb, rw, si):
     for _ in range(5):                                    # [asm 93BF dx=5]
         bx = ov.rw(si)                                    # [asm 93C2] source pointer
         si = (si + 2) & 0xFFFF                            # [asm 93E2]
-        if bx == 0xA415:                                  # [asm 93C4]
-            ov.apply({0xA423: (di, 2)})
-        if bx == 0xA41B:                                  # [asm 93CE]
-            ov.apply({0xA421: (di, 2)})
-        if bx == 0xA40F:                                  # [asm 93D8]
-            ov.apply({0xA425: (di, 2)})
+        if bx == CAM_T2_X:                                  # [asm 93C4]
+            ov.apply({CAM_TARGET_B: (di, 2)})
+        if bx == CAM_T3_X:                                  # [asm 93CE]
+            ov.apply({CAM_TARGET_A: (di, 2)})
+        if bx == CAM_T1_X:                                  # [asm 93D8]
+            ov.apply({CAM_TARGET_C: (di, 2)})
         ov.apply({di: (ov.rw(bx), 2),                     # [asm 93E4-93EE] copy 3 words
                   (di + 2) & 0xFFFF: (ov.rw((bx + 2) & 0xFFFF), 2),
                   (di + 4) & 0xFFFF: (ov.rw((bx + 4) & 0xFFFF), 2)})
@@ -829,7 +876,7 @@ def camera_script_interp(rb, rw):
     ov.apply({CMD_BYTE: (al, 1)})                         # [asm 7554]
     cmd = al & 0xBF                                       # [asm 7557]
     ov.apply({SCRIPT_CURSOR: ((ov.rw(SCRIPT_CURSOR) + 1) & 0xFFFF, 2)})   # [asm 7559]
-    si = (cmd * 0x14 + 0xA571) & 0xFFFF                   # [asm 755D-7563]
+    si = (cmd * 0x14 + CAM_CMD_TABLE) & 0xFFFF                   # [asm 755D-7563]
     ov.apply({CURSOR_SNAP_X: (ov.rw(CURSOR_X), 2), CURSOR_SNAP_Y: (ov.rw(CURSOR_Y), 2)})   # [asm 7567-7570]
     cmd_writes, _ = camera_script_command(ov.rb, ov.rw, si)   # [asm 7573] 93B2
     ov.apply(cmd_writes)
@@ -882,10 +929,10 @@ def tick_mode9_spawn(rb, rw):
     (the seed + the spawn row); the 6B1C+ boss-script engine is a separate routine."""
     writes = {}
     if rw(M9_INIT_FLAG) == 0xFFFF:                     # [asm 6AE7] first frame -> seed the state
-        writes[M9_PTR] = (0xA4F9, 2)                   # [asm 6AEE]
+        writes[M9_PTR] = (BOSS_SCRIPT_M9, 2)                   # [asm 6AEE]
         writes[M9_COUNT] = (0x18, 2)                   # [asm 6AF4]
-        writes[0xA515] = (0, 1)                        # [asm 6AFA]
-        writes[0xA516] = (3, 1)                        # [asm 6AFF]
+        writes[BOSS_DWELL] = (0, 1)                        # [asm 6AFA]
+        writes[BOSS_CYCLE] = (3, 1)                        # [asm 6AFF]
         count = 0x18
     else:
         count = rw(M9_COUNT)
@@ -903,7 +950,7 @@ def tick_mode9_spawn(rb, rw):
 def boss_hit_burst(rb, rw):
     """[asm 6BDB..6C0C] Returns the ``{offset: (value, width)}`` writes (4 spawned 0x50A8 slots)."""
     ov = _Ov(rb, rw)
-    ov.apply({0xA336: (0xB9, 2), 0xA338: (0x1E, 2), 0xA33A: (0x2137, 2)})   # [asm 6BDB-6BF5] origin + sprite
+    ov.apply({HURT_FX_X: (0xB9, 2), HURT_FX_Y: (0x1E, 2), HURT_FX_SPRITE: (0x2137, 2)})   # [asm 6BDB-6BF5] origin + sprite
     ax, dx = 0x20, 0xFF60                                  # [asm 6BEA-6BED]
     for _ in range(4):                                     # [asm 6BE7 cx=4]
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, ax, dx, 1))   # [asm 6BFC] 8D1B (one sprite)
@@ -1061,7 +1108,7 @@ def boss_pre_interp(rb, rw):
         if (ov.rw((si + 4) & 0xFFFF) != 0xFFFF                              # [asm 6B49] active
                 and ((ov.rw(si) - BOSS_ZONE_X[0]) & 0xFFFF) < BOSS_ZONE_X[1]    # [asm 6B4F-6B57] X in zone
                 and ((ov.rw((si + 2) & 0xFFFF) - BOSS_ZONE_Y[0]) & 0xFFFF) < BOSS_ZONE_Y[1]):  # [asm 6B59-6B62]
-            ov.apply({BOSS_SCRIPT_PTR: (0xA534, 2)})      # [asm 6B64] switch to the hit script
+            ov.apply({BOSS_SCRIPT_PTR: (BOSS_SCRIPT_HIT, 2)})      # [asm 6B64] switch to the hit script
             h = ov.rb(M9_COUNT)                           # [asm 6B6A-6B6F] boss health-- (saturating)
             nh = ((h - 1) & 0xFF) if h else 0
             ov.apply({M9_COUNT: (nh, 1)})
@@ -1070,7 +1117,7 @@ def boss_pre_interp(rb, rw):
             c = (ov.rb(BOSS_CYCLE) + 1) & 3               # [asm 6B79-6B7D] (runs on both the hit and kill paths)
             ov.apply({BOSS_CYCLE: (c, 1)})
             if c == 0:                                    # [asm 6B82]
-                ov.apply({BOSS_SCRIPT_PTR: (0xA540, 2)})  # [asm 6B84]
+                ov.apply({BOSS_SCRIPT_PTR: (BOSS_SCRIPT_CYCLE, 2)})  # [asm 6B84]
             break                                         # [asm 6B8A] -> the glyph interpreter
         si = (si + 0x12) & 0xFFFF                         # [asm 6B8C]
     return ov.writes
@@ -1172,7 +1219,7 @@ def _l6_tail_6f8f(ov):
     p, g = PlayerView(ov), PlayerGlobals(ov)
     if g.respawn_state != 0:                               # [asm 6F94 je / 6F96 jmp 70CB]
         return True
-    hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, 0x5690)   # [asm 6F9F] 8D7B
+    hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, BOSS_HITBOX)   # [asm 6F9F] 8D7B
     ov.apply(hb)
     if hit and g.hit_flag != 0:                            # [asm 6FA2 jae / 6FA4 je 6FBB]
         p.yvel = 0xFF80 if g.in_up != 0 else 0xFFC0        # [asm 6FAB-6FB8]
@@ -1231,10 +1278,10 @@ def _l6_boss_hit(ov):
     hit_slot = None
     if p.slot0.sprite != 0xFFFF:                           # [asm 6FC9] the player club (0x4F0A+4)
         g.hit_pass_full = 1                                # [asm 6FCF] full-tolerance hitbox
-        h, hb = hitbox_overlap(ov.rb, ov.rw, si, 0x4F0A)   # [asm 6FD4] 8D7B
+        h, hb = hitbox_overlap(ov.rb, ov.rw, si, SCAN_PLAYER)   # [asm 6FD4] 8D7B
         ov.apply(hb); g.hit_pass_full = 0                  # [asm 6FD7]
         if h:                                             # [asm 6FDC jb 7001]
-            hit_slot = 0x4F0A
+            hit_slot = SCAN_PLAYER
     if hit_slot is None:
         for slot in g.projectiles:                        # [asm 6FDE-6FFC] the 4 projectiles
             if not slot.free:                             # [asm 6FE4] active slot
@@ -1295,7 +1342,7 @@ def tick_level6_boss(rb, rw):
         if bp != 0xFFFF:                                  # [asm 6D4F] active slot
             killed = False
             if g.respawn_state == 0:                      # [asm 6D54] not the death freeze
-                hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, rslot.offset)   # [asm 6D5B] 8D7B(player, slot)
+                hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, rslot.offset)   # [asm 6D5B] 8D7B(player, slot)
                 ov.apply(hb)
                 if hit:                                   # [asm 6D5E jb -> knock the player back]
                     p.death_state = 0x2C; g.anim_gate = 0                 # [asm 6D60-6D65]
@@ -1328,15 +1375,15 @@ def tick_level6_boss(rb, rw):
     t0, t1, t2, t3, t4 = g.boss_targets                   # records 0x5648/565A/566C/567E/5690
     t2.sprite = 0xFFFF; t1.sprite = 0xFFFF                # [asm 6DDE-6DE4]
     if ov.rw(L6_PHASE) < 2:                               # [asm 6DE7 jae 6E12]
-        si = (0xC * ov.rb(L6_SUB_B) + 0xA4B5) & 0xFFFF     # [asm 6DEE-6DF6]
+        si = (0xC * ov.rb(L6_SUB_B) + L6_SUB_B_TABLE) & 0xFFFF     # [asm 6DEE-6DF6]
         t2.x = ov.rw(si); t2.y = ov.rw((si + 2) & 0xFFFF); t2.sprite = ov.rw((si + 4) & 0xFFFF)   # [6DFA-6E02]
         t1.x = ov.rw((si + 6) & 0xFFFF); t1.y = ov.rw((si + 8) & 0xFFFF)                          # [6E05-6E0A]
         t1.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                    # [6E0F]
-    si = (0xC * ov.rb(L6_SUB_A) + 0xA485) & 0xFFFF         # [asm 6E12-6E18]
+    si = (0xC * ov.rb(L6_SUB_A) + L6_SUB_A_TABLE) & 0xFFFF         # [asm 6E12-6E18]
     t4.x = ov.rw(si); t4.y = ov.rw((si + 2) & 0xFFFF); t4.sprite = ov.rw((si + 4) & 0xFFFF)       # [6E1E-6E26]
     t3.x = ov.rw((si + 6) & 0xFFFF); t3.y = ov.rw((si + 8) & 0xFFFF)                              # [6E29-6E2E]
     t3.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                        # [6E33]
-    si = (6 * ov.rb(L6_ANIM) + 0xA4E5) & 0xFFFF            # [asm 6E36-6E3C] the main target record
+    si = (6 * ov.rb(L6_ANIM) + L6_ANIM_TABLE) & 0xFFFF            # [asm 6E36-6E3C] the main target record
     t0.x = ov.rw(si); t0.y = ov.rw((si + 2) & 0xFFFF)     # [asm 6E42-6E47] (= boss_x / boss_y)
     t0.sprite = 0xFFFF if ov.rw(L6_PHASE) != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E55]
 
@@ -1358,11 +1405,11 @@ def tick_level6_boss(rb, rw):
         _l6_spawn_state_machine(ov)                       # [asm 6E92-6F37]
         if g.respawn_state != 0:                          # [asm 6F3C-6F43]
             return _l6_finish(ov)                         # [asm 6F43 jmp 70CB]
-        hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, 0x5690)   # [asm 6F4C]
+        hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, BOSS_HITBOX)   # [asm 6F4C]
         ov.apply(hb)
         bounced = hit
         if not hit:
-            hit, hb = hitbox_overlap(ov.rb, ov.rw, 0x4F1C, 0x567E)   # [asm 6F54]
+            hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, BOSS_HITBOX_ALT)   # [asm 6F54]
             ov.apply(hb)
             bounced = hit
         if bounced:                                       # [asm 6F4F jb / 6F57 jae 6F8F]
