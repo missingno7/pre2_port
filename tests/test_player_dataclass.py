@@ -42,6 +42,32 @@ def test_tick_runs_with_player_as_a_live_dataclass():
     assert isinstance(obj.backend.player.x, int)
 
 
+def test_tick_state_is_self_contained_no_image():
+    """After a tick, (objects + level_data) reconstruct the DGROUP into a FRESH buffer — no hidden image dep."""
+    from pre2.bridge.game_layout import DataclassBackend
+    from pre2.native.game_tick_demo import GameTickDemo, _inject
+    from pre2.native.loop import native_gameplay_frame
+    from pre2.native.state import NativeGameState
+
+    demo = ROOT / "artifacts" / "demo_cold_20260712_172030" / "game_tick_demo.bin"
+    if not demo.exists():
+        import pytest
+        pytest.skip("cold demo corpus not present")
+
+    gtd = GameTickDemo.load(demo)
+    ref = NativeGameState(bytearray(gtd.seed))
+    obj = NativeGameState(bytearray(gtd.seed))
+    obj.backend = DataclassBackend(obj, readonly_image=True)
+    for i in range(min(gtd.n_ticks, 15)):
+        idle = gtd.idle[i] if i < len(gtd.idle) else None
+        _inject(ref, gtd.keys[i], idle); native_gameplay_frame(ref)
+        _inject(obj, gtd.keys[i], idle); native_gameplay_frame(obj)
+        fresh = bytearray(DGROUP_BASE + 0x10000)        # a clean buffer, NOT the tick's own image
+        obj.backend.materialize(fresh)
+        assert fresh[DGROUP_BASE:DGROUP_BASE + 0x10000] == ref.data[DGROUP_BASE:DGROUP_BASE + 0x10000], \
+            f"self-contained reconstruction diverged at tick {i}"
+
+
 def test_no_two_routes_claim_the_same_offset():
     """Two routed structures must never map the same DGROUP byte (would corrupt materialize)."""
     from pre2.bridge.game_layout import _ROUTES

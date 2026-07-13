@@ -222,14 +222,17 @@ class DataclassBackend:
     """
 
     _IS_DGROUP_BACKEND = True
-    __slots__ = ("_img", "_objs", "_map", "_arena", "_sparse", "_readonly_image")
+    __slots__ = ("_img", "_objs", "_map", "_arena", "_sparse", "_readonly_image", "_level_data")
 
     def __init__(self, seed, readonly_image=False):
-        # readonly_image=True asserts the invariant that the gameplay tick writes NOTHING to the image (all
-        # mutable state is on the object graph); any fallback write then raises. The image is pure loaded data.
+        # readonly_image=True asserts the invariant that the gameplay tick writes NOTHING to the loaded data (all
+        # mutable state is on the object graph); any fallback write then raises. ``_level_data`` is the tick's
+        # own copy of the read-only loaded tables — so (objects + level_data) is a SELF-CONTAINED state of record
+        # and the tick needs no external byte image at all (``_img`` is only a materialize target for the render).
         data = getattr(seed, "data", seed)
         self._img = data
         self._readonly_image = readonly_image
+        self._level_data = bytearray(data[DGROUP_BASE:DGROUP_BASE + 0x10000])
         self._objs: dict[str, object] = {}
         # absolute dgroup offset -> (object, field, byte_index, width, signed) — mapped straight to the instance
         self._map: dict[int, tuple] = {}
@@ -288,8 +291,8 @@ class DataclassBackend:
     def rb(self, off: int) -> int:
         off &= 0xFFFF
         m = self._map.get(off)
-        if m is None:
-            return self._img[DGROUP_BASE + off]
+        if m is None:                               # un-routed -> the read-only loaded tables
+            return self._level_data[off]
         inst, f, k, w, _s = m
         if w == 0:                                  # a bytearray byte (record body / working buffer)
             return getattr(inst, f)[k]
@@ -301,9 +304,9 @@ class DataclassBackend:
         m = self._map.get(off)
         if m is None:
             if self._readonly_image:
-                raise AssertionError(f"gameplay tick wrote to the read-only image at 0x{off:04X} — an "
+                raise AssertionError(f"gameplay tick wrote to the read-only loaded data at 0x{off:04X} — an "
                                      f"un-routed mutable byte (the object graph is not the complete store)")
-            self._img[DGROUP_BASE + off] = val
+            self._level_data[off] = val
             return
         inst, f, k, w, s = m
         if w == 0:                                  # a bytearray byte (record body / working buffer)
@@ -323,7 +326,9 @@ class DataclassBackend:
         self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
 
     def materialize(self, data=None) -> None:
+        # Self-contained: reconstruct the whole DGROUP from (loaded tables + the object graph), no external state.
         data = self._img if data is None else data
+        data[DGROUP_BASE:DGROUP_BASE + 0x10000] = self._level_data
         for attr, _cls, layout, base, count, stride in _ROUTES:
             insts = self._objs[attr] if count > 1 else [self._objs[attr]]
             for k, inst in enumerate(insts):
