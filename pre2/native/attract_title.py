@@ -23,6 +23,8 @@ from pre2.recovered.object_render import (Sprite, paint_sprite, plan_frame,
                                           plan_sprite_command)
 from pre2.recovered.player import player_advance_anim
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
+from pre2.native.dgroup_offsets import (
+    LIGHT_FADE_STEP, LIGHT_FADE_TO_DARK, LIGHT_FADE_TO_LEVEL, RENDER_PAGE)
 
 DINO = 0x4F2E          # dino / first bounce object (the caveman is the named PlayerView player slot)
 _PAGE = 0x2000         # render page (VM double-buffers 2000/0000; a single page renders identically)
@@ -80,7 +82,7 @@ def _caveman_onscreen(state, rs):
 def _compose(state, base_planes, pal256):
     """Render one frame: the jungle base + the caveman/dino sprites (plan_frame + paint_sprite), as a
     FrontEndScene-ready (planes, page, palette). Uses the recovered renderer over the decoded base."""
-    _ww(state, 0x2DD8, _PAGE)                         # pin the render page so cam.dest_page is stable
+    _ww(state, RENDER_PAGE, _PAGE)                         # pin the render page so cam.dest_page is stable
     planes = [bytearray(0x10000) for _ in range(4)]
     for p in range(4):
         planes[p][_PAGE:_PAGE + len(base_planes[p])] = base_planes[p]
@@ -118,13 +120,13 @@ def native_attract_title(state, game_root: str):
         return FrontEndScene(MODE_PLANAR, palette=pal256, planes=planes, page=_PAGE, game_paced=True)
 
     # -------- SETUP (8F2D..8F8F) -------- #
-    state.wb(0x6C01, 0); state.wb(0x6C02, 1); state.wb(0x6C03, 0)   # [8F46..8F50] byte flags (unnamed)
+    state.wb(LIGHT_FADE_TO_DARK, 0); state.wb(LIGHT_FADE_TO_LEVEL, 1); state.wb(LIGHT_FADE_STEP, 0)   # [8F46..8F50] byte flags (unnamed)
     g.fine_scroll = 0                                 # [8F55] fine-scroll byte
     g.cam_col_word = 0; g.cam_row_word = 0            # [8F5C/8F5F] camera = origin
     pv.x = 0; pv.y = 0xA9; pv.facing = 0              # caveman (= player slot) X=0 Y=0xA9 facing=right
     pv.xvel = 0; pv.anim_ptr = 0x7BA7                 # Xvel=0, anim-ptr=0x7BA7
-    _ww(state, DINO, 0x30); _ww(state, 0x4F30, 0xA9)  # dino X=0x30 Y=0xA9 (the dino/bounce-object arena)
-    _ww(state, 0x4F37, 0); _ww(state, 0x4F34, 0); _ww(state, 0x4F3A, 0xAB4B)   # dino flags/anim-ptr
+    _ww(state, DINO, 0x30); _ww(state, DINO + 2, 0xA9)  # dino X=0x30 Y=0xA9 (the dino/bounce-object arena)
+    _ww(state, DINO + 9, 0); _ww(state, DINO + 6, 0); _ww(state, DINO + 0xC, 0xAB4B)   # dino flags/anim-ptr
     g.glider = 0
 
     # -------- PHASE 1 (8F94..8FC4): caveman runs right, dino chases -------- #
@@ -142,8 +144,8 @@ def native_attract_title(state, game_root: str):
             break
 
     # -------- PHASE 2 setup (8FC6..9000): kill dino, spawn 3 staggered bouncing objects -------- #
-    _ww(state, 0x4F37, 0xFFFF)                        # [8FC8] (the dino/bounce-object arena)
-    _ww(state, 0x4F3C, 0)                             # [8FCE]
+    _ww(state, DINO + 9, 0xFFFF)                      # [8FC8] (the dino/bounce-object arena)
+    _ww(state, DINO + 0xE, 0)                         # [8FCE]
     pv.facing = 0xFFFF                                # [8FD4] caveman facing = left (H-flip)
     for w in range(0x3F):                            # [8FDA] rep movsw 4F2E->4F40, OVERLAPPING -> propagates
         s = 0x4F2E + w * 2; t = 0x4F40 + w * 2       # (replicates the 18-byte dino record across the slots)

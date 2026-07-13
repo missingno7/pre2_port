@@ -20,6 +20,8 @@ from pre2.views.camera_pan import apply_camera_pan
 from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.frame_renderer import calc_scroll_source
+from pre2.native.dgroup_offsets import (
+    CAM_ROW, CAM_SCROLL_IDLE, LEVEL_BOTTOM_LIMIT, LEVEL_PROP_HEADER, PLAYER_MOVE_FLAG, ROW_RING, SCROLL_ANIM_CTR, SCROLL_COPY_SRC, SCROLL_DIR, SCROLL_GATE_6BD9, SCROLL_TARGET_X, SCROLL_WINDOW_FLAG, UNK_78C4)
 
 _DS_BASE = (DATA_SEG << 4) & 0xFFFFF
 _CS_BASE = (0x1030 << 4) & 0xFFFFF
@@ -60,25 +62,25 @@ def _v_scroll_down(state, dl: int) -> bool:
     the bottom limit (stc). Reproduces the camera-cell state; the 348D tile-row redraw is VRAM (skipped)."""
     rb, rw = readers(state)
     g = PlayerGlobals(state)
-    maxy = (rb(0x2CF5) - 0xB) & 0xFFFF                              # [33B6-33BB] bottom camera limit
+    maxy = (rb(LEVEL_BOTTOM_LIMIT) - 0xB) & 0xFFFF                              # [33B6-33BB] bottom camera limit
     if g.cam_row_word >= maxy:                                          # [33BE jae 340E]
         return False
-    _wb(state, 0x2DF5, (rb(0x2DF5) + 1) & 0xFF)                     # [33C4]
+    _wb(state, 0x2DF5, (rb(SCROLL_ANIM_CTR) + 1) & 0xFF)                     # [33C4]
     acc = (g.fine_scroll + (dl & 0xFF)) & 0xFF                         # [33C8] sub-tile accumulator += dl
     if acc < 0x10:                                                  # [33CC jb 340B]
         _wb(state, 0x6BC4, acc)
         return True
     acc -= 0x10                                                     # [33D3]
     cy = (g.cam_row_word + 1) & 0xFFFF                                  # [33D8] camera cell += 1
-    _ww(state, 0x2DE6, cy)
+    _ww(state, CAM_ROW, cy)
     if cy >= maxy:                                                 # [33DC jb 33E7 ; else 33E2]
         acc = 0
     _wb(state, 0x6BC4, acc)
-    dea = (rw(0x2DEA) + 1) & 0xFFFF                                 # [33E7-33F0] buffer index, wrap at 0xC
+    dea = (rw(ROW_RING) + 1) & 0xFFFF                                 # [33E7-33F0] buffer index, wrap at 0xC
     if dea >= 0xC:
         dea = 0
-    _ww(state, 0x2DEA, dea)                                         # [33F5]
-    _ww(state, 0x2DBA, calc_scroll_source(g.col_ring, rb(0x2DEA)))  # [33F8-33FB -> 3588]
+    _ww(state, ROW_RING, dea)                                         # [33F5]
+    _ww(state, SCROLL_COPY_SRC, calc_scroll_source(g.col_ring, rb(ROW_RING)))  # [33F8-33FB -> 3588]
     return True
 
 
@@ -89,18 +91,18 @@ def _v_scroll_up(state, dl: int) -> bool:
     g = PlayerGlobals(state)
     if g.cam_row_word == 0:                                             # [336C je 33A7]
         return False
-    _wb(state, 0x2DF5, (rb(0x2DF5) + 1) & 0xFF)                     # [3373]
+    _wb(state, 0x2DF5, (rb(SCROLL_ANIM_CTR) + 1) & 0xFF)                     # [3373]
     raw = g.fine_scroll - (dl & 0xFF)                                  # [3377 sub; jns 33A4]
     if raw >= 0:
         _wb(state, 0x6BC4, raw & 0xFF)
         return True
     _wb(state, 0x6BC4, (raw + 0x10) & 0xFF)                         # [337D]
-    _ww(state, 0x2DE6, (g.cam_row_word - 1) & 0xFFFF)                   # [3382] camera cell -= 1
-    dea = rw(0x2DEA) - 1                                            # [3386-338C] buffer index, wrap to 0xB
+    _ww(state, CAM_ROW, (g.cam_row_word - 1) & 0xFFFF)                   # [3382] camera cell -= 1
+    dea = rw(ROW_RING) - 1                                            # [3386-338C] buffer index, wrap to 0xB
     if dea < 0:
         dea = 0xB
-    _ww(state, 0x2DEA, dea & 0xFFFF)                                # [338F-3391]
-    _ww(state, 0x2DBA, calc_scroll_source(g.col_ring, rb(0x2DEA)))  # [3394-3397 -> 3588]
+    _ww(state, ROW_RING, dea & 0xFFFF)                                # [338F-3391]
+    _ww(state, SCROLL_COPY_SRC, calc_scroll_source(g.col_ring, rb(ROW_RING)))  # [3394-3397 -> 3588]
     return True
 
 
@@ -110,7 +112,7 @@ def _h_init(state, dxs: int) -> None:
     """[asm 57F6..581D] Pick the horizontal scroll direction [0x6BED] (1=right, 2=left) from Xvel + screen X."""
     rb, rw = readers(state)
     pv = PlayerView(state)
-    if pv.xvel != 0 and (rb(0x4F23) & 0x80):                     # [57FD] moving left
+    if pv.xvel != 0 and (rb(PLAYER_MOVE_FLAG) & 0x80):                     # [57FD] moving left
         right = False
     elif pv.xvel != 0:                                           # moving right
         right = True
@@ -134,10 +136,10 @@ def _h_follow(state) -> None:
     pv = PlayerView(state)
     dx = (_sar16(pv.x, 4) - g.cam_col_word) & 0xFFFF              # [57AD-57B5] player screen X
     dxs = _s16(dx)
-    if dx < 0x14 and rb(0x6BFE) == 0 and pv.xvel == 0:           # [57B9/57BE/57C5] in-window & idle -> stop
+    if dx < 0x14 and rb(SCROLL_WINDOW_FLAG) == 0 and pv.xvel == 0:           # [57B9/57BE/57C5] in-window & idle -> stop
         _wb(state, 0x6BED, 0)
         return
-    bed = rb(0x6BED)
+    bed = rb(SCROLL_DIR)
     if bed == 0:                                                   # [57CC je 57F6]
         _h_init(state, dxs)
     elif bed == 1:                                                 # [57D1 je 57E6] scrolling right
@@ -163,11 +165,11 @@ def _v_speed(state, down: bool) -> int:
     if _rb_cs(state, SCROLL_DONE_FLAG) != 0:
         return 0x10
     ay = (pv.y - g.fine_scroll) & 0xFFFF                         # player Y - sub-tile accumulator
-    cell = ((g.cam_row_word + rw(0x6BF1)) << 4) & 0xFFFF                # (cam cell + target) * 16
+    cell = ((g.cam_row_word + rw(SCROLL_TARGET_X)) << 4) & 0xFFFF                # (cam cell + target) * 16
     bx = ((ay - cell) if down else (cell - ay)) & 0xFFFF           # [574C sub ax,dx] / [5788 sub bx,ax]
     if g.grid_dirty == 0:                                            # [5750/578A] table form
         return rb((_SPEED_TABLE + bx) & 0xFFFF)
-    return rb((rw(0x78C4) + bx) & 0xFFFF)
+    return rb((rw(UNK_78C4) + bx) & 0xFFFF)
 
 
 def _v_follow(state) -> None:
@@ -199,9 +201,9 @@ def _v_follow(state) -> None:
         elif dxs <= 3:
             target = 8
     if target is not None:                                         # [56D9]
-        _ww(state, 0x6BF1, target)
-        _wb(state, 0x6BEE, (rb(0x6BEE) + 1) & 0xFF)
-    if rb(0x6BEE) == 0:                                            # [56E0 jne 56EA]
+        _ww(state, SCROLL_TARGET_X, target)
+        _wb(state, 0x6BEE, (rb(CAM_SCROLL_IDLE) + 1) & 0xFF)
+    if rb(CAM_SCROLL_IDLE) == 0:                                            # [56E0 jne 56EA]
         return
     _v_scroll_apply(state, dxs)
 
@@ -212,15 +214,15 @@ def _v_scroll_apply(state, dxs: int) -> None:
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     pv = PlayerView(state)
-    top = (rw(0x815E) + 0xB) & 0xFFFF
+    top = (rw(LEVEL_PROP_HEADER) + 0xB) & 0xFFFF
     # [56EA-5701] level-edge pre-check: if not past the bottom and the level top is above the camera -> scroll up
-    if pv.y <= ((top << 4) & 0xFFFF) and _s16(rw(0x815E)) < _s16((g.cam_row_word - 1) & 0xFFFF):
+    if pv.y <= ((top << 4) & 0xFFFF) and _s16(rw(LEVEL_PROP_HEADER)) < _s16((g.cam_row_word - 1) & 0xFFFF):
         if not _v_scroll_up(state, _v_speed(state, down=False)):    # [576A]
             _wb(state, 0x6BEE, 0)
         return
-    if rb(0x6BEE) == 0:                                            # [5703]
+    if rb(CAM_SCROLL_IDLE) == 0:                                            # [5703]
         return
-    tgt = rw(0x6BF1)                                               # [570D] target vs screen Y
+    tgt = rw(SCROLL_TARGET_X)                                               # [570D] target vs screen Y
     if tgt == (dxs & 0xFFFF):
         _wb(state, 0x6BEE, 0)                                       # [5713 -> 57A2] reached
         return
@@ -229,7 +231,7 @@ def _v_scroll_apply(state, dxs: int) -> None:
             _wb(state, 0x6BEE, 0)
         return
     # [5718] scroll down toward the target
-    if pv.y <= ((top << 4) & 0xFFFF) and g.cam_row_word > rw(0x815E):   # [5722-572C]
+    if pv.y <= ((top << 4) & 0xFFFF) and g.cam_row_word > rw(LEVEL_PROP_HEADER):   # [5722-572C]
         _wb(state, 0x6BEE, 0)
         return
     if not _v_scroll_down(state, _v_speed(state, down=True)):       # [5763]
@@ -244,7 +246,7 @@ def native_camera_follow(state) -> None:
     _wb_cs(state, SCROLL_DONE_FLAG, 0)                              # [5643]
     rb, _ = readers(state)
     g = PlayerGlobals(state)
-    if rb(0x6BD9) != 0:                                            # [564E jne 5662]
+    if rb(SCROLL_GATE_6BD9) != 0:                                            # [564E jne 5662]
         return
     if not (g.level_flags & 2):                                       # [5655 jne 565F]
         _h_follow(state)                                           # [565C call 57A8]

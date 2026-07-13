@@ -120,7 +120,35 @@ LEVEL_PROP_HEADER   = 0x815E   # the property block start = the level's camera b
 PLAYER_START_X      = 0x8160   # the level start point X (property header) -> player X [asm 4056]
 PLAYER_START_Y      = 0x8162   # the level start point Y -> player Y
 
+# ---- per-level index / mode / loader flags (also exposed as named views) ------------------------------
+LEVEL_INDEX         = 0x2D8A   # the current level index (= PlayerGlobals.level)
+MODE_COPY           = 0xB198   # the committed BEGINNER/EXPERT mode copy (= PlayerGlobals.mode_copy)
+ANY_ANIMATED_FLAG   = 0x6BBD   # the loader's "any animated tile" flag (= PlayerGlobals.page_dirty) [asm 4311]
+LEVEL_BOTTOM_LIMIT  = 0x2CF5   # the level header size / bottom camera limit byte [asm 4316 / 33B6]
+SPRITE_BANK_LO      = 0x8C89   # the entity sprite-ref bank base A (= sprite_bank_lo view) [4182]
+SPRITE_BANK_HI      = 0x8C8B   # ... bank base B (= sprite_bank_hi view; reset to 0x35/0x138 after rebase)
+
+# ---- the horizontal-scroll follower (camera_scroll) ---------------------------------------------------
+SCROLL_DIR          = 0x6BED   # the horizontal scroll direction: 1 = right, 2 = left [asm 57F6]
+SCROLL_GATE_6BD9    = 0x6BD9   # a scroll-enable gate flag [asm 564E]
+SCROLL_TARGET_X     = 0x6BF1   # the scroll target X the camera chases [asm]
+SCROLL_WINDOW_FLAG  = 0x6BFE   # the in-window scroll-suppress flag [asm 57B9]
+SCROLL_ACCUM        = 0x8164   # the scroll accumulator, reset on a snap-to-destination [asm 5335]
+UNK_78C4            = 0x78C4   # role not yet evidenced (a scroll-adjacent word)
+COMBO_COMPLETE_6BE2 = 0x6BE2   # set to 0x294 when the [0x6CA8] utensil group completes
+
+# ---- the reward-burst (player_interaction 67DE) -------------------------------------------------------
+BURST_POS_X         = 0xA336   # the reward-burst spawn position X = player X [asm 67DE]
+BURST_POS_Y         = 0xA338   # ... position Y = player Y - 0x70 [asm 67E4]
+BURST_SPRITE        = 0xA33A   # ... the reward sprite id (0x6E) [asm 67ED]
+
+# ---- the free-running frame timer ---------------------------------------------------------------------
+FRAME_TIMER         = 0x6BD5   # the free-running frame counter 26FA bumps (= frame_stamp / frame_blink view)
+ROW_FACTOR          = 0x6BF8   # the row-stride factor the camera shake writes (= PlayerGlobals.row_factor)
+
 # ---- render / effect slots (the stride-0x12 records; see dgroup_view PlayerView/RenderSlot) ------------
+PLAYER_Y            = 0x4F1E   # the player record Y word (= PlayerView.y)
+PLAYER_MOVE_FLAG    = 0x4F23   # the player facing/move flag byte; & 0x80 = moving left [asm 57FD]
 RENDER_SLOTS_BASE   = 0x4F0A   # slot 0; the player is slot 1 (base + 0x12 = 0x4F1C) [= dgroup_view]
 SLOT0_SPRITE        = 0x4F0E   # slot-0 sprite word: 0xFFFF suppresses the normal player draw [50DF]
 PLAYER_SLOT         = 0x4F1C   # the player record (= dgroup_view PLAYER_BASE / PlayerView base)

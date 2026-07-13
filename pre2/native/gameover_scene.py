@@ -23,7 +23,7 @@ from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input
 from pre2.recovered.prng import rng_lcg
-from pre2.native.dgroup_offsets import (CRY_CAVEMAN_SPRITE, IDLE_CLOCK, RENDER_SLOTS_BASE)
+from pre2.native.dgroup_offsets import (CRY_CAVEMAN_SPRITE, FIRE_PRIMARY, IDLE_CLOCK, RENDER_SLOTS_BASE)
 
 _DS = DATA_SEG << 4
 
@@ -199,7 +199,7 @@ def native_gameover_scene(state, dos, game_root: str):
         last = planes
         yield planes, 0                                            # [9C6B] 44FB present
         apply_ds(state, decode_input(rb, rw))                      # [9C6E] DC1
-        if rb(0x27E8):                                             # [9C7C-9C81] fire exits early
+        if rb(FIRE_PRIMARY):                                        # [9C7C-9C81] fire exits early
             break
     # [9C83] 9286: the 16-colour DAC fade-out over the frozen frame
     pal6 = bytes(b & 0x3F for b in d[_DS + 0xAFE8:_DS + 0xAFE8 + 0x10 * 3])

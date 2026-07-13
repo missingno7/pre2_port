@@ -41,6 +41,10 @@ from pre2.recovered.scene import (
     MODE_LINEAR, MODE_PLANAR,
     SCENE_INTRO, SCENE_MAP, SCENE_MENU, SCENE_TITLE,
 )
+from pre2.native.dgroup_offsets import (
+    BIOS_SEED, CARTE_MARKER_DIMS, CARTE_MARKER_TABLE, CARTE_MASK_OFF, CARTE_MASK_SEG, DEMO_CURSOR,
+    DEMO_LEVEL, DEMO_MODE, FIRE_ALT, FIRE_LATCH, FIRE_SPACE, FONT_SEG, KEY_1_LATCH, KEY_2_LATCH,
+    LOAD_TOP, PENDING_KEY)
 
 _DS = DATA_SEG << 4
 
@@ -142,7 +146,7 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     apply_ds(state, decode_input(rb, rw))                  # [asm 0bc3 / 0bcf] DC1 input decode
-    fire = (g.in_fire | rb(0x2832)) & 0xFF                # [asm 0bc6-0bc9 / 0bd2-0bd5] fire = [0x27e8] | [0x2832]
+    fire = (g.in_fire | rb(FIRE_ALT)) & 0xFF                # [asm 0bc6-0bc9 / 0bd2-0bd5] fire = [0x27e8] | [0x2832]
     if phase == WAIT_PRESS:
         return (WAIT_RELEASE if fire else WAIT_PRESS), False   # [asm 0bcd] je: loop until pressed
     return phase, fire == 0                                    # [asm 0bd9] jne: loop until released -> RET 0bdb
@@ -165,7 +169,7 @@ def _skippable_intro(scenes, state, *, enabled: bool):
     for scene in scenes:
         yield scene
         apply_ds(state, decode_input(rb, rw))                 # DC1 input decode (same read as native_scene_wait)
-        fire = (g.in_fire | rb(0x2832)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
+        fire = (g.in_fire | rb(FIRE_ALT)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
         if not fire:
             armed = True
         elif armed:
@@ -189,8 +193,8 @@ def _native_attract(state, dos, game_root: str):
     from pre2.native.runtime import native_frame_step
     d = state.data
     g = PlayerGlobals(state)
-    g.level = state.rb(0x83E)                                 # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
-    g.mode_copy = state.rb(0x83D)                             # [asm 8ec4]
+    g.level = state.rb(DEMO_LEVEL)                                 # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
+    g.mode_copy = state.rb(DEMO_MODE)                             # [asm 8ec4]
     # --- [asm 8F2D] the animated MENU2 title (caveman runs across the PREHISTORIK-2 jungle chased by a dino),
     #     then the carte, exactly as a normal level start shows them. Pixel-exact vs the VM (attract_title;
     #     119 frames, 0 diff). Replaces the earlier static-title stand-in (user: "should be a game-like screen
@@ -199,9 +203,9 @@ def _native_attract(state, dos, game_root: str):
     yield from _native_carte(state, dos, game_root)          # [asm 9520] the world-map scroll-in (auto-advances)
     # --- now the gameplay demo ---
     g.input_source = 1                                       # [asm 8eb6] demo-playback input mode
-    state.wb(0x287A, 0); state.wb(0x287B, 0)                 # reset the demo cursor + current byte/count
-    state.wb(0x287C, 0); state.wb(0x287D, 0)
-    state.wb(0x2874, 0)                                      # no pending key yet
+    state.wb(DEMO_CURSOR, 0); state.wb(DEMO_CURSOR + 1, 0)        # reset the demo cursor + current byte/count
+    state.wb(DEMO_CURSOR + 2, 0); state.wb(DEMO_CURSOR + 3, 0)
+    state.wb(PENDING_KEY, 0)                                      # no pending key yet
     g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0   # clear the death/end selectors
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)         # clear the residual key table
     native_load_song(state, native_level_song_name(state), game_root)
@@ -230,7 +234,7 @@ def _native_attract(state, dos, game_root: str):
         for pal in _dac_fade_palettes(dos.vga_palette, into=False):
             yield FrontEndScene(MODE_PLANAR, palette=pal, planes=last[0], page=last[1], game_paced=True)
     g.input_source = 0                                       # back to live keyboard input
-    state.wb(0x287A, 0); state.wb(0x287B, 0)
+    state.wb(DEMO_CURSOR, 0); state.wb(DEMO_CURSOR + 1, 0)
     g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
 
@@ -357,7 +361,7 @@ def native_menu_flow(state, dos, game_root: str):
         wait = 0
         choice = LS_WAIT
         while choice == LS_WAIT:                                            # [asm 8e7b] the dispatch wait loop
-            choice = level_select_dispatch(rb(0x27F6), rb(0x27F7), rb(0x282D) | rb(0x2810), wait)  # 1/2/fire/timeout
+            choice = level_select_dispatch(rb(KEY_1_LATCH), rb(KEY_2_LATCH), rb(FIRE_LATCH) | rb(FIRE_SPACE), wait)  # 1/2/fire/timeout
             if choice != LS_WAIT:
                 break
             # screen="menu": the touch host maps a TAP here to '1' (beginner mode-select), not fire — matches the
@@ -487,7 +491,7 @@ def _password_step(state):
     ww(_PW_WRONG_TIMER, 0)                                  # [asm 9A28] reset the wrong-code timer for this group
     di, si, bp = rw(_PW_HIST[0]), rw(_PW_HIST[1]), rw(_PW_HIST[2])   # [asm 9A2E-9A36] the three prior groups
     code = rw(_PW_CODE)
-    seed = rw(0xA333) or DEFAULT_SEED                       # [asm 932F] the BIOS seed (0 on the GOG build -> 0x20)
+    seed = rw(BIOS_SEED) or DEFAULT_SEED                       # [asm 932F] the BIOS seed (0 on the GOG build -> 0x20)
     rot = state.data[(0x1030 << 4) + 5]                     # cs:[5] rotate count (== 3 on this build)
 
     m = None
@@ -532,7 +536,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     page = MenuScenePage()
     motif = unpack_sqz(resolve_game_path(game_root, "MOTIF.SQZ").read_bytes())[:0x3E80]
     page.seed(motif)                                              # [asm 96EC/9718] planes 0,1
-    fseg = rw(0x3D)                                               # the font segment ([0x3d])
+    fseg = rw(FONT_SEG)                                               # the font segment ([0x3d])
     font = build_shifted_font(bytes(state.data[(fseg << 4):(fseg << 4) + 0x3000]))          # [asm 972E] shift copies
 
     def text_runs():
@@ -592,7 +596,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
                 g.attract_mode = g.mode
                 yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte + loader for the chosen level
-        if (g.in_fire | rb(0x2832)) != 0:                      # fire = confirm / leave
+        if (g.in_fire | rb(FIRE_ALT)) != 0:                      # fire = confirm / leave
             if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
                 g.mode_copy = g.mode
                 g.attract_mode = g.mode
@@ -621,16 +625,16 @@ def _native_carte(state, dos, game_root: str):
                                        stamp_carte_marker, SCROLL_START)
     rb, rw = readers(state)
     g = PlayerGlobals(state)
-    saved_top = rw(0x2875)                                       # [asm 9530] MAP.SQZ loads at the top...
+    saved_top = rw(LOAD_TOP)                                       # [asm 9530] MAP.SQZ loads at the top...
     seg = load_sqz(state, "MAP.SQZ", game_root=game_root)
     LoaderGlobals(state).load_top = saved_top                    # ...but is transient — restore the load pointer so
     #                                                                the loader stacks the level exactly where the VM does
     master = bytes(state.data[(seg << 4):(seg << 4) + 0xFA00])   # the 4-plane map master (planes @0/3E80/7D00/BB80)
     # [asm 9543-95CD] stamp the per-level 'you are here' marker (the player's caveman on the map) into the master.
     lv = g.level                                              # the level index picks its map (x,y) + the marker
-    dims = rw(0x7522); mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
-    di = carte_marker_offset(rw(0xB148 + lv * 4), rw(0xB14A + lv * 4))
-    msrc = (rw(0x667A) << 4) + rw(0x62DA)                        # [0x667a]:[0x62da] — mask + 4 colour planes
+    dims = rw(CARTE_MARKER_DIMS); mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
+    di = carte_marker_offset(rw(CARTE_MARKER_TABLE + lv * 4), rw(CARTE_MARKER_TABLE + 2 + lv * 4))
+    msrc = (rw(CARTE_MASK_SEG) << 4) + rw(CARTE_MASK_OFF)                        # [0x667a]:[0x62da] — mask + 4 colour planes
     marker = bytes(state.data[msrc:msrc + 5 * mw * mh])
     master = stamp_carte_marker(master, marker, di, mw, mh)
     from pre2.native.audio import native_load_song
@@ -648,7 +652,7 @@ def _native_carte(state, dos, game_root: str):
                             page=ds, pel=pel, wrap=0x1FFF, active_width=312,
                             enh=("carte", master, scroll_x))   # 640px stamped master + reveal (see FrontEndScene)
         apply_ds(state, decode_input(rb, rw))
-        fire = (g.in_fire | rb(0x2832)) != 0
+        fire = (g.in_fire | rb(FIRE_ALT)) != 0
         # confirm on a fresh fire press OR when the scroll-in reaches the end (auto-advance) — either way the
         # carte fades to black before the level loads (the VM does not snap from the map straight into gameplay).
         if (fire and not prev_fire) or scroll_x >= 639:
