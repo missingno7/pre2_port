@@ -49,8 +49,6 @@ _DIGIT_BASE, _DIGIT_STRIDE, _DIGIT_COUNT = 0xCE8A, 0x58, 9   # the 16x32 HUD dig
 # pixel is exact) so they leave the compressed blob and can be re-decoded into cleaner sprites later.
 _CONTIG_GFX = [
     ("boot_font.png", 0xD1A4, 0xDA9C - 0xD1A4, 16, 32),
-    ("boot_gfx_pre.png", 0xB1C0, 0xCE8A - 0xB1C0, 16, 16),
-    ("boot_gfx_post.png", 0xDA9C, 0xEB4E - 0xDA9C, 16, 16),
 ]
 _CONTIG_GFX_BYTES = sum(ln for _, _, ln, _, _ in _CONTIG_GFX)
 
@@ -59,6 +57,7 @@ _RAW_TABLES = [
     ("LOOKUP_TABLE_6F60", 0x6F60), ("SPRITE_EXTENT_TABLE_B", 0x71D0), ("SPRITE_PARAM_TABLE", 0x754A),
     ("ANIM_FRAME_DATA", 0x79E0), ("COMBAT_TIMING_7B18", 0x7B18), ("ANIM_SEQ_DATA", 0x7B9F),
     ("BOOT_TABLE_7D6F", 0x7D6F),
+    ("BOOT_GFX_MASKED", 0xB1C0), ("BOOT_PACKED_DATA", 0xDA9C),   # not cleanly-decodable pictures -> raw bytes
 ]
 _RAW_TABLES_BYTES = sum(len(getattr(T, n)) for n, _ in _RAW_TABLES)
 
