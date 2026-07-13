@@ -70,3 +70,64 @@ def ByteBackend_wrap(img):
         def __init__(self, data):
             self.data = data
     return ByteBackend(_Mem(img))
+
+
+_PLAYER_FIELDS = ("x", "y", "sprite", "xvel", "motion_mode", "facing", "anim_b", "anim_ptr", "yvel",
+                  "run_flag", "death_state")
+
+
+def _real_player_states(n_states=8, stride=60):
+    """Drive the real tick over a demo and snapshot the DGROUP at intervals — real, non-trivial player states."""
+    from pre2.native.game_tick_demo import GameTickDemo, _inject
+    from pre2.native.loop import native_gameplay_frame
+    from pre2.native.state import NativeGameState
+    demo = ROOT / "artifacts" / "demo_pre2_full_gorilla_20260628_203423" / "game_tick_demo.bin"
+    if not demo.exists():
+        import pytest
+        pytest.skip("gorilla demo corpus not present")
+    gtd = GameTickDemo.load(demo)
+    st = NativeGameState(bytearray(gtd.seed))
+    out = []
+    for i in range(n_states * stride):
+        _inject(st, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
+        native_gameplay_frame(st)
+        if i % stride == stride - 1:
+            out.append(bytearray(st.data))
+    return out
+
+
+def test_one_named_player_view_is_byte_exact_over_both_backends():
+    """The P2 linchpin: a SINGLE name-keyed view definition (PlayerNamedView) resolves BYTE-IDENTICALLY whether
+    backed by the shipped offset-free NamedObjectBackend (over a pre2/game.Player dataclass) or the bridge's
+    NamedImageBackend (over the byte image via the offset layout). Proven on real post-tick player states across
+    the corpus, for reads AND writes. This is what makes P2 tractable: one view, two backends, the bridge
+    proving they agree — the image path can keep working while the object path becomes the shipped default."""
+    from pre2.bridge.game_layout import (NamedImageBackend, PLAYER_BASE, PLAYER_LAYOUT, player_from_image,
+                                         player_to_image)
+    from pre2.views.named_view import NamedObjectBackend, PlayerNamedView
+
+    DS = 0x1A0F << 4
+    states = _real_player_states()
+    for img in states:
+        obj = PlayerNamedView(NamedObjectBackend().register(PlayerNamedView, player_from_image(img)))
+        via_img = PlayerNamedView(NamedImageBackend(img, PLAYER_BASE, PLAYER_LAYOUT))
+        # reads agree, field for field
+        for f in _PLAYER_FIELDS:
+            assert getattr(obj, f) == getattr(via_img, f), f"read {f} diverged"
+
+        # writes agree: apply the same deltas via each path, then compare the resulting player bytes
+        player = player_from_image(img)
+        obj_w = PlayerNamedView(NamedObjectBackend().register(PlayerNamedView, player))
+        img_w = bytearray(img)
+        via_img_w = PlayerNamedView(NamedImageBackend(img_w, PLAYER_BASE, PLAYER_LAYOUT))
+        for f in _PLAYER_FIELDS:
+            v = (getattr(obj_w, f) + 7) & 0x7FFF
+            setattr(obj_w, f, v)
+            setattr(via_img_w, f, v)
+        folded = bytearray(img)
+        player_to_image(player, folded)
+        for _f, off, w, _s in PLAYER_LAYOUT:
+            for k in range(w):
+                a = folded[DS + PLAYER_BASE + off + k]
+                b = img_w[DS + PLAYER_BASE + off + k]
+                assert a == b, f"write {_f} byte {off + k:#06x} diverged: object {a:#04x} vs image {b:#04x}"

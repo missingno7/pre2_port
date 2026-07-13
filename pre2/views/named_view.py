@@ -83,7 +83,9 @@ class NamedObjectBackend:
         return self._objs[view_cls]
 
     def read_field(self, view, name: str, width: int, signed: bool) -> int:
-        v = getattr(self._objs[type(view)], name)
+        # mask to the field width FIRST (the dataclass may hold the value in signed or raw form), then
+        # sign-extend — matching the proven DataclassBackend/_S16 read convention exactly.
+        v = getattr(self._objs[type(view)], name) & ((1 << (8 * width)) - 1)
         if signed and v & (1 << (8 * width - 1)):
             v -= 1 << (8 * width)
         return v
@@ -116,3 +118,25 @@ class RngNamedView(NamedView):
         new = rng_ror(self.ror)
         self.ror = new
         return new
+
+
+class PlayerNamedView(NamedView):
+    """The player kinematics/render record as a NAME-keyed view (no offsets) — the scale exemplar (11 canonical
+    fields, signed velocities) for the native-dataclass lift. Same field names as ``dgroup_view.PlayerView``'s
+    canonical fields, resolved against a ``pre2/game.Player`` dataclass through a name-keyed backend. The pure
+    width-alias fields (``flags``/``facing_lo``/``life``/``sprite_id``) are omitted here: they are DERIVED
+    re-projections the Player dataclass exposes as properties, not stored fields."""
+
+    __slots__ = ()
+
+    x = _u16()
+    y = _u16()
+    sprite = _u16()
+    xvel = _s16()
+    motion_mode = _u8()
+    facing = _s16()
+    anim_b = _u8()
+    anim_ptr = _u16()
+    yvel = _s16()
+    run_flag = _u8()
+    death_state = _u8()

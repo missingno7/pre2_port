@@ -226,6 +226,28 @@ def rng_to_image(rng: Rng, data) -> None:
         _wr(data, 0, off, w, getattr(rng, f))
 
 
+class NamedImageBackend:
+    """Resolves a NAME-keyed view's fields (pre2/views/named_view) against the byte image via an offset layout.
+    The DETACHABLE image resolver: it lets ONE name-keyed view definition serve the byte/verification path too
+    (the shipped NamedObjectBackend serves the object path). It needs offsets, so it lives here in the bridge,
+    never shipped. ``layout`` is the same ``(name, rel_off, width, signed)`` list the serialiser uses."""
+
+    __slots__ = ("_data", "_base", "_map")
+
+    def __init__(self, image, base, layout):
+        self._data = getattr(image, "data", image)
+        self._base = base
+        self._map = {f: (off, w, s) for f, off, w, s in layout}
+
+    def read_field(self, view, name, width, signed):
+        off, _w, _s = self._map[name]
+        return _rd(self._data, self._base, off, width, signed)
+
+    def write_field(self, view, name, width, v):
+        off, _w, _s = self._map[name]
+        _wr(self._data, self._base, off, width, v)
+
+
 def _obj_from_image(cls, layout, data, base=0):
     data = getattr(data, "data", data)
     return cls(**{f: _rd(data, base, off, w, s) for f, off, w, s in layout})
