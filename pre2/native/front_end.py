@@ -30,7 +30,7 @@ from dataclasses import dataclass
 
 from pre2.native.vga import _dac8
 from pre2.views.image_scene import image_palette, render_image_scene
-from pre2.views.input_decode import apply_ds, readers
+from pre2.views.memory_adapter import apply_ds, readers
 from pre2.views.oldies_scene import build_oldies_scene
 from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
 from pre2.views.dgroup_view import LoaderGlobals, PlayerGlobals
@@ -140,8 +140,9 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
     spin's repeated DC1 reads see the same flags — i.e. the native per-frame poll detects the same press/release
     edge at the same frame the VM's loop exits. DC1 itself is byte-exact (decode_input)."""
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     apply_ds(state, decode_input(rb, rw))                  # [asm 0bc3 / 0bcf] DC1 input decode
-    fire = (rb(0x27E8) | rb(0x2832)) & 0xFF                # [asm 0bc6-0bc9 / 0bd2-0bd5] fire = [0x27e8] | [0x2832]
+    fire = (g.in_fire | rb(0x2832)) & 0xFF                # [asm 0bc6-0bc9 / 0bd2-0bd5] fire = [0x27e8] | [0x2832]
     if phase == WAIT_PRESS:
         return (WAIT_RELEASE if fire else WAIT_PRESS), False   # [asm 0bcd] je: loop until pressed
     return phase, fire == 0                                    # [asm 0bd9] jne: loop until released -> RET 0bdb
@@ -159,11 +160,12 @@ def _skippable_intro(scenes, state, *, enabled: bool):
         yield from scenes
         return False
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     armed = False                                              # only skip on a fresh press (wait for a release first)
     for scene in scenes:
         yield scene
         apply_ds(state, decode_input(rb, rw))                 # DC1 input decode (same read as native_scene_wait)
-        fire = (rb(0x27E8) | rb(0x2832)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
+        fire = (g.in_fire | rb(0x2832)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
         if not fire:
             armed = True
         elif armed:
@@ -534,7 +536,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     font = build_shifted_font(bytes(state.data[(fseg << 4):(fseg << 4) + 0x3000]))          # [asm 972E] shift copies
 
     def text_runs():
-        return password_text_runs() if kind == "password" else mode_select_text_runs(rb(0xB197))
+        return password_text_runs() if kind == "password" else mode_select_text_runs(g.mode)
 
     def cstr(off):                                               # the NUL-terminated string at DS:off
         end = state.data.index(0, _DS + (off & 0xFFFF))
@@ -577,8 +579,8 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
         yield scene(page.planes, ds, pel)
         apply_ds(state, decode_input(rb, rw))                  # DC1: host keys -> the FSM arrow/fire flags
         if kind == "mode_select":                              # [asm 994E] an arrow toggles BEGINNER <-> EXPERT
-            arrow_sc = (0x48 if rb(0x27EA) else 0x50 if rb(0x27EB) else       # up / down
-                        0x4D if rb(0x27EC) else 0x4B if rb(0x27ED) else 0)    # right / left
+            arrow_sc = (0x48 if g.in_up else 0x50 if g.in_down else       # up / down
+                        0x4D if g.in_right else 0x4B if g.in_left else 0)    # right / left
             if arrow_sc and not prev_arrow and mode_select_input(arrow_sc, False).toggle:
                 g.mode ^= 1                                    # flip the selection (the text re-renders next frame)
             prev_arrow = bool(arrow_sc)
@@ -590,7 +592,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
                 g.attract_mode = g.mode
                 yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte + loader for the chosen level
-        if (rb(0x27E8) | rb(0x2832)) != 0:                      # fire = confirm / leave
+        if (g.in_fire | rb(0x2832)) != 0:                      # fire = confirm / leave
             if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
                 g.mode_copy = g.mode
                 g.attract_mode = g.mode
@@ -618,13 +620,14 @@ def _native_carte(state, dos, game_root: str):
     from pre2.recovered.carte import (build_carte_page, carte_display, carte_marker_offset,
                                        stamp_carte_marker, SCROLL_START)
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     saved_top = rw(0x2875)                                       # [asm 9530] MAP.SQZ loads at the top...
     seg = load_sqz(state, "MAP.SQZ", game_root=game_root)
     LoaderGlobals(state).load_top = saved_top                    # ...but is transient — restore the load pointer so
     #                                                                the loader stacks the level exactly where the VM does
     master = bytes(state.data[(seg << 4):(seg << 4) + 0xFA00])   # the 4-plane map master (planes @0/3E80/7D00/BB80)
     # [asm 9543-95CD] stamp the per-level 'you are here' marker (the player's caveman on the map) into the master.
-    lv = rb(0x2D8A)                                              # the level index picks its map (x,y) + the marker
+    lv = g.level                                              # the level index picks its map (x,y) + the marker
     dims = rw(0x7522); mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
     di = carte_marker_offset(rw(0xB148 + lv * 4), rw(0xB14A + lv * 4))
     msrc = (rw(0x667A) << 4) + rw(0x62DA)                        # [0x667a]:[0x62da] — mask + 4 colour planes
@@ -645,7 +648,7 @@ def _native_carte(state, dos, game_root: str):
                             page=ds, pel=pel, wrap=0x1FFF, active_width=312,
                             enh=("carte", master, scroll_x))   # 640px stamped master + reveal (see FrontEndScene)
         apply_ds(state, decode_input(rb, rw))
-        fire = (rb(0x27E8) | rb(0x2832)) != 0
+        fire = (g.in_fire | rb(0x2832)) != 0
         # confirm on a fresh fire press OR when the scroll-in reaches the end (auto-advance) — either way the
         # carte fades to black before the level loads (the VM does not snap from the map straight into gameplay).
         if (fire and not prev_fire) or scroll_x >= 639:

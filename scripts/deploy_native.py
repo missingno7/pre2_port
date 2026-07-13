@@ -118,11 +118,16 @@ from pre2.native.render import native_render, native_sync_render_state, native_l
 import pre2.native.front_end, pre2.native.runtime, pre2.native.audio, pre2.native.game_tick_demo  # noqa: E402,F401
 import play_native                                                   # noqa: E402,F401 (the runner module loads)
 
+from pre2.views.dgroup_view import FieldBackend, HybridBackend        # noqa: E402
 state = native_cold_boot(GAME_ROOT, level=0)
+# Run gameplay on the NAMED FIELD STORE (the field-backed flip): named mutable state lives in a FieldBackend,
+# only the residue in the image; materialise() folds it back before the renderer reads the image.
+state.backend = HybridBackend(FieldBackend(state), state.data)
 dos = NativeVGA()
 native_load_level_palette(state, dos)
 for i in range(N_TICKS):
     native_gameplay_frame(state)
+state.backend.materialize(state.data)                               # named state -> the image, for the renderer
 native_sync_render_state(state)
 DS = 0x1A0F << 4
 disp = state.data[DS + 0x2DD6] | (state.data[DS + 0x2DD7] << 8)

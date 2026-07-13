@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView
+from pre2.views.dgroup_view import DictBackend, ObjectSlot, PlayerGlobals, PlayerView
 
 # --- globals this island reads/writes -------------------------------------------------
 SPAWN_X = 0xA336      # effect-spawn world X (cell << 4)
@@ -344,47 +344,46 @@ def death_handler(rb, rw, bx, di, src_si):
     byte-level ``{offset: value}`` write contract. ``rb``/``rw`` read base DS; all mutation is staged on an
     overlay so the composed leaves (8875/8D1B/80CB) see each other's writes."""
     ov = _Overlay(rb)
+    enemy = ObjectSlot(ov, di)                                 # the dying enemy slot (the debris source)
     sprite = (_s8(rb((bx + 8) & 0xFFFF)) + 0x4A) & 0xFFFF      # [asm 8C72] [def+8] signed + 0x4A
-    cnt_idx = (rb((di + 0x10) & 0xFFFF) >> 3) & 7              # [asm 8C7A]
+    cnt_idx = (enemy.hits >> 3) & 7                            # [asm 8C7A]
     count = rb((cnt_idx - DEBRIS_COUNT_TABLE) & 0xFFFF)
 
-    enemy = di                                                 # [asm 8C8E] si = enemy slot (the debris source)
-    orig_x = ov.rw(enemy)                                      # [asm 8C90/8C92] saved pos (restored later)
-    orig_y = ov.rw((enemy + 2) & 0xFFFF)
+    orig_x = enemy.x                                           # [asm 8C90/8C92] saved pos (restored later)
+    orig_y = enemy.y
 
     rem = count
     while rem != 0:                                            # [asm 8C96] debris loop
-        w, slot = spawn_debris_element(ov.rb, ov.rw, sprite, enemy)
+        w, slot = spawn_debris_element(ov.rb, ov.rw, sprite, di)
         ov.apply(w)
         if slot is not None:
-            elem = ov.rw(SPAWNED_PTR)                          # [asm 8C99] di = [0xA33E]
-            cur = ov.rw((elem + 0xC) & 0xFFFF)                 # [asm 8CA2] [elem+0xC] -= rem*4
-            ov.ww((elem + 0xC) & 0xFFFF, (cur - (rem << 2)) & 0xFFFF)
-        ov.ww((enemy + 2) & 0xFFFF, (ov.rw((enemy + 2) & 0xFFFF) + 7) & 0xFFFF)  # [asm 8CA6] scatter
-        ov.ww(enemy, (ov.rw(enemy) + 9) & 0xFFFF)                               # [asm 8CAA]
+            elem = ObjectSlot(ov, ov.rw(SPAWNED_PTR))         # [asm 8C99] di = [0xA33E]
+            elem.anim_ptr = (elem.anim_ptr - (rem << 2)) & 0xFFFF   # [asm 8CA2] [elem+0xC] -= rem*4
+        enemy.y = (enemy.y + 7) & 0xFFFF                       # [asm 8CA6] scatter
+        enemy.x = (enemy.x + 9) & 0xFFFF                       # [asm 8CAA]
         rem = (rem - 1) & 0xFFFF
 
-    ov.ww((enemy + 2) & 0xFFFF, orig_y)                       # [asm 8CB1/8CB4] restore enemy pos
-    ov.ww(enemy, orig_x)
-    ov.wb((di + 0xE) & 0xFFFF, 0xFF)                          # [asm 8CB7] mark dead
+    enemy.y = orig_y                                           # [asm 8CB1/8CB4] restore enemy pos
+    enemy.x = orig_x
+    enemy.state = 0xFF                                         # [asm 8CB7] mark dead
 
     def_flags = ov.rb((bx + DEF_FLAGS) & 0xFFFF)
     if def_flags & 1:                                          # [asm 8CBB] jne -> launch path
-        ov.ww((di + 0xC) & 0xFFFF, advance_death_anim(ov.rw, di))   # [asm 8CE1] 80CB
+        enemy.anim_ptr = advance_death_anim(ov.rw, di)         # [asm 8CE1] 80CB
         if (def_flags & 0xC8) != 0x88:                        # [asm 8CE4-8CF2] conditional bit3 clear
             ov.wb((bx + DEF_FLAGS) & 0xFFFF, def_flags & 0xF7)
         dmg = ov.rb(DAMAGE)                                   # [asm 8CF5]
         if dmg > 0x19:
             dmg = 0x19
         yvel = ((-dmg) << 3) & 0xFFFF                          # [asm 8D02-8D08] -min(dmg,0x19)*8
-        ov.ww((di + 0xA) & 0xFFFF, yvel)
+        enemy.yvel = yvel
         xvel = _sar16(yvel, 1)                                 # [asm 8D0D] ax sar 1
         if not (ov.rb((src_si + 5) & 0xFFFF) & 0x80):         # [asm 8D0F] test attacker [si+5],0x80 ; jne keep
             xvel = (-xvel) & 0xFFFF
-        ov.ww((di + 8) & 0xFFFF, xvel)
+        enemy.xvel = xvel
     else:                                                      # [asm 8CC1] bonus path
-        ov.ww(SPAWN_X, ov.rw(di))                             # [0xA336] = enemy X
-        ov.ww(SPAWN_Y, ov.rw((di + 2) & 0xFFFF))             # [0xA338] = enemy Y
+        ov.ww(SPAWN_X, enemy.x)                               # [0xA336] = enemy X
+        ov.ww(SPAWN_Y, enemy.y)                               # [0xA338] = enemy Y
         ov.ww(BURST_SPRITE, DEATH_BONUS_SPRITE)              # [0xA33A] = 0x2046
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFF80, 6))   # [asm 8CDC] 8D1B
 

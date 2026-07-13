@@ -8,6 +8,7 @@ effect-spawn emit (``spawn_effects`` over the ``0x7DE6`` list). Pure layout/tran
 from __future__ import annotations
 
 from pre2.recovered.object_update import spawn_effects
+from pre2.views.tables import Tables
 
 _FX_LIST = 0x7DE6        # secondary effect list (6-byte entries) the spawning handlers emit into
 _HANDLER_TABLE = 0x6AA9  # cs:[ (def[1]*2)&0xFF + 0x6AA9 ] -> AI handler address
@@ -43,19 +44,32 @@ class LiveWalkerMem:
         self.cs = cpu.s.cs & 0xFFFF
         self.base = (self.ds << 4) & 0xFFFFF
         self.cbase = (self.cs << 4) & 0xFFFFF
+        #: the swappable DGROUP backend (the NativeGameState seam), so the object walker's slot access follows
+        #: a hybrid store like the contract passes; None over a raw VM cpu -> straight to .data.
+        be = getattr(cpu.mem, "backend", None)
+        self.backend = be if getattr(be, "_IS_DGROUP_BACKEND", False) else None
         self.map_seg = self.rw(0x2DDA)
+        self.tables = Tables(self.rb)          # the named read-only lookup tables
 
     def rb(self, off):
+        if self.backend is not None:
+            return self.backend.rb(off)
         return self.data[(self.base + (off & 0xFFFF)) & 0xFFFFF]
 
     def rw(self, off):
+        if self.backend is not None:
+            return self.backend.rw(off)
         b = self.base
         return self.data[(b + (off & 0xFFFF)) & 0xFFFFF] | (self.data[(b + ((off + 1) & 0xFFFF)) & 0xFFFFF] << 8)
 
     def wb(self, off, v):
+        if self.backend is not None:
+            self.backend.wb(off, v); return
         self.data[(self.base + (off & 0xFFFF)) & 0xFFFFF] = v & 0xFF
 
     def ww(self, off, v):
+        if self.backend is not None:
+            self.backend.ww(off, v); return
         b = self.base
         self.data[(b + (off & 0xFFFF)) & 0xFFFFF] = v & 0xFF
         self.data[(b + ((off + 1) & 0xFFFF)) & 0xFFFFF] = (v >> 8) & 0xFF
@@ -64,22 +78,22 @@ class LiveWalkerMem:
         return self.data[(((self.map_seg << 4) & 0xFFFFF) + (idx & 0xFFFF)) & 0xFFFFF]
 
     def prop_a(self, t):
-        return self.rb(0x7E5E + t)
+        return self.tables.ceil_props[t]
 
     def prop_b(self, t):
-        return self.rb(0x7F5E + t)
+        return self.tables.floor_props[t]
 
     def slope(self, t):
-        return self.rb(0x8E1D + t)
+        return self.tables.tile_props[t]
 
     def cos_table(self, a):
-        return self.rb((0x6F90 + a) & 0xFFFF)
+        return self.tables.cos[a]
 
     def sin_table(self, a):
-        return self.rb((0x7090 + a) & 0xFFFF)
+        return self.tables.sin[a]
 
     def tile_prop(self, tx, ty):
-        return self.rb(0x7F5E + self.read_map((ty * 0x100 + tx) & 0xFFFF))
+        return self.tables.floor_props[self.read_map((ty * 0x100 + tx) & 0xFFFF)]
 
     def scale(self):
         return self.rw(0x6BE2)

@@ -28,7 +28,7 @@ from pre2.recovered.sprite_decode import (
     demux_sprite,
 )
 
-DATA_SEG = 0x1A0F                  # GOG build
+from pre2.views.memory_adapter import DATA_SEG   # the game data segment (GOG build)
 CACHE_OFF = 0x5E80                 # planar cache base within each EGA plane (EGA, not DGROUP — unchanged)
 CACHE_PLANE_BYTES = NUM_SLOTS * SLOT_BYTES  # 0x2000 per plane
 

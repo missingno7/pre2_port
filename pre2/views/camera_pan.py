@@ -8,6 +8,8 @@ is the symmetric transcription (no witness yet — ASM_MATCHED).
 """
 from __future__ import annotations
 
+from pre2.views.memory_adapter import dgroup_backend
+
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.views import frame as _F
 from pre2.recovered.frame_renderer import RowFlags, calc_scroll_source, draw_tile_column
@@ -16,21 +18,33 @@ _DS = 0x1A0F
 
 
 def _rw(mem, o: int) -> int:
+    be = dgroup_backend(mem)
+    if be is not None:
+        return be.rw(o)
     b = ((_DS << 4) + o) & 0xFFFFF
     return mem.data[b] | (mem.data[(b + 1) & 0xFFFFF] << 8)
 
 
 def _rb(mem, o: int) -> int:
+    be = dgroup_backend(mem)
+    if be is not None:
+        return be.rb(o)
     return mem.data[((_DS << 4) + o) & 0xFFFFF]
 
 
 def _ww(mem, o: int, v: int) -> None:
+    be = dgroup_backend(mem)
+    if be is not None:
+        be.ww(o, v); return
     b = ((_DS << 4) + o) & 0xFFFFF
     mem.data[b] = v & 0xFF
     mem.data[(b + 1) & 0xFFFFF] = (v >> 8) & 0xFF
 
 
 def _wb(mem, o: int, v: int) -> None:
+    be = dgroup_backend(mem)
+    if be is not None:
+        be.wb(o, v); return
     mem.data[((_DS << 4) + o) & 0xFFFFF] = v & 0xFF
 
 

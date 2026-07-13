@@ -15,6 +15,7 @@ from __future__ import annotations
 from pre2.recovered.object_update import on_screen_tile
 from pre2.recovered.prng import rng_lcg
 from pre2.views.dgroup_view import DictBackend, PlayerGlobals, RngView, WidthContractBackend
+from pre2.views.tables import Tables
 
 __all__ = ["OBJ_BASE", "OBJ_STRIDE", "OBJ_COUNT", "find_free_object_slot", "ProjectResult", "project_entity"]
 
@@ -67,7 +68,6 @@ PLAYER_X = 0x4F1C
 PLAYER_Y = 0x4F1E
 SPAWN_OFFSET_RING = 0xA341    # 16-slot ring index into the X-offset table
 SPAWN_OFFSET_TABLE = 0x5CBD   # the offset table, read as DS:[(ring - 0x5CBD) & 0xFFFF]
-TERRAIN_TABLE = 0x7F5E       # tile id -> terrain solidity (for the ground-snap scan)
 MAP_HEIGHT = 0x2CF5          # [0x2CF5] level-map height (rows)
 PROJ_SLOT_PTR = 0xA32E       # [0xA32E] = the last projected object slot
 
@@ -143,15 +143,16 @@ def handler_ground_snap_spawn(rb, rw, read_es, si, find_free):
     # [7E18] scan the terrain map upward for a standable surface (solid here, 2 empty above)
     start = (((py_cell + 4) & 0xFF) << 8) | ((new_x >> 4) & 0xFF)   # bp = ((playerY>>4)+4):(newX>>4)
     limit = (rb(MAP_HEIGHT) << 8)                                    # dx = mapheight*0x100
+    floor_props = Tables(rb).floor_props
     bp = start
     ground_row = None
     for _ in range(0x0A):                                # [7E66] ah = 0xA tries
         if bp < limit:                                   # [7E3B] bp below the map bottom?
-            t0 = rb((TERRAIN_TABLE + read_es(bp)) & 0xFFFF)
+            t0 = floor_props[read_es(bp)]
             if t0 != 0:                                  # [7E3F] solid here
-                t1 = rb((TERRAIN_TABLE + read_es((bp - 0x100) & 0xFFFF)) & 0xFFFF)
+                t1 = floor_props[read_es((bp - 0x100) & 0xFFFF)]
                 if t1 == 0:                              # [7E48] empty one above
-                    t2 = rb((TERRAIN_TABLE + read_es((bp - 0x200) & 0xFFFF)) & 0xFFFF)
+                    t2 = floor_props[read_es((bp - 0x200) & 0xFFFF)]
                     if t2 == 0:                          # [7E52] empty two above -> standable
                         ground_row = (bp >> 8) & 0xFF
                         break

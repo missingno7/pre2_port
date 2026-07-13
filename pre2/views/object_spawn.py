@@ -6,6 +6,6 @@ readers and the level-map tile reader are shared with the effects-update island.
 """
 from __future__ import annotations
 
-from pre2.views.effects_update import apply_ds, readers, tile_reader
+from pre2.views.memory_adapter import apply_ds, readers, tile_reader
 
 __all__ = ["readers", "tile_reader", "apply_ds"]

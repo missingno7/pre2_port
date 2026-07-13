@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pre2.views.memory_adapter import dgroup_backend
 from pre2.recovered.particles import (COS_TABLE, PARTICLE_BASE, PARTICLE_COUNT, PARTICLE_STRIDE,
                                        SIN_TABLE)
 
@@ -19,11 +20,17 @@ _YBIAS = 0x6BC4      # [0x6BC4] vertical bias subtracted from the particle Y
 
 
 def _rw(mem, off):
+    be = dgroup_backend(mem)
+    if be is not None:
+        return be.rw(off)
     b = ((_DS << 4) + off) & 0xFFFFF
     return mem.data[b] | (mem.data[b + 1] << 8)
 
 
 def _rb(mem, off):
+    be = dgroup_backend(mem)
+    if be is not None:
+        return be.rb(off)
     return mem.data[((_DS << 4) + off) & 0xFFFFF]
 
 
@@ -82,6 +89,13 @@ def read_particle_consume_inputs(mem):
 def apply_particle_writeback(mem, writeback) -> None:
     """Apply the per-slot writeback the ASM leaves: ``[slot+2]=ny`` (the advanced Y persists) and
     ``[slot]=0xFFFF`` (the kill). ``writeback`` = ``[(index, ny)]`` from ``consume_particles``."""
+    be = dgroup_backend(mem)
+    if be is not None:
+        for index, ny in writeback:
+            o = PARTICLE_BASE + index * PARTICLE_STRIDE
+            be.ww(o + 2, ny)
+            be.ww(o, 0xFFFF)
+        return
     base = (_DS << 4)
     for index, ny in writeback:
         b = base + PARTICLE_BASE + index * PARTICLE_STRIDE

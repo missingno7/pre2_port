@@ -26,6 +26,7 @@ DGROUP_BASE = 0x1A0F << 4       # DS<<4 — the game data segment's linear base 
 class ByteBackend:
     """Reads/writes go straight to the 1 MB image at ``DGROUP_BASE + offset``."""
 
+    _IS_DGROUP_BACKEND = True
     __slots__ = ("data",)
 
     def __init__(self, source):
@@ -171,8 +172,13 @@ def apply_contract(state, writes, *, word_fields=None) -> None:
 
     THE FLIP POINT: when the product's state becomes field-backed, this function (plus the read half,
     the backends) is where the offset world ends — the contract application resolves through the generated
-    field registry instead of a byte image, and this module's offset map moves to the detachable bridge."""
-    be = ByteBackend(state)
+    field registry instead of a byte image, and this module's offset map moves to the detachable bridge.
+
+    Routes through ``state.backend`` when present (the NativeGameState seam — swappable to a hybrid store),
+    else a fresh :class:`ByteBackend` (the workbench's VM state / raw images)."""
+    be = getattr(state, "backend", None)
+    if be is None or not getattr(be, "_IS_DGROUP_BACKEND", False):
+        be = ByteBackend(state)
     for off, v in writes.items():
         if isinstance(v, tuple):
             val, width = v
@@ -341,11 +347,15 @@ class StructView:
 def _coerce_backend(source):
     """A backend passes through — the package's own backends plus anything marked ``_IS_DGROUP_BACKEND``
     (island-local overlays like player_collision's read-through ``_Overlay`` opt in with that attribute; the
-    VM ``mem`` object must NOT pass, its ``rb`` takes (seg, off)). Anything else (NativeGameState / VM ``mem``
-    / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
+    VM ``mem`` object must NOT pass, its ``rb`` takes (seg, off)). A state object carrying its own swappable
+    ``.backend`` (NativeGameState) binds to THAT — so a view follows the hybrid store, not a fresh image
+    wrapper. Anything else (VM ``mem`` / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
     if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend, DictBackend)) \
             or getattr(source, "_IS_DGROUP_BACKEND", False):
         return source
+    be = getattr(source, "backend", None)
+    if be is not None and getattr(be, "_IS_DGROUP_BACKEND", False):
+        return be
     return ByteBackend(source)
 
 
@@ -790,6 +800,12 @@ class ProjectileSlot(RenderSlot):
     kind      = _U8(0x08)    # (phase flag >> 1) & 3 [asm 601C]
     spawn_ptr = _U16(0x0C)   # the spawn record ptr (past the frame table's terminator) [asm 6030]
     yoff      = _U16(0x0E)   # the spawn record's Y offset word [asm 603B]
+    # in-flight aliases: once launched, the 6210 physics tick reinterprets the same words as kinematics
+    alive     = _U8(0x05)    # width alias of RenderSlot.flags: bit 0x20 = alive, else free the slot [asm 621C]
+    xvel      = _U16(0x06)   # width alias of xoff: X velocity, 12.4 fixed [asm 6229]
+    facing    = _U8(0x07)    # width alias of xvel's high byte: the facing byte (bit7) [asm 6256]
+    anim_ptr  = _U16(0x0C)   # width alias of spawn_ptr: the live anim-script cursor [asm 6244]
+    yvel      = _U16(0x0E)   # width alias of yoff: Y velocity [asm 6236]
 
     @property
     def free(self) -> bool:
@@ -831,6 +847,21 @@ class L6Projectile(StructView):
         return self.sprite == 0xFFFF                     # [asm 6D4F/6EC1]
 
 
+class EffectParticle(RenderSlot):
+    """The 60FE PHYSICS interpretation of the same stride-0x12 slot family — the 0x50A8 pool when it holds
+    bounce/debris particles and boss bolts (emitters: combat_interaction's burst, the boss-script spawners).
+    A genuine UNION with :class:`ObjectSlot`: the object walker keeps velocities at +8/+0xA, the effects
+    pass keeps them at +6/+0xE — which record class applies is decided by the pass that ticks the slot."""
+
+    __slots__ = ()
+
+    xvel     = _U16(0x06)   # X velocity, 12.4 fixed [asm 6229: X += Xvel>>4]
+    facing   = _U8(0x07)    # width alias of xvel's high byte: the facing/flip byte [effects_update]
+    lifetime = _U16(0x0C)   # signed lifetime countdown; doubles as the anim selector [asm 612B/61F9]
+    yvel     = _U16(0x0E)   # Y velocity (gravity +9/frame, capped 0x100) [asm 615C-615F]
+    substate = _U8(0x11)    # width alias of RenderSlot.life: the particle substate byte [effects_update]
+
+
 class ObjectSlot(RenderSlot):
     """One active object/enemy record (the 12-slot list at 0x4FD0 + the 32-slot effect/burst pool at 0x50A8,
     stride 0x12) — the object walker's own view of the same 0x12-stride render-record family. Fields per
@@ -842,9 +873,9 @@ class ObjectSlot(RenderSlot):
     xvel     = _U16(0x08)    # X velocity, 12.4 fixed [object_tick _obj_view]
     yvel     = _U16(0x0A)    # Y velocity, 12.4 fixed
     anim_ptr = _U16(0x0C)    # the anim-script cursor
-    state    = _U8(0x0E)     # the behavior state byte (handlers dispatch on it)
-    aux_f    = _U8(0x0F)     # per-type aux byte (a _BYTE_FIELDS union member) [object_inject]
-    hits     = _U8(0x10)     # hit accumulator: the hurt handler reads >>2 and caps at 0xB [asm 834E]
+    state    = _U8(0x0E)     # the behavior state byte (0xFF = dead; handlers dispatch on it) [asm 8310/8CB7]
+    hp       = _U8(0x0F)     # hit points; the damage handler subtracts into it [asm 8C48]
+    hits     = _U8(0x10)     # hit accumulator: the hurt handler reads >>2/>>3 and caps [asm 834E/8C7A]
 
 
 class TerrainEntity(StructView):
@@ -910,6 +941,7 @@ PlayerGlobals.l6_render_slots = StructArray(0x55EE, 0x12, 5, RenderSlot)    # ..
 PlayerGlobals.boss_targets = StructArray(0x5648, 0x12, 5, RenderSlot)       # the boss/camera-target records
 PlayerGlobals.enemy_slots = StructArray(0x4FD0, 0x12, 12, ObjectSlot)       # the 12 active object/enemy slots
 PlayerGlobals.burst_slots = StructArray(0x50A8, 0x12, 32, ObjectSlot)       # the effect/score-burst pool
+PlayerGlobals.effect_particles = StructArray(0x50A8, 0x12, 32, EffectParticle)  # the SAME pool, 60FE physics view
 #     (0x50A8..0x52E8 — the free pool after the 12 main objects; same record family)
 PlayerGlobals.particles = StructArray(0x7DE6, 6, 20, Particle)              # the 4B8E particle array
 PlayerGlobals.terrain_entities = StructArray(0x9107, 0xF, 16, TerrainEntity)  # the 4907 source list
@@ -1022,3 +1054,52 @@ class FieldBackend:
     def owner(self, off: int) -> str:
         """The declared name covering ``off`` — the readable answer to 'what is this byte?'."""
         return self._map[off & 0xFFFF][0]
+
+
+class HybridBackend:
+    """The field-backed flip's store: named DGROUP bytes live in a :class:`FieldBackend`, everything else
+    (read-only tables, the tilemap pointer, boot constants, the untouched span) stays in a residue byte image.
+
+    This is the product's state-of-record once flipped — there is no single contiguous mutable image; the
+    named mutable state has no offset home, only the residue keeps bytes. It presents the same offset-keyed
+    rb/rw/wb/ww API, so ``NativeGameState.backend`` swaps to it with nothing else changing: every read of a
+    named offset resolves to the FieldBackend, every write of a named offset lands there and NOT in the image.
+    (The residue image is still needed for the read-only content until Phase 5 migrates it to loaded objects.)
+
+    ``materialize(data)`` writes the FieldBackend's named bytes back over an image — the serialisation the
+    renderer and the verifier need (a contiguous DGROUP image), proving the split is lossless."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("fields", "_img", "_named")
+
+    def __init__(self, field_backend: "FieldBackend", residue_data):
+        self.fields = field_backend
+        self._img = residue_data                               # the 1 MB image (its named-offset bytes go stale)
+        self._named = field_backend._map                      # offset -> covering (name, base, width)
+
+    def rb(self, off: int) -> int:
+        off &= 0xFFFF
+        if off in self._named:
+            return self.fields._bytes.get(off, 0)
+        return self._img[DGROUP_BASE + off]
+
+    def wb(self, off: int, v: int) -> None:
+        off &= 0xFFFF
+        if off in self._named:
+            self.fields._bytes[off] = v & 0xFF
+        else:
+            self._img[DGROUP_BASE + off] = v & 0xFF
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v & 0xFF)
+        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+
+    def materialize(self, data=None) -> None:
+        """Write the FieldBackend's named bytes back over ``data`` (default: the residue image) so it becomes
+        a full contiguous DGROUP image again — for the renderer / the byte-exact digest."""
+        data = self._img if data is None else data
+        for off, val in self.fields._bytes.items():
+            data[DGROUP_BASE + off] = val & 0xFF

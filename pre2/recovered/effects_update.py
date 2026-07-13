@@ -17,6 +17,8 @@ proof, exactly like the object_tick / combat_interaction precedents.
 from __future__ import annotations
 
 from pre2.islands import oracle_link
+from pre2.views.dgroup_view import EffectParticle, ProjectileSlot, WidthContractBackend
+from pre2.views.tables import Tables
 
 
 class Pre2EffectsGap(Exception):
@@ -104,8 +106,6 @@ X_MAX = 0x1000               # [asm 6149] world-X bounce bound
 LIFE_CLAMP = 0x32            # [asm 612B] special ids cap their lifetime here
 FREEZE_FLAG = 0x6BD5         # [asm 61E3] bit0 -> skip the sprite animation
 MAP_SEG_PTR = 0x2DDA         # [asm 6106] [0x2DDA] = the level-map (es) segment
-TBL_FLOOR = 0x7F5E           # [asm 61A0] ground-tile property table (xlatb)
-TBL_CEIL = 0x7E5E            # [asm 61D1] ceiling-tile property table (xlatb)
 ANIM_WRAP_AT = 0x49          # [asm 61F9] sprite cycles ..->0x49 ->0x46
 ANIM_WRAP_TO = 0x46
 ID_LIFE_CLAMP = (0x136, 0x134, 0x12C, 0x132)   # [asm 6168] -> clamp lifetime, skip tile/anim
@@ -124,31 +124,33 @@ def tick_particles(rw, rb, read_tile):
     """[asm 60FE] ``rw``/``rb`` read DGROUP word/byte; ``read_tile(off)`` reads the level-map (es) segment.
     Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
+    tbl = Tables(rb)
     freeze = rb(FREEZE_FLAG) & 1
     b = PARTICLE_LO
     for _ in range(PARTICLE_N):
-        if rw((b + 4) & 0xFFFF) == 0xFFFF:                     # [asm 610A] inactive slot
+        pt = EffectParticle(WidthContractBackend(rb, rw, writes), b)
+        if pt.sprite == 0xFFFF:                                # [asm 610A] inactive slot
             b = (b + STRIDE) & 0xFFFF
             continue
-        life = (rw((b + 0xC) & 0xFFFF) - 1) & 0xFFFF           # [asm 6110] dec lifetime
-        writes[(b + 0xC) & 0xFFFF] = (life, 2)
+        life = (pt.lifetime - 1) & 0xFFFF                      # [asm 6110] dec lifetime
+        pt.lifetime = life
         sl = _s16(life)
         if sl < 0:                                             # [asm 6117] expired
-            if rb((b + 0x11) & 0xFFFF) == 0:                   # free once the substate marker cleared
-                writes[(b + 4) & 0xFFFF] = (0xFFFF, 2)         # [asm 611D]
+            if pt.substate == 0:                               # free once the substate marker cleared
+                pt.sprite = 0xFFFF                             # [asm 611D]
             b = (b + STRIDE) & 0xFFFF
             continue
         if sl == 0:                                            # [asm 6124] just expired -> arm substate
-            writes[(b + 0x11) & 0xFFFF] = (0x0F, 1)
+            pt.substate = 0x0F
             b = (b + STRIDE) & 0xFFFF
             continue
 
         # [asm 6139] physics (lifetime > 0)
-        x = rw(b & 0xFFFF)
-        xv = rw((b + 6) & 0xFFFF)
-        y = rw((b + 2) & 0xFFFF)
-        yv = rw((b + 0xE) & 0xFFFF)
-        idv = rw((b + 4) & 0xFFFF)
+        x = pt.x
+        xv = pt.xvel
+        y = pt.y
+        yv = pt.yvel
+        idv = pt.sprite
 
         x = (x + _sar16(xv, 4)) & 0xFFFF                       # [asm 613C-613E] X += Xvel>>4
         if x & 0x8000:                                        # [asm 6140] jns -> clamp 0 + bounce
@@ -167,7 +169,7 @@ def tick_particles(rw, rb, read_tile):
         new_id = None
         if sid in ID_LIFE_CLAMP:                               # [asm 612B] clamp lifetime, skip rest
             if life > LIFE_CLAMP:                              # unsigned jbe
-                writes[(b + 0xC) & 0xFFFF] = (LIFE_CLAMP, 2)
+                pt.lifetime = LIFE_CLAMP
         elif sid == ID_SKIP:                                   # [asm 617A] skip rest
             pass
         else:
@@ -176,13 +178,13 @@ def tick_particles(rw, rb, read_tile):
             row = (_s16(y) >> 4) & 0xFF
             bx = (col | (row << 8)) & 0xFFFF
             if ydelta > 0:                                     # [asm 619B] falling -> floor check
-                if rb((TBL_FLOOR + read_tile(bx)) & 0xFFFF) != 0:    # [asm 61A3-61A6] solid
+                if tbl.floor_props[read_tile(bx)] != 0:              # [asm 61A3-61A6] solid
                     yv = _sar16(_neg16(yv), 1)                 # [asm 61A8-61AB] -Yvel/2
                     d = 8 if _s16(xv) >= 0 else -8             # [asm 61B3-61BA]
                     axv = (xv - d) & 0xFFFF                    # [asm 61BC] reduce |Xvel| by 8 toward 0
-                    xv = axv if (((axv >> 8) ^ rb((b + 7) & 0xFFFF)) & 0xFF) == 0 else 0   # [asm 61C0-61C5]
+                    xv = axv if (((axv >> 8) ^ pt.facing) & 0xFF) == 0 else 0   # [asm 61C0-61C5]
             else:                                              # [asm 61CC] rising -> ceiling check
-                if rb((TBL_CEIL + read_tile((bx - 0x100) & 0xFFFF)) & 0xFFFF) != 0:        # [asm 61D1-61D5]
+                if tbl.ceil_props[read_tile((bx - 0x100) & 0xFFFF)] != 0:                  # [asm 61D1-61D5]
                     xv = _neg16(xv)                            # [asm 61D9]
                     x = (x + _sar16(xv, 4)) & 0xFFFF           # [asm 61DC-61E1]
             # [asm 61E3] sprite animation 0x46..0x49 (gated by [0x6BD5]&1 and Xvel!=0)
@@ -193,12 +195,12 @@ def tick_particles(rw, rb, read_tile):
                 elif masked == ANIM_WRAP_AT:                   # [asm 6200] wrap
                     new_id = ANIM_WRAP_TO
 
-        writes[b & 0xFFFF] = (x, 2)
-        writes[(b + 2) & 0xFFFF] = (y, 2)
-        writes[(b + 6) & 0xFFFF] = (xv, 2)
-        writes[(b + 0xE) & 0xFFFF] = (yv, 2)
+        pt.x = x
+        pt.y = y
+        pt.xvel = xv
+        pt.yvel = yv
         if new_id is not None:
-            writes[(b + 4) & 0xFFFF] = (new_id, 2)
+            pt.sprite = new_id
         b = (b + STRIDE) & 0xFFFF
     return writes
 
@@ -225,33 +227,30 @@ def tick_projectiles(rw, rb):
     writes: dict[int, tuple[int, int]] = {}
     b = PROJECTILE_LO
     for _ in range(PROJECTILE_N):
-        if rw((b + 4) & 0xFFFF) == 0xFFFF:                    # [asm 6216] inactive slot
+        proj = ProjectileSlot(WidthContractBackend(rb, rw, writes), b)
+        if proj.sprite == 0xFFFF:                             # [asm 6216] inactive slot
             b = (b + STRIDE) & 0xFFFF
             continue
-        if not (rb((b + 5) & 0xFFFF) & PROJ_ALIVE):           # [asm 621C] dead -> free
-            writes[(b + 4) & 0xFFFF] = (0xFFFF, 2)
+        if not (proj.alive & PROJ_ALIVE):                     # [asm 621C] dead -> free
+            proj.sprite = 0xFFFF
             b = (b + STRIDE) & 0xFFFF
             continue
-        x = (rw(b & 0xFFFF) + _sar16(rw((b + 6) & 0xFFFF), 4)) & 0xFFFF       # [asm 6229] X += Xvel>>4
-        writes[b & 0xFFFF] = (x, 2)
-        y = (rw((b + 2) & 0xFFFF) + _sar16(rw((b + 0xE) & 0xFFFF), 4)) & 0xFFFF  # [asm 6236] Y += Yvel>>4
-        writes[(b + 2) & 0xFFFF] = (y, 2)
+        proj.x = (proj.x + _sar16(proj.xvel, 4)) & 0xFFFF     # [asm 6229] X += Xvel>>4
+        proj.y = (proj.y + _sar16(proj.yvel, 4)) & 0xFFFF     # [asm 6236] Y += Yvel>>4
 
-        ptr = rw((b + 0xC) & 0xFFFF)                          # [asm 6244] anim-script pointer
+        ptr = proj.anim_ptr                                   # [asm 6244] anim-script pointer
         word = rw(ptr)
         if word & 0x8000:                                    # [asm 6249] negative -> loop back
             ptr = (ptr + _s16(word)) & 0xFFFF
             word = rw(ptr)
-        ptr = (ptr + 2) & 0xFFFF                              # [asm 6251] advance
-        writes[(b + 0xC) & 0xFFFF] = (ptr, 2)
+        proj.anim_ptr = (ptr + 2) & 0xFFFF                    # [asm 6251] advance
 
-        facing = rb((b + 7) & 0xFFFF) & 0x80                  # [asm 6256] [+4] = script word | facing bit
-        writes[(b + 4) & 0xFFFF] = ((word | (facing << 8)) & 0xFFFF, 2)
+        facing = proj.facing & 0x80                           # [asm 6256] [+4] = script word | facing bit
+        proj.sprite = (word | (facing << 8)) & 0xFFFF
 
         idx = rb((b + 8) & 0xFFFF)                            # [asm 6261] handler dispatch [+8]
         if idx not in PROJ_HANDLER_DYV:
             raise Pre2EffectsGap(f"6210 projectile handler idx {idx} unrecovered (DS:0x79EC)")
-        yv = (rw((b + 0xE) & 0xFFFF) + PROJ_HANDLER_DYV[idx]) & 0xFFFF
-        writes[(b + 0xE) & 0xFFFF] = (yv, 2)
+        proj.yvel = (proj.yvel + PROJ_HANDLER_DYV[idx]) & 0xFFFF
         b = (b + STRIDE) & 0xFFFF
     return writes

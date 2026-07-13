@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-DATA_SEG = 0x1A0F        # GOG build
+from pre2.views.memory_adapter import DATA_SEG   # the game data segment (GOG build)
 
 # --- visible-window / ring geometry (from the tile loops 348D/35A1 and 3344/338E) -
 VISIBLE_COLS = 0x14      # 20 tiles across (cl=0x14)

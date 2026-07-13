@@ -11,14 +11,14 @@ sprite-data segment ``0x62E8`` and offset ``0x5F48``.
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import ByteBackend, RenderSlot
+from pre2.views.dgroup_view import RenderSlot
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
 from pre2.recovered.object_render import (
     LIST_BASE, LIST_TOP, RECORD_BYTES, Camera, Sprite, SpriteAttr,
 )
 
-DATA_SEG = 0x1A0F
+from pre2.views.memory_adapter import DATA_SEG, dgroup_backend
 CODE_SEG = 0x1030
 PLANE_BYTES = EGA_PLANE_STRIDE   # 0x10000 per EGA plane
 
@@ -43,10 +43,18 @@ VAR_GLOBAL_SHIFT = 0x0000
 
 
 def _rb(mem, seg, off):
+    if seg == DATA_SEG:
+        be = dgroup_backend(mem)
+        if be is not None:
+            return be.rb(off)
     return mem.data[((seg << 4) + off) & 0xFFFFF]
 
 
 def _rw(mem, seg, off):
+    if seg == DATA_SEG:
+        be = dgroup_backend(mem)
+        if be is not None:
+            return be.rw(off)
     b = ((seg << 4) + off) & 0xFFFFF
     return mem.data[b] | (mem.data[b + 1] << 8)
 
@@ -82,7 +90,7 @@ def read_source(mem, seg: int, off: int, length: int) -> bytes:
 
 
 def read_sprite(mem, off: int) -> Sprite:
-    s = RenderSlot(ByteBackend(mem), off)              # the shared stride-0x12 slot, human-named
+    s = RenderSlot(mem, off)                            # the shared stride-0x12 slot, human-named (via the seam)
     return Sprite(
         x=s.x,
         y=s.y,
@@ -116,6 +124,11 @@ def read_attr(mem, sprite_id: int) -> SpriteAttr:
 def write_record(mem, off: int, update) -> None:
     """Write back the per-frame active-record mutation (1030:26FA): flags byte [+5] and
     life byte [+0x11]. ``update`` is a recovered ``SpriteRecordUpdate``."""
+    be = dgroup_backend(mem)
+    if be is not None:
+        be.wb(off + 5, update.new_flags)
+        be.wb(off + 0x11, update.new_life)
+        return
     base = (DATA_SEG << 4) & 0xFFFFF
     mem.data[base + off + 5] = update.new_flags & 0xFF
     mem.data[base + off + 0x11] = update.new_life & 0xFF

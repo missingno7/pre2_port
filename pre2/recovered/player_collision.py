@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from pre2.recovered.player import player_emit_trail
 from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView
+from pre2.views.tables import Tables
 
 __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "collision_land",
            "collision_ceiling", "collision_ground_handler", "collision_bridge_dip",
@@ -186,7 +187,7 @@ def collision_land(rb, rw, read_es, di: int) -> dict:
     y = p.y & 0xFFF0                                                 # [6432] snap Y to tile top
     p.y = y
     new_y = y
-    foot = rb((read_es(di & 0xFFFF) + TILE_PROP_TABLE) & 0xFFFF)     # [6437-643C] foot tile property
+    foot = Tables(rb).tile_props[read_es(di & 0xFFFF)]     # [6437-643C] foot tile property
     if foot != 0:                                                   # [6441]
         off = _s16(collision_slope_offset(foot, p.x))               # [6445]
         cap = p.yvel >> 4                                            # [6448] sar Yvel,4
@@ -195,7 +196,7 @@ def collision_land(rb, rw, read_es, di: int) -> dict:
         new_y = (y + off) & 0xFFFF
         p.y = new_y                                                  # [6478]
     else:                                                            # [645E] below tile
-        below = rb((read_es((di - 0x100) & 0xFFFF) + TILE_PROP_TABLE) & 0xFFFF)
+        below = Tables(rb).tile_props[read_es((di - 0x100) & 0xFFFF)]
         if below != 0:                                              # [6469]
             off = _s16(collision_slope_offset(below, p.x))           # [646D]
             if off < 0x10:                                          # [6470]
@@ -246,10 +247,10 @@ def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
     col = (_s16(rw(ptr)) >> 4) & 0xFF                            # [66A5-66A9] sar (X word),4
     row = (_s16(rw((ptr + 2) & 0xFFFF)) >> 4) & 0xFF            # [669E-66A3] sar (Y word),4
     cell = ((row << 8) | col) & 0xFFFF                           # [66AB] di = (row<<8)|col
-    if not (rb((TILE_CEIL_SOLID_TABLE + read_es(cell)) & 0xFFFF) & 1):   # [66B4-66BA] this cell not solid -> nothing
+    if not (Tables(rb).ceil_props[read_es(cell)] & 1):   # [66B4-66BA] this cell not solid -> nothing
         return {}
     dx = 0x10                                                   # [66BC] default: push right one tile
-    if not (rb((TILE_CEIL_SOLID_TABLE + read_es((cell - 1) & 0xFFFF)) & 0xFFFF) & 1):  # [66BF-66C6] left tile open?
+    if not (Tables(rb).ceil_props[read_es((cell - 1) & 0xFFFF)] & 1):  # [66BF-66C6] left tile open?
         dx = -0x10                                              # [66C8] neg -> push toward the open (left) side
     return {ptr: (rw(ptr) + dx) & 0xFFFF}                       # [66CA-66CE] add [ [ptr] ], dx
 
@@ -283,11 +284,11 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
 
     if solid and _s16(be.writes.get(0x4F1E, p.y)) > 0:           # [5C38-5C42] solid + Y>0 -> corner-slip nudge
         dx = -1 if p.xvel > 0 else 1                             # [5C44-5C51] step away from the facing edge
-        n1 = rb((TILE_CEIL_SOLID_TABLE + read_es((di + dx + 0x100) & 0xFFFF)) & 0xFFFF)  # [5C54-5C5C]
+        n1 = Tables(rb).ceil_props[read_es((di + dx + 0x100) & 0xFFFF)]  # [5C54-5C5C]
         if n1 == 0:                                              # [5C5E] this side is open -> slip into it
             p.x = (p.x + dx * 2) & 0xFFFF                         # [5C70-5C72]
         else:                                                    # [5C60-5C64] other side
-            n2 = rb((TILE_CEIL_SOLID_TABLE + read_es((di - dx + 0x100) & 0xFFFF)) & 0xFFFF)  # [5C66-5C6B]
+            n2 = Tables(rb).ceil_props[read_es((di - dx + 0x100) & 0xFFFF)]  # [5C66-5C6B]
             if n2 == 0:                                          # [5C6E] only the far side is open
                 p.x = (p.x - dx * 2) & 0xFFFF                     # [5C70-5C72] (dx negated)
             # else: wedged between two solid tiles -> no nudge
@@ -303,7 +304,7 @@ def _ground_snap_or_fall(rb, rw, read_es, di: int) -> dict:
         g.airborne = collision_fall(g.airborne)
         return be.writes
     al = read_es((di + 0x100) & 0xFFFF)                             # [65F6] tile one row below the foot tile
-    prop = rb((TILE_PROP_TABLE + al) & 0xFFFF)                      # [65FB-65FE]
+    prop = Tables(rb).tile_props[al]                      # [65FB-65FE]
     if prop == 0:                                                   # [65FF] empty below -> fall
         g.airborne = collision_fall(g.airborne)
         return be.writes
@@ -530,7 +531,7 @@ def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
         return                                                     # [5B93]
     di = (cell_bx + 0x100) & 0xFFFF                                # [5B97] foot tile
     foot_tile = ov.read_es(di) if g.map_rows > (di >> 8) else 0    # [5B9D-5BA6] map-bounds clamp
-    idx = ov.rb((GROUND_REMAP_TABLE + foot_tile) & 0xFFFF)         # [5BA8] cs:[0x7D9B] index
+    idx = Tables(ov.rb).floor_props[foot_tile]         # [5BA8] cs:[0x7D9B] index
     if g.dipping_tile != di:                                       # [5BB2] not already dipping here -> bridge-dip
         bds, bmp, bredraws = collision_bridge_dip(di, ov.read_es, ov.rw, ov.rb)  # [5BB8]
         ov.apply_ds(bds)
@@ -545,7 +546,7 @@ def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
 def _side_scan(ov: _Overlay, cell: int, conditional: bool) -> None:
     """One vertical scan-loop cell ``5C92`` (first, unconditional) / ``5CAC`` (rest, only tile types 2 & 4)."""
     tile = ov.read_es(cell & 0xFFFF)                              # [5C97 / 5CB1]
-    idx = ov.rb((TILE_CEIL_SOLID_TABLE + tile) & 0xFFFF)          # [5C9A / 5CB4] remap 0x7E5E
+    idx = Tables(ov.rb).ceil_props[tile]          # [5C9A / 5CB4] remap 0x7E5E
     if conditional and idx not in (2, 4):                         # [5CB8-5CBE] 5CAC dispatch filter
         return
     ov.apply_ds(collision_side_handler(idx, ov.read_es, ov.rw, ov.rb, cell & 0xFFFF))
@@ -568,7 +569,7 @@ def collision(rb, rw, read_es) -> tuple:
     cell_high = ((row_m1 & 0xFF) << 8) | ((row_m1 >> 8) & 0xFF)    # [5AA4] xchg al,ah
     cell_bx = ((_s16(p.x) >> 4) + cell_high) & 0xFFFF              # [5AC5-5ACB] X>>4 + (row<<8)
     anim_idx = ((p.sprite & 0x1FFF) << 1) & 0xFFFF                 # [5AA6-5AAD] anim frame *2
-    dh = ov.rb((PLAYER_ANIM_HEIGHT_TABLE + anim_idx) & 0xFFFF)     # [5AAF] player vertical extent
+    dh = Tables(ov.rb).player_anim_height[anim_idx]     # [5AAF] player vertical extent
     xvel = p.xvel
     x_edge = 9 if xvel > 0 else (-9 if xvel < 0 else 0)            # [5AB3-5AC1] leading-edge X offset
 

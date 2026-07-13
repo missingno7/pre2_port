@@ -15,6 +15,7 @@ from pre2.native.camera_scroll import (SCROLL_DONE_FLAG, _h_follow, _sar16, _v_f
 from pre2.gaps import Pre2HybridGap
 from pre2.native.level_load import native_level_load, native_player_init
 from pre2.native.state import DATA_SEG
+from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 from pre2.recovered.prng import rng_lcg
 
 _DS = DATA_SEG << 4
@@ -29,23 +30,23 @@ def native_3af2(state) -> None:
     The initial screen tile-draw and the ``[0x2dba]``/``[0x2de8]``/``[0x2df2]`` render-pointer state are the
     renderer's job and are not produced here."""
     d = state.data
-    for o in (0x2DE4, 0x2DE6, 0x2DE8, 0x2DEA):                       # [asm 3afe-3b07] reset the camera cells
-        d[_DS + o] = 0; d[_DS + o + 1] = 0
+    g, pv = PlayerGlobals(state), PlayerView(state)
+    g.cam_col_word = 0; g.cam_row_word = 0; g.col_ring = 0; g.unk_2DEA = 0   # [asm 3afe-3b07] reset camera cells
     for _ in range(8000):                                           # [asm 3b35] 5634: snap-scroll to convergence
         _wb_cs(state, SCROLL_DONE_FLAG, 1)                          # [asm 5634] set the snap flag (forces dl=0x10)
-        if d[_DS + 0x6BD9] == 0 and not (d[_DS + 0x8166] & 2):      # [asm 564e/5655] 5649 gate
+        if g.unk_6BD9 == 0 and not (g.level_flags & 2):            # [asm 564e/5655] 5649 gate
             _h_follow(state)                                       # [asm 565c] 57a8 horizontal follow
         _v_follow(state)                                           # [asm 565f] 5663 vertical follow
         _wb_cs(state, SCROLL_DONE_FLAG, 0)                          # [asm 563d] clear the snap flag
         if d[_DS + 0x6BEE] == 0 and d[_DS + 0x6BED] == 0:           # [asm 3b38] both axes idle -> converged
             break
-    if not (d[_DS + 0x8166] & 2):                                   # [asm 3b41] (not the gated mode)
-        px_tile = _sar16(d[_DS + 0x4F1C] | (d[_DS + 0x4F1D] << 8), 4)
-        cam_x = d[_DS + 0x2DE4] | (d[_DS + 0x2DE5] << 8)            # [asm 3b48-3b4f] player tile - camera cell
+    if not (g.level_flags & 2):                                     # [asm 3b41] (not the gated mode)
+        px_tile = _sar16(pv.x, 4)
+        cam_x = g.cam_col_word                                      # [asm 3b48-3b4f] player tile - camera cell
         if ((px_tile - cam_x) & 0xFFFF) >= 0xC:                    # [asm 3b53] still > 0xc cols right -> centre it
             for _ in range(0xA):                                   # [asm 3b58] pan right x10
                 apply_camera_pan(state, "right")
-    d[_DS + 0x2DF4] = 1                                             # [asm 3b60]
+    g.grid_dirty = 1                                                # [asm 3b60]
     d[_DS + 0x2DE0] = 0xAA; d[_DS + 0x2DE1] = 0x55                  # [asm 3b65] [0x2de0]=0x55aa
 
 

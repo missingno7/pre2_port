@@ -16,7 +16,7 @@ Verified byte-exact (DGROUP) vs the ASM 5850->5A95 over the demos: pre2/probes/p
 """
 from __future__ import annotations
 
-from pre2.views.input_decode import apply_ds, readers
+from pre2.views.memory_adapter import apply_ds, readers
 from pre2.gaps import Pre2CheatCredits, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.input_decode import Pre2InputGap, decode_input
@@ -44,8 +44,8 @@ _BASE = (DATA_SEG << 4) & 0xFFFFF
 
 
 def _w(state, off: int, val: int, width: int) -> None:
-    for k in range(width):
-        state.data[(_BASE + ((off + k) & 0xFFFF)) & 0xFFFFF] = (val >> (8 * k)) & 0xFF
+    for k in range(width):                               # through the backend seam (Phase 4)
+        state.wb((off + k) & 0xFFFF, (val >> (8 * k)) & 0xFF)
 
 
 def _keycombo_active(rb) -> bool:
