@@ -1,8 +1,8 @@
 """Symbolic DGROUP offset names — so shipped native code reads the real thing, not ``0x2DBC``.
 
 Every constant here is a DS-relative offset into the game's global-data segment (DGROUP). They are the
-offsets that survive as *raw accessor arguments* (``state.rw(SCROLL_SCRIPT_PTR)``) because they address
-arenas, pointer/segment cells, lookup tables, RNG state, or animation scratch that has no single scalar
+offsets that survive as *raw accessor arguments* (e.g. a ``state`` word-read of ``SCROLL_SCRIPT_PTR``) because
+they address arenas, pointer/segment cells, lookup tables, RNG state, or animation scratch that has no scalar
 "field" home — everything else is a named view (``pre2/views/dgroup_view.py``). Each name carries its
 ``[asm ....]`` evidence anchor; where an offset is *also* exposed as a view field, the comment says so.
 
