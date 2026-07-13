@@ -193,20 +193,53 @@ def apply_contract(state, writes, *, word_fields=None) -> None:
 
 
 # ---- field descriptors (offset RELATIVE to the view's base) -------------------------------------------------
+#
+# Each descriptor also captures its own attribute NAME (``__set_name__``) so a view can be resolved by NAME as
+# well as by offset. When the bound backend exposes ``read_field`` / ``write_field`` (the shipped, offset-free
+# NamedObjectBackend — pre2/views/named_view.py, the native-dataclass lift), access dispatches by name to the
+# ``pre2/game`` dataclass; otherwise it uses the offset exactly as before (the shipped ByteBackend path is
+# byte-for-byte unchanged). The offset stays here through the P2/P3 transition and is removed at P4, when it
+# moves wholly into the detachable bridge layout.
+
+def _read_field(o, off: int, name: str, width: int, signed: bool) -> int:
+    be = o._backend
+    rf = getattr(be, "read_field", None)
+    if rf is not None:
+        return rf(o, name, width, signed)
+    v = be.rb(o._base + off) if width == 1 else be.rw(o._base + off)
+    if signed and v & (1 << (8 * width - 1)):
+        v -= 1 << (8 * width)
+    return v
+
+
+def _write_field(o, off: int, name: str, width: int, v: int) -> None:
+    be = o._backend
+    wf = getattr(be, "write_field", None)
+    if wf is not None:
+        wf(o, name, width, v)
+    elif width == 1:
+        be.wb(o._base + off, v)
+    else:
+        be.ww(o._base + off, v)
+
 
 class _U16:
     """A little-endian 16-bit field."""
 
     def __init__(self, off: int):
         self.off = off
+        self.name = ""
+
+    def __set_name__(self, owner, name: str):
+        self.name = name
 
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        return o._backend.rw(o._base + self.off)
+        return _read_field(o, self.off, self.name, 2, False)
 
     def __set__(self, o, v: int):
-        o._backend.ww(o._base + self.off, v)
+        _write_field(o, self.off, self.name, 2, v)
 
 
 class _U8:
@@ -214,14 +247,18 @@ class _U8:
 
     def __init__(self, off: int):
         self.off = off
+        self.name = ""
+
+    def __set_name__(self, owner, name: str):
+        self.name = name
 
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        return o._backend.rb(o._base + self.off)
+        return _read_field(o, self.off, self.name, 1, False)
 
     def __set__(self, o, v: int):
-        o._backend.wb(o._base + self.off, v)
+        _write_field(o, self.off, self.name, 1, v)
 
 
 class _S16:
@@ -229,15 +266,18 @@ class _S16:
 
     def __init__(self, off: int):
         self.off = off
+        self.name = ""
+
+    def __set_name__(self, owner, name: str):
+        self.name = name
 
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        v = o._backend.rw(o._base + self.off)
-        return v - 0x10000 if v & 0x8000 else v
+        return _read_field(o, self.off, self.name, 2, True)
 
     def __set__(self, o, v: int):
-        o._backend.ww(o._base + self.off, v)
+        _write_field(o, self.off, self.name, 2, v)
 
 
 class _S8:
@@ -245,15 +285,18 @@ class _S8:
 
     def __init__(self, off: int):
         self.off = off
+        self.name = ""
+
+    def __set_name__(self, owner, name: str):
+        self.name = name
 
     def __get__(self, o, owner=None):
         if o is None:
             return self
-        v = o._backend.rb(o._base + self.off)
-        return v - 0x100 if v & 0x80 else v
+        return _read_field(o, self.off, self.name, 1, True)
 
     def __set__(self, o, v: int):
-        o._backend.wb(o._base + self.off, v)
+        _write_field(o, self.off, self.name, 1, v)
 
 
 class _U16Array:
@@ -353,7 +396,8 @@ def _coerce_backend(source):
     ``.backend`` (NativeGameState) binds to THAT — so a view follows the hybrid store, not a fresh image
     wrapper. Anything else (VM ``mem`` / raw ``bytearray``) is wrapped in a :class:`ByteBackend`."""
     if isinstance(source, (ByteBackend, SegmentBackend, OverlayBackend, WidthContractBackend, DictBackend)) \
-            or getattr(source, "_IS_DGROUP_BACKEND", False):
+            or getattr(source, "_IS_DGROUP_BACKEND", False) \
+            or hasattr(source, "read_field"):            # a name-keyed backend (NamedObjectBackend) — pass through
         return source
     be = getattr(source, "backend", None)
     if be is not None and getattr(be, "_IS_DGROUP_BACKEND", False):

@@ -51,6 +51,40 @@ def test_named_rng_view_matches_offset_rng_view_byte_exact():
             assert out[DS + off + k] == ref[DS + off + k], f"rng byte {off + k:#06x} diverged"
 
 
+def test_production_rng_view_is_name_capable_byte_exact():
+    """P2 enabler: the SHIPPED production RngView (dgroup_view.py — its descriptors still carry offsets) now
+    ALSO resolves by NAME when bound to a NamedObjectBackend, so the recovered roll logic runs byte-exact over
+    a pre2/game.Rng dataclass without any change to the view or the logic. The shipped ByteBackend path is
+    unchanged (it has no read_field -> offsets, as proven by the whole corpus)."""
+    from pre2.bridge.game_layout import rng_from_image
+    from pre2.views.dgroup_view import RngView
+    from pre2.views.named_view import NamedObjectBackend
+
+    img = _seed_image()
+    off_view = RngView(ByteBackend_wrap(img))                 # offset path over the image
+    name_view = RngView(NamedObjectBackend().register(RngView, rng_from_image(img)))  # name path over a dataclass
+
+    for i in range(200):
+        if i % 3 == 0:
+            assert off_view.roll_ror() == name_view.roll_ror()
+        else:
+            assert off_view.roll() == name_view.roll()
+
+
+def test_production_player_view_is_name_capable_byte_exact():
+    """P2 enabler, on the player: the SHIPPED PlayerView resolves every canonical field identically over the
+    image (offset path) and over a pre2/game.Player dataclass (name path), across real post-tick states."""
+    from pre2.bridge.game_layout import player_from_image
+    from pre2.views.dgroup_view import PlayerView
+    from pre2.views.named_view import NamedObjectBackend
+
+    for img in _real_player_states():
+        off_view = PlayerView(ByteBackend_wrap(img))
+        name_view = PlayerView(NamedObjectBackend().register(PlayerView, player_from_image(img)))
+        for f in _PLAYER_FIELDS:
+            assert getattr(off_view, f) == getattr(name_view, f), f"production PlayerView.{f} diverged"
+
+
 def test_named_object_backend_has_no_offsets():
     """The shipped name-keyed path must contain no DGROUP offsets at all — resolution is getattr by name."""
     import inspect
