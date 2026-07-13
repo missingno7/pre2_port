@@ -23,7 +23,8 @@ for genuinely dynamic data — the anim/impulse/phase TABLES, the trail ring, th
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView, WidthContractBackend
+from pre2.views.dgroup_view import (DictBackend, PLAYER_BASE, PlayerGlobals, PlayerView, RENDER_SLOTS_BASE,
+                                    WidthContractBackend)
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
@@ -49,13 +50,39 @@ JUMP_FRAMES = 9               # [asm 5F50] frames driven by the impulse table be
 ATTACK_PHASE_TABLE = 0x7B04      # [asm 5FAF/6081] 5-byte per-phase records {frametbl_ptr w, sfx b, v19 b, flag b}
 ATTACK_SPAWN_LIST = 0x4F2E       # [asm 627D] the projectile list the attack handler spawns into (4 slots, 0x12)
 
+# player render/physics record fields (PLAYER_BASE = render slot 1; slot 0 sits just below it) + the
+# player-state globals / per-frame timers the FSM writes -- named once here (= the like-named
+# PlayerView/PlayerGlobals fields in dgroup_view; offsets given relative to the named slot base).
+P_SPRITE   = PLAYER_BASE + 0x04   # 0x4F20 packed anim-frame word (same field as ANIM_FRAME below)
+P_XVEL     = PLAYER_BASE + 0x06   # 0x4F22 X velocity
+P_FACING   = PLAYER_BASE + 0x09   # 0x4F25 facing word
+P_ANIM_B   = PLAYER_BASE + 0x0B   # 0x4F27 anim B-state
+P_ANIM_PTR = PLAYER_BASE + 0x0C   # 0x4F28 anim-script pointer
+P_YVEL     = PLAYER_BASE + 0x0E   # 0x4F2A Y velocity
+P_RUN      = PLAYER_BASE + 0x10   # 0x4F2C run-state flag
+SLOT0_DEATH = RENDER_SLOTS_BASE + 0x11   # 0x4F1B slot-0 life/death byte (the FSM's "depth")
+POPUP_RING_HEAD = 0x6BBE          # popup/effect ring write cursor
+RUN_COUNT = 0x6BEB                # run-frames counter
+FIDGET_RANGE_TABLE = 0x79E0       # idle-fidget anim threshold ranges [lo,hi)
+IDLE_TIMER = 0x6BD3               # idle/fidget clock gate
+ANIM_GATE = 0x6BD0                # hold-current-anim / FSM-route gate
+# the 5A4A-5A87 per-frame countdown timers (seven byte counters + the 0x6BE2 word)
+CHARGE = 0x6BCE
+INPUT_SUPPRESS = 0x6BCD
+SHAKE_MAGNITUDE = 0x6BEA
+TIMER_6BE8 = 0x6BE8
+RESPAWN_STATE = 0x6BE4
+PENDING_PICKUP = 0x6BE1
+REWARD_ARM_HI = 0x6C00
+
 # 16-bit-word DS fields written by player_fsm_step; every other write in its contract is a byte. Used by the
 # live FSM checkpoint to apply / diff each write at the right width (the byte-vs-word lesson from collision).
 FSM_WORD_FIELDS = frozenset(
-    {0x4F0A, 0x4F0C, 0x4F0E, 0x4F20, 0x4F22, 0x4F25, 0x4F28, 0x4F2A, 0x6BBE, 0x6BEB}
+    {RENDER_SLOTS_BASE, RENDER_SLOTS_BASE + 2, RENDER_SLOTS_BASE + 4, P_SPRITE, P_XVEL, P_FACING,
+     P_ANIM_PTR, P_YVEL, POPUP_RING_HEAD, RUN_COUNT}
     | {s + d for s in range(ATTACK_SPAWN_LIST, ATTACK_SPAWN_LIST + 4 * 0x12, 0x12)  # projectile slots:
        for d in (0, 2, 4, 6, 0xC, 0xE)}                                            # words (the +8 field is a byte)
-    | set(range(TRAIL_RING_LO, 0x4FC4, 2))    # trail/dust ring slots, incl. the TOP slot's +4 id word (0x4FC2):
+    | set(range(TRAIL_RING_LO, TRAIL_RING_HI + 6, 2))    # trail/dust ring slots, incl. the TOP slot's +4 id word (0x4FC2):
     #   5E11/5E41 write [ring+4]=0x35 as a WORD (mov word ptr) — a byte write leaves [+5] stale (was 0x4FC2-exclusive)
 )
 
@@ -69,7 +96,8 @@ XVEL_FLOOR = -0x60      # [asm 62FA] directional-friction floor on Xvel
 
 # [asm 5A4A-5A87] per-frame countdown timers decremented at the tail of the player update, each clamped at 0
 # (`sub [x],1 ; adc [x],0` = decrement-but-not-below-zero). Seven byte counters + one word counter.
-TIMER_BYTES = (0x6BCE, 0x6BCD, 0x6BEA, 0x6BE8, 0x6BE4, 0x6BE1, 0x6C00)
+TIMER_BYTES = (CHARGE, INPUT_SUPPRESS, SHAKE_MAGNITUDE, TIMER_6BE8, RESPAWN_STATE, PENDING_PICKUP,
+               REWARD_ARM_HI)
 TIMER_WORD = 0x6BE2   # also object_update's sprite "scale" level + player_interaction's instadeath gate (same offset)
 
 X_MIN = 0x0008          # [asm 5A29] commit only if new_x >= 8 (left world edge)
@@ -209,13 +237,13 @@ def player_select_anim_id(bitmask: int, suppress: int, depth: int, anim_b_state:
     maps ``{0x4F1B, 0x6BEB[, 0x4F2C]}`` to their new values (0x4F2C only on a change)."""
     bm = 0 if (suppress & 0xFF) != 0 else (bitmask & 0xFF)       # [5921-592C]
     anim_id = read_byte((bm + ANIM_ID_TABLE) & 0xFFFF) & 0xFF    # [592E]
-    writes = {0x4F1B: depth & 0xFF}                              # [5932-5936] [0x4F1B]=[0x4F2D]
+    writes = {SLOT0_DEATH: depth & 0xFF}                              # [5932-5936] [0x4F1B]=[0x4F2D]
     if (depth & 0xFF) >= 0x16:                                   # [593A-593F]
         anim_id = 8
     if (anim_b_state & 0xFF) != anim_id:                         # [5941] anim changed -> reset run state
         beb = 0                                                  # [5947]
-        writes[0x4F2C] = 0                                       # [594D]
-    writes[0x6BEB] = _inc_wrap_word(beb)                         # [5952-5957]
+        writes[P_RUN] = 0                                       # [594D]
+    writes[RUN_COUNT] = _inc_wrap_word(beb)                         # [5952-5957]
     return anim_id, writes
 
 
@@ -465,9 +493,9 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         return out                                              # [5D0B] jmp 5E0D (no anim_b reset)
 
     facing = p.facing_lo
-    ax = abs(_s16(out[0x4F22]))                                 # [5D0E-5D15] |Xvel| (post-friction)
+    ax = abs(_s16(out[P_XVEL]))                                 # [5D0E-5D15] |Xvel| (post-friction)
     if ax >= 8:                                                 # [5D17] jb 5D42
-        if ((p.flags >> 7) & 1) == ((out[0x4F22] >> 15) & 1):   # [5D1C-5D2C] facing == vel sign?
+        if ((p.flags >> 7) & 1) == ((out[P_XVEL] >> 15) & 1):   # [5D1C-5D2C] facing == vel sign?
             _idle_set_advance(p, g, 0x12, 0x24, rb, rw, facing)     # [5D31-5D39] anim 0x12
             trail = player_emit_trail(p.x, p.y, g.frame_blink, g.trail_ring)  # [5D3C] call 5E11
             if trail is not None:
@@ -478,7 +506,7 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         p.anim_b = 0                                            # [5E08]
         return out
 
-    if _s16(out[0x4F22]) != 0:                                  # [5D42-5D46] 0 < |Xvel| < 8 -> default
+    if _s16(out[P_XVEL]) != 0:                                  # [5D42-5D46] 0 < |Xvel| < 8 -> default
         _idle_default_anim(p, entry_bx, facing, rw)
         p.anim_b = 0
         return out
@@ -516,7 +544,7 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
 
     # fidget [5DC9]: find the 0x79E0 range [lo,hi) containing key=idle_clock&0x1FF -> anim 0x11; below lo -> default
     key = g.idle_clock & 0x1FF
-    si = 0x79E0
+    si = FIDGET_RANGE_TABLE
     while True:
         if key < rw(si):                                       # [5DD2] jb 5DED
             _idle_default_anim(p, entry_bx, facing, rw)
@@ -704,7 +732,7 @@ def player_state_anim4(rb, rw) -> dict:
         g.anim_hi = bcf
         return out
     # [5E89] jmp 5CDB — idle sees idle_timer==0 (just written) and bx==8
-    rb2 = lambda o: 0 if o == 0x6BD3 else rb(o)                            # noqa: E731 — the just-written read shim
+    rb2 = lambda o: 0 if o == IDLE_TIMER else rb(o)                            # noqa: E731 — the just-written read shim
     out.update(player_state_idle(rb2, rw, entry_bx=8))
     return out
 
@@ -758,7 +786,7 @@ def player_fsm_step(rb, rw) -> tuple:
     ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``)."""
     p0, g0, _be0 = _views(rb, rw)                               # read-only views over ENTRY memory
     bitmask, writes = player_fsm_frontend(rb, rw)               # [58A7-591F]
-    beb = writes.get(0x6BEB, g0.run_count)
+    beb = writes.get(RUN_COUNT, g0.run_count)
     anim_id, sel_writes = player_select_anim_id(bitmask, g0.input_suppress, p0.death_state,  # [5921-595C]
                                                 p0.anim_b, beb, rb)
     writes.update(sel_writes)                                   # [0x4F1B], [0x6BEB], maybe [0x4F2C]
@@ -779,7 +807,7 @@ def player_fsm_step(rb, rw) -> tuple:
         writes.update(mwrites)
         msfx: list = []
         if do_dispatch:                                        # [-> 5A0B] dispatch via cs:[0x7D6F]
-            if rb2(0x6BD0) != 0:                               # the flying handlers' [0x6BD0] override is unwitnessed
+            if rb2(ANIM_GATE) != 0:                               # the flying handlers' [0x6BD0] override is unwitnessed
                 raise NotImplementedError("flying dispatch with [0x6BD0]!=0 not witnessed")
             hw, msfx = player_fsm_flying_dispatch(anim_id, rb2, rw2)
             writes.update(hw)
@@ -790,7 +818,7 @@ def player_fsm_step(rb, rw) -> tuple:
     # (anim_id 3/6/7 = 5F96, the tail's own body) has no such prologue — it can't override into itself — and
     # anim_id 8 (5CCE) has none either; both dispatch normally.
     if g0.anim_gate != 0 and anim_id not in (3, 6, 7, 8):       # [5F35-etc] -> 5F93 override
-        hw, sfx = player_state_attack(rb2(0x4F27), anim_id * 2, rb2, rw2)
+        hw, sfx = player_state_attack(rb2(P_ANIM_B), anim_id * 2, rb2, rw2)
     else:
         hw, sfx = player_dispatch_handler(anim_id, rb2, rw2)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
     writes.update(hw)
@@ -900,7 +928,7 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
     # sound path [5FD2+]
     g.input_suppress = rb((rec + 2) & 0xFFFF)                                 # [5FD2] phase.sfx
     sfx.append(5 if phase == 0 else (0 if phase == 1 else 0x0A))             # [5FD9-5FEB] play_sfx dl
-    a27 = out[0x4F27]                                                         # [5FF0] (post set_anim)
+    a27 = out[P_ANIM_B]                                                         # [5FF0] (post set_anim)
     if a27 == 6:                                                             # [5FF3-5FF5]
         dy = 0
     elif a27 == 3:                                                           # [5FF7/5FFA-5FFC] dx=0xFFE0
