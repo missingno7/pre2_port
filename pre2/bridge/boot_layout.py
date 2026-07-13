@@ -52,7 +52,7 @@ def _residual() -> bytearray:
 def _place_digit_sprites(img) -> None:
     """Regenerate the 9 HUD digit sprites from the committed PNG asset (the readable form of that artwork)."""
     from pre2.bridge.boot_graphics import png_to_region
-    png = Path(__file__).with_name("assets") / "boot_digits.png"
+    png = Path(__file__).with_name("boot_digits.png")
     payload = png_to_region(str(png), _DIGIT_COUNT * 64, tile_w=16, tile_h=32, tiles_wide=_DIGIT_COUNT, gap=0)
     for k in range(_DIGIT_COUNT):
         off = _DIGIT_BASE + k * _DIGIT_STRIDE
