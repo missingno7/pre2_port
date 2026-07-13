@@ -13,7 +13,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 from __future__ import annotations
 
 from pre2.game.model import (Actor, ArenaEntity, Camera, EffectSlot, Input, LevelState, Motion, Player,
-                             PlayerState, Progress, Rng, Scroll)
+                             PlayerState, Progress, Rng, Scroll, WallMarker)
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
 
@@ -79,6 +79,10 @@ _BURST_BASE, _BURST_COUNT = 0x50A8, 20              # the score/effect-burst fre
 _DST_BASE, _DST_COUNT = 0x52E8, 20                  # the DST effect-particle pool (0x52E8..0x5450)
 _DEBRIS_BASE, _DEBRIS_COUNT = 0x5450, 16            # the debris-element pool
 _EFFECT_ROW_BASE, _EFFECT_ROW_COUNT = 0x56A2, 8     # the horizontal effect-row sprites
+# the wall-impact marker table (0x6EA9..0x6F49, 20 x 8-byte records = four words each)
+WALL_MARKER_LAYOUT = [("token", 0, 2, False), ("map_off", 2, 2, False), ("data0", 4, 2, False),
+                      ("data1", 6, 2, False)]
+_WALL_MARKER_BASE, _WALL_MARKER_COUNT = 0x6EA9, 20
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
 PLAYER_LAYOUT = [
@@ -165,6 +169,7 @@ _ROUTES = [
     ("dst_pool", EffectSlot, EFFECT_SLOT_LAYOUT, _DST_BASE, _DST_COUNT, 0x12),
     ("debris", EffectSlot, EFFECT_SLOT_LAYOUT, _DEBRIS_BASE, _DEBRIS_COUNT, 0x12),
     ("effect_row", EffectSlot, EFFECT_SLOT_LAYOUT, _EFFECT_ROW_BASE, _EFFECT_ROW_COUNT, 0x12),
+    ("wall_markers", WallMarker, WALL_MARKER_LAYOUT, _WALL_MARKER_BASE, _WALL_MARKER_COUNT, 8),
 ]
 
 

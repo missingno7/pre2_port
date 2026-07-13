@@ -101,6 +101,21 @@ class EffectSlot:
 
 
 @dataclass
+class WallMarker:
+    """One 8-byte wall-impact marker (the 20-slot table). ``token == 0x55AA`` means the slot is free; on a wall
+    hit the collision code records the map offset + impact data in the remaining words."""
+
+    token: int = 0x55AA
+    map_off: int = 0x55AA
+    data0: int = 0x55AA
+    data1: int = 0x55AA
+
+    @property
+    def free(self) -> bool:
+        return self.token == 0x55AA
+
+
+@dataclass
 class ArenaEntity:
     """One record of the variable-stride 2nd-pass entity list (0x8489). The header is named; ``body`` holds the
     handler-specific bytes past it. Entry 0 is the player. ``sprite_ref == 0xFFFF`` means empty."""
