@@ -86,3 +86,11 @@ RESOURCE_RECORDS = [
     (0x0A85, 'KOOL.TRK'),
     (0x0A8E, 'BOULA.TRK'),
 ]
+
+# [0x752A] 32 sprite-hitbox X half-widths, indexed by (sprite_id >> 8) & 0x1F
+HITBOX_HALF_WIDTHS = [20, 36, 16, 35, 12, 36, 16, 36, 16, 37, 16, 37, 15, 36, 16, 35,
+                      15, 35, 15, 35, 12, 35, 16, 38, 20, 31, 24, 31, 16, 31, 16, 36]
+# [0x7B7F] 3x8 table of anim-state ids selected by the input bitmask
+ANIM_STATE_IDS = [0, 3, 5, 7, 2, 6, 0, 0, 1, 3, 4, 7, 2, 6, 1, 0, 1, 3, 4, 7, 2, 6, 0, 0]
+# [0x7CDF] 9 word pointers into the 0x7Bxx anim-sequence data (DOS offsets; the bridge keeps them as words)
+ANIM_SEQ_PTRS = [0x7B9F, 0x7BA7, 0x7BDB, 0x7BE7, 0x7BF7, 0x7C29, 0x7C3F, 0x7C53, 0x7C67]

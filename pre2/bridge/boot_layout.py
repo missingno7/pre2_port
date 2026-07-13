@@ -26,6 +26,7 @@ DGROUP_LEN = 0x10000
 # (constant, dgroup offset, encoder) — where each readable table lands in the original layout
 _SINE_OFF, _COSINE_OFF, _HALF_OFF = 0x6F90, 0x7090, 0x7190
 _JUMP_OFF, _ATTACK_OFF, _SCORE_OFF, _SCANCODE_OFF = 0x79CE, 0x7B04, 0xA343, 0x2301
+_HITBOX_WX_OFF, _ANIM_ID_OFF, _ANIM_SEQ_OFF = 0x752A, 0x7B7F, 0x7CDF
 
 
 def _enc_s8(vals) -> bytes:
@@ -55,6 +56,9 @@ def generate_boot_dgroup() -> bytearray:
     img[_ATTACK_OFF:_ATTACK_OFF + 20] = b"".join(
         bytes((p & 0xFF, (p >> 8) & 0xFF, sfx, v19, flag)) for (p, sfx, v19, flag) in T.ATTACK_PHASES)
     img[_SCORE_OFF:_SCORE_OFF + 34] = _enc_s16(T.SCORE_VALUES)
+    img[_HITBOX_WX_OFF:_HITBOX_WX_OFF + 32] = bytes(T.HITBOX_HALF_WIDTHS)
+    img[_ANIM_ID_OFF:_ANIM_ID_OFF + 24] = bytes(T.ANIM_STATE_IDS)
+    img[_ANIM_SEQ_OFF:_ANIM_SEQ_OFF + 18] = _enc_s16(T.ANIM_SEQ_PTRS)
     sc = T.SCANCODE_CHARS.encode("latin1")
     img[_SCANCODE_OFF:_SCANCODE_OFF + len(sc)] = sc
     for off, text in T.RESOURCE_RECORDS:
@@ -65,7 +69,7 @@ def generate_boot_dgroup() -> bytearray:
 
 def constant_coverage() -> tuple[int, int]:
     """(bytes generated from readable constants, non-zero bytes still in the residual blob)."""
-    covered = (256 + 256 + 64 + 18 + 20 + 34 + len(T.SCANCODE_CHARS)
+    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + len(T.SCANCODE_CHARS)
                + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
     return covered, sum(1 for b in _residual() if b)
 
