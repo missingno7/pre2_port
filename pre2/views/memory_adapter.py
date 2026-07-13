@@ -15,6 +15,13 @@ from __future__ import annotations
 DATA_SEG = 0x1A0F
 
 
+def dgroup_backend(mem):
+    """The swappable DGROUP backend a NativeGameState carries (so slot/array access follows a hybrid store),
+    or None for a raw VM ``mem`` / bytearray. THE single home of this check — the layout views share it."""
+    be = getattr(mem, "backend", None)
+    return be if getattr(be, "_IS_DGROUP_BACKEND", False) else None
+
+
 def readers(mem):
     """``(rb, rw)`` byte/word DGROUP readers. Routes through ``mem.backend`` when present (the NativeGameState
     seam — so reads follow the swappable backend, e.g. a hybrid store), else straight to ``mem.data``."""

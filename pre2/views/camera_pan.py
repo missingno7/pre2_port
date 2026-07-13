@@ -8,6 +8,8 @@ is the symmetric transcription (no witness yet — ASM_MATCHED).
 """
 from __future__ import annotations
 
+from pre2.views.memory_adapter import dgroup_backend
+
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.views import frame as _F
 from pre2.recovered.frame_renderer import RowFlags, calc_scroll_source, draw_tile_column
@@ -15,13 +17,8 @@ from pre2.recovered.frame_renderer import RowFlags, calc_scroll_source, draw_til
 _DS = 0x1A0F
 
 
-def _be(mem):
-    b = getattr(mem, "backend", None)
-    return b if getattr(b, "_IS_DGROUP_BACKEND", False) else None
-
-
 def _rw(mem, o: int) -> int:
-    be = _be(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         return be.rw(o)
     b = ((_DS << 4) + o) & 0xFFFFF
@@ -29,14 +26,14 @@ def _rw(mem, o: int) -> int:
 
 
 def _rb(mem, o: int) -> int:
-    be = _be(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         return be.rb(o)
     return mem.data[((_DS << 4) + o) & 0xFFFFF]
 
 
 def _ww(mem, o: int, v: int) -> None:
-    be = _be(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         be.ww(o, v); return
     b = ((_DS << 4) + o) & 0xFFFFF
@@ -45,7 +42,7 @@ def _ww(mem, o: int, v: int) -> None:
 
 
 def _wb(mem, o: int, v: int) -> None:
-    be = _be(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         be.wb(o, v); return
     mem.data[((_DS << 4) + o) & 0xFFFFF] = v & 0xFF

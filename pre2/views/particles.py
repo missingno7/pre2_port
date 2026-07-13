@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pre2.views.memory_adapter import dgroup_backend
 from pre2.recovered.particles import (COS_TABLE, PARTICLE_BASE, PARTICLE_COUNT, PARTICLE_STRIDE,
                                        SIN_TABLE)
 
@@ -18,14 +19,8 @@ _CAM_ROW = 0x2DE6    # [0x2DE6] tile camera row
 _YBIAS = 0x6BC4      # [0x6BC4] vertical bias subtracted from the particle Y
 
 
-def _dgroup_backend(mem):
-    """The swappable DGROUP backend of a NativeGameState (so the array follows a hybrid store), or None."""
-    be = getattr(mem, "backend", None)
-    return be if getattr(be, "_IS_DGROUP_BACKEND", False) else None
-
-
 def _rw(mem, off):
-    be = _dgroup_backend(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         return be.rw(off)
     b = ((_DS << 4) + off) & 0xFFFFF
@@ -33,7 +28,7 @@ def _rw(mem, off):
 
 
 def _rb(mem, off):
-    be = _dgroup_backend(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         return be.rb(off)
     return mem.data[((_DS << 4) + off) & 0xFFFFF]
@@ -94,7 +89,7 @@ def read_particle_consume_inputs(mem):
 def apply_particle_writeback(mem, writeback) -> None:
     """Apply the per-slot writeback the ASM leaves: ``[slot+2]=ny`` (the advanced Y persists) and
     ``[slot]=0xFFFF`` (the kill). ``writeback`` = ``[(index, ny)]`` from ``consume_particles``."""
-    be = _dgroup_backend(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         for index, ny in writeback:
             o = PARTICLE_BASE + index * PARTICLE_STRIDE

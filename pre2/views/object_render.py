@@ -18,7 +18,7 @@ from pre2.recovered.object_render import (
     LIST_BASE, LIST_TOP, RECORD_BYTES, Camera, Sprite, SpriteAttr,
 )
 
-from pre2.views.memory_adapter import DATA_SEG
+from pre2.views.memory_adapter import DATA_SEG, dgroup_backend
 CODE_SEG = 0x1030
 PLANE_BYTES = EGA_PLANE_STRIDE   # 0x10000 per EGA plane
 
@@ -42,15 +42,9 @@ TBL_SRC_OFF = 0x5F48         # word: sprite pixel-data offset
 VAR_GLOBAL_SHIFT = 0x0000
 
 
-def _dgroup_backend(mem):
-    """The swappable DGROUP backend of a NativeGameState (so slot access follows a hybrid store), or None."""
-    be = getattr(mem, "backend", None)
-    return be if getattr(be, "_IS_DGROUP_BACKEND", False) else None
-
-
 def _rb(mem, seg, off):
     if seg == DATA_SEG:
-        be = _dgroup_backend(mem)
+        be = dgroup_backend(mem)
         if be is not None:
             return be.rb(off)
     return mem.data[((seg << 4) + off) & 0xFFFFF]
@@ -58,7 +52,7 @@ def _rb(mem, seg, off):
 
 def _rw(mem, seg, off):
     if seg == DATA_SEG:
-        be = _dgroup_backend(mem)
+        be = dgroup_backend(mem)
         if be is not None:
             return be.rw(off)
     b = ((seg << 4) + off) & 0xFFFFF
@@ -130,7 +124,7 @@ def read_attr(mem, sprite_id: int) -> SpriteAttr:
 def write_record(mem, off: int, update) -> None:
     """Write back the per-frame active-record mutation (1030:26FA): flags byte [+5] and
     life byte [+0x11]. ``update`` is a recovered ``SpriteRecordUpdate``."""
-    be = _dgroup_backend(mem)
+    be = dgroup_backend(mem)
     if be is not None:
         be.wb(off + 5, update.new_flags)
         be.wb(off + 0x11, update.new_life)
