@@ -429,12 +429,12 @@ _PW_WRONG_FRAMES = 0x8C     # [asm 9AB8] the pause length before the buffer clea
 def _password_init(state) -> None:
     """Reset the ENTER-CODE screen on entry: empty '[[[[' buffer, no chars/scancode, AND clear the rolling
     cheat-group history + the wrong-code state so a fresh session starts clean."""
-    d = state.data
-    d[_DS + _PW_SCAN_LATCH] = 0
+    d = state.data                                           # `d` for the 4-byte echo-buffer fill (slice)
+    state.wb(_PW_SCAN_LATCH, 0)
     d[_DS + _PW_ECHO:_DS + _PW_ECHO + 4] = b"[[[["            # [asm 9ACB] the empty-slot placeholders (0x5B)
     for off in (_PW_CURSOR, _PW_CODE, _PW_WRONG_TIMER, *_PW_HIST):
-        d[_DS + off] = 0; d[_DS + off + 1] = 0
-    d[_DS + _PW_STATE] = 0
+        state.ww(off, 0)
+    state.wb(_PW_STATE, 0)
 
 
 def _password_step(state):

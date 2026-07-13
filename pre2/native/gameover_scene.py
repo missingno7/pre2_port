@@ -44,59 +44,57 @@ def _s16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def _rd(d, off):
-    return d[_DS + (off & 0xFFFF)] | (d[_DS + ((off + 1) & 0xFFFF)] << 8)
+def _rd(state, off):
+    return state.rw(off & 0xFFFF)
 
 
-def _ww(d, off, val):
-    d[_DS + (off & 0xFFFF)] = val & 0xFF
-    d[_DS + ((off + 1) & 0xFFFF)] = (val >> 8) & 0xFF
+def _ww(state, off, val):
+    state.ww(off & 0xFFFF, val)
 
 
-def _rand(d) -> int:
+def _rand(state) -> int:
     """[asm 39DF] one RNG step over the DGROUP state [0x2CEC..0x2CEF]; returns AL (the new b)."""
-    a, b, c, dd, ret = rng_lcg(d[_DS + _RNG], d[_DS + _RNG + 1], d[_DS + _RNG + 2], _rd(d, _RNG + 3))
-    d[_DS + _RNG] = a
-    d[_DS + _RNG + 1] = b
-    d[_DS + _RNG + 2] = c
-    _ww(d, _RNG + 3, dd)
+    a, b, c, dd, ret = rng_lcg(state.rb(_RNG), state.rb(_RNG + 1), state.rb(_RNG + 2), state.rw(_RNG + 3))
+    state.wb(_RNG, a)
+    state.wb(_RNG + 1, b)
+    state.wb(_RNG + 2, c)
+    state.ww(_RNG + 3, dd)
     return ret
 
 
 def native_gameover_setup(state) -> None:
     """[asm 9B35..9C5F] Build the scene state (camera, slots, letters, tableau, birds). The GAMEOVER.SQZ
     image + palette are the render/runner side (bridge gameover_background + the 0xAFE8 DAC load)."""
-    d = state.data
     g = PlayerGlobals(state)
     g.cam_col_word = 0; g.cam_row_word = 0; g.row_factor = 0       # [9B35-9B3B] camera reset
     g.fine_scroll = 0                                              # [9B3E] scroll = top
     for i in range(0x74):                                          # [9B8C-9B9B] free every object slot
-        _ww(d, 0x4F0A + i * 0x12 + 4, 0xFFFF)
+        _ww(state, 0x4F0A + i * 0x12 + 4, 0xFFFF)
     # --- the 8 GAME/OVER letters [9B9D-9BF1]: ids [0xB018+i]+0xB0, X staggered 0x18 (+0x30 gap after 4),
     #     Y=0xE0, bounce seed [di+0xE] = rand&7 (forced nonzero for the first 4) ---
     di, x = 0x4F1C, 0x2C
     for i in range(8):
         if i == 4:
             x = (x + 0x30) & 0xFFFF                                # [9BD1] the GAME|OVER word gap
-        _ww(d, di + 4, (d[_DS + _LETTER_TABLE + i] + 0xB0) & 0xFFFF)
-        _ww(d, di, x)
-        _ww(d, di + 2, 0xE0)
-        r = _rand(d) & 7                                           # [9BBA/9BE2] 39DF & 7
+        _ww(state, di + 4, (state.rb(_LETTER_TABLE + i) + 0xB0) & 0xFFFF)
+        _ww(state, di, x)
+        _ww(state, di + 2, 0xE0)
+        r = _rand(state) & 7                                           # [9BBA/9BE2] 39DF & 7
         if i < 4 and r == 0:                                       # [9BC0-9BC2] first word: nonzero seed
             r = 1
-        _ww(d, di + 0xE, r)
+        _ww(state, di + 0xE, r)
         x = (x + 0x18) & 0xFFFF
         di += 0x12
     # --- the 4 tableau characters [9BF3-9C34] (below the fold; the scroll reveals them) ---
     di += 0xB4                                                     # [9BF3] -> 0x5060
     for x, y, sid in ((0x96, 0x135, 0x64), (0x97, 0x108, 0x1C4), (0x96, 0x121, 0x68), (0x96, 0x119, 0x62)):
-        _ww(d, di, x); _ww(d, di + 2, y); _ww(d, di + 4, sid)
+        _ww(state, di, x); _ww(state, di + 2, y); _ww(state, di + 4, sid)
         di += 0x12
     # --- the 3 circling birds [9C35-9C5B]: phase + anim-script ptr (X/Y/id computed per tick) ---
     for k, (phase, script) in enumerate(((0, 0xB020), (0x55, 0xB032), (0xAA, 0xB054))):
         base = _BIRD_BASE + k * 0x12
-        d[_DS + base + 8] = phase
-        _ww(d, base + 0xC, script)
+        state.wb(base + 8, phase)
+        _ww(state, base + 0xC, script)
     g.idle_clock = 0                                               # [9C5C] reset the idle/timeout counter
 
 
@@ -108,39 +106,39 @@ def native_gameover_tick(state) -> None:
     if g.fine_scroll < 0xB9:                                       # [9CC6-9CCD] scroll down to the tableau
         g.fine_scroll += 1
     if (g.frame_stamp & 3) == 0:                                   # [9CD1-9CD6] every 4th frame
-        ax = _rd(d, 0x5088)                                        # [9CD8] the crying caveman's sprite id
+        ax = _rd(state, 0x5088)                                        # [9CD8] the crying caveman's sprite id
         ax = ((ax & 0x1FFF) + 1) & 0xFFFF                          # [9CDB-9CDE] and ah,0x1f ; inc
         if ax >= 0x6E:                                             # [9CDF-9CE4] cycle 0x68..0x6D
             ax = 0x68
-        _ww(d, 0x5088, ax)
+        _ww(state, 0x5088, ax)
     si = 0x4F1C
     for _ in range(8):                                             # [9CEA-9D04] the letters' bounce oscillator
-        ax = (_rd(d, si + 0xE) + 1) & 0xFFFF                       # [9CF0-9CF3] vel += 1
+        ax = (_rd(state, si + 0xE) + 1) & 0xFFFF                       # [9CF0-9CF3] vel += 1
         if _s8(ax) >= 8:                                           # [9CF4-9CF6] cmp al,8 ; jl
             ax = (-ax + 1) & 0xFFFF                                # [9CF8-9CFA] neg ; inc
-        _ww(d, si + 0xE, ax)
-        _ww(d, si + 2, (_rd(d, si + 2) + _s16(ax)) & 0xFFFF)       # [9CFE] Y += vel
+        _ww(state, si + 0xE, ax)
+        _ww(state, si + 2, (_rd(state, si + 2) + _s16(ax)) & 0xFFFF)       # [9CFE] Y += vel
         si += 0x12
     si = _BIRD_BASE
     for _ in range(3):                                             # [9D06-9D95] the bird orbits
-        _ww(d, si - 0x164, 0xFFFF)                                 # [9D0C] free the paired render slot
-        phase = d[_DS + si + 8]
-        sin = _s8(d[_DS + _BIRD_SIN + phase])                      # [9D12-9D19] xlatb + cbw
-        _ww(d, si, (0x96 + ((sin * 0x41) >> 6)) & 0xFFFF)          # [9D1A-9D3A] X = 0x96 + sin*0x41/64
-        cos = _s8(d[_DS + _BIRD_COS + phase])                      # [9D3C-9D43]
+        _ww(state, si - 0x164, 0xFFFF)                                 # [9D0C] free the paired render slot
+        phase = state.rb(si + 8)
+        sin = _s8(state.rb(_BIRD_SIN + phase))                     # [9D12-9D19] xlatb + cbw
+        _ww(state, si, (0x96 + ((sin * 0x41) >> 6)) & 0xFFFF)          # [9D1A-9D3A] X = 0x96 + sin*0x41/64
+        cos = _s8(state.rb(_BIRD_COS + phase))                     # [9D3C-9D43]
         v = (cos * 0x0A) >> 6                                      # [9D44-9D5F] the Y orbit component
-        _ww(d, si + 6, v & 0xFFFF)                                 # [9D61]
-        _ww(d, si + 2, (v + 0x135) & 0xFFFF)                       # [9D64-9D67] Y = v + 0x135
-        d[_DS + si + 8] = (phase + 2) & 0xFF                       # [9D6A] phase advance
-        bx = _rd(d, si + 0xC)                                      # [9D6E] the anim-script advance
-        ax = _rd(d, bx)
+        _ww(state, si + 6, v & 0xFFFF)                                 # [9D61]
+        _ww(state, si + 2, (v + 0x135) & 0xFFFF)                       # [9D64-9D67] Y = v + 0x135
+        state.wb(si + 8, (phase + 2) & 0xFF)                       # [9D6A] phase advance
+        bx = _rd(state, si + 0xC)                                      # [9D6E] the anim-script advance
+        ax = _rd(state, bx)
         while ax & 0x8000:                                         # [9D73-9D79] loop marker: rewind
             bx = (bx + _s16(ax)) & 0xFFFF
-            ax = _rd(d, bx)
+            ax = _rd(state, bx)
         ax = (ax + 0x138) & 0xFFFF                                 # [9D7B]
-        ax |= _rd(d, si + 6) & 0x8000                              # [9D7E-9D85] H-flip on the far side
-        _ww(d, si + 4, ax)                                         # [9D87]
-        _ww(d, si + 0xC, (bx + 2) & 0xFFFF)                        # [9D8A-9D8C]
+        ax |= _rd(state, si + 6) & 0x8000                              # [9D7E-9D85] H-flip on the far side
+        _ww(state, si + 4, ax)                                         # [9D87]
+        _ww(state, si + 0xC, (bx + 2) & 0xFFFF)                        # [9D8A-9D8C]
         si += 0x12
     # [9D98-9DB1] bubble-sort the 3 bird records DESCENDING by Y (swap + restart on any inversion)
     swapped = True
@@ -149,7 +147,7 @@ def native_gameover_tick(state) -> None:
         for k in range(2):
             a = _BIRD_BASE + k * 0x12
             b = a + 0x12
-            if _s16(_rd(d, b + 2)) >= _s16(_rd(d, a + 2)):         # [9DA4-9DA7] jl skips the swap
+            if _s16(_rd(state, b + 2)) >= _s16(_rd(state, a + 2)):         # [9DA4-9DA7] jl skips the swap
                 pa, pb = _DS + a, _DS + b
                 d[pa:pa + 0x12], d[pb:pb + 0x12] = d[pb:pb + 0x12], d[pa:pa + 0x12]   # [9DDA] record swap
                 swapped = True                                     # [9DAC] jmp 9D98 (restart)
@@ -159,10 +157,10 @@ def native_gameover_tick(state) -> None:
     for k in range(2):
         si = _BIRD_BASE + k * 0x12
         di = 0x4FD0 + k * 0x12
-        if _s16(_rd(d, si + 2)) >= 0x135:                          # [9DBC-9DC1]
+        if _s16(_rd(state, si + 2)) >= 0x135:                          # [9DBC-9DC1]
             ps, pd = _DS + si, _DS + di
             d[pd:pd + 0x12] = d[ps:ps + 0x12]                      # [9DF0] copy the record
-            _ww(d, si + 4, 0xFFFF)                                 # [9DC6] free the original
+            _ww(state, si + 4, 0xFFFF)                                 # [9DC6] free the original
 
 
 def native_gameover_scene(state, dos, game_root: str):
@@ -195,7 +193,7 @@ def native_gameover_scene(state, dos, game_root: str):
     for frame in range(_TIMEOUT // 3):                            # [9C74] 0x276/3 presents (timer +3 per iteration)
         native_gameover_tick(state)                                # [9C62] 9CC0
         g.frame_stamp = (g.frame_stamp + 1) & 0xFFFF              # the frame counter the cry cycle reads
-        _ww(d, 0x27F0, (_rd(d, 0x27F0) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
+        _ww(state, 0x27F0, (_rd(state, 0x27F0) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
         planes, _status = build_gameover_scene(state, dos, game_root=game_root, page=0)  # [9C65/9C68] 9C87+26FA
         last = planes
         yield planes, 0                                            # [9C6B] 44FB present
