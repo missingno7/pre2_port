@@ -13,7 +13,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 from __future__ import annotations
 
 from pre2.game.model import (Actor, ArenaEntity, Camera, EffectSlot, Input, LevelState, Motion, Player,
-                             Progress, Rng)
+                             PlayerState, Progress, Rng, Scroll)
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
 
@@ -41,6 +41,18 @@ LEVEL_STATE_LAYOUT = [
     ("flags", 0x8166, 1, False), ("end_mode", 0x6BE6, 1, False), ("respawn_state", 0x6BE4, 1, False),
     ("end_signal", 0x6BE5, 1, False), ("checkpoint_x", 0x6BAD, 2, False), ("checkpoint_y", 0x6BAF, 2, False),
     ("grid_dirty", 0x2DF4, 1, False),
+]
+PLAYER_STATE_LAYOUT = [
+    ("trail_ring", 0x6BBE, 2, False), ("glider", 0x6BC5, 1, False), ("fly_hold", 0x6BC6, 1, False),
+    ("last_land_y", 0x6BCA, 2, False), ("input_suppress", 0x6BCD, 1, False), ("anim_hi", 0x6BCF, 1, False),
+    ("frame_blink", 0x6BD5, 1, False), ("input_lr", 0x6BDB, 1, False), ("input_ud", 0x6BDC, 1, False),
+    ("drop_gate", 0x6BE1, 1, False), ("scale_level", 0x6BE2, 2, False), ("camera_shake", 0x6BEA, 1, False),
+    ("run_count", 0x6BEB, 2, False), ("friction", 0x6BF6, 2, False),
+]
+SCROLL_LAYOUT = [
+    ("bonus_flash", 0x6C00, 1, False), ("to_dark", 0x6C01, 1, False), ("to_light", 0x6C02, 1, False),
+    ("step", 0x6C03, 1, False), ("lights_off", 0x6C04, 1, False), ("phase", 0x6C05, 1, False),
+    ("vx", 0x6C06, 2, False), ("vy", 0x6C08, 2, False), ("script_last", 0x6C0A, 2, False),
 ]
 MOTION_LAYOUT = [
     ("airborne", 0x6BF3, 1, False), ("fall_frames", 0x6BD2, 1, False), ("fall_latch", 0x6BD1, 1, False),
@@ -141,6 +153,8 @@ _ROUTES = [
     ("input", Input, INPUT_LAYOUT, 0, 1, 0),
     ("level_state", LevelState, LEVEL_STATE_LAYOUT, 0, 1, 0),
     ("motion", Motion, MOTION_LAYOUT, 0, 1, 0),
+    ("player_state", PlayerState, PLAYER_STATE_LAYOUT, 0, 1, 0),
+    ("scroll", Scroll, SCROLL_LAYOUT, 0, 1, 0),
     ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
     ("projectiles", EffectSlot, EFFECT_SLOT_LAYOUT, _PROJECTILE_BASE, _PROJECTILE_COUNT, 0x12),
     ("bursts", EffectSlot, EFFECT_SLOT_LAYOUT, _BURST_BASE, _BURST_COUNT, 0x12),

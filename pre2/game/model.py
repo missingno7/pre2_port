@@ -176,6 +176,41 @@ class Motion:
 
 
 @dataclass
+class PlayerState:
+    """More of the player FSM / motion state — the glider, landing, input helpers, and per-frame scratch."""
+
+    trail_ring: int = 0      # landing-dust / trail effect ring cursor
+    glider: int = 0          # glider / flying gate
+    fly_hold: int = 0        # glider hold budget
+    last_land_y: int = 0     # Y of the last landing (fall-height source)
+    input_suppress: int = 0  # nonzero forces the input bitmask to 0
+    anim_hi: int = 0         # advance_anim's raw frame high byte
+    frame_blink: int = 0     # frame counter gating the trail emit / blink
+    input_lr: int = 0        # left|right held
+    input_ud: int = 0        # up|down held
+    drop_gate: int = 0       # nonzero: drop-through tiles active
+    scale_level: int = 0     # object_update's sprite scale level
+    camera_shake: int = 0    # = 8 on a hard fall -> camera shake
+    run_count: int = 0       # inc-wrap run counter
+    friction: int = 0        # per-level directional-friction constant
+
+
+@dataclass
+class Scroll:
+    """The scripted-camera scroll + palette-fade / lighting state."""
+
+    bonus_flash: int = 0     # bonus-collect flash timer
+    to_dark: int = 0         # fade toward the dark palette
+    to_light: int = 0        # fade back toward the level palette
+    step: int = 0            # the fade ramp step
+    lights_off: int = 0      # resting state after a lights-off fade
+    phase: int = 0           # camera/scroll phase counter
+    vx: int = 0              # scroll-cursor X velocity
+    vy: int = 0              # scroll-cursor Y velocity
+    script_last: int = 0     # camera-script pointer last seen
+
+
+@dataclass
 class LevelState:
     """The level / transition state — end mode, respawn + end signals, checkpoint, and redraw flags."""
 

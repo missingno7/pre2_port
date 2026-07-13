@@ -31,6 +31,19 @@ def test_tick_runs_with_player_as_a_live_dataclass():
     from pre2.game.model import ArenaEntity
     assert obj.backend.entities and all(isinstance(e, ArenaEntity) for e in obj.backend.entities)
 
+
+def test_no_two_routes_claim_the_same_offset():
+    """Two routed structures must never map the same DGROUP byte (would corrupt materialize)."""
+    from pre2.bridge.game_layout import _ROUTES
+    seen: dict[int, str] = {}
+    for attr, _cls, layout, base, count, stride in _ROUTES:
+        for k in range(count):
+            for _f, off, w, _s in layout:
+                for bk in range(w):
+                    o = (base + k * stride + off + bk) & 0xFFFF
+                    assert o not in seen, f"offset {o:#06x} claimed by both {seen[o]} and {attr}"
+                    seen[o] = attr
+
     for i in range(min(gtd.n_ticks, 15)):
         idle = gtd.idle[i] if i < len(gtd.idle) else None
         _inject(ref, gtd.keys[i], idle); native_gameplay_frame(ref)
