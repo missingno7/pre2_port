@@ -160,7 +160,6 @@ def native_trigger_scan(state) -> None:
     raises :class:`Pre2CaveTeleport` (BEFORE mutating anything) — the caller drives the multi-frame 5326
     transition via the ``native_cave_teleport`` generator (fade-out curtain, hidden pan, mini-pass, reveal,
     then the frame's remainder)."""
-    from pre2.views.dgroup_view import PlayerView
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     if g.drop_gate != 0 and g.glider == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
@@ -195,7 +194,6 @@ def native_cave_teleport(state, si):
          "one-tick drift" (demo 195135 @frame 206) — now byte-reproduced. 3054 is the CENTER-OUT REVEAL curtain
          -> yields ``("reveal", k)`` k=1..10 (the panel_copy strip pairs).
       6. The interrupted frame's REMAINDER (the post-0238 spine) — ``_frame_tail_after_trigger``."""
-    from pre2.views.dgroup_view import PlayerView
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     player = PlayerView(state)
@@ -475,7 +473,6 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
         # _redraws = the on-screen tile re-blit (a render side-effect) — the faithful renderer's job.
         did = collected                                             # [asm 890D] jae -> skip the bounce if no collect
     if bounce and did:
-        from pre2.views.dgroup_view import PlayerView
         player = PlayerView(state)
         if player.yvel != 0:                                        # [asm 890F/8914] airborne only
             player.yvel = -0x50                                     # [asm 8916] bounce up
@@ -634,7 +631,6 @@ def native_death_bounce_509d(state):
     residual is the 8 effect slots that the render 26FA frees ([slot+4]=0xffff) as their lifetime expires —
     render-managed, and in the full 4F6C respawn it is immediately wiped by 5237's pool re-init, so it is
     irrelevant to the respawn outcome (and would be reproduced by native_render's per-frame draw in a renderer)."""
-    from pre2.views.dgroup_view import PlayerView
     from pre2.native.audio import native_play_sfx, player_sfx_x
     rb, rw = readers(state)
     g = PlayerGlobals(state)

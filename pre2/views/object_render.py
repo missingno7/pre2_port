@@ -11,7 +11,7 @@ sprite-data segment ``0x62E8`` and offset ``0x5F48``.
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import ByteBackend, RenderSlot
+from pre2.views.dgroup_view import RenderSlot
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 
 from pre2.recovered.object_render import (
