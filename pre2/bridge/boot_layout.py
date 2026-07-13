@@ -42,7 +42,17 @@ def _enc_s16(vals) -> bytes:
 
 
 _DIGIT_BASE, _DIGIT_STRIDE, _DIGIT_COUNT = 0xCE8A, 0x58, 9   # the 16x32 HUD digit sprites (1..9)
-_FONT_BASE, _FONT_LEN = 0xD1A4, 0xDA9C - 0xD1A4              # the 16x32 alphanumeric font (0-9 A-Z a-z)
+
+# contiguous boot-graphics regions, each regenerated from a committed PNG asset (the readable/editable form):
+# (png filename, dgroup offset, byte length, tile_w, tile_h). The two fonts are clean recognisable art; the
+# _gfx_ pieces are the remaining masked HUD icons / small glyphs / planar bitmaps -- rendered lossless (bit<->
+# pixel is exact) so they leave the compressed blob and can be re-decoded into cleaner sprites later.
+_CONTIG_GFX = [
+    ("boot_font.png", 0xD1A4, 0xDA9C - 0xD1A4, 16, 32),
+    ("boot_gfx_pre.png", 0xB1C0, 0xCE8A - 0xB1C0, 16, 16),
+    ("boot_gfx_post.png", 0xDA9C, 0xEB4E - 0xDA9C, 16, 16),
+]
+_CONTIG_GFX_BYTES = sum(ln for _, _, ln, _, _ in _CONTIG_GFX)
 
 
 def _residual() -> bytearray:
@@ -60,12 +70,13 @@ def _place_digit_sprites(img) -> None:
         img[off:off + 64] = payload[k * 64:k * 64 + 64]
 
 
-def _place_font(img) -> None:
-    """Regenerate the 16x32 alphanumeric font (0-9 A-Z a-z) from its committed PNG asset."""
+def _place_contig_graphics(img) -> None:
+    """Regenerate the contiguous boot-graphics regions from their committed PNG assets."""
     from pre2.bridge.boot_graphics import png_to_region
-    png = Path(__file__).with_name("boot_font.png")
-    img[_FONT_BASE:_FONT_BASE + _FONT_LEN] = png_to_region(str(png), _FONT_LEN, tile_w=16, tile_h=32,
-                                                           tiles_wide=16, gap=0)
+    tiles_wide = 16
+    for name, base, ln, tw, th in _CONTIG_GFX:
+        png = Path(__file__).with_name(name)
+        img[base:base + ln] = png_to_region(str(png), ln, tile_w=tw, tile_h=th, tiles_wide=tiles_wide, gap=0)
 
 
 def generate_boot_dgroup() -> bytearray:
@@ -86,14 +97,14 @@ def generate_boot_dgroup() -> bytearray:
     for off, text in T.RESOURCE_RECORDS:
         blob = text.encode("latin1") + b"\x00"
         img[off:off + len(blob)] = blob
-    _place_digit_sprites(img)     # the HUD digit font, from its PNG asset
-    _place_font(img)              # the alphanumeric font, from its PNG asset
+    _place_digit_sprites(img)     # the HUD digit font (strided), from its PNG asset
+    _place_contig_graphics(img)   # the alphanumeric font + the remaining graphics, from PNG assets
     return img
 
 
 def constant_coverage() -> tuple[int, int]:
     """(bytes generated from readable constants, non-zero bytes still in the residual blob)."""
-    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + _FONT_LEN
+    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + _CONTIG_GFX_BYTES
                + len(T.SCANCODE_CHARS) + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
     return covered, sum(1 for b in _residual() if b)
 
