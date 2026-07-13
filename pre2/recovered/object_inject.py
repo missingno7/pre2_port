@@ -418,6 +418,49 @@ B198 = 0xB198               # [0xB198] != 1 -> entries with the [si+1]&0x80 skip
 ENTITY_STRIDE_END = 0x32    # [si] >= this ends the walk
 
 
+class LiveEntityRecord:
+    """A live view of ONE 2nd-pass entity record at cursor ``si``, reading its header fields through the tick's
+    ``rb``/``rw`` (so it reflects committed writes). Names the record-relative offsets so the walk speaks the
+    entity's vocabulary — ``rec.sprite_ref`` / ``rec.handler_idx`` / ``rec.off_screen_cull`` — instead of raw
+    ``rw(si+2)`` / ``rb(si+1)&0x7f`` / ``rb(si+1)&0x80``. The live twin of
+    :class:`pre2.bridge.state_object.EntityRecord` (the snapshot form); the field offsets are the same."""
+
+    _STRIDE, _FLAGS1, _SPRITE_REF, _MODE = 0, 1, 2, 4    # record-relative header offsets
+    __slots__ = ("_rb", "_rw", "si")
+
+    def __init__(self, rb, rw, si: int):
+        self._rb, self._rw = rb, rw
+        self.si = si & 0xFFFF
+
+    @property
+    def stride(self) -> int:                             # [+0] record length in bytes
+        return self._rb((self.si + self._STRIDE) & 0xFFFF)
+
+    @property
+    def flags1(self) -> int:                             # [+1] bit7 = off-screen-cull, bits0-6 = handler index
+        return self._rb((self.si + self._FLAGS1) & 0xFFFF)
+
+    @property
+    def handler_idx(self) -> int:
+        return self.flags1 & 0x7F
+
+    @property
+    def off_screen_cull(self) -> bool:
+        return bool(self.flags1 & 0x80)
+
+    @property
+    def sprite_ref(self) -> int:                         # [+2] word; 0xFFFF = empty
+        return self._rw((self.si + self._SPRITE_REF) & 0xFFFF)
+
+    @property
+    def empty(self) -> bool:
+        return self.sprite_ref == 0xFFFF
+
+    @property
+    def skip_flag(self) -> bool:                         # [+4] bit2 = skip
+        return bool(self._rb((self.si + self._MODE) & 0xFFFF) & 4)
+
+
 def second_pass_tick(rb, rw, apply_writes, read_es, cam_x, cam_y):
     """Compose the SECOND per-frame pass (1030:6913..698B) — the variable-stride entity-list walk + per-type
     dispatch + anim-frame resolve + stride advance.
@@ -431,21 +474,20 @@ def second_pass_tick(rb, rw, apply_writes, read_es, cam_x, cam_y):
     through those committed writes."""
     b198 = rb(B198)
     find_free = lambda: find_free_object_slot(lambda s: rw(OBJ_BASE + s * OBJ_STRIDE + 4))   # noqa: E731
-    si = ENTITY_LIST
+    rec = LiveEntityRecord(rb, rw, ENTITY_LIST)                   # entry 0 = the player
     while True:
-        stride = rb(si & 0xFFFF)                                  # [6916]
+        stride = rec.stride                                      # [6916] read the record length once
         if stride >= ENTITY_STRIDE_END:
-            return si & 0xFFFF                                    # si at the terminator entry (the ASM's 698B si)
-        flags1 = rb((si + 1) & 0xFFFF)
-        skip = (rw((si + 2) & 0xFFFF) == 0xFFFF                   # [691B] empty
-                or (rb((si + 4) & 0xFFFF) & 4)                   # [6921] skip flag
-                or (b198 != 1 and (flags1 & 0x80)))             # [6927/692E] off-screen-cull flag
+            return rec.si                                        # si at the terminator entry (the ASM's 698B si)
+        skip = (rec.empty                                        # [691B] sprite ref == -1
+                or rec.skip_flag                                # [6921] [si+4] & 4
+                or (b198 != 1 and rec.off_screen_cull))         # [6927/692E] off-screen-cull flag
         if not skip:
-            idx = flags1 & 0x7F                                   # [6934/6939] bx = ([si+1]<<1)&0xFF -> idx
-            writes, drawn = dispatch_handler(idx, rb, rw, read_es, si, cam_x, cam_y, find_free)
+            idx = rec.handler_idx                                # [6934/6939] [si+1] & 0x7f
+            writes, drawn = dispatch_handler(idx, rb, rw, read_es, rec.si, cam_x, cam_y, find_free)
             apply_writes(writes)
             if drawn:                                            # [6952] CF==0 -> resolve the anim frame
-                desc = lookup_anim_frame(rw, rw((si + 2) & 0xFFFF), idx)   # [6954..697B]
+                desc = lookup_anim_frame(rw, rec.sprite_ref, idx)   # [6954..697B]
                 di = rw(PROJ_SLOT_PTR)                            # [697D] di = [0xA32E]
                 apply_writes({(di + 0x0C) & 0xFFFF: (desc, 2)})  # [6981] [di+0xC] = descriptor
-        si = (si + stride) & 0xFFFF                               # [6984] advance by the (positive) stride
+        rec.si = (rec.si + stride) & 0xFFFF                      # [6984] advance by the (positive) stride
