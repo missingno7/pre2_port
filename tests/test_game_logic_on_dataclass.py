@@ -33,13 +33,24 @@ def test_recovered_rng_logic_runs_byte_exact_on_the_offset_free_dataclass():
     assert type(dc).__mro__[1] is object
 
 
-def test_rng_dataclass_has_field_name_parity_with_the_view():
-    """The precondition for gap #3: every named field the RNG view exposes exists on the Rng dataclass."""
+def _view_fields(dv, cls):
     import re
+    body = dv.split(f"class {cls}")[1].split("\nclass ")[0]
+    return set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*=\s*_[US]", body, re.M))
 
-    from pre2.game.model import Rng
+
+def _dc_names(dc):
+    return set(dc.__dataclass_fields__) | {n for n in dir(dc) if isinstance(getattr(dc, n, None), property)}
+
+
+def test_record_dataclasses_have_full_field_name_parity_with_their_views():
+    """The precondition for gap #3, per record structure: every named field the view exposes (incl. the
+    inherited RenderSlot fields and the width-alias fields) exists on the dataclass — so ANY recovered
+    function reading those names runs unchanged on the offset-free dataclass."""
+    from pre2.game.model import Actor, Player, Rng
     dv = (ROOT / "pre2" / "views" / "dgroup_view.py").read_text(encoding="utf-8")
-    view_body = dv.split("class RngView")[1].split("\nclass ")[0]
-    view_fields = set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*=\s*_[US]", view_body, re.M))
-    dc_fields = set(Rng.__dataclass_fields__)
-    assert view_fields <= dc_fields, f"RNG view fields missing on the dataclass: {view_fields - dc_fields}"
+    render = _view_fields(dv, "RenderSlot")
+    for view, dc in [("PlayerView", Player), ("ObjectSlot", Actor), ("RngView", Rng)]:
+        need = _view_fields(dv, view) | (render if view != "RngView" else set())
+        gap = need - _dc_names(dc)
+        assert not gap, f"{view} fields missing on {dc.__name__}: {sorted(gap)}"

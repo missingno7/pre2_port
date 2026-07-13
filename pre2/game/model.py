@@ -39,9 +39,21 @@ class Player:
         return (self.sprite >> 8) & 0xFF
 
     @property
-    def anim_mirror(self) -> int:
-        """The anim-mirror flag — ``facing``'s low byte (the DOS ``facing_lo`` alias) — derived."""
+    def facing_lo(self) -> int:
+        """``facing``'s low byte — the anim-mirror flag the DOS view exposes as ``facing_lo``."""
         return self.facing & 0xFF
+
+    anim_mirror = facing_lo   # readable alias of the same derived byte
+
+    @property
+    def life(self) -> int:
+        """The generic render-slot ``life`` byte — for the player it IS ``death_state`` (same byte 0x11)."""
+        return self.death_state
+
+    @property
+    def source(self) -> int:
+        """The render-slot ``source`` word — for the player it aliases ``facing``'s bytes (unsigned)."""
+        return self.facing & 0xFFFF
 
     @property
     def alive(self) -> bool:
@@ -79,6 +91,16 @@ class Actor:
     @property
     def empty(self) -> bool:
         return self.sprite == 0xFFFF
+
+    @property
+    def flags(self) -> int:
+        """The sprite word's high byte (the DOS ``flags`` alias)."""
+        return (self.sprite >> 8) & 0xFF
+
+    @property
+    def source(self) -> int:
+        """The render-slot ``source`` word (bytes +9/+10) — for an object slot it overlaps xvel-hi / yvel-lo."""
+        return ((self.xvel >> 8) & 0xFF) | ((self.yvel & 0xFF) << 8)
 
 
 @dataclass
