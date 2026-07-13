@@ -100,42 +100,30 @@ def native_5237(state) -> None:
     restore the pristine proximity-scenery map blocks (``native_52d2``), seed the decor-RNG table, and reset the
     energy / boss / scroll-script state. The ``0ba0`` sub-call (VGA palette via int 10h) is render and skipped."""
     d = state.data
-
-    def rb(o: int) -> int:
-        return d[_DS + (o & 0xFFFF)]
-
-    def rw(o: int) -> int:
-        return d[_DS + (o & 0xFFFF)] | (d[_DS + ((o + 1) & 0xFFFF)] << 8)
-
-    def wb(o: int, v: int) -> None:
-        d[_DS + (o & 0xFFFF)] = v & 0xFF
-
-    def ww(o: int, v: int) -> None:
-        wb(o, v); wb(o + 1, v >> 8)
-
+    g, pv = PlayerGlobals(state), PlayerView(state)
     d[_DS + 0x6BC4:_DS + 0x6BC4 + 0x48] = b"\x00" * 0x48              # [asm 5247] zero the timer/state block
     d[_DS + 0x815E:_DS + 0x815E + 0x10A5] = bytes(d[_DS + 0x9203:_DS + 0x9203 + 0x10A5])  # [asm 5251] restore dbl-buffer
-    wb(0x4F2C, 0)                                                     # [asm 525c]
-    ww(0x2DE0, 0x55AA)                                               # [asm 525f]
-    ww(0x6BBE, 0x4F76)                                              # [asm 5265]
+    pv.run_flag = 0                                                  # [asm 525c]
+    state.ww(0x2DE0, 0x55AA)                                         # [asm 525f]
+    state.ww(0x6BBE, 0x4F76)                                         # [asm 5265] popup-ring head
     native_player_init(state)                                       # [asm 526e] 55fc (ax=0xffff)
     # [asm 5271] 0ba0 VGA palette (int 10h) — render, skipped (no DGROUP)
-    a, b, c, dd = rb(0x2CEC), rb(0x2CED), rb(0x2CEE), rw(0x2CEF)     # [asm 5274] fill [0x6ca9] with 0x100 RNG words
+    a, b, c, dd = state.rb(0x2CEC), state.rb(0x2CED), state.rb(0x2CEE), state.rw(0x2CEF)  # [5274] fill [0x6ca9]
     di = 0x6CA9
     for _ in range(0x100):
         a, b, c, dd, _r1 = rng_lcg(a, b, c, dd)                     # [asm 527a] dh (advances the RNG, discarded)
         a, b, c, dd, r2 = rng_lcg(a, b, c, dd)                      # [asm 527f] ah = al = the 2nd return byte
-        ww(di, (r2 << 8) | r2); di += 2                            # [asm 5284] stosw (the byte duplicated)
-    wb(0x2CEC, a); wb(0x2CED, b); wb(0x2CEE, c); ww(0x2CEF, dd)      # write the advanced RNG state back
+        state.ww(di, (r2 << 8) | r2); di += 2                      # [asm 5284] stosw (the byte duplicated)
+    state.wb(0x2CEC, a); state.wb(0x2CED, b); state.wb(0x2CEE, c); state.ww(0x2CEF, dd)   # advanced RNG state back
     for i in range(0x50):                                           # [asm 5287] [0x6ea9..] = 0x55aa x 0x50
-        ww(0x6EA9 + i * 2, 0x55AA)
+        state.ww(0x6EA9 + i * 2, 0x55AA)
     native_52d2(state)                                               # [asm 5292] restore the pristine scenery map blocks
     d[_DS + 0x7DE6:_DS + 0x7DE6 + 0x78] = b"\xFF" * 0x78             # [asm 5295]
     d[_DS + 0x7DAF:_DS + 0x7DAF + 0x37] = b"\xFF" * 0x37             # [asm 52a0]
-    wb(0x27D6, 3)                                                    # [asm 52a8] energy / hearts
-    ww(0xA517, 0xFFFF)                                              # [asm 52ad] boss state reset
-    ww(0x2DBC, rw((rb(0x2D8A) * 2 + 0x2D40) & 0xFFFF))             # [asm 52b3] per-level scroll-script ptr
-    ww(0x2DBE, 0)                                                    # [asm 52c2]
+    g.energy = 3                                                     # [asm 52a8] energy / hearts
+    state.ww(0xA517, 0xFFFF)                                         # [asm 52ad] boss state reset
+    state.ww(0x2DBC, state.rw((g.level * 2 + 0x2D40) & 0xFFFF))     # [asm 52b3] per-level scroll-script ptr
+    state.ww(0x2DBE, 0)                                             # [asm 52c2]
 
 
 def native_level_init(state, *, game_root: str) -> None:
@@ -145,19 +133,19 @@ def native_level_init(state, *, game_root: str) -> None:
     ``native_player_init`` (55fc) + ``native_3af2`` (camera-init), then re-seeds the RNG to the fixed level-start
     value + clears the per-level flags. The render sub-calls (0ba0 palette, 454e sprite-save, 3a27 scroll-copy,
     44fb CRTC) are the renderer's job. Each composed leaf is verified byte-exact against the ASM individually."""
-    d = state.data
-    level = d[_DS + 0x2D8A]
+    g = PlayerGlobals(state)
+    level = g.level
     native_level_load(state, level, game_root=game_root)            # [asm 01d2] 3ed6
     # [asm 01d5] 0ba0 VGA palette load — render
     native_5237(state)                                             # [asm 01d8] 5237 re-init
     native_player_init(state)                                      # [asm 01e0] 55fc
     native_3af2(state)                                             # [asm 01e3] camera-init
     # [asm 01e6-01ec] 454e sprite-save / 3a27 scroll-copy / 44fb CRTC — render
-    d[_DS + 0xA341] = 0; d[_DS + 0xA342] = 0                        # [asm 01ef] [0xa341]=0 (word)
-    d[_DS + 0x6BCC] = 0                                            # [asm 01f5]
-    d[_DS + 0x2CEC] = 5; d[_DS + 0x2CED] = 0x22; d[_DS + 0x2CEE] = 0x86  # [asm 01fa] re-seed the RNG to the
-    d[_DS + 0x2CEF] = 0x8D; d[_DS + 0x2CF0] = 0xE5                  # fixed level-start (a,b,c,d=0xe58d)
-    d[_DS + 0x2874] = 0                                            # [asm 020f]
+    g.spawn_offset_ring = 0                                        # [asm 01ef] [0xa341]=0 (word)
+    state.wb(0x6BCC, 0)                                            # [asm 01f5]
+    state.wb(0x2CEC, 5); state.wb(0x2CED, 0x22); state.wb(0x2CEE, 0x86)  # [asm 01fa] re-seed the RNG to the
+    state.wb(0x2CEF, 0x8D); state.wb(0x2CF0, 0xE5)                 # fixed level-start (a,b,c,d=0xe58d)
+    state.wb(0x2874, 0)                                            # [asm 020f]
 
 
 def native_level_start(state, *, game_root: str) -> None:
@@ -168,10 +156,10 @@ def native_level_start(state, *, game_root: str) -> None:
     writes are NOT part of native_level_init (01cf) — the menu->gameplay handoff and cold boot must run them too,
     else lives reads 0, combat damage is wrong, etc. (This is the block ``native_level_end`` already applied inline.)"""
     native_level_init(state, game_root=game_root)                 # [asm 013e: 447d] load + re-init the level
-    d = state.data
-    d[_DS + 0x27D8] = 2                                            # [asm 0141] lives
-    d[_DS + 0x6CA7] = 0                                            # [asm 0146] BONUS-letters mask
-    d[_DS + 0x7B19] = 0x14                                         # [asm 014b] projectile damage / hit tolerance
-    d[_DS + 0x7B18] = 0                                            # [asm 0150]
-    d[_DS + 0x6CA8] = 0                                            # [asm 0155] utensils mask
-    d[_DS + 0x6BE6] = 0; d[_DS + 0x6BE4] = 0; d[_DS + 0x6BE5] = 0  # level-state flags are clear in gameplay
+    g = PlayerGlobals(state)
+    g.lives = 2                                                   # [asm 0141]
+    g.bonus_letters = 0                                           # [asm 0146] BONUS-letters mask
+    g.attack_v19 = 0x14                                           # [asm 014b] projectile damage / hit tolerance
+    g.attack_phase = 0                                            # [asm 0150]
+    g.utensils_mask = 0                                           # [asm 0155] utensils mask
+    g.level_end_mode = 0; g.respawn_state = 0; g.end_signal = 0   # level-state flags are clear in gameplay

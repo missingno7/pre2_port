@@ -8,7 +8,7 @@
   "pre2/native/game_tick_demo.py": 17,
   "pre2/native/gameover_scene.py": 31,
   "pre2/native/input.py": 6,
-  "pre2/native/level_init.py": 64,
+  "pre2/native/level_init.py": 44,
   "pre2/native/level_load.py": 148,
   "pre2/native/level_state.py": 20,
   "pre2/native/loop.py": 24,
