@@ -28,6 +28,17 @@ _BUFFERS = [
 ]
 _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 
+# sparse working buffers: the last scattered scratch bytes, woven BETWEEN routed fields (so not contiguous).
+# Each groups a list of specific offsets into one named bytearray. Offsets live here in the bridge, as intended.
+_SPARSE = [
+    ("input_scratch", (0x27E9, 0x27F0, 0x27F1, 0x27F2, 0x27F3, 0x287A, 0x287B)),
+    ("render_ptr_scratch", (0x2DBA, 0x2DBB, 0x2DBE, 0x2DBF, 0x2DE8, 0x2DE9, 0x2DEA, 0x2DEB, 0x2DF2, 0x2DF5,
+                            0x2DF6, 0x2DF7)),
+    ("player_flag_scratch", (0x6BBD, 0x6BC0, 0x6BC1, 0x6BD6, 0x6BE8, 0x6BED, 0x6BEE, 0x6BF1, 0x6BF2, 0x6BFA,
+                             0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE)),
+    ("camera_hud_scratch", (0x7B18, 0x7B19, 0xA30E, 0xA30F, 0xA310, 0xA311, 0xA312)),
+]
+
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
 
 DGROUP_BASE = 0x1A0F << 4
@@ -202,7 +213,7 @@ class DataclassBackend:
     """
 
     _IS_DGROUP_BACKEND = True
-    __slots__ = ("_img", "_objs", "_map", "_arena")
+    __slots__ = ("_img", "_objs", "_map", "_arena", "_sparse")
 
     def __init__(self, seed):
         data = getattr(seed, "data", seed)
@@ -244,6 +255,15 @@ class DataclassBackend:
             self._objs[attr] = buf
             for k in range(ln):
                 self._map[(base + k) & 0xFFFF] = (buf, "data", k, 0, False)
+        # sparse working buffers (scattered offsets -> one bytearray, indexed by position)
+        self._sparse = []
+        for attr, offs in _SPARSE:
+            offs = tuple(sorted(offs))
+            buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + o] for o in offs))
+            self._objs[attr] = buf
+            self._sparse.append((offs, buf))
+            for i, o in enumerate(offs):
+                self._map[o & 0xFFFF] = (buf, "data", i, 0, False)
 
     # convenience accessors
     player = property(lambda self: self._objs["player"])
@@ -304,3 +324,6 @@ class DataclassBackend:
         for attr, base, ln in _BUFFERS:
             buf = self._objs[attr]
             data[DGROUP_BASE + base:DGROUP_BASE + base + ln] = buf.data
+        for offs, buf in self._sparse:
+            for i, o in enumerate(offs):
+                data[DGROUP_BASE + o] = buf.data[i]
