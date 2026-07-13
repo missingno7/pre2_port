@@ -53,9 +53,9 @@ def run_demo(demo_dir: Path) -> int:
 
 
 def main(argv) -> int:
-    from pre2.bridge.game_layout import _ROUTES
+    from pre2.bridge.game_layout import _BUFFERS, _ROUTES
     names = ", ".join(a for a, *_ in _ROUTES)
-    n_objs = sum(count for *_, count, _ in _ROUTES)
+    n_objs = sum(count for *_, count, _ in _ROUTES) + len(_BUFFERS)
     demos = argv or CORPUS
     total = 0
     for d in demos:
@@ -67,8 +67,8 @@ def main(argv) -> int:
         total += c
         print(f"  PASS: {d} — {c} ticks with {len(_ROUTES)} live dataclasses, byte-identical")
     print(f"\ntick-on-dataclasses: the gameplay tick runs with {n_objs}+ offset-free dataclass instances across "
-          f"{len(_ROUTES)} structures ({names}) PLUS the variable-stride entity arena — "
-          f"{total} ticks across {len(demos)} demos, byte-identical")
+          f"{len(_ROUTES)} structures ({names}), the variable-stride entity arena, and {len(_BUFFERS)} named "
+          f"working buffers — {total} ticks across {len(demos)} demos, byte-identical")
     return 0
 
 

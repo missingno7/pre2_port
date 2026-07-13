@@ -101,6 +101,16 @@ class EffectSlot:
 
 
 @dataclass
+class ByteBuffer:
+    """A named working buffer — a contiguous region the tick scribbles as raw bytes (scenery-trigger scratch,
+    level load buffers, camera-target scratch). Honest as bytes: it is transient working memory, not a record
+    with fields, so it is modeled as a named bytearray rather than fake fields."""
+
+    name: str
+    data: bytearray = field(default_factory=bytearray)
+
+
+@dataclass
 class WallMarker:
     """One 8-byte wall-impact marker (the 20-slot table). ``token == 0x55AA`` means the slot is free; on a wall
     hit the collision code records the map offset + impact data in the remaining words."""

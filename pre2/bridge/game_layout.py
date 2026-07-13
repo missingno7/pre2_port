@@ -12,8 +12,17 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import (Actor, ArenaEntity, Camera, EffectSlot, Input, LevelState, Motion, Player,
-                             PlayerState, Progress, Rng, Scroll, WallMarker)
+from pre2.game.model import (Actor, ArenaEntity, ByteBuffer, Camera, EffectSlot, Input, LevelState, Motion,
+                             Player, PlayerState, Progress, Rng, Scroll, WallMarker)
+
+# named working-memory buffers the tick scribbles as raw bytes: (attr, base, length). Modeled as a bytearray,
+# not fields (transient scratch, not records). These finish draining the mutable state off the image.
+_BUFFERS = [
+    ("level_scratch_lo", 0x0043, 0x2A), ("level_scratch_mid", 0x0535, 0x1E),
+    ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
+    ("proj_slot_scratch", 0xA32E, 0x13), ("camera_target_scratch", 0xA3F7, 0x30),
+]
+_BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
 
@@ -221,6 +230,12 @@ class DataclassBackend:
                 self._map[(i + 5 + k) & 0xFFFF] = (e, "body", k, 0, False)
             i += st
         self._objs["entities"] = [e for _, e in self._arena]
+        # named working-memory buffers (raw bytearrays), mapped byte-for-byte (width 0 -> index into .data)
+        for attr, base, ln in _BUFFERS:
+            buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + base:DGROUP_BASE + base + ln]))
+            self._objs[attr] = buf
+            for k in range(ln):
+                self._map[(base + k) & 0xFFFF] = (buf, "data", k, 0, False)
 
     # convenience accessors
     player = property(lambda self: self._objs["player"])
@@ -236,8 +251,8 @@ class DataclassBackend:
         if m is None:
             return self._img[DGROUP_BASE + off]
         inst, f, k, w, _s = m
-        if w == 0:                                  # a variable-length record body byte
-            return inst.body[k]
+        if w == 0:                                  # a bytearray byte (record body / working buffer)
+            return getattr(inst, f)[k]
         return (getattr(inst, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
 
     def wb(self, off: int, val: int) -> None:
@@ -248,8 +263,8 @@ class DataclassBackend:
             self._img[DGROUP_BASE + off] = val
             return
         inst, f, k, w, s = m
-        if w == 0:                                  # a variable-length record body byte
-            inst.body[k] = val
+        if w == 0:                                  # a bytearray byte (record body / working buffer)
+            getattr(inst, f)[k] = val
             return
         v = getattr(inst, f) & ((1 << (8 * w)) - 1)
         v = (v & ~(0xFF << (8 * k))) | (val << (8 * k))
@@ -278,3 +293,6 @@ class DataclassBackend:
             data[b + 3] = (e.sprite_ref >> 8) & 0xFF
             data[b + 4] = e.skip & 0xFF
             data[b + 5:b + 5 + len(e.body)] = e.body
+        for attr, base, ln in _BUFFERS:
+            buf = self._objs[attr]
+            data[DGROUP_BASE + base:DGROUP_BASE + base + ln] = buf.data
