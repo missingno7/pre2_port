@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from pre2.views.dgroup_view import apply_contract
+from pre2.views.dgroup_view import PlayerGlobals, PlayerView, apply_contract
 from pre2.views.memory_adapter import apply_ds, readers, tile_reader
 from pre2.views.object_tick import LiveWalkerMem
 from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
@@ -122,12 +122,13 @@ def native_object_spawn_step(state) -> None:
         apply_ds(state, writes)
 
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     try:
-        if rb(0x91FE) != 0xFF:                # [asm 6822/6827] camera active -> 70D7
+        if g.cam_state != 0xFF:                # [asm 6822/6827] camera active -> 70D7
             _apply(camera_engine(rb, rw, tile_reader(state)))
-        if rb(0x2D8A) == 5 and (rb(0x8166) & 0xFE) == 0 and rw(0xA326) != 3:   # [asm 682C-6841] level-6 tree boss
+        if g.level == 5 and (g.level_flags & 0xFE) == 0 and g.boss_phase != 3:   # [asm 682C-6841] level-6 tree boss
             _apply(tick_level6_boss(rb, rw))              # 6D34 (incl. the recovered 94F3 death-burst finale)
-        if rb(0x2D8A) == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
+        if g.level == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
             _apply(tick_mode9_boss(rb, rw))
     except Pre2SpawnGap as exc:
         # The boss finales (94F3 death-burst, the camera state-6 boss-reach) and the lives-depleted death
@@ -143,12 +144,13 @@ def native_object_system_step(state) -> None:
     object_tick (684E, in place), then the second pass (6913). Each sub-pass reads the previous one's writes
     in place — exactly the ASM's fall-through 6822 -> 684E -> 6913."""
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     native_object_spawn_step(state)                       # [asm 6822..6B..] camera_engine / tick_mode9_boss
     object_tick(LiveWalkerMem(_NativeCpuView(state)))     # [asm 684E..6912] per-slot walker, in place
     es = rw(0x2DDA)
     eb = (es << 4) & 0xFFFFF
     read_es = lambda o: state.data[(eb + (o & 0xFFFF)) & 0xFFFFF]   # noqa: E731 — level map (read-only)
-    second_pass_tick(rb, rw, lambda w: apply_ds(state, w), read_es, rw(0x2DE4), rw(0x2DE6))   # [asm 6913..698B]
+    second_pass_tick(rb, rw, lambda w: apply_ds(state, w), read_es, g.cam_col_word, g.cam_row_word)   # [asm 6913..698B]
 
 
 def native_trigger_scan(state) -> None:
@@ -160,7 +162,8 @@ def native_trigger_scan(state) -> None:
     then the frame's remainder)."""
     from pre2.views.dgroup_view import PlayerView
     rb, rw = readers(state)
-    if rb(0x6BE1) != 0 and rb(0x6BC5) == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
+    g = PlayerGlobals(state)
+    if g.drop_gate != 0 and g.glider == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
         dx = PlayerView(state).tile_coords                  # [asm 5313 -> 549A] the player's packed tile coord
         si = 0x8367                                         # [asm 5316]
         for _ in range(0x14):                               # [asm 5319 cx=0x14] the 20-entry table
@@ -194,6 +197,7 @@ def native_cave_teleport(state, si):
       6. The interrupted frame's REMAINDER (the post-0238 spine) — ``_frame_tail_after_trigger``."""
     from pre2.views.dgroup_view import PlayerView
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     player = PlayerView(state)
     dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
     dest_x, dest_y = dest_cam & 0xFF, (dest_cam >> 8) & 0xFF
@@ -204,25 +208,25 @@ def native_cave_teleport(state, si):
     for k in range(1, 10):                                    # [asm 5332] 30C6 vertical fade-out (VRAM-only)
         yield ("fade", k)
     _wb(state, 0x6BC4, 0)                                     # [asm 5335] vertical sub-tile accumulator
-    saved_8164 = rw(0x8164)                                   # [asm 533A] push [0x8164]
+    saved_8164 = g.cam_left                                   # [asm 533A] push [0x8164]
     _ww(state, 0x8164, 0xEC)                                  # [asm 533F] pan clamp -> max (don't block the pan)
     player.x = (dest_tile & 0xFF) << 4                        # [asm 5350] player X = tile.lo << 4
     player.y = ((dest_tile >> 8) & 0xFF) << 4                 # [asm 535A] player Y = tile.hi << 4
-    while rb(0x2DE6) != dest_y:                               # [asm 5361-5375] vertical pan first
-        ok = _v_scroll_up(state, 0x10) if rb(0x2DE6) > dest_y else _v_scroll_down(state, 0x10)
+    while g.cam_row != dest_y:                               # [asm 5361-5375] vertical pan first
+        ok = _v_scroll_up(state, 0x10) if g.cam_row > dest_y else _v_scroll_down(state, 0x10)
         if not ok:                                            # the ASM would spin forever; we fail loud
-            raise Pre2HybridGap(f"cave pan blocked vertically at [0x2DE6]={rb(0x2DE6)} dest={dest_y}")
+            raise Pre2HybridGap(f"cave pan blocked vertically at [0x2DE6]={g.cam_row} dest={dest_y}")
         yield ("pan",)
-    while rb(0x2DE4) != dest_x:                               # [asm 5377-5387] then horizontal
-        ok = apply_camera_pan(state, "left" if rb(0x2DE4) > dest_x else "right")
+    while g.cam_col != dest_x:                               # [asm 5377-5387] then horizontal
+        ok = apply_camera_pan(state, "left" if g.cam_col > dest_x else "right")
         if not ok:
-            raise Pre2HybridGap(f"cave pan blocked horizontally at [0x2DE4]={rb(0x2DE4)} dest={dest_x}")
+            raise Pre2HybridGap(f"cave pan blocked horizontally at [0x2DE4]={g.cam_col} dest={dest_x}")
         yield ("pan",)
     _ww(state, 0x8164, saved_8164)                            # [asm 538A] pop [0x8164]
     _wb(state, 0x6BD9, flag)                                 # [asm 5391]
     _wb(state, 0x6BE1, 0)                                     # [asm 5394] disarm the trigger
-    if rb(0x2D8A) == 5:                                       # [asm 5399] level-6 (inside-a-tree) boss re-init
-        _wb(state, 0x8166, rb(0x8166) & 1)                   # [asm 53A0]
+    if g.level == 5:                                       # [asm 5399] level-6 (inside-a-tree) boss re-init
+        _wb(state, 0x8166, g.level_flags & 1)                   # [asm 53A0]
         for off, val in ((0xA324, 0), (0xA325, 5), (0xA326, 0), (0xA328, 0), (0xA32A, 1),
                          (0xA329, 0), (0xA32B, 0x6E), (0xA32C, 8)):    # [asm 53A5-53CD]
             _wb(state, off, val)
@@ -232,7 +236,7 @@ def native_cave_teleport(state, si):
     _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 53DD] 4907
     apply_ds(state, project_particles(rb, rw))                # [asm 53E0] 8922
     native_object_system_step(state)                          # [asm 53E3] 6822
-    _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)             # [asm 53E6: 26FA] inc word [0x6bd5]
+    _ww(state, 0x6BD5, (g.frame_stamp + 1) & 0xFFFF)             # [asm 53E6: 26FA] inc word [0x6bd5]
     native_object_render_state(state)                         # [asm 53E6: 26FA] record mutation (life/flags)
     native_firefly_step(state)                                # [asm 53EC] 54AB
     native_scroll_script(state)                               # [asm 53EF] 3922
@@ -379,16 +383,17 @@ def native_level_state(state) -> None:
       * [0x6be5]==1 death -> game-over restart (5063) / ==0xff GAME-COMPLETE -> THE END (5034) / [0x6be6]
         level-end (4F65) -> the carry paths that return to main's level change at 0x12f."""
     rb, _ = readers(state)
-    if rb(0x6BE6) != 0:                                           # ==1 normal level-end, >1 the 4C74 warp — both
+    g = PlayerGlobals(state)
+    if g.level_end_mode != 0:                                           # ==1 normal level-end, >1 the 4C74 warp — both
         raise Pre2LevelEndTransition()                            # [asm 4cba/4c74] a transition; native_level_end
         #                                                          reads [0x6be6] + the [0x2cf6] table to pick the level
-    if rb(0x6BE4) == 1:
+    if g.respawn_state == 1:
         raise Pre2RespawnTransition()                              # [asm 4f6c] respawn — a multi-frame transition
-    if rb(0x6BE4) != 0:
+    if g.respawn_state != 0:
         return                                                      # [0x6be4]==2: 4C69 idle (counter winding down)
-    if rb(0x6BE5) == 1:
+    if g.end_signal == 1:
         raise Pre2GameOverTransition()                            # [asm 5063] death -> game-over restart (level 1)
-    if rb(0x6BE5) == 0xFF:
+    if g.end_signal == 0xFF:
         raise Pre2GameComplete()                                  # [asm 5034] THE END (level 0xE cleared)
 
 
@@ -405,16 +410,18 @@ def native_special_event(state) -> None:
     the [0x6CA8] 0x38-bit group is complete, clear it and set [0x6BE2]=0x294. Neither armed -> a byte-exact no-op."""
     from pre2.recovered.combat_interaction import spawn_effect_burst
     rb, rw = readers(state)
-    if rb(0x6CA7) == 0x1F:                                   # [asm 67D7] all 5 BONUS letters -> reward burst
-        _ww(state, 0xA336, rw(0x4F1C))                      # [asm 67DE] burst pos X = player X
-        _ww(state, 0xA338, (rw(0x4F1E) - 0x70) & 0xFFFF)    # [asm 67E4] pos Y = player Y - 0x70
+    g = PlayerGlobals(state)
+    pv = PlayerView(state)
+    if g.bonus_letters == 0x1F:                                   # [asm 67D7] all 5 BONUS letters -> reward burst
+        _ww(state, 0xA336, pv.x)                      # [asm 67DE] burst pos X = player X
+        _ww(state, 0xA338, (pv.y - 0x70) & 0xFFFF)    # [asm 67E4] pos Y = player Y - 0x70
         _ww(state, 0xA33A, 0x6E)                            # [asm 67ED] reward sprite id
         apply_ds(state, spawn_effect_burst(rb, rw, 0, 0, 1))   # [asm 67FA] 8D1B: spawn 1
         _wb(state, 0x6CA7, 0)                               # [asm 67FD] reset the letters mask
         _wb(state, 0x6BFF, 1)                              # [asm 6802]
         _wb(state, 0x6C00, 0x2C)                           # [asm 6807]
-    elif (rb(0x6CA8) & 0x38) == 0x38:                       # [asm 680D-6814] the [0x6CA8] 0x38-group is complete
-        _wb(state, 0x6CA8, rb(0x6CA8) & 0xC7)              # [asm 6816] clear those bits
+    elif (g.utensils_mask & 0x38) == 0x38:                       # [asm 680D-6814] the [0x6CA8] 0x38-group is complete
+        _wb(state, 0x6CA8, g.utensils_mask & 0xC7)              # [asm 6816] clear those bits
         _ww(state, 0x6BE2, 0x294)                          # [asm 681B]
 
 
@@ -424,7 +431,9 @@ def native_camera_shake(state) -> None:
     Magnitude 0 -> no change (no shake). [recovered leaf]"""
     from pre2.recovered.camera_shake import apply_camera_shake
     rb, rw = readers(state)
-    res = apply_camera_shake(rw(0x6BF8), rb(0x6BEA), rb(0x6BD5), rb(0x4F27), rw(0x4F1E))
+    g = PlayerGlobals(state)
+    pv = PlayerView(state)
+    res = apply_camera_shake(g.row_factor, g.camera_shake, g.frame_blink, pv.anim_b, pv.y)
     _ww(state, 0x6BF8, res.row_factor)
     _wb(state, 0x6BEA, res.magnitude)
     _ww(state, 0x4F1E, res.h_scroll)
@@ -531,6 +540,7 @@ def _frame_tail_after_trigger(state) -> None:
     """The main-loop frame REMAINDER after the position-trigger scan ([asm 023B..026D]) — shared by the normal
     frame and the cave-teleport transition (whose 5326 runs mid-scan, then the frame continues here)."""
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     native_proximity_trigger(state)                                 # [asm 023B] 53F6 (proximity trigger; no-op unfired)
     native_camera_follow(state)                                     # [asm 023E] 5643 (H+V camera follow/scroll)
     # [asm 0241..0250] 3668/35A1/3A27/4B8E/26FA/3721 render cluster — the faithful renderer's job. Two gameplay
@@ -541,7 +551,7 @@ def _frame_tail_after_trigger(state) -> None:
     state.particle_capture = read_particles(state)                  # snapshot [0x7DE6] at the 4B8E ENTRY (spider-
     #   threads/sparkles) so native_render can DRAW them — the consume below KILLS the one-shot slots
     native_particle_consume(state)                                  # [asm 0247: 4B8E state] advance-Y + kill [0x7DE6]
-    _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                    # [asm 024D: 2708] inc word [0x6bd5]
+    _ww(state, 0x6BD5, (g.frame_stamp + 1) & 0xFFFF)                    # [asm 024D: 2708] inc word [0x6bd5]
     native_object_render_state(state)                               # [asm 024D: 26FA] record mutation (life/flags)
     native_firefly_step(state)                                      # [asm 0253] 54AB
     native_scroll_script(state)                                     # [asm 0256] 3922
@@ -627,12 +637,13 @@ def native_death_bounce_509d(state):
     from pre2.views.dgroup_view import PlayerView
     from pre2.native.audio import native_play_sfx, player_sfx_x
     rb, rw = readers(state)
+    g = PlayerGlobals(state)
     player = PlayerView(state)
     native_play_sfx(state, 7, player_sfx_x(state))                   # [asm 50a6-50a9] the death SCREAM (play_sfx 7)
     player.death_state = 0                                           # [asm 50ac]
     player.sprite = 0x21                                             # [asm 50b1] the death anim frame
     player.yvel = 0x0F                                               # [asm 50b7] the upward kick
-    centre = ((rw(0x2DE4) + 0xA) << 4) & 0xFFFF                      # [asm 50c0-50cd] (camera cell + 10 tiles) * 16
+    centre = ((g.cam_col_word + 0xA) << 4) & 0xFFFF                      # [asm 50c0-50cd] (camera cell + 10 tiles) * 16
     player.xvel = 5 if player.x < centre else -5                     # [asm 50cf-50d8] drift toward screen centre
     for _ in range(0x3C):                                            # [asm 50db cx=0x3c] 60 frames
         yield                                                       # render THIS bounce frame (mirrors the ASM
@@ -649,7 +660,7 @@ def native_death_bounce_509d(state):
         # unbounded) walks off the end into the [0x9203] backup — corrupting it, which the respawn's 5251 restore
         # then propagates into the working tables (the tick-1299 divergence, demo 175517). Run it like 509d does.
         native_particle_consume(state)                            # [asm 50fx] 4B8E state (advance-Y + kill [0x7DE6])
-        _ww(state, 0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)              # [asm 26fa:2708]
+        _ww(state, 0x6BD5, (g.frame_stamp + 1) & 0xFFFF)              # [asm 26fa:2708]
         native_firefly_step(state)                                 # [asm 5106] 54AB
         native_scroll_script(state)                                # [asm 5109] 3922
         # [asm 510c] 44FB render/timing helper

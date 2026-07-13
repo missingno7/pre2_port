@@ -10,7 +10,7 @@
   "pre2/native/level_init.py": 28,
   "pre2/native/level_load.py": 22,
   "pre2/native/level_state.py": 25,
-  "pre2/native/loop.py": 57,
+  "pre2/native/loop.py": 20,
   "pre2/native/player.py": 19,
   "pre2/native/render.py": 1,
   "pre2/native/runtime.py": 86,
