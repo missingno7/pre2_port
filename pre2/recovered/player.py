@@ -165,15 +165,16 @@ def player_friction_sym(xvel: int, shift: int) -> int:
     return ((-a) & 0xFFFF) if neg else (a & 0xFFFF)                      # [6351-6357]
 
 
-def player_gravity(yvel: int, water: int, limit: int) -> int:
+def player_gravity(yvel: int, low_gravity: int, limit: int) -> int:
     """Recover the player gravity ``1030:6309``.
 
-    Add gravity to Yvel — ``0x10`` normally, ``4`` when the water flag ``[0x6BC7]==1`` (with the terminal
-    velocity ``limit`` also divided by 8) — then cap at the terminal velocity. Pure: returns the new
-    ``[0x4F2A]``."""
+    Add gravity to Yvel — ``0x10`` normally, ``4`` when the low-gravity flag ``[0x6BC7]==1`` (with the terminal
+    velocity ``limit`` also divided by 8) — then cap at the terminal velocity. ``[0x6BC7]`` is the GLIDE /
+    float-descent gate (armed at the jump apex [5F..], gates the flight animation [63xx], cleared on landing
+    [642D]) — NOT water; Prehistorik 2 has no water. Pure: returns the new ``[0x4F2A]``."""
     grav = 0x10                                                         # [6310]
     term = _s16(limit & 0xFFFF)
-    if water == 1:                                                      # [6313-6321]
+    if low_gravity == 1:                                               # [6313-6321]
         grav = 4
         term = term >> 3
     nv = _s16((yvel + grav) & 0xFFFF)                                   # [6323]

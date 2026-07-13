@@ -113,10 +113,10 @@ def test_friction_sym_pulls_toward_zero_keeping_sign():
 
 
 def test_gravity_adds_and_caps_terminal():
-    assert player_gravity(0x00, water=0, limit=0xC0) == 0x10         # +0x10
-    assert player_gravity(0xB8, water=0, limit=0xC0) == 0xC0         # capped at terminal
-    # water: gravity 4, terminal = limit>>3
-    assert player_gravity(0x00, water=1, limit=0xC0) == min(4, 0xC0 >> 3)
+    assert player_gravity(0x00, low_gravity=0, limit=0xC0) == 0x10         # +0x10
+    assert player_gravity(0xB8, low_gravity=0, limit=0xC0) == 0xC0         # capped at terminal
+    # low-gravity (glide descent): gravity 4, terminal = limit>>3
+    assert player_gravity(0x00, low_gravity=1, limit=0xC0) == min(4, 0xC0 >> 3)
 
 
 def test_set_anim_switches_and_loads_pointer():
