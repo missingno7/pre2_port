@@ -278,7 +278,7 @@ def spawn_debris_element(rb, rw, ax, si):
     # [asm 8879] score bump for sprite ids 0x4A..0x5A
     bx = (ax - 0x4A) & 0xFFFF
     if not (bx & 0x8000) and bx <= 0x10:          # jb (negative) / ja (>0x10) skip
-        val = rw(((bx << 1) - 0x5CAD) & 0xFFFF)   # shl bx,1 ; mov bx,[bx-0x5CAD]
+        val = rw(((bx << 1) - SCORE_TABLE) & 0xFFFF)   # shl bx,1 ; mov bx,[bx-0x5CAD]
         total = (rw(SCORE_LO) | (rw(SCORE_LO + 2) << 16)) + val   # add [6C0E] ; adc [6C10],0
         writes[SCORE_LO] = (total & 0xFFFF, 2)
         writes[SCORE_LO + 2] = ((total >> 16) & 0xFFFF, 2)
@@ -299,7 +299,7 @@ def spawn_debris_element(rb, rw, ax, si):
         writes[slot + 0xC] = (0x2C, 2)
         writes[SPAWNED_PTR] = (slot, 2)            # [asm 88B9] [0xA33E]=di
         # [asm 88BD] if the pos source is an effect slot, free its back-referenced slot
-        if si >= 0x50A8:
+        if si >= BURST_SLOT_LO:
             ref = rw((si + 9) & 0xFFFF)
             if ref != 0xFFFF:
                 writes[(ref + 4) & 0xFFFF] = (0xFFFF, 2)
@@ -466,7 +466,10 @@ def spawn_pickup_sparkle(rw, ax, dx):
 
 COLLECTED_COUNTER = 0x2A76  # bumped once per bonus collected
 MAP_SEG_PTR = 0x2DDA        # [0x2DDA] holds the level-map segment (the es for the tile write)
-REDRAW_DIRTY = (0x6BBD, 0x2DF4, 0x2DE0)  # set when the consumed tile is redrawn on-screen
+PAGE_DIRTY = 0x6BBD         # one-tile direct re-blit page flag
+GRID_DIRTY = 0x2DF4         # whole-grid redraw request
+GRID_DIRTY_TOKEN = 0x2DE0   # the grid-dirty 0x55AA companion token
+REDRAW_DIRTY = (PAGE_DIRTY, GRID_DIRTY, GRID_DIRTY_TOKEN)  # set when the consumed tile is redrawn on-screen
 
 
 @oracle_link("1030:8B6E",
@@ -495,9 +498,9 @@ def bonus_collect_tail(rb, rw, di):
     sy = (ah - cam_y) & 0xFF                             # [asm 8B97] sub ah,[0x2DE6]
     onscreen = (al >= cam_x and sx < 0x14 and ah >= cam_y and sy < 0x0C)
     if onscreen:                                         # [asm 8BD8-8BE2] redraw-dirty flags
-        ds[0x6BBD] = (1, 1)
-        ds[0x2DF4] = (1, 1)
-        ds[0x2DE0] = (0x55AA, 2)
+        ds[PAGE_DIRTY] = (1, 1)
+        ds[GRID_DIRTY] = (1, 1)
+        ds[GRID_DIRTY_TOKEN] = (0x55AA, 2)
     return ds, map_writes, onscreen
 
 
