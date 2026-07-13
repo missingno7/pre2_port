@@ -120,8 +120,8 @@ import play_native                                                   # noqa: E40
 
 from pre2.views.dgroup_view import FieldBackend, HybridBackend        # noqa: E402
 state = native_cold_boot(GAME_ROOT, level=0)
-# Run gameplay on the NAMED FIELD STORE (the field-backed flip): named mutable state lives in a FieldBackend,
-# only the residue in the image; materialise() folds it back before the renderer reads the image.
+# Run gameplay on the NAMED FIELD STORE (the umbilical; see pre2/native/field_runtime.py): named mutable state
+# lives in a FieldBackend, only the residue in the image; materialize folds it back before the renderer reads.
 state.backend = HybridBackend(FieldBackend(state), state.data)
 dos = NativeVGA()
 native_load_level_palette(state, dos)

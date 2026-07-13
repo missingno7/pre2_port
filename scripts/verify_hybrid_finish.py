@@ -25,33 +25,9 @@ from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.runtime import native_exit_anim
 from pre2.native.state import NativeGameState
 from pre2.native.vga import NativeVGA
-from pre2.views.dgroup_view import ByteBackend, FieldBackend, HybridBackend
+from pre2.native.field_runtime import enter_image_mode, materialize, to_field_store
 
 DS = 0x1A0F << 4
-
-
-def _to_field(state):
-    """Swap the state onto the named field store (gameplay writes named state, not the image)."""
-    state.backend = HybridBackend(FieldBackend(state), state.data)
-
-
-def _enter_image_mode(state):
-    """Transitions/level-load mix view + raw-.data access, so they must run wholly on the image: fold the
-    field store into the image, then swap to a plain ByteBackend for the duration of the transition."""
-    state.backend.materialize(state.data)
-    state.backend = ByteBackend(state)
-
-
-def _enter_field_mode(state):
-    """Back to the field store for gameplay — seed it from the (transition-updated) image."""
-    state.backend = HybridBackend(FieldBackend(state), state.data)
-
-
-def _materialize(state):
-    """Fold the field store into the image (before a digest read); no-op-safe when already image-backed."""
-    mat = getattr(state.backend, "materialize", None)
-    if mat is not None:
-        mat(state.data)
 
 
 def main() -> int:
@@ -66,7 +42,7 @@ def main() -> int:
 
     gr = str(ROOT / "assets")
     state = NativeGameState(bytearray(gtd.seed))
-    _to_field(state)
+    to_field_store(state)
     stage_start = 0
     dos = NativeVGA()
     i = 0
@@ -75,23 +51,23 @@ def main() -> int:
         try:
             native_gameplay_frame(state)                            # on the field store
         except Pre2CaveTeleport as tp:
-            _enter_image_mode(state)
+            enter_image_mode(state)
             for _ in native_cave_teleport(state, tp.si):
                 pass
-            _enter_field_mode(state)
+            to_field_store(state)
         except Pre2RespawnTransition:
-            _enter_image_mode(state)
+            enter_image_mode(state)
             for _ in native_4f6c(state):
                 pass
-            _enter_field_mode(state)
+            to_field_store(state)
         except Pre2LevelEndTransition:
-            _enter_image_mode(state)                                   # fold named state into the image for the load
+            enter_image_mode(state)                                   # fold named state into the image for the load
             for _ in native_exit_anim(state, dos, 0, game_root=gr, state_only=True):
                 pass
             before = state.data[DS + 0x2D8A]
             native_level_end(state, game_root=gr)                   # loads the next level (raw-.data writes)
             after = state.data[DS + 0x2D8A]
-            _enter_field_mode(state)                                          # named state picks up the freshly-loaded level
+            to_field_store(state)                                          # named state picks up the freshly-loaded level
             print(f"  LEVEL-END {before}->{after} @ tick {i}  ({i - stage_start} ticks in the prior stage)")
             stage_start = i
             _inject(state, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
@@ -101,10 +77,10 @@ def main() -> int:
                 print(f"  DIVERGED: first {after:#x} frame (tick {i}) raised {type(e).__name__}: {str(e)[:90]}")
                 return 1
         except Pre2GameOverTransition:
-            _enter_image_mode(state)
+            enter_image_mode(state)
             for _ in native_5063(state):
                 pass
-            _enter_field_mode(state)
+            to_field_store(state)
             _inject(state, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
             native_gameplay_frame(state)
             stage_start = i
@@ -117,7 +93,7 @@ def main() -> int:
             print(f"  DIVERGED: gap at tick {i} (level {state.data[DS+0x2D8A]}): {str(e)[:110]}")
             return 1
 
-        _materialize(state)                                            # materialise before the digest read
+        materialize(state)                                            # materialise before the digest read
         got = gameplay_digest(state.data[DS:DS + 0x10000])
         if got != gtd.digests[i]:
             lvl = state.data[DS + 0x2D8A]

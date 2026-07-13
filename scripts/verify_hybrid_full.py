@@ -30,12 +30,12 @@ def run(n_ticks: int, game_root: str = GAME_ROOT):
     from pre2.native.render import native_load_level_palette, native_render, native_sync_render_state
     from pre2.native.state import NativeGameState
     from pre2.native.vga import NativeVGA
-    from pre2.views.dgroup_view import FieldBackend, HybridBackend, _named_map
+    from pre2.native.field_runtime import materialize, to_field_store
+    from pre2.views.dgroup_view import _named_map
 
     ref = native_cold_boot(game_root, level=0)          # LOAD on the image (both start from the same boot)
     hyb = NativeGameState(bytearray(ref.data))
-    hb = HybridBackend(FieldBackend(hyb), hyb.data)     # swap to the field store for gameplay
-    hyb.backend = hb
+    to_field_store(hyb)                                 # swap to the field store for gameplay
     dos_r, dos_h = NativeVGA(), NativeVGA()
     native_load_level_palette(ref, dos_r)
     native_load_level_palette(hyb, dos_h)
@@ -43,7 +43,7 @@ def run(n_ticks: int, game_root: str = GAME_ROOT):
     for i in range(n_ticks):
         native_gameplay_frame(ref)
         native_gameplay_frame(hyb)
-        hb.materialize(hyb.data)                        # fold named state back before ANY .data render read
+        materialize(hyb)                        # fold named state back before ANY .data render read
         a = ref.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
         b = hyb.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
         if a != b:
