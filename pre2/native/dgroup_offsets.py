@@ -152,6 +152,18 @@ BURST_POS_X         = 0xA336   # the reward-burst spawn position X = player X [a
 BURST_POS_Y         = 0xA338   # ... position Y = player Y - 0x70 [asm 67E4]
 BURST_SPRITE        = 0xA33A   # ... the reward sprite id (0x6E) [asm 67ED]
 
+# ---- render / RNG scratch read by the memory adapters (views/) ----------------------------------------
+RNG_ROTATE          = 0x28C1   # the one-word rotate-generator state (= ror view) [asm 26CF]
+TILE_FLAGS_ACC      = 0x2DF2   # the tile-flags accumulator (VAR_TILE_FLAGS)
+GRID_DIRTY          = 0x2DF4   # the whole-grid redraw request (= grid_dirty view) [asm 5C82]
+BG_RESTORE_PTR      = 0x2DF6   # the background-restore source pointer (VAR_BG_PTR)
+FIREFLY_SCRATCH_A   = 0x6BC0   # firefly-sim scratch byte A (= firefly_scratch_a view)
+FIREFLY_SCRATCH_B   = 0x6BC1   # firefly-sim scratch byte B (= firefly_scratch_b view)
+ANIM_GATE           = 0x6BD0   # hold-current-anim / FSM-route gate (= anim_gate view)
+QUAKE_DIST_LO       = 0xA30E   # the boss-quake player-distance^2 scratch, low word (= quake_dist_lo view)
+QUAKE_DIST_HI       = 0xA310   # ... high word (= quake_dist_hi view)
+ANIM_READY          = 0xA340   # object_update's per-step anim-ready scratch byte (= anim_ready view)
+
 # ---- the free-running frame timer ---------------------------------------------------------------------
 FRAME_TIMER         = 0x6BD5   # the free-running frame counter 26FA bumps (= frame_stamp / frame_blink view)
 ROW_FACTOR          = 0x6BF8   # the row-stride factor the camera shake writes (= PlayerGlobals.row_factor)

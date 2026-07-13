@@ -17,6 +17,8 @@ a release could add a third, field-backed backend (plain Python attributes, no o
 API with no change to the logic. That is what makes the offset map the *optional* half of the split.
 """
 from __future__ import annotations
+from pre2.native.dgroup_offsets import (
+    PALETTE_PTR_TABLE, RENDER_SLOTS_BASE)
 
 DGROUP_BASE = 0x1A0F << 4       # DS<<4 — the game data segment's linear base in the 1 MB image
 
@@ -707,7 +709,7 @@ class LightFadeView(DgroupView):
     @property
     def level_palette(self) -> int:
         """DGROUP offset of the current level's 0x30-byte palette [asm 677F-6787]."""
-        return self._backend.rw(0x2D00 + self.level * 2)
+        return self._backend.rw(PALETTE_PTR_TABLE + self.level * 2)
 
     def palette_byte(self, base: int, k: int) -> int:
         """One 6-bit DAC channel byte from a palette at DGROUP offset ``base``."""

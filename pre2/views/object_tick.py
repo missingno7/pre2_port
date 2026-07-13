@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pre2.recovered.object_update import spawn_effects
 from pre2.views.tables import Tables
+from pre2.native.dgroup_offsets import (
+    ANIM_GATE, ANIM_READY, COMBO_COMPLETE_6BE2, FIREFLY_SCRATCH_A, FIREFLY_SCRATCH_B, FRAME_TIMER, LEVEL_DATA_SEG, LEVEL_INDEX, PLAYER_SLOT, PLAYER_Y, QUAKE_DIST_HI, QUAKE_DIST_LO, RNG_ROTATE, RNG_STATE, SHAKE_MAGNITUDE)
 
 _FX_LIST = 0x7DE6        # secondary effect list (6-byte entries) the spawning handlers emit into
 _HANDLER_TABLE = 0x6AA9  # cs:[ (def[1]*2)&0xFF + 0x6AA9 ] -> AI handler address
@@ -48,7 +50,7 @@ class LiveWalkerMem:
         #: a hybrid store like the contract passes; None over a raw VM cpu -> straight to .data.
         be = getattr(cpu.mem, "backend", None)
         self.backend = be if getattr(be, "_IS_DGROUP_BACKEND", False) else None
-        self.map_seg = self.rw(0x2DDA)
+        self.map_seg = self.rw(LEVEL_DATA_SEG)
         self.tables = Tables(self.rb)          # the named read-only lookup tables
 
     def rb(self, off):
@@ -96,23 +98,23 @@ class LiveWalkerMem:
         return self.tables.floor_props[self.read_map((ty * 0x100 + tx) & 0xFFFF)]
 
     def scale(self):
-        return self.rw(0x6BE2)
+        return self.rw(COMBO_COMPLETE_6BE2)
 
     def handler_addr(self, tbl):
         off = (tbl + _HANDLER_TABLE) & 0xFFFF
         return self.data[(self.cbase + off) & 0xFFFFF] | (self.data[(self.cbase + ((off + 1) & 0xFFFF)) & 0xFFFFF] << 8)
 
     def glb(self):
-        return {"player_x": self.rw(0x4F1C), "player_y": self.rw(0x4F1E), "frame": self.rb(0x6BD5),
-                "shake": self.rb(0x6BEA), "a340": self.rb(0xA340), "mode": self.rb(0x2D8A),
-                "a30e": self.rw(0xA30E), "a310": self.rw(0xA310), "bc0": self.rb(0x6BC0), "bc1": self.rb(0x6BC1),
-                "bd0": self.rb(0x6BD0), "ror": self.rw(0x28C1), "la": self.rb(0x2CEC), "lb": self.rb(0x2CED),
-                "lc": self.rb(0x2CEE), "ld": self.rw(0x2CEF)}
+        return {"player_x": self.rw(PLAYER_SLOT), "player_y": self.rw(PLAYER_Y), "frame": self.rb(FRAME_TIMER),
+                "shake": self.rb(SHAKE_MAGNITUDE), "a340": self.rb(ANIM_READY), "mode": self.rb(LEVEL_INDEX),
+                "a30e": self.rw(QUAKE_DIST_LO), "a310": self.rw(QUAKE_DIST_HI), "bc0": self.rb(FIREFLY_SCRATCH_A), "bc1": self.rb(FIREFLY_SCRATCH_B),
+                "bd0": self.rb(ANIM_GATE), "ror": self.rw(RNG_ROTATE), "la": self.rb(RNG_STATE), "lb": self.rb(RNG_STATE + 1),
+                "lc": self.rb(RNG_STATE + 2), "ld": self.rw(RNG_STATE + 3)}
 
     def write_glb(self, g):
-        self.ww(0xA30E, g["a30e"]); self.ww(0xA310, g["a310"]); self.wb(0x6BC0, g["bc0"])
-        self.wb(0x6BC1, g["bc1"]); self.ww(0x28C1, g["ror"]); self.wb(0x2CEC, g["la"])
-        self.wb(0x2CED, g["lb"]); self.wb(0x2CEE, g["lc"]); self.ww(0x2CEF, g["ld"])
+        self.ww(QUAKE_DIST_LO, g["a30e"]); self.ww(QUAKE_DIST_HI, g["a310"]); self.wb(FIREFLY_SCRATCH_A, g["bc0"])
+        self.wb(FIREFLY_SCRATCH_B, g["bc1"]); self.ww(RNG_ROTATE, g["ror"]); self.wb(RNG_STATE, g["la"])
+        self.wb(RNG_STATE + 1, g["lb"]); self.wb(RNG_STATE + 2, g["lc"]); self.ww(RNG_STATE + 3, g["ld"])
 
     def spawn(self, def9, defB, arg, dl):
         def find_free():

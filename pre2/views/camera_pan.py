@@ -13,6 +13,8 @@ from pre2.views.memory_adapter import dgroup_backend
 from pre2.native.vga import EGA_APERTURE, EGA_PLANE_STRIDE
 from pre2.views import frame as _F
 from pre2.recovered.frame_renderer import RowFlags, calc_scroll_source, draw_tile_column
+from pre2.native.dgroup_offsets import (
+    ANY_ANIMATED_FLAG, BG_RESTORE_PTR, CAM_COL, CAM_ROW, COL_RING, GRID_DIRTY, PLAYER_SLOT, ROW_RING, SCROLL_ACCUM, SCROLL_COPY_SRC, TILE_FLAGS_ACC)
 
 _DS = 0x1A0F
 
@@ -60,31 +62,31 @@ def apply_camera_pan(mem, direction: str) -> bool:
     edge (the ASM's ``stc`` no-op path)."""
     if direction == "left":                                  # [3414]
         col_param = 0
-        if _rw(mem, 0x2DE4) == 0:                            # [341F-3424] at the left map edge -> no pan
+        if _rw(mem, CAM_COL) == 0:                            # [341F-3424] at the left map edge -> no pan
             return False
-        _ww(mem, 0x2DE4, (_rw(mem, 0x2DE4) - 1) & 0xFFFF)    # [3426] dec [0x2DE4]
-        ax = (_rw(mem, 0x2DE8) - 1) & 0xFFFF                 # [342A-342D] dec
+        _ww(mem, CAM_COL, (_rw(mem, CAM_COL) - 1) & 0xFFFF)    # [3426] dec [0x2DE4]
+        ax = (_rw(mem, COL_RING) - 1) & 0xFFFF                 # [342A-342D] dec
         de8 = 0x13 if (ax & 0x8000) else ax                 # [342E jns / 3430] underflow -> 0x13
     elif direction == "right":                               # [3435]
         col_param = 0x13
-        px = (_s16(_rw(mem, 0x4F1C)) >> 4) - 0x14            # [343E-3449] player tile X - 0x14
-        clamp = _rw(mem, 0x8164) if _s16(_rw(mem, 0x8164)) >= px else 0xEC  # [344C-345A] jge
-        if _rw(mem, 0x2DE4) >= clamp:                       # [345A-345E] jae -> at the right limit, no pan
+        px = (_s16(_rw(mem, PLAYER_SLOT)) >> 4) - 0x14            # [343E-3449] player tile X - 0x14
+        clamp = _rw(mem, SCROLL_ACCUM) if _s16(_rw(mem, SCROLL_ACCUM)) >= px else 0xEC  # [344C-345A] jge
+        if _rw(mem, CAM_COL) >= clamp:                       # [345A-345E] jae -> at the right limit, no pan
             return False
-        _ww(mem, 0x2DE4, (_rw(mem, 0x2DE4) + 1) & 0xFFFF)   # [3463] inc [0x2DE4]
-        ax = (_rw(mem, 0x2DE8) + 1) & 0xFFFF                # [3467-346A] inc
+        _ww(mem, CAM_COL, (_rw(mem, CAM_COL) + 1) & 0xFFFF)   # [3463] inc [0x2DE4]
+        ax = (_rw(mem, COL_RING) + 1) & 0xFFFF                # [3467-346A] inc
         de8 = 0 if ax >= 0x14 else ax                       # [346B-3470] wrap at 0x14 -> 0
     else:
         raise ValueError(direction)
 
-    _ww(mem, 0x2DE8, de8)                                    # [3472] [0x2DE8] = ax
-    scroll_src = calc_scroll_source(de8, _rb(mem, 0x2DEA))   # [3475 -> 3588] [0x2DBA]
-    _ww(mem, 0x2DBA, scroll_src)
-    cell = ((_rb(mem, 0x2DE6) << 8) | _rb(mem, 0x2DE4)) & 0xFFFF  # [3478-347C] camera map cell
+    _ww(mem, COL_RING, de8)                                    # [3472] [0x2DE8] = ax
+    scroll_src = calc_scroll_source(de8, _rb(mem, ROW_RING))   # [3475 -> 3588] [0x2DBA]
+    _ww(mem, SCROLL_COPY_SRC, scroll_src)
+    cell = ((_rb(mem, CAM_ROW) << 8) | _rb(mem, CAM_COL)) & 0xFFFF  # [3478-347C] camera map cell
 
     planes = [bytearray(mem.data[EGA_APERTURE + i * EGA_PLANE_STRIDE:
                                  EGA_APERTURE + (i + 1) * EGA_PLANE_STRIDE]) for i in range(4)]
-    flags = RowFlags(_rb(mem, 0x6BBD), _rb(mem, 0x2DF2), _rb(mem, 0x2DF4))
+    flags = RowFlags(_rb(mem, ANY_ANIMATED_FLAG), _rb(mem, TILE_FLAGS_ACC), _rb(mem, GRID_DIRTY))
     tilemap = _F.read_tilemap(mem)
     blit_type = _F.read_blit_type_table(mem)
     mask_region = bytes(mem.data[(_DS << 4) + 0x2DF8:(_DS << 4) + 0x4DF8])
@@ -95,8 +97,8 @@ def apply_camera_pan(mem, direction: str) -> bool:
     for i in range(4):                                       # write the revealed column back to the planes
         mem.data[EGA_APERTURE + i * EGA_PLANE_STRIDE:
                  EGA_APERTURE + (i + 1) * EGA_PLANE_STRIDE] = planes[i]
-    _ww(mem, 0x2DF6, bg_ptr)
-    _wb(mem, 0x6BBD, flags.plane_attr)
-    _wb(mem, 0x2DF2, flags.tile_flags)
-    _wb(mem, 0x2DF4, flags.tile_type)
+    _ww(mem, BG_RESTORE_PTR, bg_ptr)
+    _wb(mem, ANY_ANIMATED_FLAG, flags.plane_attr)
+    _wb(mem, TILE_FLAGS_ACC, flags.tile_flags)
+    _wb(mem, GRID_DIRTY, flags.tile_type)
     return True

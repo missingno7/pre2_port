@@ -22,10 +22,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# the layers held to zero bare offset-hex (the shipped game surface the naming pass covered)
-_ENFORCED = ("native",)
-# reported but not enforced (recovered = closure-passed game logic; views = the adapter/descriptor home)
-_SURVEYED = ("recovered", "views")
+# every shipped layer is held to zero bare offset-hex: an accessor address must be a named constant
+# (pre2/native/dgroup_offsets.py or a file-local const) or a named view — never a bare 0x2DBC.
+_ENFORCED = ("native", "views", "recovered", "enhanced", "codecs")
+_SURVEYED = ()   # nothing left to merely survey — the whole shipped surface is enforced
 
 _ACCESSORS = {"rb", "rw", "wb", "ww", "rd"}
 _MEM_OBJECTS = {"state", "mem", "ov", "self", "d", "view", "v"}
