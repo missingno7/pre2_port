@@ -130,10 +130,17 @@ class Node:
 
 @dataclass
 class GameState:
-    """The whole game state as a graph: named-field nodes + the STRUCTURED entity arena. No byte image."""
+    """The whole game state as a self-contained graph: named-field nodes + the STRUCTURED entity arena + the
+    ``residue`` — the rest of the DGROUP heap (the per-level loaded tables: tile props, the anim/attack/camera
+    script bytecode, the bonus-cell + effect-source lists, ...). The nodes + arena ARE the object graph; the
+    residue is loaded INPUT data carried alongside as bytes (not dissolved into fields — it is bytecode and
+    lookup tables, not game-logic state), so :func:`to_image` can reconstruct the whole DGROUP from a
+    ``GameState`` ALONE, with no external byte image. Modeling residue regions into named loaded-table objects
+    is the remaining incremental work; carrying it makes the graph the complete state of record today."""
 
     nodes: dict[str, Node]
     entity_arena: EntityArena
+    residue: bytes = b""
 
     # convenience accessors for the structured record nodes (the interesting, non-globals ones)
     @property
@@ -166,12 +173,21 @@ def from_image(data) -> GameState:
         nodes[cls] = Node(values)
     lo, hi = ARENAS[_ENTITY_ARENA_KEY]
     entity_arena = _parse_entity_arena(bytes(data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1]))
-    return GameState(nodes=nodes, entity_arena=entity_arena)
+    residue = bytes(data[DGROUP_BASE:DGROUP_BASE + 0x10000])
+    return GameState(nodes=nodes, entity_arena=entity_arena, residue=residue)
 
 
-def to_image(gs: GameState, data) -> None:
-    """Write the object graph back over a DGROUP image (the bridge serialiser) — the named region becomes
-    byte-identical to the image ``gs`` was read from. Only the named region is touched."""
+def to_image(gs: GameState, data=None):
+    """Serialise the object graph back to a DGROUP image (the bridge serialiser). With ``data`` given, overlay
+    the named region + arena onto it (byte-identical to the image ``gs`` was read from; only the named region
+    is touched). With ``data=None``, reconstruct the WHOLE DGROUP from ``gs`` ALONE — seed from ``gs.residue``,
+    then overlay the graph — proving the graph is a self-contained state of record with no external image.
+    Returns the image written."""
+    if data is None:
+        if len(gs.residue) != 0x10000:
+            raise ValueError(f"self-contained to_image needs a full DGROUP residue, got {len(gs.residue)} bytes")
+        data = bytearray(DGROUP_BASE + 0x10000)
+        data[DGROUP_BASE:DGROUP_BASE + 0x10000] = gs.residue
     data = getattr(data, "data", data)
     specs = _node_specs()
     for cls, node in gs.nodes.items():
@@ -188,6 +204,7 @@ def to_image(gs: GameState, data) -> None:
     if len(blob) != hi - lo + 1:
         raise ValueError(f"entity arena: expected {hi - lo + 1} bytes, got {len(blob)}")
     data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1] = blob
+    return data
 
 
 def _owner_map() -> dict[int, str]:
