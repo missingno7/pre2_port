@@ -54,6 +54,14 @@ _CONTIG_GFX = [
 ]
 _CONTIG_GFX_BYTES = sum(ln for _, _, ln, _, _ in _CONTIG_GFX)
 
+# lookup-table-block remainder: named raw-byte data arrays placed verbatim: (constant name, dgroup offset)
+_RAW_TABLES = [
+    ("LOOKUP_TABLE_6F60", 0x6F60), ("SPRITE_EXTENT_TABLE_B", 0x71D0), ("SPRITE_PARAM_TABLE", 0x754A),
+    ("ANIM_FRAME_DATA", 0x79E0), ("COMBAT_TIMING_7B18", 0x7B18), ("ANIM_SEQ_DATA", 0x7B9F),
+    ("BOOT_TABLE_7D6F", 0x7D6F),
+]
+_RAW_TABLES_BYTES = sum(len(getattr(T, n)) for n, _ in _RAW_TABLES)
+
 
 def _residual() -> bytearray:
     z = (Path(__file__).with_name("_boot_residual.txt")).read_text().strip()
@@ -89,6 +97,9 @@ def generate_boot_dgroup() -> bytearray:
     img[_ATTACK_OFF:_ATTACK_OFF + 20] = b"".join(
         bytes((p & 0xFF, (p >> 8) & 0xFF, sfx, v19, flag)) for (p, sfx, v19, flag) in T.ATTACK_PHASES)
     img[_SCORE_OFF:_SCORE_OFF + 34] = _enc_s16(T.SCORE_VALUES)
+    for name, off in _RAW_TABLES:
+        blob = getattr(T, name)
+        img[off:off + len(blob)] = blob
     img[_HITBOX_WX_OFF:_HITBOX_WX_OFF + 32] = bytes(T.HITBOX_HALF_WIDTHS)
     img[_ANIM_ID_OFF:_ANIM_ID_OFF + 24] = bytes(T.ANIM_STATE_IDS)
     img[_ANIM_SEQ_OFF:_ANIM_SEQ_OFF + 18] = _enc_s16(T.ANIM_SEQ_PTRS)
@@ -105,7 +116,8 @@ def generate_boot_dgroup() -> bytearray:
 def constant_coverage() -> tuple[int, int]:
     """(bytes generated from readable constants, non-zero bytes still in the residual blob)."""
     covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + _CONTIG_GFX_BYTES
-               + len(T.SCANCODE_CHARS) + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
+               + _RAW_TABLES_BYTES + len(T.SCANCODE_CHARS)
+               + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
     return covered, sum(1 for b in _residual() if b)
 
 
