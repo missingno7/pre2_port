@@ -188,8 +188,9 @@ def _native_attract(state, dos, game_root: str):
     from pre2.native.render import native_load_level_palette
     from pre2.native.runtime import native_frame_step
     d = state.data
-    d[_DS + 0x2D8A] = d[_DS + 0x83E]                          # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
-    d[_DS + 0xB198] = d[_DS + 0x83D]                          # [asm 8ec4]
+    g = PlayerGlobals(state)
+    g.level = state.rb(0x83E)                                 # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
+    g.mode_copy = state.rb(0x83D)                             # [asm 8ec4]
     # --- [asm 8F2D] the animated MENU2 title (caveman runs across the PREHISTORIK-2 jungle chased by a dino),
     #     then the carte, exactly as a normal level start shows them. Pixel-exact vs the VM (attract_title;
     #     119 frames, 0 diff). Replaces the earlier static-title stand-in (user: "should be a game-like screen
@@ -197,18 +198,17 @@ def _native_attract(state, dos, game_root: str):
     yield from native_attract_title(state, game_root)        # [asm 8f2d] the running-caveman title animation
     yield from _native_carte(state, dos, game_root)          # [asm 9520] the world-map scroll-in (auto-advances)
     # --- now the gameplay demo ---
-    d[_DS + 0x2879] = 1                                       # [asm 8eb6] demo-playback input mode
-    d[_DS + 0x287A] = 0; d[_DS + 0x287B] = 0                  # reset the demo cursor + current byte/count
-    d[_DS + 0x287C] = 0; d[_DS + 0x287D] = 0
-    d[_DS + 0x2874] = 0                                       # no pending key yet
-    for sel in (0x6BE4, 0x6BE5, 0x6BE6):                      # clear the death/end selectors
-        d[_DS + sel] = 0
+    g.input_source = 1                                       # [asm 8eb6] demo-playback input mode
+    state.wb(0x287A, 0); state.wb(0x287B, 0)                 # reset the demo cursor + current byte/count
+    state.wb(0x287C, 0); state.wb(0x287D, 0)
+    state.wb(0x2874, 0)                                      # no pending key yet
+    g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0   # clear the death/end selectors
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)         # clear the residual key table
     native_load_song(state, native_level_song_name(state), game_root)
     native_level_start(state, game_root=game_root)           # load the demo's level
     native_load_level_palette(state, dos)                    # [asm 0ba0] the per-level DAC palette (else the demo
     #                                                          renders under the leftover MENU palette — wrong colours)
-    disp = d[_DS + 0x2DD6] | (d[_DS + 0x2DD7] << 8)
+    disp = g.display_page
     last = None                                              # (planes, page) of the last demo frame -> fade-out over it
     first = True
     try:
@@ -222,17 +222,16 @@ def _native_attract(state, dos, game_root: str):
                 yield FrontEndScene(MODE_PLANAR, palette=tuple(dos.vga_palette),
                                     planes=frozen, page=page, game_paced=True)
                 last = (frozen, page)
-            disp = d[_DS + 0x2DD6] | (d[_DS + 0x2DD7] << 8)
+            disp = g.display_page
     except (Pre2GameOverTransition, Pre2LevelEndTransition, Pre2RespawnTransition,
             Pre2CaveTeleport, Pre2HybridGap):
         pass                                                 # any end/gap in the idle demo -> back to the menu
     if last is not None:                                     # fade the demo OUT to black before re-showing the menu
         for pal in _dac_fade_palettes(dos.vga_palette, into=False):
             yield FrontEndScene(MODE_PLANAR, palette=pal, planes=last[0], page=last[1], game_paced=True)
-    d[_DS + 0x2879] = 0                                       # back to live keyboard input
-    d[_DS + 0x287A] = 0; d[_DS + 0x287B] = 0
-    for sel in (0x6BE4, 0x6BE5, 0x6BE6):
-        d[_DS + sel] = 0
+    g.input_source = 0                                       # back to live keyboard input
+    state.wb(0x287A, 0); state.wb(0x287B, 0)
+    g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0
     d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
 
 
@@ -337,12 +336,12 @@ def native_menu_flow(state, dos, game_root: str):
     #     0199/012F restarts all pass through it): lives=2, BONUS-letters/utensils masks cleared, damage reset.
     #     native_level_start re-applies the same values at the load (outcome-identical), but writing them HERE
     #     matches the VM's state at menu entry byte-for-byte (the front-end transition witness reads it). ---
-    d = state.data
-    d[_DS + 0x27D8] = 0x02                                # [asm 0141] lives
-    d[_DS + 0x6CA7] = 0x00                                # [asm 0146] BONUS-letters mask
-    d[_DS + 0x7B19] = 0x14                                # [asm 014B] damage/energy
-    d[_DS + 0x7B18] = 0x00                                # [asm 0150]
-    d[_DS + 0x6CA8] = 0x00                                # [asm 0155] utensils mask
+    g = PlayerGlobals(state)
+    g.lives = 2                                          # [asm 0141]
+    g.bonus_letters = 0                                  # [asm 0146] BONUS-letters mask
+    g.attack_v19 = 0x14                                  # [asm 014B] damage/energy
+    g.attack_phase = 0                                   # [asm 0150]
+    g.utensils_mask = 0                                  # [asm 0155] utensils mask
     # --- 8e45: the "press 1/2" difficulty screen (MENU.SQZ = resource 8, a 13h image) faded in over 0xA0 DAC
     #     entries ([asm 8e67 cl=0xA0] -> 919f), then held while the dispatch waits for a choice. Pixel-exact vs the
     #     VM. The dispatch flags [0x27f6]/[0x27f7] ARE the '1'/'2' key-table entries (0x27f4 + scancode 2/3); fire =
@@ -710,8 +709,8 @@ def is_expert_eater_wall(state) -> bool:
     """[asm 0163-0176] True when a BEGINNER (``[0xB197]==0``) has advanced to level 8 or 9 (``[0x2D8A]`` in
     {8, 9}) — where main's 0x0163 gate shows the CASTLE "expert eater" wall (:func:`native_expert_eater`)
     instead of loading the level. Beginner can only PLAY levels 0..7; 8 (penguin) is the expert-only wall."""
-    d = state.data
-    return d[_DS + 0x2D8A] in (8, 9) and d[_DS + 0xB197] == 0
+    g = PlayerGlobals(state)
+    return g.level in (8, 9) and g.mode == 0
 
 
 def native_the_end(state, game_root: str):
