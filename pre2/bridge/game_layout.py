@@ -74,8 +74,11 @@ EFFECT_SLOT_LAYOUT = [
     ("anim_ptr", 0x0C, 2, False), ("yvel", 0x0E, 2, False), ("aux_10", 0x10, 1, False), ("life", 0x11, 1, False),
 ]
 _PROJECTILE_BASE, _PROJECTILE_COUNT = 0x4F2E, 4     # the player's thrown-weapon projectiles
+_RING_BASE, _RING_COUNT = 0x4F76, 5                 # the sparkle / popup trail ring (0x4F76..0x4FD0)
 _BURST_BASE, _BURST_COUNT = 0x50A8, 20              # the score/effect-burst free object pool (0x50A8..0x52E8)
+_DST_BASE, _DST_COUNT = 0x52E8, 20                  # the DST effect-particle pool (0x52E8..0x5450)
 _DEBRIS_BASE, _DEBRIS_COUNT = 0x5450, 16            # the debris-element pool
+_EFFECT_ROW_BASE, _EFFECT_ROW_COUNT = 0x56A2, 8     # the horizontal effect-row sprites
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
 PLAYER_LAYOUT = [
@@ -157,8 +160,11 @@ _ROUTES = [
     ("scroll", Scroll, SCROLL_LAYOUT, 0, 1, 0),
     ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
     ("projectiles", EffectSlot, EFFECT_SLOT_LAYOUT, _PROJECTILE_BASE, _PROJECTILE_COUNT, 0x12),
+    ("popup_ring", EffectSlot, EFFECT_SLOT_LAYOUT, _RING_BASE, _RING_COUNT, 0x12),
     ("bursts", EffectSlot, EFFECT_SLOT_LAYOUT, _BURST_BASE, _BURST_COUNT, 0x12),
+    ("dst_pool", EffectSlot, EFFECT_SLOT_LAYOUT, _DST_BASE, _DST_COUNT, 0x12),
     ("debris", EffectSlot, EFFECT_SLOT_LAYOUT, _DEBRIS_BASE, _DEBRIS_COUNT, 0x12),
+    ("effect_row", EffectSlot, EFFECT_SLOT_LAYOUT, _EFFECT_ROW_BASE, _EFFECT_ROW_COUNT, 0x12),
 ]
 
 
