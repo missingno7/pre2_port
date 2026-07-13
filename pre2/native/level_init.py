@@ -38,7 +38,7 @@ def native_3af2(state) -> None:
             _h_follow(state)                                       # [asm 565c] 57a8 horizontal follow
         _v_follow(state)                                           # [asm 565f] 5663 vertical follow
         _wb_cs(state, SCROLL_DONE_FLAG, 0)                          # [asm 563d] clear the snap flag
-        if d[_DS + 0x6BEE] == 0 and d[_DS + 0x6BED] == 0:           # [asm 3b38] both axes idle -> converged
+        if g.unk_6BED == 0:                                        # [asm 3b38] both axes idle -> converged (word 0x6bed)
             break
     if not (g.level_flags & 2):                                     # [asm 3b41] (not the gated mode)
         px_tile = _sar16(pv.x, 4)
@@ -47,7 +47,7 @@ def native_3af2(state) -> None:
             for _ in range(0xA):                                   # [asm 3b58] pan right x10
                 apply_camera_pan(state, "right")
     g.grid_dirty = 1                                                # [asm 3b60]
-    d[_DS + 0x2DE0] = 0xAA; d[_DS + 0x2DE1] = 0x55                  # [asm 3b65] [0x2de0]=0x55aa
+    g.grid_dirty_token = 0x55AA                                     # [asm 3b65] [0x2de0]=0x55aa
 
 
 def native_52d2(state) -> None:
