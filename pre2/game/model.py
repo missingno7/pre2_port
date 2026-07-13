@@ -176,6 +176,27 @@ class Camera:
     fine_scroll: int = 0  # sub-cell pixel scroll
     row_factor: int = 0   # the row-stride factor the renderer multiplies by
 
+    # read/write aliases of the DOS view's field names (cam_col_word/cam_col are the same word as `col`)
+    @property
+    def cam_col_word(self) -> int:
+        return self.col
+
+    @cam_col_word.setter
+    def cam_col_word(self, v: int) -> None:
+        self.col = v
+
+    cam_col = cam_col_word
+
+    @property
+    def cam_row_word(self) -> int:
+        return self.row
+
+    @cam_row_word.setter
+    def cam_row_word(self, v: int) -> None:
+        self.row = v
+
+    cam_row = cam_row_word
+
 
 @dataclass
 class Progress:
@@ -205,6 +226,55 @@ class Input:
     fire: int = 0
     source: int = 0       # 0 = live keyboard, 1 = demo playback
 
+    # read/write aliases of the DOS view's field names
+    @property
+    def in_up(self) -> int:
+        return self.up
+
+    @in_up.setter
+    def in_up(self, v: int) -> None:
+        self.up = v
+
+    @property
+    def in_down(self) -> int:
+        return self.down
+
+    @in_down.setter
+    def in_down(self, v: int) -> None:
+        self.down = v
+
+    @property
+    def in_left(self) -> int:
+        return self.left
+
+    @in_left.setter
+    def in_left(self, v: int) -> None:
+        self.left = v
+
+    @property
+    def in_right(self) -> int:
+        return self.right
+
+    @in_right.setter
+    def in_right(self, v: int) -> None:
+        self.right = v
+
+    @property
+    def in_fire(self) -> int:
+        return self.fire
+
+    @in_fire.setter
+    def in_fire(self, v: int) -> None:
+        self.fire = v
+
+    @property
+    def input_source(self) -> int:
+        return self.source
+
+    @input_source.setter
+    def input_source(self, v: int) -> None:
+        self.source = v
+
 
 @dataclass
 class Motion:
@@ -232,7 +302,15 @@ class PlayerState:
     last_land_y: int = 0     # Y of the last landing (fall-height source)
     input_suppress: int = 0  # nonzero forces the input bitmask to 0
     anim_hi: int = 0         # advance_anim's raw frame high byte
-    frame_blink: int = 0     # frame counter gating the trail emit / blink
+    frame_blink: int = 0     # frame counter gating the trail emit / blink; DOS view name: frame_stamp
+
+    @property
+    def frame_stamp(self) -> int:
+        return self.frame_blink
+
+    @frame_stamp.setter
+    def frame_stamp(self, v: int) -> None:
+        self.frame_blink = v
     input_lr: int = 0        # left|right held
     input_ud: int = 0        # up|down held
     drop_gate: int = 0       # nonzero: drop-through tiles active
@@ -256,6 +334,30 @@ class Scroll:
     vy: int = 0              # scroll-cursor Y velocity
     script_last: int = 0     # camera-script pointer last seen
 
+    @property
+    def scroll_phase(self) -> int:
+        return self.phase
+
+    @scroll_phase.setter
+    def scroll_phase(self, v: int) -> None:
+        self.phase = v
+
+    @property
+    def scroll_vx(self) -> int:
+        return self.vx
+
+    @scroll_vx.setter
+    def scroll_vx(self, v: int) -> None:
+        self.vx = v
+
+    @property
+    def scroll_vy(self) -> int:
+        return self.vy
+
+    @scroll_vy.setter
+    def scroll_vy(self, v: int) -> None:
+        self.vy = v
+
 
 @dataclass
 class LevelState:
@@ -268,3 +370,19 @@ class LevelState:
     checkpoint_x: int = 0
     checkpoint_y: int = 0
     grid_dirty: int = 0
+
+    @property
+    def level_flags(self) -> int:
+        return self.flags
+
+    @level_flags.setter
+    def level_flags(self, v: int) -> None:
+        self.flags = v
+
+    @property
+    def level_end_mode(self) -> int:
+        return self.end_mode
+
+    @level_end_mode.setter
+    def level_end_mode(self, v: int) -> None:
+        self.end_mode = v
