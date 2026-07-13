@@ -68,6 +68,48 @@ def test_a_real_composed_recovered_function_runs_identically_on_both_backends():
     assert byte_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000] == obj_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
 
 
+def test_player_collision_runs_identically_on_both_backends():
+    """A second, structurally different mechanism proof: player_collision.collision() uses PlayerView +
+    PlayerGlobals + Tables (not the RNG-overlay pattern), returns a 3-tuple (ds_writes, map_writes, redraws),
+    and is gated on branches (out-of-camera-range, airborne state) — exercised after real gameplay ticks so the
+    player is in a non-trivial physical state. Same result: identical writes, identical DGROUP, both backends."""
+    from pre2.bridge.game_layout import DataclassBackend
+    from pre2.native.game_tick_demo import GameTickDemo, _inject
+    from pre2.native.loop import native_gameplay_frame
+    from pre2.native.state import NativeGameState
+    from pre2.recovered.player_collision import collision
+    from pre2.views.memory_adapter import apply_ds, readers
+
+    demo = ROOT / "artifacts" / "demo_pre2_full_gorilla_20260628_203423" / "game_tick_demo.bin"
+    if not demo.exists():
+        import pytest
+        pytest.skip("gorilla demo corpus not present")
+    gtd = GameTickDemo.load(demo)
+    DGROUP_BASE = 0x1A0F << 4
+
+    byte_st = NativeGameState(bytearray(gtd.seed))
+    obj_st = NativeGameState(bytearray(gtd.seed))
+    obj_st.backend = DataclassBackend(obj_st, readonly_image=True)
+    for i in range(30):
+        idle = gtd.idle[i] if i < len(gtd.idle) else None
+        _inject(byte_st, gtd.keys[i], idle); native_gameplay_frame(byte_st)
+        _inject(obj_st, gtd.keys[i], idle); native_gameplay_frame(obj_st)
+
+    def call_collision(state):
+        rb, rw = readers(state)
+        es_base = (rw(0x2DDA) << 4) & 0xFFFFF
+        return collision(rb, rw, lambda o: state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF])
+
+    ds1, map1, redraws1 = call_collision(byte_st)
+    ds2, map2, redraws2 = call_collision(obj_st)
+    assert ds1 == ds2 and map1 == map2 and redraws1 == redraws2 and len(ds1) > 0
+
+    apply_ds(byte_st, ds1)
+    apply_ds(obj_st, ds2)
+    obj_st.backend.materialize()
+    assert byte_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000] == obj_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
+
+
 def _view_fields(dv, cls):
     import re
     body = dv.split(f"class {cls}")[1].split("\nclass ")[0]
