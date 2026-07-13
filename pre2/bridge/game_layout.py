@@ -12,9 +12,10 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import (Actor, ArenaEntity, AttackState, AttractState, Boss, ByteBuffer, Camera,
-                             CameraScript, DifficultyMode, EffectSlot, HitScratch, Input, LevelState, Motion,
-                             Player, PlayerState, Progress, Rng, SceneryState, Scroll, SpawnCursor, WallMarker)
+from pre2.game.model import (Actor, ArenaEntity, AttackState, AttractState, Boss, BonusCell, BossScript,
+                             ByteBuffer, Camera, CameraScript, DifficultyMode, EffectSlot, HitScratch, Input,
+                             LevelState, Motion, Player, PlayerState, Progress, Rng, SceneryState, Scroll,
+                             SpawnCursor, WallMarker)
 
 # named working-memory buffers the tick scribbles as raw bytes: (attr, base, length). Modeled as a bytearray,
 # not fields (transient scratch, not records). These finish draining the mutable state off the image.
@@ -32,12 +33,17 @@ _BUFFERS = [
     ("boot_scratch_1004", 0x1004, 0x04),
     ("keyboard_demo_state", 0x2804, 0x2879 - 0x2804),    # the keyboard scan + demo-cursor state
     ("demo_input_buffer", 0x00D6, 0x0125 - 0x00D6),      # the demo/idle input record buffer
-    ("low_scratch_2ea", 0x02EA, 0x0311 - 0x02EA),
+    # decode_input's demo-recording write lands at a runtime DEMO_PTR-relative offset that ranges over this
+    # whole low-memory scratch region (was under-sized, causing a real gap during recording-triggering demos)
+    ("low_scratch_2ea", 0x02EA, 0x0535 - 0x02EA),
     ("trigger_bank_scratch", 0x0553, 0x065E - 0x0553),   # the 41CA trigger/scenery bump-alloc bank
-    ("low_scratch_727", 0x0727, 2),
+    # the demo-recording buffer (input_decode.decode_input writes at a runtime DEMO_PTR-relative offset that
+    # can land anywhere in this low-memory region, up to just before attract_mode at 0x083D) + adjacent scratch
+    ("low_scratch_727", 0x0727, 0x083D - 0x0727),
     ("item_collect_state", 0x6C12, 0x6CA0 - 0x6C12),     # per-item collected counts + totals
     ("prop_scratch_7e0a", 0x7E0A, 0x7E1C - 0x7E0A),
     ("prop_scratch_846b", 0x846B, 0x847E - 0x846B),
+    ("bonus_cell_dedup", 0xA2A8, 0x50),   # the flood-fill dedup buffer, one byte per bonus-cell index
 ]
 _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 
@@ -125,11 +131,16 @@ SCENERY_STATE_LAYOUT = [
     ("sprite_bank_lo", 0x8C89, 2, False), ("sprite_bank_hi", 0x8C8B, 2, False),
     ("firefly_scratch_a", 0x6BC0, 1, False), ("firefly_scratch_b", 0x6BC1, 1, False),
     ("collected_linked", 0x2A7A, 2, False), ("display_page", 0x2DD6, 2, False), ("cam_left", 0x8164, 2, False),
+    ("collected_counter", 0x2A76, 2, False),
 ]
 ATTRACT_STATE_LAYOUT = [("attract_mode", 0x083D, 1, False), ("attract_level", 0x083E, 1, False),
                         ("in_aux", 0x27E9, 1, False), ("idle_clock", 0x27F0, 2, False)]
 DIFFICULTY_MODE_LAYOUT = [("mode", 0xB197, 1, False), ("mode_copy", 0xB198, 1, False)]
 BOSS_LAYOUT = [("boss_phase", 0xA326, 2, False)]
+BOSS_SCRIPT_LAYOUT = [
+    ("script_ptr", 0xA517, 2, False), ("dwell", 0xA515, 1, False), ("cycle", 0xA516, 1, False),
+    ("m9_ptr", 0xA4F7, 2, False), ("m9_count", 0xA519, 2, False),
+]
 # the 12-slot object/enemy list at 0x4FD0 (stride 0x12); the offsets are relative to each slot
 ACTOR_LAYOUT = [
     ("x", 0x00, 2, False), ("y", 0x02, 2, False), ("sprite", 0x04, 2, False), ("def_ptr", 0x06, 2, False),
@@ -145,7 +156,8 @@ EFFECT_SLOT_LAYOUT = [
 ]
 _PROJECTILE_BASE, _PROJECTILE_COUNT = 0x4F2E, 4     # the player's thrown-weapon projectiles
 _RING_BASE, _RING_COUNT = 0x4F76, 5                 # the sparkle / popup trail ring (0x4F76..0x4FD0)
-_BURST_BASE, _BURST_COUNT = 0x50A8, 20              # the score/effect-burst free object pool (0x50A8..0x52E8)
+_BURST_BASE, _BURST_COUNT = 0x50A8, 32              # the score/effect-burst free object pool (0x50A8..0x52E8);
+                                                     # (0x52E8-0x50A8)/0x12 = 32 exactly (was wrongly 20)
 _DST_BASE, _DST_COUNT = 0x52E8, 20                  # the DST effect-particle pool (0x52E8..0x5450)
 _DEBRIS_BASE, _DEBRIS_COUNT = 0x5450, 16            # the debris-element pool
 _SLOT0_BASE, _SLOT0_COUNT = 0x4F0A, 1               # render slot 0 (the one below the player)
@@ -155,6 +167,10 @@ _TARGET_BASE, _TARGET_COUNT = 0x5648, 5             # the 5 camera-target flash 
 WALL_MARKER_LAYOUT = [("token", 0, 2, False), ("map_off", 2, 2, False), ("data0", 4, 2, False),
                       ("data1", 6, 2, False)]
 _WALL_MARKER_BASE, _WALL_MARKER_COUNT = 0x6EA9, 20
+# the 80-cell bonus/collectible list (0x8C8D..0x8E1D, stride 5)
+BONUS_CELL_LAYOUT = [("reserved0", 0, 1, False), ("reserved1", 1, 1, False), ("reserved2", 2, 1, False),
+                     ("cell", 3, 2, False)]
+_BONUS_CELL_BASE, _BONUS_CELL_COUNT = 0x8C8D, 0x50
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
 PLAYER_LAYOUT = [
@@ -242,6 +258,7 @@ _ROUTES = [
     ("attract_state", AttractState, ATTRACT_STATE_LAYOUT, 0, 1, 0),
     ("difficulty_mode", DifficultyMode, DIFFICULTY_MODE_LAYOUT, 0, 1, 0),
     ("boss", Boss, BOSS_LAYOUT, 0, 1, 0),
+    ("boss_script", BossScript, BOSS_SCRIPT_LAYOUT, 0, 1, 0),
     ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
     ("projectiles", EffectSlot, EFFECT_SLOT_LAYOUT, _PROJECTILE_BASE, _PROJECTILE_COUNT, 0x12),
     ("popup_ring", EffectSlot, EFFECT_SLOT_LAYOUT, _RING_BASE, _RING_COUNT, 0x12),
@@ -252,6 +269,7 @@ _ROUTES = [
     ("target_records", EffectSlot, EFFECT_SLOT_LAYOUT, _TARGET_BASE, _TARGET_COUNT, 0x12),
     ("slot0", EffectSlot, EFFECT_SLOT_LAYOUT, _SLOT0_BASE, _SLOT0_COUNT, 0x12),
     ("wall_markers", WallMarker, WALL_MARKER_LAYOUT, _WALL_MARKER_BASE, _WALL_MARKER_COUNT, 8),
+    ("bonus_cells", BonusCell, BONUS_CELL_LAYOUT, _BONUS_CELL_BASE, _BONUS_CELL_COUNT, 5),
 ]
 
 

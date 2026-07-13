@@ -133,6 +133,17 @@ class ByteBuffer:
 
 
 @dataclass
+class BonusCell:
+    """One record of the 80-cell bonus/collectible list (stride 5). Only ``cell`` (the packed x/y map-cell
+    word) is read by the scan; the leading bytes are level-init-time payload the scan doesn't interpret."""
+
+    reserved0: int = 0
+    reserved1: int = 0
+    reserved2: int = 0
+    cell: int = 0xFFFF   # packed (y_cell << 8) | x_cell; 0xFFFF = the cell is empty/collected
+
+
+@dataclass
 class WallMarker:
     """One 8-byte wall-impact marker (the 20-slot table). ``token == 0x55AA`` means the slot is free; on a wall
     hit the collision code records the map offset + impact data in the remaining words."""
@@ -460,6 +471,7 @@ class SceneryState:
     firefly_scratch_a: int = 0   # the firefly pass's per-frame scratch pair
     firefly_scratch_b: int = 0
     collected_linked: int = 0    # the LINKED-item collected count
+    collected_counter: int = 0   # bumped once per bonus collected (the tally-percent numerator)
     display_page: int = 0        # the CRTC display-start page the present flips
     cam_left: int = 0            # camera-left tile — the X-integrate right bound
 
@@ -481,6 +493,18 @@ class Boss:
     they are already real fields, just reached through the camera-target array rather than this dataclass."""
 
     boss_phase: int = 0   # advances every 7 hits
+
+
+@dataclass
+class BossScript:
+    """The mode-9 boss glyph-script interpreter state (a separate boss subsystem from ``Boss``/``boss_phase``
+    — these bytes are addressed by object_spawn.py's own local constants, not a PlayerGlobals view name)."""
+
+    script_ptr: int = 0xFFFF   # the live boss-script cursor (== the mode-9 init flag; -1 = not yet seeded)
+    dwell: int = 0             # the dwell counter (decremented by jump opcodes; the advance fires at 0)
+    cycle: int = 0             # hit cadence counter (&3); every 4th hit switches scripts
+    m9_ptr: int = 0            # the relative-wrap script-table pointer
+    m9_count: int = 0          # spawn-count seed / boss health (saturating; 0 = boss dead)
 
 
 @dataclass
