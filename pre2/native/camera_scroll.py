@@ -15,6 +15,7 @@ shared address space, invisible to the DGROUP comparison, so calling it here is 
 from __future__ import annotations
 
 from pre2.views.memory_adapter import readers
+from pre2.views.dgroup_view import PlayerView
 from pre2.views.camera_pan import apply_camera_pan
 from pre2.gaps import Pre2HybridGap
 from pre2.native.state import DATA_SEG
@@ -106,9 +107,10 @@ def _v_scroll_up(state, dl: int) -> bool:
 def _h_init(state, dxs: int) -> None:
     """[asm 57F6..581D] Pick the horizontal scroll direction [0x6BED] (1=right, 2=left) from Xvel + screen X."""
     rb, rw = readers(state)
-    if rw(0x4F22) != 0 and (rb(0x4F23) & 0x80):                     # [57FD] moving left
+    pv = PlayerView(state)
+    if pv.xvel != 0 and (rb(0x4F23) & 0x80):                     # [57FD] moving left
         right = False
-    elif rw(0x4F22) != 0:                                           # moving right
+    elif pv.xvel != 0:                                           # moving right
         right = True
     elif dxs >= 0xA:                                                # [5806] Xvel==0: far right half
         right = True
@@ -126,9 +128,10 @@ def _h_follow(state) -> None:
     """[asm 57A8..581D] Horizontal camera follow: a 3-state machine (idle/right/left) on [0x6BED] driving
     apply_camera_pan (3414/3435)."""
     rb, rw = readers(state)
-    dx = (_sar16(rw(0x4F1C), 4) - rw(0x2DE4)) & 0xFFFF              # [57AD-57B5] player screen X
+    pv = PlayerView(state)
+    dx = (_sar16(pv.x, 4) - rw(0x2DE4)) & 0xFFFF              # [57AD-57B5] player screen X
     dxs = _s16(dx)
-    if dx < 0x14 and rb(0x6BFE) == 0 and rw(0x4F22) == 0:           # [57B9/57BE/57C5] in-window & idle -> stop
+    if dx < 0x14 and rb(0x6BFE) == 0 and pv.xvel == 0:           # [57B9/57BE/57C5] in-window & idle -> stop
         _wb(state, 0x6BED, 0)
         return
     bed = rb(0x6BED)
@@ -152,9 +155,10 @@ def _v_speed(state, down: bool) -> int:
     is from its target. The down/up paths index the curve by the SIGNED-OPPOSITE distance (down: player below
     target = ``ay-cell``; up: ``cell-ay``). cs:[0x6771]!=0 forces dl=0x10 (snap)."""
     rb, rw = readers(state)
+    pv = PlayerView(state)
     if _rb_cs(state, SCROLL_DONE_FLAG) != 0:
         return 0x10
-    ay = (rw(0x4F1E) - rb(0x6BC4)) & 0xFFFF                         # player Y - sub-tile accumulator
+    ay = (pv.y - rb(0x6BC4)) & 0xFFFF                         # player Y - sub-tile accumulator
     cell = ((rw(0x2DE6) + rw(0x6BF1)) << 4) & 0xFFFF                # (cam cell + target) * 16
     bx = ((ay - cell) if down else (cell - ay)) & 0xFFFF           # [574C sub ax,dx] / [5788 sub bx,ax]
     if rb(0x2DF4) == 0:                                            # [5750/578A] table form
@@ -166,14 +170,15 @@ def _v_follow(state) -> None:
     """[asm 5663..57A7] Vertical camera follow: a screen-Y window picks a target row [0x6BF1] + active flag
     [0x6BEE], then scrolls toward it (33AD down / 3363 up)."""
     rb, rw = readers(state)
+    pv = PlayerView(state)
     if _rb_cs(state, SCROLL_DONE_FLAG) == 0 and (rb(0x8166) & 4):   # [5668-5675] forced snap-down
         _v_scroll_down(state, 1)                                    # [5677 dl=1]
         return
-    if rw(0x4F2A) == 0:                                             # [567D] Yvel==0 -> reset active flag
+    if pv.yvel == 0:                                             # [567D] Yvel==0 -> reset active flag
         _wb(state, 0x6BEE, 0)
-    dxs = _s16((_sar16(rw(0x4F1E), 4) - rw(0x2DE6)) & 0xFFFF)       # [5689] player screen Y
+    dxs = _s16((_sar16(pv.y, 4) - rw(0x2DE6)) & 0xFFFF)       # [5689] player screen Y
     target = None
-    if rw(0x4F2A) != 0:                                            # [5695] Yvel != 0
+    if pv.yvel != 0:                                            # [5695] Yvel != 0
         if dxs >= 9:
             target = 3
         elif dxs <= 2:
@@ -200,9 +205,10 @@ def _v_scroll_apply(state, dxs: int) -> None:
     """[asm 56EA..57A2] Scroll the camera one step toward the target row [0x6BF1], or clear the active flag when
     it is reached / blocked at a level edge."""
     rb, rw = readers(state)
+    pv = PlayerView(state)
     top = (rw(0x815E) + 0xB) & 0xFFFF
     # [56EA-5701] level-edge pre-check: if not past the bottom and the level top is above the camera -> scroll up
-    if rw(0x4F1E) <= ((top << 4) & 0xFFFF) and _s16(rw(0x815E)) < _s16((rw(0x2DE6) - 1) & 0xFFFF):
+    if pv.y <= ((top << 4) & 0xFFFF) and _s16(rw(0x815E)) < _s16((rw(0x2DE6) - 1) & 0xFFFF):
         if not _v_scroll_up(state, _v_speed(state, down=False)):    # [576A]
             _wb(state, 0x6BEE, 0)
         return
@@ -217,7 +223,7 @@ def _v_scroll_apply(state, dxs: int) -> None:
             _wb(state, 0x6BEE, 0)
         return
     # [5718] scroll down toward the target
-    if rw(0x4F1E) <= ((top << 4) & 0xFFFF) and rw(0x2DE6) > rw(0x815E):   # [5722-572C]
+    if pv.y <= ((top << 4) & 0xFFFF) and rw(0x2DE6) > rw(0x815E):   # [5722-572C]
         _wb(state, 0x6BEE, 0)
         return
     if not _v_scroll_down(state, _v_speed(state, down=True)):       # [5763]
