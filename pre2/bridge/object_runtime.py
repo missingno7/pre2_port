@@ -59,3 +59,24 @@ def enter_image_mode(state) -> None:
 def is_object_backed(state) -> bool:
     """True when ``state`` is currently on the object graph (gameplay mode), not a plain byte image."""
     return isinstance(getattr(state, "backend", None), DataclassBackend)
+
+
+class ObjectStore:
+    """The gameplay-state-of-record controller the product's frame loop calls via dependency injection
+    (``native_frame_step_tagged(..., store=ObjectStore())``). The product never imports this — the bridge is
+    detachable and hands it in — so the shipped loop carries no dependency on the object model.
+
+    ``seed`` puts the tick on the object graph (fresh from the current image each frame, so it picks up whatever
+    the prior frame's render/transition left); ``fold`` folds the ticked objects back into the image (preserving
+    the render-owned counters) and returns the state to the byte image for the render + any transition."""
+
+    __slots__ = ("readonly_image",)
+
+    def __init__(self, readonly_image: bool = True) -> None:
+        self.readonly_image = readonly_image
+
+    def seed(self, state) -> None:
+        to_object_store(state, readonly_image=self.readonly_image)
+
+    def fold(self, state) -> None:
+        enter_image_mode(state)

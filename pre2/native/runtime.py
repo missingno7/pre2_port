@@ -310,8 +310,18 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
         yield planes, page
 
 
-def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, raster_normal: bool = True):
+def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, raster_normal: bool = True,
+                             store=None):
     """Advance the recovered gameplay over ``state`` (in place) and ``yield (planes, page, interpolatable, tx)``.
+
+    ``store`` is an optional gameplay-state-of-record controller (duck-typed: ``store.seed(state)`` before the
+    tick, ``store.fold(state)`` after it). Default ``None`` leaves the shipped byte-image path byte-for-byte
+    unchanged; passing the bridge's object-store controller (pre2/bridge/object_runtime.ObjectStore) runs the
+    gameplay TICK on the offset-free object graph (the north-star state of record) and folds it back for the
+    render. It is INJECTED, never imported here — the product must not depend on the detachable bridge. Proven
+    byte-identical either way: the ONLY code that runs on the object graph is the tick; everything after it (every
+    render and every transition, which mix raw-image access) runs on the materialised image, so the seam is just
+    ``seed`` at entry then ``fold`` the moment the tick returns or raises. See scripts/verify_object_playloop.py.
 
     ``raster_normal=False`` skips the faithful raster for the NORMAL gameplay tick (yields ``planes=None``) — the
     ~7ms saved when the caller presents via the enhanced compositor, which rebuilds the frame itself and needs
@@ -329,9 +339,17 @@ def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, r
 
     Normally exactly one frame. During the death-respawn transition it yields each death-bounce frame (the whole
     60-frame arc animates) then the checkpoint frames."""
+    if store is not None:
+        # seed the gameplay state of record from the current image (fresh each frame — picks up whatever the
+        # previous frame's render/transition left), tick on it, then fold back to the image for the render.
+        store.seed(state)
     try:
         native_gameplay_frame(state)
+        if store is not None:
+            store.fold(state)              # tick done: objects -> image (render counters preserved), ByteBackend
     except Pre2CaveTeleport as tp:
+        if store is not None:
+            store.fold(state)
         # the cave/teleport transition fired mid-frame: fade-out curtain over the CURRENT (old-area) frame,
         # black while the camera pans behind it, then the center-out reveal of the new room. The generator owns
         # ALL the state work (incl. the 53D7 mini-pass + the frame's remainder); we only compose the visuals.
@@ -362,6 +380,8 @@ def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, r
         yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True), True, None)
         return
     except Pre2RespawnTransition:
+        if store is not None:
+            store.fold(state)
         # the respawn fired this frame (the prefix already ran the death hit). Drive native_4f6c — a per-frame
         # generator — rendering EACH of the 60 bounce frames, then the checkpoint frame. Verified per-frame
         # byte-exact vs the ASM 509d loop: pre2/probes/probe_native_respawn_anim.py. force_gameplay: the
@@ -384,12 +404,16 @@ def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, r
             yield (_rp, _rpg, False, ("reveal", i / 11.0))  # [asm 3054] the checkpoint curtains in center-out
         return
     except Pre2LevelEndTransition:
+        if store is not None:
+            store.fold(state)        # fold gameplay state to the image before the caller's raw-.data load
         # PROPAGATES to the caller — the between-levels flow (the VM's 4F65 -> BRAVO tally scene -> CARTE world
         # map -> next-level load) is the FLOW DRIVER's job (play_native drives the carte scene +
         # native_level_end); a state-only consumer calls native_level_end itself (see game_tick_demo).
         # (Must be re-raised EXPLICITLY: it subclasses Pre2HybridGap, which is swallowed below.)
         raise
     except Pre2GameOverTransition:
+        if store is not None:
+            store.fold(state)
         # [asm 5063] death -> game-over restart. Render the death-bounce arc (native_5063 yields the 60 bounce
         # frames), then RE-RAISE: the restart re-enters main's 0x12f front-end flow (447d + carte + level-1
         # reload), which is the FLOW DRIVER's job (like level-end). native_5063 ends with the level/score reset
@@ -399,15 +423,21 @@ def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, r
             yield (*native_render(state, dos, display_page, game_root=game_root, force_gameplay=True), True, None)
         raise
     except Pre2GameComplete:
+        if store is not None:
+            store.fold(state)
         # [asm 5034] THE END — the player cleared the final level 0xE. The game-complete SCENE (THEEND.SQZ fade +
         # the 25F6 creators screen -> menu) is the FLOW DRIVER's job (play_native's the_end_restart). Re-raise
         # EXPLICITLY: it subclasses Pre2HybridGap, which the handler below swallows.
         raise
     except Pre2CheatCredits:
+        if store is not None:
+            store.fold(state)
         # [asm 247B->2505] the dev-credits cheat combo — an OVERLAY scene the flow driver shows then RESUMES the
         # same level. Re-raise EXPLICITLY (subclasses Pre2HybridGap, swallowed below).
         raise
     except Pre2HybridGap:
+        if store is not None:
+            store.fold(state)
         # a real non-gameplay scene reached via a carry path we don't drive as a transition — let the SceneKind
         # classifier run (force_gameplay stays False -> honest FaithfulVisualGap, no ASM fallback).
         native_sync_render_state(state)
