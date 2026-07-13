@@ -14,6 +14,7 @@ from __future__ import annotations
 from pre2.native.vga import _dac8
 
 from pre2.views.foreground_tiles import read_foreground_state
+from pre2.views.dgroup_view import PlayerGlobals
 from pre2.views.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.views.gameplay_effects import capture_gameplay_effects
 from pre2.views.particles import read_particles
@@ -44,7 +45,7 @@ def native_load_level_palette(state, dos) -> None:
     'render' (it touches no DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap
     snapshot's palette. The per-level palettes are global in DGROUP, so this just selects the right one."""
     d = state.data
-    level = d[_DS + 0x2D8A]
+    level = PlayerGlobals(state).level
     table_off = d[_DS + 0x2D00 + level * 2] | (d[_DS + 0x2D00 + level * 2 + 1] << 8)
     native_load_dac_palette(state, dos, table_off, 0x10)
 
@@ -59,8 +60,9 @@ def native_sync_render_state(state) -> None:
     renderer reads a stale ring index and the tiles corrupt the moment the camera scrolls. (Render-only, so it
     lives outside ``native_gameplay_frame`` and never perturbs the byte-exact gameplay verify.)"""
     d = state.data
-    cam_x = d[_DS + 0x2DE4] | (d[_DS + 0x2DE5] << 8)
-    cam_y = d[_DS + 0x2DE6] | (d[_DS + 0x2DE7] << 8)
+    g = PlayerGlobals(state)
+    cam_x = g.cam_col_word
+    cam_y = g.cam_row_word
     for off, val in ((0x2DE8, cam_x % _RING_COLS), (0x2DEA, cam_y % _RING_ROWS),
                      (0x2DE0, cam_x), (0x2DE2, cam_y)):
         d[_DS + off] = val & 0xFF
@@ -84,8 +86,8 @@ def native_sync_render_state(state) -> None:
     from pre2.recovered.animation import advance_animation
     fp = d[_DS + 0x6BC2] | (d[_DS + 0x6BC3] << 8)
     thr = d[_DS + 0x6BD4]
-    active = d[_DS + 0x6BBD] != 0
-    speed = d[_DS + 0x6BF6] | (d[_DS + 0x6BF7] << 8)
+    active = g.page_dirty != 0
+    speed = g.friction
     fp, thr, _ = advance_animation(fp, thr, active, speed)
     d[_DS + 0x6BC2] = fp & 0xFF
     d[_DS + 0x6BC3] = (fp >> 8) & 0xFF
