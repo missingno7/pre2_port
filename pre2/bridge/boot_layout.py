@@ -41,9 +41,22 @@ def _enc_s16(vals) -> bytes:
     return bytes(out)
 
 
+_DIGIT_BASE, _DIGIT_STRIDE, _DIGIT_COUNT = 0xCE8A, 0x58, 9   # the 16x32 HUD digit sprites (1..9)
+
+
 def _residual() -> bytearray:
     z = (Path(__file__).with_name("_boot_residual.txt")).read_text().strip()
     return bytearray(zlib.decompress(base64.b85decode(z)))
+
+
+def _place_digit_sprites(img) -> None:
+    """Regenerate the 9 HUD digit sprites from the committed PNG asset (the readable form of that artwork)."""
+    from pre2.bridge.boot_graphics import png_to_region
+    png = Path(__file__).with_name("assets") / "boot_digits.png"
+    payload = png_to_region(str(png), _DIGIT_COUNT * 64, tile_w=16, tile_h=32, tiles_wide=_DIGIT_COUNT, gap=0)
+    for k in range(_DIGIT_COUNT):
+        off = _DIGIT_BASE + k * _DIGIT_STRIDE
+        img[off:off + 64] = payload[k * 64:k * 64 + 64]
 
 
 def generate_boot_dgroup() -> bytearray:
@@ -64,12 +77,13 @@ def generate_boot_dgroup() -> bytearray:
     for off, text in T.RESOURCE_RECORDS:
         blob = text.encode("latin1") + b"\x00"
         img[off:off + len(blob)] = blob
+    _place_digit_sprites(img)     # the HUD digit font, from its PNG asset
     return img
 
 
 def constant_coverage() -> tuple[int, int]:
     """(bytes generated from readable constants, non-zero bytes still in the residual blob)."""
-    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + len(T.SCANCODE_CHARS)
+    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + len(T.SCANCODE_CHARS)
                + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
     return covered, sum(1 for b in _residual() if b)
 
