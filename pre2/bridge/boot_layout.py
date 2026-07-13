@@ -62,6 +62,18 @@ _RAW_TABLES = [
 ]
 _RAW_TABLES_BYTES = sum(len(getattr(T, n)) for n, _ in _RAW_TABLES)
 
+# the final drain: every remaining boot region (boot stub, initial game-state values, camera/password/carte
+# block, misc boot tables) named + placed verbatim, so the residual is now all zeros (_DGROUP_Z is redundant)
+_FINAL_TABLES = [
+    ("BOOT_MEMCPY_STUB", 0x0000), ("BOOT_TABLE_0037", 0x0037), ("BOOT_TABLE_0864", 0x0864),
+    ("BOOT_TABLE_0A98", 0x0A98), ("BOOT_TABLE_0B1F", 0x0B1F), ("BOOT_TABLE_0B49", 0x0B49),
+    ("BOOT_TABLE_0E47", 0x0E47), ("BOOT_TABLE_1004", 0x1004), ("BOOT_TABLE_2355", 0x2355),
+    ("BOOT_TABLE_27DA", 0x27DA), ("INITIAL_GAME_STATE", 0x2875), ("BOOT_TABLE_2DD9", 0x2DD9),
+    ("BOOT_TABLE_6BA0", 0x6BA0), ("BOOT_TABLE_6BC2", 0x6BC2), ("BOOT_TABLE_6F4D", 0x6F4D),
+    ("BOOT_TABLE_7CFF", 0x7CFF), ("BOOT_TABLE_7D1F", 0x7D1F), ("BOOT_TABLE_8C89", 0x8C89),
+    ("BOOT_TABLE_A2F8", 0xA2F8), ("BOOT_TABLE_A365", 0xA365), ("CAMERA_PASSWORD_CARTE_BLOCK", 0xA42D),
+]
+
 
 def _residual() -> bytearray:
     z = (Path(__file__).with_name("_boot_residual.txt")).read_text().strip()
@@ -97,7 +109,7 @@ def generate_boot_dgroup() -> bytearray:
     img[_ATTACK_OFF:_ATTACK_OFF + 20] = b"".join(
         bytes((p & 0xFF, (p >> 8) & 0xFF, sfx, v19, flag)) for (p, sfx, v19, flag) in T.ATTACK_PHASES)
     img[_SCORE_OFF:_SCORE_OFF + 34] = _enc_s16(T.SCORE_VALUES)
-    for name, off in _RAW_TABLES:
+    for name, off in _RAW_TABLES + _FINAL_TABLES:
         blob = getattr(T, name)
         img[off:off + len(blob)] = blob
     img[_HITBOX_WX_OFF:_HITBOX_WX_OFF + 32] = bytes(T.HITBOX_HALF_WIDTHS)
@@ -115,8 +127,9 @@ def generate_boot_dgroup() -> bytearray:
 
 def constant_coverage() -> tuple[int, int]:
     """(bytes generated from readable constants, non-zero bytes still in the residual blob)."""
+    final_bytes = sum(len(getattr(T, n)) for n, _ in _FINAL_TABLES)
     covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + _CONTIG_GFX_BYTES
-               + _RAW_TABLES_BYTES + len(T.SCANCODE_CHARS)
+               + _RAW_TABLES_BYTES + final_bytes + len(T.SCANCODE_CHARS)
                + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
     return covered, sum(1 for b in _residual() if b)
 

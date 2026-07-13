@@ -18,8 +18,8 @@ def test_boot_tables_are_plain_readable_constants():
     assert not hasattr(m, "DS_BASE") and not hasattr(m, "generate_boot_dgroup")
 
 
-def test_residual_shrinks_as_tables_are_decoded():
+def test_residual_is_fully_drained():
     from pre2.bridge.boot_layout import constant_coverage
     covered, residual = constant_coverage()
-    assert covered > 1000               # the decoded tables carry real bytes
-    assert residual > 0                 # graphics/undecoded fossil remains (honest measure of work left)
+    assert covered > 20000              # the whole boot image is now named constants + PNG assets
+    assert residual == 0                # nothing left in the opaque blob -> _DGROUP_Z is redundant
