@@ -14,7 +14,7 @@
   "pre2/native/loop.py": 24,
   "pre2/native/player.py": 19,
   "pre2/native/render.py": 20,
-  "pre2/native/runtime.py": 114,
+  "pre2/native/runtime.py": 56,
   "pre2/native/sprite_bank.py": 12,
   "pre2/recovered/combat_interaction.py": 91,
   "pre2/recovered/effects_update.py": 12,

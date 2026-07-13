@@ -21,7 +21,7 @@ from pre2.gaps import (Pre2CaveTeleport, Pre2CheatCredits, Pre2GameComplete, Pre
 from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
-from pre2.native.state import DATA_SEG
+from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 
 
 _VIEW_ROWS = 0xB0          # the gameplay viewport height in rows (the HUD band below stays)
@@ -89,37 +89,30 @@ def native_iris_close(state, dos, display_page: int, *, game_root: str):
     stepping [0x2DC0] up every 0x14 frames, until the circle closes. (The 316F object-clear is skipped: it frees
     the gameplay objects for the exit-anim that follows, but native reloads the level fresh via native_level_end,
     and skipping it keeps the frozen objects visible behind the iris — matching the VM's page snapshot.)"""
-    _DS = (DATA_SEG << 4) & 0xFFFFF
-    d = state.data
-
-    def rw(o):
-        return d[_DS + (o & 0xFFFF)] | (d[_DS + ((o + 1) & 0xFFFF)] << 8)
-
-    def ww(o, v):
-        d[_DS + (o & 0xFFFF)] = v & 0xFF
-        d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
+    g, pv = PlayerGlobals(state), PlayerView(state)
 
     def s16(v):
         return v - 0x10000 if v & 0x8000 else v
 
-    x_off = (rw(0x4F1C) - (rw(0x2DE4) << 4)) & 0xFFFF                          # [asm 31AC-31B9] player screen X
-    y_off = (((rw(0x4F1E) - (rw(0x2DE6) << 4)) & 0xFFFF) - 0x10 - d[_DS + 0x6BC4]) & 0xFFFF  # [asm 31BC-31D1]
+    x_off = (pv.x - (g.cam_col_word << 4)) & 0xFFFF                            # [asm 31AC-31B9] player screen X
+    y_off = (((pv.y - (g.cam_row_word << 4)) & 0xFFFF) - 0x10 - state.rb(0x6BC4)) & 0xFFFF  # [asm 31BC-31D1]
     clamp = (2 * s16(y_off)) & 0xFFFF                                          # [asm 31D4-31DF] max(2*Y, 0xF0)
     if s16(clamp) < 0xF0:
         clamp = 0xF0
-    ww(0x2DC8, x_off); ww(0x2DC6, y_off); ww(0x2DC4, clamp)
-    ww(0x2DD0, 0xE6); ww(0x2DC0, 4); ww(0x2DC2, 0)                            # [asm 31E2-31EE] radius + counters
-    while s16(rw(0x2DD0)) > 0:                                                # [asm 31F4..32DD] shrink loop
+    # the iris geometry is unnamed animation scratch ([0x2dc*]/[0x2dd0] radius) — accessor form, no named field
+    state.ww(0x2DC8, x_off); state.ww(0x2DC6, y_off); state.ww(0x2DC4, clamp)
+    state.ww(0x2DD0, 0xE6); state.ww(0x2DC0, 4); state.ww(0x2DC2, 0)          # [asm 31E2-31EE] radius + counters
+    while s16(state.rw(0x2DD0)) > 0:                                          # [asm 31F4..32DD] shrink loop
         planes, page = native_render(state, dos, display_page, game_root=game_root)   # IRIS kind (compose_iris)
         _paint_player_over_iris(state, planes, page)                          # keep the player ON TOP of the fade
         yield planes, page
-        c2 = (rw(0x2DC2) + 1) & 0xFFFF                                        # [asm 32B0-32C1] accel every 0x14
+        c2 = (state.rw(0x2DC2) + 1) & 0xFFFF                                  # [asm 32B0-32C1] accel every 0x14
         if c2 >= 0x14:
             c2 = 0
-            ww(0x2DC0, (rw(0x2DC0) + 1) & 0xFFFF)
-        ww(0x2DC2, c2)
-        ww(0x2DD0, (rw(0x2DD0) - rw(0x2DC0)) & 0xFFFF)                        # [asm 32D1] radius -= step
-    ww(0x2DD0, 0)                                                             # iris closed -> off
+            state.ww(0x2DC0, (state.rw(0x2DC0) + 1) & 0xFFFF)
+        state.ww(0x2DC2, c2)
+        state.ww(0x2DD0, (state.rw(0x2DD0) - state.rw(0x2DC0)) & 0xFFFF)      # [asm 32D1] radius -= step
+    state.ww(0x2DD0, 0)                                                       # iris closed -> off
 
 
 def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_only: bool = False):
@@ -138,36 +131,25 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
     Without that clear it over-counted (610) by also scanning the LEVEL's leftover [0x52E8] effect sprites."""
     from pre2.views.tally_scene import build_tally_scene
     from pre2.recovered.player import player_advance_anim
-    _DS = (DATA_SEG << 4) & 0xFFFFF
-    d = state.data
     page = display_page & 0xFFFF
-
-    def rw(o):
-        return d[_DS + (o & 0xFFFF)] | (d[_DS + ((o + 1) & 0xFFFF)] << 8)
-
-    def ww(o, v):
-        d[_DS + (o & 0xFFFF)] = v & 0xFF
-        d[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
-
-    def wb(o, v):
-        d[_DS + (o & 0xFFFF)] = v & 0xFF
+    g, pv = PlayerGlobals(state), PlayerView(state)
 
     def s16(v):
         return v - 0x10000 if v & 0x8000 else v
 
     def frame():
-        ap = rw(0x4F28)                                              # [asm 638B] step the player walk animation
-        fr, nptr, bcf = player_advance_anim(ap, d[_DS + 0x4F25], rw)
-        ww(0x4F20, fr); ww(0x4F28, nptr); wb(0x6BCF, bcf)
+        ap = pv.anim_ptr                                            # [asm 638B] step the player walk animation
+        fr, nptr, bcf = player_advance_anim(ap, pv.facing_lo, state.rw)
+        pv.sprite = fr; pv.anim_ptr = nptr; g.anim_hi = bcf
         # [asm 51F0] the pot-FLAME animation — the ASM calls 51F0 each pot-phase frame (slide-in/throw/count-up),
         # BEFORE 26FA bumps [0x6BD5]: every 4th frame ([0x6BD5]&3==0) it advances the flame sprite id [0x4F56]
         # (masked to the base id, so its collectible flag drops) through 0x68..0x6D and wraps. Guard on the flame
         # id range so it fires only while the pot is on screen (the 316F clear leaves [0x4F56]=0xFFFF during the
         # player walk-in). Without this the flame was frozen (user: "the pot should be animated and it isn't").
-        if (d[_DS + 0x6BD5] & 3) == 0:
-            fid = rw(0x4F56) & 0x1FFF
+        if (state.rb(0x6BD5) & 3) == 0:
+            fid = state.rw(0x4F56) & 0x1FFF                         # [0x4F56] the pot-flame render-slot sprite id
             if 0x68 <= fid < 0x6E:
-                ww(0x4F56, 0x68 if fid + 1 >= 0x6E else fid + 1)
+                state.ww(0x4F56, 0x68 if fid + 1 >= 0x6E else fid + 1)
         _ww_ctr()                                                   # advance the free-running frame counter
         native_sync_render_state(state)                            # cheap; maintains the tile-ring indices
         #                                                            [0x2DE8]/[0x2DEA] the VM's render cluster updates
@@ -177,7 +159,7 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
         return planes, page
 
     def _ww_ctr():
-        ww(0x6BD5, (rw(0x6BD5) + 1) & 0xFFFF)                       # [0x6BD5]++ (51F0/count-up timing read it)
+        state.ww(0x6BD5, (state.rw(0x6BD5) + 1) & 0xFFFF)          # [0x6BD5]++ (51F0/count-up timing read it)
 
     # [asm 316F->318B-31AA] clear the object/effect slots for the tally. The VM does this at the iris-close
     # entry (316F), which first snapshots the frozen frame to A000 (3177-3184) so the iris still shows the level;
@@ -187,33 +169,32 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
     # [slot+4]=0xFFFF for 0x73 slots from 0x4F2E (the player record @0x4F1C is before the range and survives).
     for _k in range(0x73):
         _so = (0x4F2E + _k * 0x12) & 0xFFFF
-        d[_DS + _so + 4] = 0xFF
-        d[_DS + _so + 5] = 0xFF
+        state.ww(_so + 4, 0xFFFF)                                  # the effect-slot arena (stride 0x12): free the id
 
     # [asm 4CEA-4D1A] recenter the player to screen space, zero the camera + velocities
-    ww(0x4F1E, (rw(0x4F1E) - (rw(0x2DE6) << 4)) & 0xFFFF)
-    ww(0x4F1C, (rw(0x4F1C) - (rw(0x2DE4) << 4)) & 0xFFFF)
-    ww(0x2DE4, 0); ww(0x2DE6, 0); ww(0x4F25, 0); ww(0x4F22, 0)
-    wb(0x6BC5, 0); ww(0x4F0E, 0xFFFF); ww(0x4F28, 0x7BA7)           # [asm 4D26-4D3B] free weapon slot, walk anim
+    pv.y = (pv.y - (g.cam_row_word << 4)) & 0xFFFF
+    pv.x = (pv.x - (g.cam_col_word << 4)) & 0xFFFF
+    g.cam_col_word = 0; g.cam_row_word = 0; pv.facing = 0; pv.xvel = 0
+    g.glider = 0; state.ww(0x4F0E, 0xFFFF); pv.anim_ptr = 0x7BA7    # [asm 4D26-4D3B] free weapon slot, walk anim
 
-    # [asm 4D3E-4D8E] the player walks in to (0x3C, 0xAF)
+    # [asm 4D3E-4D8E] the player walks in to (0x3C, 0xAF) — the (x, y) render-slot words at 0x4F1C/0x4F1E
     while True:
         moved = False
         for off, tgt in ((0x4F1C, 0x3C), (0x4F1E, 0xAF)):
-            diff = s16((rw(off) - tgt) & 0xFFFF)
+            diff = s16((state.rw(off) - tgt) & 0xFFFF)
             if abs(diff) >= 2:
-                ww(off, (rw(off) - (2 if diff > 0 else -2)) & 0xFFFF)
+                state.ww(off, (state.rw(off) - (2 if diff > 0 else -2)) & 0xFFFF)
                 moved = True
         if not moved:
             break
         yield frame()
 
-    # [asm 4D8E-4DE9] 3 food sprites slide in from the right (X=0x168) to X<=0x9B
+    # [asm 4D8E-4DE9] 3 food sprites slide in from the right (X=0x168) to X<=0x9B — the 0x4F2E food-slot arena
     for base, y, sid in ((0x4F2E, 0xAF, 0x64), (0x4F40, 0x94, 0x62), (0x4F52, 0x9B, 0x68)):
-        ww(base, 0x168); ww(base + 2, y); ww(base + 4, sid)
-    while s16(rw(0x4F2E)) > 0x9B:
+        state.ww(base, 0x168); state.ww(base + 2, y); state.ww(base + 4, sid)
+    while s16(state.rw(0x4F2E)) > 0x9B:
         for base in (0x4F2E, 0x4F40, 0x4F52):
-            ww(base, (rw(base) - 3) & 0xFFFF)
+            state.ww(base, (state.rw(base) - 3) & 0xFFFF)
         yield frame()
 
     # [asm 4DF5-4F0B] the food-throw score COUNT-UP — byte-verified vs the VM (adds exactly the VM's 100 on the
@@ -221,54 +202,54 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
     # the level's leftover [0x52E8] effect sprites. The player throws, then each collected item ([0x6C12] queue)
     # spawns at the top and falls into the pot, adding its value.
     _COUNT_UP_RECOVERED = True
-    if _COUNT_UP_RECOVERED and rw(0x6C9E) != 0:                     # [asm 4DEB] a bonus was collected -> count-up
+    if _COUNT_UP_RECOVERED and state.rw(0x6C9E) != 0:              # [asm 4DEB] a bonus was collected -> count-up
         # [asm 4DF5-4E30] the player throws; the recoil velocity decays (6333 friction) to a stop
-        ww(0x4F28, 0x7C6B); ww(0x4F22, 0x40); wb(0x4F24, 2)
-        while rw(0x4F22) != 0:
-            ww(0x4F1C, (rw(0x4F1C) + s16(rw(0x4F22)) // 16) & 0xFFFF)   # [asm 4E1F-4E2A] X += Xvel>>4
-            v = abs(s16(rw(0x4F22))) - (0xC >> d[_DS + 0x4F24])          # [asm 6333] friction
-            v = 0 if v < 0 else (-v if s16(rw(0x4F22)) < 0 else v)
-            ww(0x4F22, v & 0xFFFF)
+        pv.anim_ptr = 0x7C6B; pv.xvel = 0x40; pv.motion_mode = 2
+        while pv.xvel != 0:
+            pv.x = (pv.x + pv.xvel // 16) & 0xFFFF                 # [asm 4E1F-4E2A] X += Xvel>>4
+            v = abs(pv.xvel) - (0xC >> pv.motion_mode)            # [asm 6333] friction
+            v = 0 if v < 0 else (-v if pv.xvel < 0 else v)
+            pv.xvel = v & 0xFFFF
             yield frame()
         # [asm 4E32-4F0B] the food falls into the pot; each item on reaching the pot line adds its value.
         # Loop shape matches the ASM: render (top, [0x6BD5]++), the slot fall/collect scan, then the refill —
         # a refill that SPAWNS a queued item continues (jmp 4E3A); termination (4F07) only fires on a refill
         # frame that finds the queue EMPTY and no slot still falling. (My earlier break-every-frame quit the
         # instant the last item spawned — before it could fall — leaving the score uncounted.)
-        ww(0x4F28, 0x7CAF)                                          # [asm 4E32] the throw/count-up anim
+        pv.anim_ptr = 0x7CAF                                       # [asm 4E32] the throw/count-up anim
         while True:
             yield frame()                                          # [asm 4E3A-4E50] render (26FA bumps [0x6BD5])
             alive = False
             for k in range(0x14):                                  # [asm 4E53-4EAE] the 20 effect slots [0x52E8]
-                si = 0x52E8 + k * 0x12
-                if rw(si + 4) == 0xFFFF:
+                si = 0x52E8 + k * 0x12                             # the falling-food effect arena (stride 0x12)
+                if state.rw(si + 4) == 0xFFFF:
                     continue
                 alive = True                                        # [asm 4E7A] inc bp — any non-empty slot
-                vel = rw(si + 0xE)
+                vel = state.rw(si + 0xE)
                 if vel < 0x80:
-                    vel = (vel + 8) & 0xFFFF; ww(si + 0xE, vel)     # [asm 4E61-4E6C] accelerate the fall
-                ww(si + 2, (rw(si + 2) + (vel >> 4)) & 0xFFFF)      # [asm 4E6F-4E77] Y += vel>>4 (falls into the pot)
-                if s16(rw(si + 2)) < 0x91:                          # [asm 4E7B] not at the pot line yet -> keep falling
+                    vel = (vel + 8) & 0xFFFF; state.ww(si + 0xE, vel)   # [asm 4E61-4E6C] accelerate the fall
+                state.ww(si + 2, (state.rw(si + 2) + (vel >> 4)) & 0xFFFF)  # [asm 4E6F-4E77] Y += vel>>4 (into the pot)
+                if s16(state.rw(si + 2)) < 0x91:                   # [asm 4E7B] not at the pot line yet -> keep falling
                     continue
-                t = ((rw(si + 4) & 0x1FFF) - 0x6E) & 0xFFFF         # [asm 4E82-4E93] value = tables[food type]
-                vi = d[_DS + ((t - 0x5C8B) & 0xFFFF)]
-                val = rw((2 * vi - 0x5CAD) & 0xFFFF)
-                sc = (rw(0x6C0E) | (rw(0x6C10) << 16)) + val        # [asm 4E97-4E9B] score += value
-                ww(0x6C0E, sc & 0xFFFF); ww(0x6C10, (sc >> 16) & 0xFFFF)
-                ww(si + 4, 0xFFFF)                                  # [asm 4EA0] free the slot
+                t = ((state.rw(si + 4) & 0x1FFF) - 0x6E) & 0xFFFF  # [asm 4E82-4E93] value = tables[food type]
+                vi = state.rb((t - 0x5C8B) & 0xFFFF)
+                val = state.rw((2 * vi - 0x5CAD) & 0xFFFF)
+                sc = (g.score_lo | (g.score_hi << 16)) + val       # [asm 4E97-4E9B] score += value
+                g.score_lo = sc & 0xFFFF; g.score_hi = (sc >> 16) & 0xFFFF
+                state.ww(si + 4, 0xFFFF)                           # [asm 4EA0] free the slot
                 _emit_sfx(state, 8)                                # [asm 4EA5-4EA8] sfx 8
-            if (rw(0x6BD5) & 7) == 0:                              # [asm 4EB0] a refill frame (every 8)
+            if (state.rw(0x6BD5) & 7) == 0:                        # [asm 4EB0] a refill frame (every 8)
                 if _exit_anim_refill(state):                       # [asm 4ED5] spawned a queued item -> continue
                     continue
                 if not alive:                                      # [asm 4F07] queue empty AND no slot falling -> done
                     break
 
     # [asm 4F0E-4F52] the player + the food walk off to the left
-    ww(0x4F28, 0x7BA7)
-    while s16(rw(0x4F2E)) > -0x34:
+    pv.anim_ptr = 0x7BA7
+    while s16(state.rw(0x4F2E)) > -0x34:
         for base in (0x4F2E, 0x4F40, 0x4F52):
-            ww(base, (rw(base) - 2) & 0xFFFF)
-        ww(0x4F1C, (rw(0x4F1C) + (3 if s16(rw(0x4F2E)) < 0 else 2)) & 0xFFFF)
+            state.ww(base, (state.rw(base) - 2) & 0xFFFF)
+        pv.x = (pv.x + (3 if s16(state.rw(0x4F2E)) < 0 else 2)) & 0xFFFF
         yield frame()
 
 
@@ -287,24 +268,22 @@ def _exit_anim_refill(state) -> bool:
     refill when the pool is full, dequeuing only after a successful spawn at 4EFF), False iff the whole queue is
     empty (the ASM's 4EC9 al>=0x71 exhausted-scan -> the 4F07 termination check). The caller uses this to
     continue vs terminate the count-up."""
-    _DS = (DATA_SEG << 4) & 0xFFFFF
-    d = state.data
     di = None
-    for i in range(0x71):
-        if d[_DS + 0x6C12 + i]:
+    for i in range(0x71):                                         # the [0x6C12] collected-item queue (byte counts)
+        if state.rb(0x6C12 + i):
             di = i
             break
     if di is None:
         return False                                              # [asm 4EC9/4F07] the queue is empty
     for k in range(0x14):
-        si = 0x52E8 + k * 0x12
-        if (d[_DS + si + 4] | (d[_DS + si + 5] << 8)) == 0xFFFF:
+        si = 0x52E8 + k * 0x12                                    # the falling-food effect arena (stride 0x12)
+        if state.rw(si + 4) == 0xFFFF:                            # a free slot (sprite id 0xFFFF)
             aid = (di + 0x6E) & 0xFFFF
-            d[_DS + si] = 0x9B; d[_DS + si + 1] = 0                # X = 0x9B
-            d[_DS + si + 2] = 0; d[_DS + si + 3] = 0               # Y = 0
-            d[_DS + si + 4] = aid & 0xFF; d[_DS + si + 5] = (aid >> 8) & 0xFF
-            d[_DS + si + 0xE] = 0; d[_DS + si + 0xF] = 0           # velocity = 0
-            d[_DS + 0x6C12 + di] -= 1                              # [asm 4EFF] dequeue
+            state.ww(si, 0x9B)                                    # X = 0x9B
+            state.ww(si + 2, 0)                                   # Y = 0
+            state.ww(si + 4, aid)                                 # sprite id
+            state.ww(si + 0xE, 0)                                 # velocity = 0
+            state.wb(0x6C12 + di, (state.rb(0x6C12 + di) - 1) & 0xFF)   # [asm 4EFF] dequeue
             return True
     return True                                                   # [asm 4EEB] found an item but the pool is full
 
