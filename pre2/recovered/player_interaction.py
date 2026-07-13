@@ -98,7 +98,7 @@ def _s16(v: int) -> int:
 def _knockback(rb, rw, yvel: int) -> dict:
     """[asm 837A] knock the player up: Yvel=yvel, clear [0x6BD2], player Y -= [0xA331]."""
     pv = PlayerView(DictBackend(rb, rw))
-    return {PLAYER_YVEL: (yvel & 0xFFFF, 2), 0x6BD2: (0, 1),
+    return {PLAYER_YVEL: (yvel & 0xFFFF, 2), FALL_FRAMES: (0, 1),
             PLAYER_Y: ((pv.y - rw(KNOCKBACK_Y)) & 0xFFFF, 2)}
 
 
@@ -128,17 +128,17 @@ def _death(rb, rw, di):
     defp = rw((di + 6) & 0xFFFF)                           # [8390] di = [di+6] (the type def)
     out[(defp + 4) & 0xFFFF] = (rb((defp + 4) & 0xFFFF) & 0xFE, 1)   # [8393]
     out[PLAYER_DEATH] = (0x2C, 1)                          # [8397]
-    out[0x6BD0] = (0, 1)                                   # [839C]
+    out[ANIM_GATE] = (0, 1)                                   # [839C]
     out[PLAYER_YVEL] = (0xFF80, 2)                         # [83A1]
     p = PlayerView(WidthContractBackend(rb, rw, out))
     p.xvel = (-(((p.xvel & 0xFFFF) << 2) & 0xFFFF)) & 0xFFFF   # [83A7] = -(Xvel<<2)
     out[_ATTACK] = (0, 1)                                  # [83B3]
     g2 = PlayerGlobals(WidthContractBackend(rb, rw, out))
     old = g2.glider                                        # [83B8] cmp before the clear
-    out[0x6BC5] = (0, 1)                                   # [83BD]
+    out[FLYING] = (0, 1)                                   # [83BD]
     if old == 0:                                           # [83C2] jne skip
         n = (g2.energy - 1) & 0xFF                         # [83C4] dec
-        out[0x27D6] = (n, 1)
+        out[ENERGY] = (n, 1)
         if n & 0x80:                                       # [83C8] jns skip -> call only if went negative
             # 65B3 returns byte-level {off:value}; out holds (val,width) tuples -> wrap as width-1
             out.update({o: (v, 1) for o, v in _offcamera_trigger(rb).items()})   # [83CA]
@@ -230,6 +230,15 @@ SCORE_SPR_LUT = 0xA375    # [(num-57) -> score index]  (= (-0x5C8B)&0xFFFF)
 FLYING = 0x6BC5           # flying power-up flag
 CUR_ANIM = 0x4F27         # player current-anim
 LIGHT_STATE = 0x6C04      # 0=on,1=off
+LIGHT_FADE_TO_DARK = 0x6C01   # fade toward the dark "lights off" palette [asm 8xxx light handler]
+LIGHT_FADE_TO_LEVEL = 0x6C02  # fade back toward the level palette
+LIGHT_FADE_STEP = 0x6C03      # the fade step counter
+FALL_FRAMES = 0x6BD2       # descending-fall counter (reset to 0 on hurt/knockback)
+ANIM_GATE = 0x6BD0         # [839C] hold-current-anim / FSM-route gate
+CHECKPOINT_X = 0x6BAD      # [4fc2] the respawn/checkpoint player X
+CHECKPOINT_Y = 0x6BAF      # [4fcb] the respawn/checkpoint player Y
+WALL_MARKER_TABLE = 0x6EA9 # per-column wall/scenery marker table (stride 8)
+EFFECT_SPRITE_SRC = 0x8F1D # effect-sprite source records (stride 7; +4 = the linked sprite id)
 LEVEL = 0x2D8A            # level number
 LEVEL_DONE = 0x6BE6       # 1=level complete, 0xFF=game complete
 SHAKE = 0x6BEA           # screen-shake counter
@@ -319,7 +328,7 @@ def loop2_handler(num, rb, rw, si, find_free):
     if num == 0x91:                                        # id 0xc6 [885F] "tap": clear fly timers, then count
         out = {}
         for k in range(0x14):                              # [8861] table 0x6EA9, 0x14 * 8
-            out[(0x6EA9 + k * 8 + 7) & 0xFFFF] = (7, 1)
+            out[(WALL_MARKER_TABLE + k * 8 + 7) & 0xFFFF] = (7, 1)
         out.update(_count_and_score(rb, rw, si, num))
         return out, [8]
     if num == 0xE2:                                       # id 0x117 [882A] end-of-level (level transition)
@@ -332,9 +341,9 @@ def loop2_handler(num, rb, rw, si, find_free):
     if num == 0x102:                                      # id 0x137 [8859] game complete
         return {LEVEL_DONE: (0xFF, 1)}, []
     if num == 0xE4:                                       # id 0x119 [87FD] checkpoint
-        out = {0x6BAD: (pv.x, 2), 0x6BAF: (pv.y, 2)}
+        out = {CHECKPOINT_X: (pv.x, 2), CHECKPOINT_Y: (pv.y, 2)}
         for k in range(0x46):                             # [8809] reveal item 0x118 in the 0x8F1D table
-            o = (0x8F1D + k * 7 + 4) & 0xFFFF
+            o = (EFFECT_SPRITE_SRC + k * 7 + 4) & 0xFFFF
             if rw(o) == 0x118:
                 out[o] = (0x119, 2)
         bx = rw((si + 9) & 0xFFFF)
@@ -375,7 +384,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         out[UTENSILS_MASK] = (g.utensils_mask | (1 << idx), 1)
         if idx == 1:                                      # lighter -> reveal the 0x116 semaphore item
             for k in range(0x46):
-                o = (0x8F1D + k * 7 + 4) & 0xFFFF
+                o = (EFFECT_SPRITE_SRC + k * 7 + 4) & 0xFFFF
                 if rw(o) == 0x116:
                     out[o] = (0x117, 2)
         out.update(_consume_link(rw, si))
@@ -442,13 +451,13 @@ def loop2_handler(num, rb, rw, si, find_free):
     if num == 0xB5:                                       # id 0xea [876C] light OFF
         out = {}
         if rb(LIGHT_STATE) != 1:
-            out = {0x6C02: (0, 1), 0x6C01: (1, 1), 0x6C03: (0, 1), LIGHT_STATE: (1, 1)}
+            out = {LIGHT_FADE_TO_LEVEL: (0, 1), LIGHT_FADE_TO_DARK: (1, 1), LIGHT_FADE_STEP: (0, 1), LIGHT_STATE: (1, 1)}
             out.update(_consume_link(rw, si)); return out, [1]
         out.update(_consume_link(rw, si)); return out, []
     if num == 0xB4:                                       # id 0xe9 [8790] light ON
         out = {}
         if rb(LIGHT_STATE) != 0:
-            out = {0x6C01: (0, 1), 0x6C02: (1, 1), 0x6C03: (0, 1), LIGHT_STATE: (0, 1)}
+            out = {LIGHT_FADE_TO_DARK: (0, 1), LIGHT_FADE_TO_LEVEL: (1, 1), LIGHT_FADE_STEP: (0, 1), LIGHT_STATE: (0, 1)}
         out.update(_consume_link(rw, si)); return out, []
     return {}, []                                         # [asm 84F3 jmp 860E] an unmapped id is a NO-OP: the
     #                                                       entity was already consumed (8426); the ASM just
