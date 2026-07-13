@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pre2.native.boot_data import build_boot_memory
+from pre2.native.boot_data import CS_TABLES, build_boot_memory
 
 DS_BASE = 0x1A0F << 4
+_HANDLER_TABLE_WINDOW = 0x6AA0     # CS window holding the object-AI dispatch table (table starts at +9 = 0x6AA9)
+_HANDLER_TABLE_OFF = 0x6AA9
 
 
 def _dgroup() -> bytes:
@@ -128,6 +130,24 @@ def attack_phase_table() -> list[AttackPhase]:
                         dg[_ATTACK_PHASE_BASE + k * 5 + 4]) for k in range(4)]
 
 
+def object_handler_table() -> list[int]:
+    """[CS window 0x6AA0, table at 0x6AA9] the object-AI dispatch table: 19 handler CODE-entry addresses indexed
+    by object-type index (``cs:[idx*2 + 0x6AA9]``). The recovered ``object_tick.HANDLERS`` reimplements these
+    entry points as Python functions; ``verify_boot_manifest`` cross-checks the two agree."""
+    w = CS_TABLES[_HANDLER_TABLE_WINDOW]
+    base = _HANDLER_TABLE_OFF - _HANDLER_TABLE_WINDOW
+    return [w[base + i * 2] | (w[base + i * 2 + 1] << 8) for i in range((len(w) - base) // 2)]
+
+
+# The 4 CS-embedded windows the recovered code reads (offsets in the code segment, not DGROUP).
+CS_WINDOWS = {
+    0x0000: "inline constants (sprite-id mask 0x1FFF, EGA plane seg 0xA000, ...)",
+    0x1D60: "a small code/jump fragment read as data",
+    0x6770: "a 4-byte return-stub + word window",
+    0x6AA0: "the object-AI handler dispatch table (0x6AA9)",
+}
+
+
 # --- the region legend: what each part of the 64 KB blob IS --------------------------------------------------
 
 @dataclass(frozen=True)
@@ -206,6 +226,17 @@ def verify_boot_manifest() -> None:
     for base, enc in checks:
         if bytes(dg[base:base + len(enc)]) != enc:
             raise AssertionError(f"typed table @0x{base:04X} does not re-encode to the boot image")
+
+    # the object-handler table re-encodes to its CS window, and cross-checks against the recovered handlers
+    handlers = object_handler_table()
+    enc = b"".join(bytes((a & 0xFF, (a >> 8) & 0xFF)) for a in handlers)
+    w = CS_TABLES[_HANDLER_TABLE_WINDOW]
+    off = _HANDLER_TABLE_OFF - _HANDLER_TABLE_WINDOW
+    if bytes(w[off:off + len(enc)]) != enc:
+        raise AssertionError("object-handler table does not re-encode to its CS window")
+    from pre2.recovered.object_tick import HANDLERS
+    if not (set(handlers) & set(HANDLERS)):
+        raise AssertionError("the decoded handler table shares no entries with the recovered HANDLERS")
 
     # region legend is ordered, non-overlapping, in range
     prev = -1

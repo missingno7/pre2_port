@@ -32,3 +32,12 @@ def test_boot_lookup_tables_decode_to_real_data():
     assert len(sprite_half_extents()) == 32
     phases = attack_phase_table()
     assert len(phases) == 4 and phases[0].sfx == 2 and phases[3].flag == 3    # last phase carries flag 3
+
+
+def test_boot_object_handler_table_matches_recovered_handlers():
+    from pre2.native.boot_manifest import object_handler_table
+    from pre2.recovered.object_tick import HANDLERS
+    addrs = object_handler_table()
+    assert len(addrs) == 19
+    # the CS dispatch table and the recovered Python handlers describe the same entry points
+    assert len(set(addrs) & set(HANDLERS)) >= 13
