@@ -12,7 +12,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import Camera, Player, Progress, Rng
+from pre2.game.model import Camera, Input, LevelState, Player, Progress, Rng
 
 DGROUP_BASE = 0x1A0F << 4
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
@@ -29,6 +29,15 @@ PROGRESS_LAYOUT = [
     ("score_lo", 0x6C0E, 2, False), ("score_hi", 0x6C10, 2, False),
     ("lives", 0x27D8, 1, False), ("energy", 0x27D6, 1, False), ("level", 0x2D8A, 1, False),
     ("bonus_letters", 0x6CA7, 1, False), ("utensils_mask", 0x6CA8, 1, False),
+]
+INPUT_LAYOUT = [
+    ("up", 0x27EA, 1, False), ("down", 0x27EB, 1, False), ("left", 0x27ED, 1, False),
+    ("right", 0x27EC, 1, False), ("fire", 0x27E8, 1, False), ("source", 0x2879, 1, False),
+]
+LEVEL_STATE_LAYOUT = [
+    ("flags", 0x8166, 1, False), ("end_mode", 0x6BE6, 1, False), ("respawn_state", 0x6BE4, 1, False),
+    ("end_signal", 0x6BE5, 1, False), ("checkpoint_x", 0x6BAD, 2, False), ("checkpoint_y", 0x6BAF, 2, False),
+    ("grid_dirty", 0x2DF4, 1, False),
 ]
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
@@ -103,6 +112,8 @@ _ROUTES = [
     ("rng", Rng, RNG_LAYOUT, 0),
     ("camera", Camera, CAMERA_LAYOUT, 0),
     ("progress", Progress, PROGRESS_LAYOUT, 0),
+    ("input", Input, INPUT_LAYOUT, 0),
+    ("level_state", LevelState, LEVEL_STATE_LAYOUT, 0),
 ]
 
 

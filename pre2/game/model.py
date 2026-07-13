@@ -84,3 +84,28 @@ class Progress:
     @property
     def score(self) -> int:
         return (self.score_hi << 16) | self.score_lo
+
+
+@dataclass
+class Input:
+    """The decoded per-frame input state the tick reads (directions + fire + the demo/live source)."""
+
+    up: int = 0
+    down: int = 0
+    left: int = 0
+    right: int = 0
+    fire: int = 0
+    source: int = 0       # 0 = live keyboard, 1 = demo playback
+
+
+@dataclass
+class LevelState:
+    """The level / transition state — end mode, respawn + end signals, checkpoint, and redraw flags."""
+
+    flags: int = 0
+    end_mode: int = 0      # 0 gameplay, 1 normal end, >1 warp
+    respawn_state: int = 0
+    end_signal: int = 0
+    checkpoint_x: int = 0
+    checkpoint_y: int = 0
+    grid_dirty: int = 0

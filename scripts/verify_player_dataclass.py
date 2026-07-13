@@ -53,6 +53,8 @@ def run_demo(demo_dir: Path) -> int:
 
 
 def main(argv) -> int:
+    from pre2.bridge.game_layout import _ROUTES
+    names = ", ".join(a for a, *_ in _ROUTES)
     demos = argv or CORPUS
     total = 0
     for d in demos:
@@ -62,9 +64,9 @@ def main(argv) -> int:
             continue
         c = run_demo(p)
         total += c
-        print(f"  PASS: {d} — {c} ticks with player+rng+camera+progress as live dataclasses, byte-identical")
-    print(f"\ntick-on-dataclasses: the gameplay tick runs with the player, RNG, camera and progress state as "
-          f"offset-free dataclasses ({total} ticks across {len(demos)} demos, byte-identical)")
+        print(f"  PASS: {d} — {c} ticks with {len(_ROUTES)} live dataclasses, byte-identical")
+    print(f"\ntick-on-dataclasses: the gameplay tick runs with {len(_ROUTES)} offset-free dataclasses "
+          f"({names}) — {total} ticks across {len(demos)} demos, byte-identical")
     return 0
 
 
