@@ -23,6 +23,7 @@ from pre2.native.state import DATA_SEG
 from pre2.recovered.object_render import (Sprite, paint_sprite, plan_frame,
                                           plan_sprite_command)
 from pre2.recovered.player import player_advance_anim
+from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 
 _DS = DATA_SEG << 4
 CAV = 0x4F1C            # caveman = the player slot (active-sprite record)
@@ -45,10 +46,12 @@ def _s16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def _caveman_anim(d):
-    """[asm 8F9B/9002] 638B — advance the caveman's animation frame from its script pointer [0x4F28]."""
-    frame, new_ptr, bcf = player_advance_anim(_rd(d, CAV + 0xC), d[_DS + 0x4F25], lambda p: _rd(d, p & 0xFFFF))
-    _ww(d, 0x4F20, frame); _ww(d, 0x4F28, new_ptr); d[_DS + 0x6BCF] = bcf
+def _caveman_anim(state):
+    """[asm 8F9B/9002] 638B — advance the caveman's animation frame from its script pointer [0x4F28]. The
+    caveman is the player render slot, so its anim fields are the named PlayerView."""
+    pv, g = PlayerView(state), PlayerGlobals(state)
+    frame, new_ptr, bcf = player_advance_anim(pv.anim_ptr, pv.facing_lo, state.rw)
+    pv.sprite = frame; pv.anim_ptr = new_ptr; g.anim_hi = bcf
 
 
 def _advance_obj_anim(d, si):
@@ -111,6 +114,7 @@ def native_attract_title(state, game_root: str):
     from pre2.recovered.scene import MODE_PLANAR
 
     d = state.data
+    g, pv = PlayerGlobals(state), PlayerView(state)
     base_planes, pal6 = title_planar_image(_TITLE_ASSET, game_root)
     pal256 = _expand_pal(pal6)
 
@@ -120,37 +124,37 @@ def native_attract_title(state, game_root: str):
         return FrontEndScene(MODE_PLANAR, palette=pal256, planes=planes, page=_PAGE, game_paced=True)
 
     # -------- SETUP (8F2D..8F8F) -------- #
-    d[_DS + 0x6C01] = 0; d[_DS + 0x6C02] = 1; d[_DS + 0x6C03] = 0   # [8F46..8F50] byte flags
-    d[_DS + 0x6BC4] = 0                               # [8F55] fine-scroll byte
-    _ww(d, 0x2DE4, 0); _ww(d, 0x2DE6, 0)              # [8F5C/8F5F] camera = origin
-    _ww(d, CAV, 0); _ww(d, 0x4F1E, 0xA9); _ww(d, 0x4F25, 0)   # caveman X=0 Y=0xA9 facing=right
-    _ww(d, 0x4F22, 0); _ww(d, 0x4F28, 0x7BA7)         # Xvel=0, anim-ptr=0x7BA7
-    _ww(d, DINO, 0x30); _ww(d, 0x4F30, 0xA9)          # dino X=0x30 Y=0xA9
+    d[_DS + 0x6C01] = 0; d[_DS + 0x6C02] = 1; d[_DS + 0x6C03] = 0   # [8F46..8F50] byte flags (unnamed)
+    g.fine_scroll = 0                                 # [8F55] fine-scroll byte
+    g.cam_col_word = 0; g.cam_row_word = 0            # [8F5C/8F5F] camera = origin
+    pv.x = 0; pv.y = 0xA9; pv.facing = 0              # caveman (= player slot) X=0 Y=0xA9 facing=right
+    pv.xvel = 0; pv.anim_ptr = 0x7BA7                 # Xvel=0, anim-ptr=0x7BA7
+    _ww(d, DINO, 0x30); _ww(d, 0x4F30, 0xA9)          # dino X=0x30 Y=0xA9 (the dino/bounce-object arena)
     _ww(d, 0x4F37, 0); _ww(d, 0x4F34, 0); _ww(d, 0x4F3A, 0xAB4B)   # dino flags/anim-ptr
-    d[_DS + 0x6BC5] = 0
+    g.glider = 0
 
     # -------- PHASE 1 (8F94..8FC4): caveman runs right, dino chases -------- #
     bp = 0
     while True:
         bp = (bp + 1) & 0xFFFF                        # [8F96] inc bp
-        _caveman_anim(d)                              # [8F9B] 638B
+        _caveman_anim(state)                          # [8F9B] 638B
         _advance_obj_anim(d, DINO)                    # [8FA1] 9047
         planes, rs = _compose(state, base_planes, pal256)   # [8FA4 restore + 8FA7 26FA]
         yield frame(planes)                           # [8FAA] present
         onscreen = _caveman_onscreen(d, rs)           # the [0x4F21]&0x20 the render would set
-        _ww(d, CAV, (_rd(d, CAV) + 5) & 0xFFFF)                        # [8FAD] caveman X += 5
+        pv.x = (pv.x + 5) & 0xFFFF                     # [8FAD] caveman X += 5
         _ww(d, DINO, (_rd(d, DINO) + (5 if (bp & 3) else 4)) & 0xFFFF)  # [8FB4] dino += 5 / 4 every 4th
         if not onscreen:                              # [8FBF/8FC4] exit when caveman off-screen
             break
 
     # -------- PHASE 2 setup (8FC6..9000): kill dino, spawn 3 staggered bouncing objects -------- #
-    _ww(d, 0x4F37, 0xFFFF)                            # [8FC8]
+    _ww(d, 0x4F37, 0xFFFF)                            # [8FC8] (the dino/bounce-object arena)
     _ww(d, 0x4F3C, 0)                                 # [8FCE]
-    _ww(d, 0x4F25, 0xFFFF)                            # [8FD4] caveman facing = left (H-flip)
+    pv.facing = 0xFFFF                                # [8FD4] caveman facing = left (H-flip)
     for w in range(0x3F):                            # [8FDA] rep movsw 4F2E->4F40, OVERLAPPING -> propagates
         s = 0x4F2E + w * 2; t = 0x4F40 + w * 2       # (replicates the 18-byte dino record across the slots)
         d[_DS + t] = d[_DS + s]; d[_DS + t + 1] = d[_DS + s + 1]
-    ax = _rd(d, CAV); dx = _rd(d, 0x4F1E)            # [8FEB/8FEE]
+    ax = pv.x; dx = pv.y                             # [8FEB/8FEE]
     for i in range(3):                              # [8FF2..9000] loop target 8FF2 -> step EACH object
         ax = (ax + 0x1E) & 0xFFFF                    # [8FF2] staggered X
         dx = (dx - 3) & 0xFFFF                       # [8FF5] staggered Y
@@ -158,8 +162,8 @@ def native_attract_title(state, game_root: str):
         _ww(d, si, ax); _ww(d, si + 2, dx)
 
     # -------- PHASE 2 loop (9002..9044): objects fall/bounce, caveman runs back left -------- #
-    while _s16(_rd(d, CAV)) >= 0:                     # [9044 jns] while caveman X >= 0
-        _caveman_anim(d)                             # [9002] 638B
+    while _s16(pv.x) >= 0:                            # [9044 jns] while caveman X >= 0
+        _caveman_anim(state)                         # [9002] 638B
         for i in range(3):                          # [900F..9034] per bouncing object
             si = 0x4F2E + i * 0x12
             _ww(d, si, (_rd(d, si) - 5) & 0xFFFF)    # [900F] X -= 5
@@ -170,4 +174,4 @@ def native_attract_title(state, game_root: str):
             _ww(d, si + 2, (_rd(d, si + 2) + (_s16(_rd(d, si + 0xE)) >> 4)) & 0xFFFF)  # [9023] Y += vel>>4
         planes, _ = _compose(state, base_planes, pal256)   # [9036 restore + 9039 26FA]
         yield frame(planes)                          # [903C] present
-        _ww(d, CAV, (_rd(d, CAV) - 7) & 0xFFFF)      # [903F] caveman X -= 7
+        pv.x = (pv.x - 7) & 0xFFFF                    # [903F] caveman X -= 7
