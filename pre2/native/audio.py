@@ -16,6 +16,7 @@ play_sfx writes), the VM-less equivalent of the 0x0282 entry hook.
 from __future__ import annotations
 
 from pre2.views.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
+from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 
 _DS = 0x1A0F << 4
 _CS = 0x1030 << 4
@@ -27,15 +28,13 @@ _SFX_DEV_FLAGS = (0x1D6C, 0x1D6D)   # cs: digital-device-present flags (either =
 def sfx_screen_x(state, world_x: int) -> int:
     """The on-screen X (0..320-ish) of a world-space X for the stereo pan: ``world_x - camera``. The camera
     pixel X is ``[0x2DE4]`` (tiles) * 16. May land <0 or >320 (off-screen); the poll clamps the pan."""
-    d = state.data
-    cam_px = (d[_DS + 0x2DE4] | (d[_DS + 0x2DE5] << 8)) * 16
+    cam_px = PlayerGlobals(state).cam_col_word * 16
     return world_x - cam_px
 
 
 def player_sfx_x(state) -> int:
     """The player's on-screen X — the pan for the player's own sounds (jump, throw, hurt, death scream, glider)."""
-    d = state.data
-    return sfx_screen_x(state, d[_DS + 0x4F1C] | (d[_DS + 0x4F1D] << 8))
+    return sfx_screen_x(state, PlayerView(state).x)
 
 
 def native_play_sfx(state, dl: int, x: "int | None" = None) -> None:
@@ -129,9 +128,8 @@ def native_level_song_name(state) -> str:
     """[asm 01AB-01B7] The music for the CURRENT level: song index = ``[0x2D20 + [0x2d8a]]`` mapped to its .TRK.
     The VM loads this right after the carte (main 01B7), which native's flow must reproduce so the level music
     replaces the carte song. Falls back to MINES for an unmapped index (any level still gets level music)."""
-    d = state.data
-    level = d[_DS + 0x2D8A]
-    idx = d[_DS + 0x2D20 + level]
+    level = PlayerGlobals(state).level
+    idx = state.rb(0x2D20 + level)                    # [0x2D20+level] the per-level song-index table
     return _SONG_INDEX_TO_FILE.get(idx, "MINES.TRK")
 
 

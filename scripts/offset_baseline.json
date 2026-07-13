@@ -2,7 +2,7 @@
   "pre2/enhanced/extract.py": 24,
   "pre2/native/assets.py": 9,
   "pre2/native/attract_title.py": 20,
-  "pre2/native/audio.py": 21,
+  "pre2/native/audio.py": 16,
   "pre2/native/camera_scroll.py": 27,
   "pre2/native/front_end.py": 91,
   "pre2/native/game_tick_demo.py": 17,
