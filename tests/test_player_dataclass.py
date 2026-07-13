@@ -31,6 +31,16 @@ def test_tick_runs_with_player_as_a_live_dataclass():
     from pre2.game.model import ArenaEntity
     assert obj.backend.entities and all(isinstance(e, ArenaEntity) for e in obj.backend.entities)
 
+    for i in range(min(gtd.n_ticks, 15)):
+        idle = gtd.idle[i] if i < len(gtd.idle) else None
+        _inject(ref, gtd.keys[i], idle); native_gameplay_frame(ref)
+        _inject(obj, gtd.keys[i], idle); native_gameplay_frame(obj)
+        obj.backend.materialize()
+        assert ref.data[DGROUP_BASE:DGROUP_BASE + 0x10000] == obj.data[DGROUP_BASE:DGROUP_BASE + 0x10000], \
+            f"player-dataclass run diverged at tick {i}"
+    # the player object actually changed over the run (it's live, not a snapshot)
+    assert isinstance(obj.backend.player.x, int)
+
 
 def test_no_two_routes_claim_the_same_offset():
     """Two routed structures must never map the same DGROUP byte (would corrupt materialize)."""
@@ -43,13 +53,3 @@ def test_no_two_routes_claim_the_same_offset():
                     o = (base + k * stride + off + bk) & 0xFFFF
                     assert o not in seen, f"offset {o:#06x} claimed by both {seen[o]} and {attr}"
                     seen[o] = attr
-
-    for i in range(min(gtd.n_ticks, 15)):
-        idle = gtd.idle[i] if i < len(gtd.idle) else None
-        _inject(ref, gtd.keys[i], idle); native_gameplay_frame(ref)
-        _inject(obj, gtd.keys[i], idle); native_gameplay_frame(obj)
-        obj.backend.materialize()
-        assert ref.data[DGROUP_BASE:DGROUP_BASE + 0x10000] == obj.data[DGROUP_BASE:DGROUP_BASE + 0x10000], \
-            f"player-dataclass run diverged at tick {i}"
-    # the player object actually changed over the run (it's live, not a snapshot)
-    assert isinstance(obj.backend.player.x, int)
