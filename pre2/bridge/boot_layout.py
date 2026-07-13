@@ -42,6 +42,7 @@ def _enc_s16(vals) -> bytes:
 
 
 _DIGIT_BASE, _DIGIT_STRIDE, _DIGIT_COUNT = 0xCE8A, 0x58, 9   # the 16x32 HUD digit sprites (1..9)
+_FONT_BASE, _FONT_LEN = 0xD1A4, 0xDA9C - 0xD1A4              # the 16x32 alphanumeric font (0-9 A-Z a-z)
 
 
 def _residual() -> bytearray:
@@ -57,6 +58,14 @@ def _place_digit_sprites(img) -> None:
     for k in range(_DIGIT_COUNT):
         off = _DIGIT_BASE + k * _DIGIT_STRIDE
         img[off:off + 64] = payload[k * 64:k * 64 + 64]
+
+
+def _place_font(img) -> None:
+    """Regenerate the 16x32 alphanumeric font (0-9 A-Z a-z) from its committed PNG asset."""
+    from pre2.bridge.boot_graphics import png_to_region
+    png = Path(__file__).with_name("boot_font.png")
+    img[_FONT_BASE:_FONT_BASE + _FONT_LEN] = png_to_region(str(png), _FONT_LEN, tile_w=16, tile_h=32,
+                                                           tiles_wide=16, gap=0)
 
 
 def generate_boot_dgroup() -> bytearray:
@@ -78,13 +87,14 @@ def generate_boot_dgroup() -> bytearray:
         blob = text.encode("latin1") + b"\x00"
         img[off:off + len(blob)] = blob
     _place_digit_sprites(img)     # the HUD digit font, from its PNG asset
+    _place_font(img)              # the alphanumeric font, from its PNG asset
     return img
 
 
 def constant_coverage() -> tuple[int, int]:
     """(bytes generated from readable constants, non-zero bytes still in the residual blob)."""
-    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + len(T.SCANCODE_CHARS)
-               + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
+    covered = (256 + 256 + 64 + 18 + 20 + 34 + 32 + 24 + 18 + _DIGIT_COUNT * 64 + _FONT_LEN
+               + len(T.SCANCODE_CHARS) + sum(len(t) + 1 for _, t in T.RESOURCE_RECORDS))
     return covered, sum(1 for b in _residual() if b)
 
 
