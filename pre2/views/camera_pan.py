@@ -15,22 +15,39 @@ from pre2.recovered.frame_renderer import RowFlags, calc_scroll_source, draw_til
 _DS = 0x1A0F
 
 
+def _be(mem):
+    b = getattr(mem, "backend", None)
+    return b if getattr(b, "_IS_DGROUP_BACKEND", False) else None
+
+
 def _rw(mem, o: int) -> int:
+    be = _be(mem)
+    if be is not None:
+        return be.rw(o)
     b = ((_DS << 4) + o) & 0xFFFFF
     return mem.data[b] | (mem.data[(b + 1) & 0xFFFFF] << 8)
 
 
 def _rb(mem, o: int) -> int:
+    be = _be(mem)
+    if be is not None:
+        return be.rb(o)
     return mem.data[((_DS << 4) + o) & 0xFFFFF]
 
 
 def _ww(mem, o: int, v: int) -> None:
+    be = _be(mem)
+    if be is not None:
+        be.ww(o, v); return
     b = ((_DS << 4) + o) & 0xFFFFF
     mem.data[b] = v & 0xFF
     mem.data[(b + 1) & 0xFFFFF] = (v >> 8) & 0xFF
 
 
 def _wb(mem, o: int, v: int) -> None:
+    be = _be(mem)
+    if be is not None:
+        be.wb(o, v); return
     mem.data[((_DS << 4) + o) & 0xFFFFF] = v & 0xFF
 
 

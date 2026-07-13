@@ -29,7 +29,6 @@
   "pre2/recovered/terrain_entities.py": 74,
   "pre2/views/audio.py": 64,
   "pre2/views/audio_commands.py": 7,
-  "pre2/views/camera_pan.py": 9,
   "pre2/views/effects_update.py": 2,
   "pre2/views/frame.py": 28,
   "pre2/views/gameover_scene.py": 1,

@@ -96,7 +96,7 @@ def read_source(mem, seg: int, off: int, length: int) -> bytes:
 
 
 def read_sprite(mem, off: int) -> Sprite:
-    s = RenderSlot(ByteBackend(mem), off)              # the shared stride-0x12 slot, human-named
+    s = RenderSlot(mem, off)                            # the shared stride-0x12 slot, human-named (via the seam)
     return Sprite(
         x=s.x,
         y=s.y,

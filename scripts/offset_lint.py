@@ -42,7 +42,9 @@ _ALLOWLIST = {"pre2/views/memory_adapter.py", "pre2/views/dgroup_view.py",
               "pre2/native/state.py",           # the NativeGameState adapter: the swappable backend + rb/rw/wb/ww seam
               "pre2/views/object_tick.py",       # the object-walker memory adapter (LiveWalkerMem)
               "pre2/views/object_render.py",      # the render-record memory adapter (slot access)
-              "pre2/views/particles.py"}         # the particle-array memory adapter
+              "pre2/views/particles.py",         # the particle-array memory adapter
+              "pre2/views/firefly_sim.py",        # the firefly-sim memory adapter
+              "pre2/views/camera_pan.py"}         # the camera-pan memory adapter
 
 _VERB = re.compile(r"\b(?:rb|rw|wb|ww)\(|\.data\[|\bDATA_SEG\b|\bDGROUP_BASE\b")
 _DEF = re.compile(r"\bdef\s+(?:rb|rw|wb|ww)\b")
