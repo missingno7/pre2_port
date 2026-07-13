@@ -15,11 +15,10 @@ from pre2.native.camera_scroll import (SCROLL_DONE_FLAG, _h_follow, _sar16, _v_f
 from pre2.gaps import Pre2HybridGap
 from pre2.native.level_load import native_level_load, native_player_init
 from pre2.native.state import DATA_SEG
-from pre2.native.dgroup_offsets import (BOSS_STATE, DECOR_RNG_TABLE, LEVEL_INIT_FLAG_6BCC, PENDING_KEY,
-                                        POPUP_RING_HEAD, RNG_STATE, SCROLL_SCRIPT_PTR, SCROLL_SCRIPT_PTR2,
-                                        SCROLL_SCRIPT_TABLE, WALL_MARKER_TABLE)
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 from pre2.recovered.prng import rng_lcg
+from pre2.native.dgroup_offsets import (
+    BOSS_STATE, DBL_BUFFER_BACKUP, DECOR_RNG_TABLE, FILL_BLOCK_7DAF, FILL_BLOCK_7DE6, LEVEL_INIT_FLAG_6BCC, LEVEL_PROP_HEADER, PENDING_KEY, POPUP_RING_HEAD, RNG_STATE, SCROLL_SCRIPT_PTR, SCROLL_SCRIPT_PTR2, SCROLL_SCRIPT_TABLE, TIMER_STATE_BLOCK, WALL_MARKER_TABLE)
 
 _DS = DATA_SEG << 4
 
@@ -104,8 +103,8 @@ def native_5237(state) -> None:
     energy / boss / scroll-script state. The ``0ba0`` sub-call (VGA palette via int 10h) is render and skipped."""
     d = state.data
     g, pv = PlayerGlobals(state), PlayerView(state)
-    d[_DS + 0x6BC4:_DS + 0x6BC4 + 0x48] = b"\x00" * 0x48              # [asm 5247] zero the timer/state block
-    d[_DS + 0x815E:_DS + 0x815E + 0x10A5] = bytes(d[_DS + 0x9203:_DS + 0x9203 + 0x10A5])  # [asm 5251] restore dbl-buffer
+    d[_DS + TIMER_STATE_BLOCK:_DS + TIMER_STATE_BLOCK + 0x48] = b"\x00" * 0x48              # [asm 5247] zero the timer/state block
+    d[_DS + LEVEL_PROP_HEADER:_DS + LEVEL_PROP_HEADER + 0x10A5] = bytes(d[_DS + DBL_BUFFER_BACKUP:_DS + DBL_BUFFER_BACKUP + 0x10A5])  # [asm 5251] restore dbl-buffer
     pv.run_flag = 0                                                  # [asm 525c]
     g.grid_dirty_token = 0x55AA                                      # [asm 525f]
     state.ww(POPUP_RING_HEAD, 0x4F76)                               # [asm 5265] popup-ring head
@@ -123,8 +122,8 @@ def native_5237(state) -> None:
     for i in range(0x50):                                           # [asm 5287] the wall-marker table = 0x55aa x 0x50
         state.ww(WALL_MARKER_TABLE + i * 2, 0x55AA)
     native_52d2(state)                                               # [asm 5292] restore the pristine scenery map blocks
-    d[_DS + 0x7DE6:_DS + 0x7DE6 + 0x78] = b"\xFF" * 0x78             # [asm 5295]
-    d[_DS + 0x7DAF:_DS + 0x7DAF + 0x37] = b"\xFF" * 0x37             # [asm 52a0]
+    d[_DS + FILL_BLOCK_7DE6:_DS + FILL_BLOCK_7DE6 + 0x78] = b"\xFF" * 0x78             # [asm 5295]
+    d[_DS + FILL_BLOCK_7DAF:_DS + FILL_BLOCK_7DAF + 0x37] = b"\xFF" * 0x37             # [asm 52a0]
     g.energy = 3                                                     # [asm 52a8] energy / hearts
     state.ww(BOSS_STATE, 0xFFFF)                                    # [asm 52ad] boss state reset
     state.ww(SCROLL_SCRIPT_PTR, state.rw((g.level * 2 + SCROLL_SCRIPT_TABLE) & 0xFFFF))  # [asm 52b3] scroll-script ptr

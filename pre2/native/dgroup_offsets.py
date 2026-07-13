@@ -146,6 +146,24 @@ BURST_SPRITE        = 0xA33A   # ... the reward sprite id (0x6E) [asm 67ED]
 FRAME_TIMER         = 0x6BD5   # the free-running frame counter 26FA bumps (= frame_stamp / frame_blink view)
 ROW_FACTOR          = 0x6BF8   # the row-stride factor the camera shake writes (= PlayerGlobals.row_factor)
 
+# ---- bulk state blocks + lookup tables (referenced as slice bounds) -----------------------------------
+TIMER_STATE_BLOCK   = 0x6BC4   # the timer/state block zeroed at re-init (starts at fine_scroll) [asm 5247]
+DBL_BUFFER          = 0x815E   # the working double-buffer block (the property header lives at +2/+4) [5251]
+DBL_BUFFER_BACKUP   = 0x9203   # the pristine double-buffer backup 5237 restores from [asm 5251]
+FILL_BLOCK_7DE6     = 0x7DE6   # a 0xFF-filled state block [asm 5295]
+FILL_BLOCK_7DAF     = 0x7DAF   # a 0xFF-filled state block [asm 52a0]
+TILE_TYPE_TABLE     = 0x4DF8   # per-cache-slot tile type table (0 opaque / 1 empty / ...) [asm 4232]
+TILE_MASK_TABLE     = 0x2DF8   # the compacted partial-transparency masks the per-frame pass reads [asm 4232]
+ROW_SINE_TABLE      = 0x6F90   # the row-bounce / bird-orbit signed sine table [asm 9B00]
+GAMEOVER_PALETTE    = 0xAFE8   # the game-over diorama 16-colour palette (DAC load) [asm 9B7F]
+MENU_MORPH_SRC      = 0xACE7   # the static menu palette the CODE-screen morph targets
+
+# ---- arena bases walked by index (stride noted) -------------------------------------------------------
+ENTITY_LIST_2NDPASS = 0x8489   # the second-pass entity list (variable stride = [si]) [asm 4182]
+BONUS_CELL_LIST     = 0x8C8D   # the 0x50-entry bonus/secret-cell list (stride 5) [asm 3eb2]
+ACTIVE_FLAG_SNAPSHOT = 0xA2A8  # the respawn active-flag snapshot table (0x50 bytes) [asm 4fa7]
+BIRD_PAIR_SLOTS     = 0x4FD0   # the game-over bird paired render slots (stride 0x12) [9D0C]
+
 # ---- render / effect slots (the stride-0x12 records; see dgroup_view PlayerView/RenderSlot) ------------
 PLAYER_Y            = 0x4F1E   # the player record Y word (= PlayerView.y)
 PLAYER_MOVE_FLAG    = 0x4F23   # the player facing/move flag byte; & 0x80 = moving left [asm 57FD]

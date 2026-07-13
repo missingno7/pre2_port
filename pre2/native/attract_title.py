@@ -24,7 +24,7 @@ from pre2.recovered.object_render import (Sprite, paint_sprite, plan_frame,
 from pre2.recovered.player import player_advance_anim
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
 from pre2.native.dgroup_offsets import (
-    LIGHT_FADE_STEP, LIGHT_FADE_TO_DARK, LIGHT_FADE_TO_LEVEL, RENDER_PAGE)
+    LIGHT_FADE_STEP, LIGHT_FADE_TO_DARK, LIGHT_FADE_TO_LEVEL, PROJECTILE_SLOTS, RENDER_PAGE)
 
 DINO = 0x4F2E          # dino / first bounce object (the caveman is the named PlayerView player slot)
 _PAGE = 0x2000         # render page (VM double-buffers 2000/0000; a single page renders identically)
@@ -154,14 +154,14 @@ def native_attract_title(state, game_root: str):
     for i in range(3):                              # [8FF2..9000] loop target 8FF2 -> step EACH object
         ax = (ax + 0x1E) & 0xFFFF                    # [8FF2] staggered X
         dx = (dx - 3) & 0xFFFF                       # [8FF5] staggered Y
-        si = 0x4F2E + i * 0x12
+        si = PROJECTILE_SLOTS + i * 0x12
         _ww(state, si, ax); _ww(state, si + 2, dx)
 
     # -------- PHASE 2 loop (9002..9044): objects fall/bounce, caveman runs back left -------- #
     while _s16(pv.x) >= 0:                            # [9044 jns] while caveman X >= 0
         _caveman_anim(state)                         # [9002] 638B
         for i in range(3):                          # [900F..9034] per bouncing object
-            si = 0x4F2E + i * 0x12
+            si = PROJECTILE_SLOTS + i * 0x12
             _ww(state, si, (_rd(state, si) - 5) & 0xFFFF)    # [900F] X -= 5
             _advance_obj_anim(state, si)             # [9012] 9047
             if _rd(state, si + 2) > 0xA9:            # [9015] bounce: Y > 0xA9 -> negate velocity

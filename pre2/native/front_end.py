@@ -37,14 +37,12 @@ from pre2.views.dgroup_view import LoaderGlobals, PlayerGlobals
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
+from pre2.native.dgroup_offsets import (
+    BIOS_SEED, CARTE_MARKER_DIMS, CARTE_MARKER_TABLE, CARTE_MASK_OFF, CARTE_MASK_SEG, DEMO_CURSOR, DEMO_LEVEL, DEMO_MODE, FIRE_ALT, FIRE_LATCH, FIRE_SPACE, FONT_SEG, KEY_1_LATCH, KEY_2_LATCH, KEY_TABLE, LOAD_TOP, MENU_MORPH_SRC, PENDING_KEY, ROW_SINE_TABLE)
 from pre2.recovered.scene import (
     MODE_LINEAR, MODE_PLANAR,
     SCENE_INTRO, SCENE_MAP, SCENE_MENU, SCENE_TITLE,
 )
-from pre2.native.dgroup_offsets import (
-    BIOS_SEED, CARTE_MARKER_DIMS, CARTE_MARKER_TABLE, CARTE_MASK_OFF, CARTE_MASK_SEG, DEMO_CURSOR,
-    DEMO_LEVEL, DEMO_MODE, FIRE_ALT, FIRE_LATCH, FIRE_SPACE, FONT_SEG, KEY_1_LATCH, KEY_2_LATCH,
-    LOAD_TOP, PENDING_KEY)
 
 _DS = DATA_SEG << 4
 
@@ -207,7 +205,7 @@ def _native_attract(state, dos, game_root: str):
     state.wb(DEMO_CURSOR + 2, 0); state.wb(DEMO_CURSOR + 3, 0)
     state.wb(PENDING_KEY, 0)                                      # no pending key yet
     g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0   # clear the death/end selectors
-    d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)         # clear the residual key table
+    d[_DS + KEY_TABLE:_DS + KEY_TABLE + 0x80] = bytes(0x80)         # clear the residual key table
     native_load_song(state, native_level_song_name(state), game_root)
     native_level_start(state, game_root=game_root)           # load the demo's level
     native_load_level_palette(state, dos)                    # [asm 0ba0] the per-level DAC palette (else the demo
@@ -236,7 +234,7 @@ def _native_attract(state, dos, game_root: str):
     g.input_source = 0                                       # back to live keyboard input
     state.wb(DEMO_CURSOR, 0); state.wb(DEMO_CURSOR + 1, 0)
     g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0
-    d[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)
+    d[_DS + KEY_TABLE:_DS + KEY_TABLE + 0x80] = bytes(0x80)
 
 
 def native_front_end(state, dos, display_page: int, *, game_root: str, intro_skippable: bool = False):
@@ -301,7 +299,7 @@ def _native_front_end_frames(state, dos, display_page: int, *, game_root: str, i
         #     reveal). The morph target is the static palette at DGROUP 0xACE7. (native_menu_flow reloads the song.) ---
         from pre2.native.audio import native_load_song
         native_load_song(state, "PRESENTA.TRK", game_root)       # [asm 02cc] the PRESENT title song (first music)
-        morph_target = bytes(b & 0x3F for b in state.data[_DS + 0xACE7:_DS + 0xACE7 + 0x300])
+        morph_target = bytes(b & 0x3F for b in state.data[_DS + MENU_MORPH_SRC:_DS + MENU_MORPH_SRC + 0x300])
         yield from _skippable_intro(
             _native_present_screen(game_root, morph_target), state, enabled=intro_skippable)
 
@@ -413,7 +411,7 @@ def native_carte_and_load(state, dos, game_root: str):
     from pre2.native.level_init import native_level_start
     native_load_song(state, native_level_song_name(state), game_root)   # [asm 01B7] the level song (plays at start)
     native_level_start(state, game_root=game_root)            # [asm 013e..0155] load + init + level-start (lives, etc.)
-    state.data[_DS + 0x27F4:_DS + 0x27F4 + 0x80] = bytes(0x80)  # clear the residual key table (the DC1 raw keys)
+    state.data[_DS + KEY_TABLE:_DS + KEY_TABLE + 0x80] = bytes(0x80)  # clear the residual key table (the DC1 raw keys)
 
 
 
@@ -550,7 +548,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     prev_page = 0
     prev_arrow = False                                          # edge-detect the arrow for the BEGINNER/EXPERT toggle
     bounce = state.data[(0x1030 << 4) + 5] != 0                # [asm 9AF5] cs:[5] (=3): the vertical sine-bounce is ON
-    sine = bytes(state.data[_DS + 0x6F90:_DS + 0x6F90 + 0x100])  # [asm 9B00] the row-bounce sine table (DGROUP 0x6f90)
+    sine = bytes(state.data[_DS + ROW_SINE_TABLE:_DS + ROW_SINE_TABLE + 0x100])  # [asm 9B00] the row-bounce sine table (DGROUP 0x6f90)
     pal = tuple(dos.vga_palette)
 
     scr = "mode_select" if kind == "mode_select" else ""           # the ONLY screen the touch host reads swipes on

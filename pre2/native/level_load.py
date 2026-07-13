@@ -19,7 +19,7 @@ from pre2.codecs.sqz import unpack_sqz
 from pre2.native.assets import load_sqz_by_dx
 from pre2.native.state import DATA_SEG
 from pre2.native.dgroup_offsets import (
-    ANY_ANIMATED_FLAG, BIOS_SEED, COLLECT_TOTAL_DECOR, COLLECT_TOTAL_MAIN, DECOR_PTR_LIST, EFFECT_SPRITE_SRC, FILENAME_DIGIT, GFX_GROUP, GFX_GROUP_TABLE, LEVEL_BOTTOM_LIMIT, LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LOAD_TOP, MODE_COPY, SCROLL_SCRIPT_PTR2, SEED_COMPUTED_FLAG, SPRITE_BANK_HI, SPRITE_BANK_LO, UNION_BANK_SEG, WARP_TABLE)
+    ANY_ANIMATED_FLAG, BIOS_SEED, BONUS_CELL_LIST, COLLECT_TOTAL_DECOR, COLLECT_TOTAL_MAIN, DBL_BUFFER_BACKUP, DECOR_PTR_LIST, EFFECT_SPRITE_SRC, ENTITY_LIST_2NDPASS, FILENAME_DIGIT, GFX_GROUP, GFX_GROUP_TABLE, LEVEL_BOTTOM_LIMIT, LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LEVEL_PROP_HEADER, LOAD_TOP, MODE_COPY, PLAYER_SLOT, SCROLL_SCRIPT_PTR2, SEED_COMPUTED_FLAG, SPRITE_BANK_HI, SPRITE_BANK_LO, TILE_MASK_TABLE, TILE_TYPE_TABLE, UNION_BANK_SEG, WARP_TABLE)
 
 _DS = DATA_SEG << 4
 
@@ -102,7 +102,7 @@ def _rebase_entity_sprites(state) -> None:
     dx = state.rw(SPRITE_BANK_LO)
     bx = state.rw(SPRITE_BANK_HI)
     if dx != 0xFFFF:
-        si = 0x8489
+        si = ENTITY_LIST_2NDPASS
         while state.rb(si) <= 0x32:
             ax = state.rw(si + 2)
             if ax != 0xFFFF:
@@ -140,7 +140,7 @@ def _assign_random_decor(state) -> None:
 
     ptrs = []
     for k in range(0x46):
-        si = 0x8F1D + k * 7
+        si = EFFECT_SPRITE_SRC + k * 7
         v = state.rw(si + 4)
         if ((v & 0x1FFF) - 0x11B) & 0xFFFF <= 0xF:
             ptrs.append(si)
@@ -188,7 +188,7 @@ def _self_patch_secret_tiles(state) -> None:
     base = (seg << 4) & 0xFFFFF
     dx = 0
     for k in range(0x50):                                        # [asm 3eb5 cx=0x50]
-        si = 0x8C8D + k * 5                                      # [asm 3eb2/3ecb stride 5]
+        si = BONUS_CELL_LIST + k * 5                                      # [asm 3eb2/3ecb stride 5]
         bx = state.rw(si + 3)                                    # [asm 3eba] cell offset
         if bx == 0xFFFF:                                         # [asm 3ebd/3ec0]
             continue
@@ -204,7 +204,7 @@ def _self_patch_secret_tiles(state) -> None:
 def _dup_double_buffer(state) -> None:
     """4065: dup the rebased [0x815e..] block to [0x9203..] (0x10a5 bytes, the working copy)."""
     d = state.data                                              # a bulk DGROUP block move (slice)
-    d[_DS + 0x9203:_DS + 0x9203 + 0x10A5] = d[_DS + 0x815E:_DS + 0x815E + 0x10A5]
+    d[_DS + DBL_BUFFER_BACKUP:_DS + DBL_BUFFER_BACKUP + 0x10A5] = d[_DS + LEVEL_PROP_HEADER:_DS + LEVEL_PROP_HEADER + 0x10A5]
 
 
 def _build_trigger_bank(state) -> None:
@@ -331,9 +331,9 @@ def native_level_load_classify(state) -> None:
     from pre2.recovered.sprite_classify import classify_sprites
     res = classify_sprites(read_sprite_cache(state))
     d = state.data
-    d[_DS + 0x4DF8:_DS + 0x4DF8 + len(res.types)] = res.types
+    d[_DS + TILE_TYPE_TABLE:_DS + TILE_TYPE_TABLE + len(res.types)] = res.types
     n = res.partial_count * 0x20
-    d[_DS + 0x2DF8:_DS + 0x2DF8 + n] = res.masks[:n]
+    d[_DS + TILE_MASK_TABLE:_DS + TILE_MASK_TABLE + n] = res.masks[:n]
 
 
 def native_level_load_anim_tables(state) -> None:
@@ -393,7 +393,7 @@ def native_player_init(state) -> None:
     0x74 object slots free (`[di+4]=0xFFFF`, `[di+0x11]=0`, stride 0x12 from `[0x4f0a]`), then sets the player
     position from the level's start point in the property tables: X=`[0x8160]`, Y=`[0x8162]`. [asm 55fc]"""
     d = state.data
-    d[_DS + 0x4F1C:_DS + 0x4F1C + 0x40B * 2] = b"\x00" * (0x40B * 2)   # a bulk object-pool clear (slice)
+    d[_DS + PLAYER_SLOT:_DS + PLAYER_SLOT + 0x40B * 2] = b"\x00" * (0x40B * 2)   # a bulk object-pool clear (slice)
     for k in range(0x74):                                        # mark 0x74 object slots free (stride 0x12)
         o = 0x4F0A + k * 0x12
         state.ww(o + 4, 0xFFFF)                                  # [di+4] = 0xFFFF (dead)

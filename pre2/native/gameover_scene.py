@@ -23,7 +23,8 @@ from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input
 from pre2.recovered.prng import rng_lcg
-from pre2.native.dgroup_offsets import (CRY_CAVEMAN_SPRITE, FIRE_PRIMARY, IDLE_CLOCK, RENDER_SLOTS_BASE)
+from pre2.native.dgroup_offsets import (
+    BIRD_PAIR_SLOTS, CRY_CAVEMAN_SPRITE, FIRE_PRIMARY, GAMEOVER_PALETTE, IDLE_CLOCK, PLAYER_SLOT, RENDER_SLOTS_BASE)
 
 _DS = DATA_SEG << 4
 
@@ -73,7 +74,7 @@ def native_gameover_setup(state) -> None:
         _ww(state, RENDER_SLOTS_BASE + i * 0x12 + 4, 0xFFFF)
     # --- the 8 GAME/OVER letters [9B9D-9BF1]: ids [0xB018+i]+0xB0, X staggered 0x18 (+0x30 gap after 4),
     #     Y=0xE0, bounce seed [di+0xE] = rand&7 (forced nonzero for the first 4) ---
-    di, x = 0x4F1C, 0x2C
+    di, x = PLAYER_SLOT, 0x2C
     for i in range(8):
         if i == 4:
             x = (x + 0x30) & 0xFFFF                                # [9BD1] the GAME|OVER word gap
@@ -112,7 +113,7 @@ def native_gameover_tick(state) -> None:
         if ax >= 0x6E:                                             # [9CDF-9CE4] cycle 0x68..0x6D
             ax = 0x68
         _ww(state, CRY_CAVEMAN_SPRITE, ax)
-    si = 0x4F1C
+    si = PLAYER_SLOT
     for _ in range(8):                                             # [9CEA-9D04] the letters' bounce oscillator
         ax = (_rd(state, si + 0xE) + 1) & 0xFFFF                       # [9CF0-9CF3] vel += 1
         if _s8(ax) >= 8:                                           # [9CF4-9CF6] cmp al,8 ; jl
@@ -157,7 +158,7 @@ def native_gameover_tick(state) -> None:
     # at 0x4FD0/0x4FE2 (drawn earlier = behind the tableau) and its 0x5138 record is freed for this frame
     for k in range(2):
         si = _BIRD_BASE + k * 0x12
-        di = 0x4FD0 + k * 0x12
+        di = BIRD_PAIR_SLOTS + k * 0x12
         if _s16(_rd(state, si + 2)) >= 0x135:                          # [9DBC-9DC1]
             ps, pd = _DS + si, _DS + di
             d[pd:pd + 0x12] = d[ps:ps + 0x12]                      # [9DF0] copy the record
@@ -202,7 +203,7 @@ def native_gameover_scene(state, dos, game_root: str):
         if rb(FIRE_PRIMARY):                                        # [9C7C-9C81] fire exits early
             break
     # [9C83] 9286: the 16-colour DAC fade-out over the frozen frame
-    pal6 = bytes(b & 0x3F for b in d[_DS + 0xAFE8:_DS + 0xAFE8 + 0x10 * 3])
+    pal6 = bytes(b & 0x3F for b in d[_DS + GAMEOVER_PALETTE:_DS + GAMEOVER_PALETTE + 0x10 * 3])
     for snap in fade_out_frames(pal6, 0x10):
         for i in range(0x10):
             dos.vga_palette[i] = (_dac8(snap[i * 3]), _dac8(snap[i * 3 + 1]), _dac8(snap[i * 3 + 2]))

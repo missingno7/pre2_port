@@ -12,7 +12,8 @@ from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
-from pre2.native.dgroup_offsets import (ITEM_TOTAL, SCORE_MID_WORD, WARP_TABLE)
+from pre2.native.dgroup_offsets import (
+    ACTIVE_FLAG_SNAPSHOT, BONUS_CELL_LIST, EFFECT_SPRITE_SRC, ITEM_QUEUE, ITEM_TOTAL, SCORE_MID_WORD, WARP_TABLE)
 
 _DS = DATA_SEG << 4
 # [asm 4fe1-4fff] effect-sprite types (relative to 0x35) the checkpoint restore must NOT overwrite — the
@@ -22,7 +23,7 @@ _TRANSIENT_TYPES = {0xD, 0x2C, 0x41, 0xA9, 0xAA, 0xB6, 0xE0}
 
 def native_51df(state) -> None:
     """[asm 51DF] Respawn cleanup: zero the object-backup scratch ``[0x6c12..+0x71]`` + ``[0x6c9e]``."""
-    state.data[_DS + 0x6C12:_DS + 0x6C12 + 0x71] = b"\x00" * 0x71   # [asm 51e2-51e7] the item-count table
+    state.data[_DS + ITEM_QUEUE:_DS + ITEM_QUEUE + 0x71] = b"\x00" * 0x71   # [asm 51e2-51e7] the item-count table
     state.ww(ITEM_TOTAL, 0)                                            # [asm 51e9] item-total (unnamed word)
 
 
@@ -80,12 +81,12 @@ def native_4f6c(state):
         raise Pre2GameOverTransition()
 
     # [asm 4f91-4fa6] snapshot the 0x46 effect-sprite source values [0x8f1d]+4 (stride 7) -> [0x6c12] (stride 2)
-    si, di = 0x8F1D, 0x6C12
+    si, di = EFFECT_SPRITE_SRC, ITEM_QUEUE
     for _ in range(0x46):
         state.ww(di, state.rw(si + 4)); si += 7; di += 2
     state.ww(di, 0x55AA)                                           # [asm 4fa3] end marker
     # [asm 4fa7-4fbd] snapshot the 0x50 active flags [0x8c8d]+3 (stride 5) -> [0xa2a8] (1 = live, 0 = free)
-    si, di = 0x8C8D, 0xA2A8
+    si, di = BONUS_CELL_LIST, ACTIVE_FLAG_SNAPSHOT
     for _ in range(0x50):
         state.wb(di, 0 if state.rw(si + 3) == 0xFFFF else 1); si += 5; di += 1
 
