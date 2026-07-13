@@ -75,7 +75,16 @@ SFX_SAMPLE_SEG      = 0x0B59   # the SFX PCM sample-bank segment [asm 07C9]
 SONG_ORDER_LEN      = 0xDC2    # the loaded song's order-list length (NativeAudio fingerprint)
 SONG_ORDER_TABLE    = 0xDC7    # the loaded song's order list
 
+# ---- the light-fade state (the light pickups; render half in native_apply_palette_fade) ---------------
+LIGHT_FADE_TO_DARK  = 0x6C01   # fade toward the dark "lights off" palette [876C]
+LIGHT_FADE_TO_LEVEL = 0x6C02   # fade back toward the level palette [8790]
+LIGHT_FADE_STEP     = 0x6C03   # the fade step counter
+
+# ---- render page -------------------------------------------------------------------------------------
+RENDER_PAGE         = 0x2DD8   # the CRTC render/back page the present flips to (cam.dest_page)
+
 # ---- keyboard / input latches (the front-end busy-waits) ----------------------------------------------
+FIRE_PRIMARY        = 0x27E8   # the primary fire/action key (the [0x27e8] | [0x2832] confirm)
 IDLE_CLOCK          = 0x27F0   # the PIT-fed idle counter, low word (= idle_clock) [5DC9]
 IDLE_CLOCK_HI       = 0x27F2   # its high word (the 32-bit free-running idle counter)
 KEY_TABLE           = 0x27F4   # the residual key/scan table (0x80 bytes) cleared on scene entry

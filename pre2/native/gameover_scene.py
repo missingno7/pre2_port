@@ -23,6 +23,7 @@ from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input
 from pre2.recovered.prng import rng_lcg
+from pre2.native.dgroup_offsets import (CRY_CAVEMAN_SPRITE, IDLE_CLOCK, RENDER_SLOTS_BASE)
 
 _DS = DATA_SEG << 4
 
@@ -69,7 +70,7 @@ def native_gameover_setup(state) -> None:
     g.cam_col_word = 0; g.cam_row_word = 0; g.row_factor = 0       # [9B35-9B3B] camera reset
     g.fine_scroll = 0                                              # [9B3E] scroll = top
     for i in range(0x74):                                          # [9B8C-9B9B] free every object slot
-        _ww(state, 0x4F0A + i * 0x12 + 4, 0xFFFF)
+        _ww(state, RENDER_SLOTS_BASE + i * 0x12 + 4, 0xFFFF)
     # --- the 8 GAME/OVER letters [9B9D-9BF1]: ids [0xB018+i]+0xB0, X staggered 0x18 (+0x30 gap after 4),
     #     Y=0xE0, bounce seed [di+0xE] = rand&7 (forced nonzero for the first 4) ---
     di, x = 0x4F1C, 0x2C
@@ -106,11 +107,11 @@ def native_gameover_tick(state) -> None:
     if g.fine_scroll < 0xB9:                                       # [9CC6-9CCD] scroll down to the tableau
         g.fine_scroll += 1
     if (g.frame_stamp & 3) == 0:                                   # [9CD1-9CD6] every 4th frame
-        ax = _rd(state, 0x5088)                                        # [9CD8] the crying caveman's sprite id
+        ax = _rd(state, CRY_CAVEMAN_SPRITE)                                        # [9CD8] the crying caveman's sprite id
         ax = ((ax & 0x1FFF) + 1) & 0xFFFF                          # [9CDB-9CDE] and ah,0x1f ; inc
         if ax >= 0x6E:                                             # [9CDF-9CE4] cycle 0x68..0x6D
             ax = 0x68
-        _ww(state, 0x5088, ax)
+        _ww(state, CRY_CAVEMAN_SPRITE, ax)
     si = 0x4F1C
     for _ in range(8):                                             # [9CEA-9D04] the letters' bounce oscillator
         ax = (_rd(state, si + 0xE) + 1) & 0xFFFF                       # [9CF0-9CF3] vel += 1
@@ -193,7 +194,7 @@ def native_gameover_scene(state, dos, game_root: str):
     for frame in range(_TIMEOUT // 3):                            # [9C74] 0x276/3 presents (timer +3 per iteration)
         native_gameover_tick(state)                                # [9C62] 9CC0
         g.frame_stamp = (g.frame_stamp + 1) & 0xFFFF              # the frame counter the cry cycle reads
-        _ww(state, 0x27F0, (_rd(state, 0x27F0) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
+        _ww(state, IDLE_CLOCK, (_rd(state, IDLE_CLOCK) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
         planes, _status = build_gameover_scene(state, dos, game_root=game_root, page=0)  # [9C65/9C68] 9C87+26FA
         last = planes
         yield planes, 0                                            # [9C6B] 44FB present

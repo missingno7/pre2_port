@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pre2.views.audio_commands import make_start_song, resolve_sfx, sfx_enabled, song_load_fingerprint
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
+from pre2.native.dgroup_offsets import (
+    SFX_DESC_LEN, SFX_DESC_SRC, SFX_PCSPK_NOTE, SFX_SAMPLE_SEG, SFX_TABLE, SONG_INDEX_TABLE)
 
 _CS = 0x1030 << 4      # code segment — the SFX device-flag reads (native_play_sfx) are CS-relative, not DGROUP
 _SONG_LENGTH = 0xDC2      # [asm 22FE] number of order positions
@@ -54,11 +56,13 @@ def native_play_sfx(state, dl: int, x: "int | None" = None) -> None:
     dl &= 0xFF
     if d[_CS + _SFX_DEV_FLAGS[0]] == 1 or d[_CS + _SFX_DEV_FLAGS[1]] == 1:   # [asm 0282/028a] digital present
         bx = dl * 4                                                          # the SB {src,len} descriptor table
-        state.wb(0x1004, state.rb(0x1009 + bx)); state.wb(0x1005, state.rb(0x100A + bx))   # [asm 02b7-02bb] src
-        state.wb(0x1006, state.rb(0x100B + bx)); state.wb(0x1007, state.rb(0x100C + bx))   # [asm 02be-02c2] len
+        state.wb(SFX_DESC_SRC, state.rb(SFX_TABLE + bx))                     # [asm 02b7-02bb] src (word)
+        state.wb(SFX_DESC_SRC + 1, state.rb(SFX_TABLE + 1 + bx))
+        state.wb(SFX_DESC_LEN, state.rb(SFX_TABLE + 2 + bx))                 # [asm 02be-02c2] len (word)
+        state.wb(SFX_DESC_LEN + 1, state.rb(SFX_TABLE + 3 + bx))
     else:                                                                   # [asm 0292-02a1] PC-speaker note ptr
         ptr = (0x1037 + dl * 0xA) & 0xFFFF
-        state.ww(0x1035, ptr)
+        state.ww(SFX_PCSPK_NOTE, ptr)
     q = getattr(state, "sfx_queue", None)                                   # every CALL is a distinct trigger (a
     if q is not None:                                                       #   repeated identical effect re-fires)
         q.append((dl, x))                                                   # x = trigger SCREEN X (0..320) or None
@@ -94,7 +98,7 @@ def native_load_sfx_bank(state, game_root: str, *, seg: int = _SFX_BANK_SEG) -> 
     d = state.data
     base = (seg << 4) & 0xFFFFF
     d[base:base + len(pcm)] = pcm                            # the decoded sample bank (segment 0xC000, not DS)
-    state.ww(0x0B59, seg)                                    # [0x0B59] = sample segment
+    state.ww(SFX_SAMPLE_SEG, seg)                                    # [0x0B59] = sample segment
     src = 0
     for dl in range(11):                                    # fill each effect's src = running offset into the bank
         t = 0x1009 + dl * 4                                 # the {src,len} descriptor table entry (DS-relative)
@@ -128,7 +132,7 @@ def native_level_song_name(state) -> str:
     The VM loads this right after the carte (main 01B7), which native's flow must reproduce so the level music
     replaces the carte song. Falls back to MINES for an unmapped index (any level still gets level music)."""
     level = PlayerGlobals(state).level
-    idx = state.rb(0x2D20 + level)                    # [0x2D20+level] the per-level song-index table
+    idx = state.rb(SONG_INDEX_TABLE + level)                    # [0x2D20+level] the per-level song-index table
     return _SONG_INDEX_TO_FILE.get(idx, "MINES.TRK")
 
 

@@ -18,6 +18,8 @@ from pre2.views.dgroup_view import PlayerGlobals
 from pre2.views.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.views.gameplay_effects import capture_gameplay_effects
 from pre2.views.particles import read_particles
+from pre2.native.dgroup_offsets import (
+    ANIM_REMAP_PTR, ANIM_REMAP_THRESH, COL_RING, PALETTE_PTR_TABLE, PREV_CAM_CELL_X, PREV_CAM_CELL_Y, ROW_RING, SCROLL_COPY_SRC)
 
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
 
@@ -43,7 +45,7 @@ def native_load_level_palette(state, dos) -> None:
     'render' (it touches no DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap
     snapshot's palette. The per-level palettes are global in DGROUP, so this just selects the right one."""
     level = PlayerGlobals(state).level
-    table_off = state.rw(0x2D00 + level * 2)              # [0x2D00 + level*2] the per-level palette pointer table
+    table_off = state.rw(PALETTE_PTR_TABLE + level * 2)              # [0x2D00 + level*2] the per-level palette pointer table
     native_load_dac_palette(state, dos, table_off, 0x10)
 
 
@@ -59,8 +61,8 @@ def native_sync_render_state(state) -> None:
     g = PlayerGlobals(state)
     cam_x = g.cam_col_word
     cam_y = g.cam_row_word
-    for off, val in ((0x2DE8, cam_x % _RING_COLS), (0x2DEA, cam_y % _RING_ROWS),
-                     (0x2DE0, cam_x), (0x2DE2, cam_y)):
+    for off, val in ((COL_RING, cam_x % _RING_COLS), (ROW_RING, cam_y % _RING_ROWS),
+                     (PREV_CAM_CELL_X, cam_x), (PREV_CAM_CELL_Y, cam_y)):
         state.ww(off, val)                                 # the render-mirror ring indices + prev-camera cells
     # Also re-derive the scroll-copy SOURCE [0x2DBA] (the ring offset build_background_ring places tiles at)
     # from the freshly-derived ring indices. native_camera_follow sets it during normal gameplay, but a camera
@@ -68,8 +70,8 @@ def native_sync_render_state(state) -> None:
     # camera — leaves it pointing at the OLD ring position, so the rebuild lays the correct tiles at the wrong
     # column offset (the level-6 respawn glitch: a narrow tree top rendered full-width + a garbage band).
     from pre2.recovered.frame_renderer import calc_scroll_source
-    src = calc_scroll_source(state.rw(0x2DE8), state.rb(0x2DEA)) & 0xFFFF
-    state.ww(0x2DBA, src)
+    src = calc_scroll_source(state.rw(COL_RING), state.rb(ROW_RING)) & 0xFFFF
+    state.ww(SCROLL_COPY_SRC, src)
 
     # Advance the animated-tile remap cycle (1030:367D) — the render-cluster step the gameplay pass omits. The
     # VM steps [0x6BC2]/[0x6BD4] once per redraw, BEFORE the grid walk reads the current remap table, so without
@@ -78,13 +80,13 @@ def native_sync_render_state(state) -> None:
     # render-state ([0x6BC2]/[0x6BD4] are excluded from the gameplay verify), so it belongs here — run exactly
     # once per displayed frame, matching the VM's per-redraw cadence.
     from pre2.recovered.animation import advance_animation
-    fp = state.rw(0x6BC2)                                  # the animated-tile remap frame pointer + threshold
-    thr = state.rb(0x6BD4)
+    fp = state.rw(ANIM_REMAP_PTR)                                  # the animated-tile remap frame pointer + threshold
+    thr = state.rb(ANIM_REMAP_THRESH)
     active = g.page_dirty != 0
     speed = g.friction
     fp, thr, _ = advance_animation(fp, thr, active, speed)
-    state.ww(0x6BC2, fp)
-    state.wb(0x6BD4, thr)
+    state.ww(ANIM_REMAP_PTR, fp)
+    state.wb(ANIM_REMAP_THRESH, thr)
 
 
 _LIGHT_DARK_PAL = 0xACB7   # [asm 6791] the fixed "lights off" dark 16-colour palette (6-bit RGB)

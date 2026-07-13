@@ -26,6 +26,7 @@ from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, pla
 from pre2.recovered.player_collision import collision
 from pre2.recovered.player_interaction import player_interaction_tick
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView, apply_contract
+from pre2.native.dgroup_offsets import (INPUT_READY_A, INPUT_READY_B, INPUT_READY_C, KEY_TABLE)
 
 _PX, _PY = 0x4F1C, 0x4F1E
 _XVEL, _YVEL, _CAM_LEFT = 0x4F22, 0x4F2A, 0x8164
@@ -51,7 +52,7 @@ def _w(state, off: int, val: int, width: int) -> None:
 def _keycombo_active(rb) -> bool:
     """247B's arm gate: all three combo flags set (the common case is inactive -> the routine is a read-only
     no-op). [asm 247B-2486: al = [0x2811] & [0x282C] & [0x2805]; je return]"""
-    return rb(0x2811) != 0 and rb(0x282C) != 0 and rb(0x2805) != 0
+    return rb(INPUT_READY_B) != 0 and rb(INPUT_READY_C) != 0 and rb(INPUT_READY_A) != 0
 
 
 def _combo_confirmed(rb, third_sc: int) -> bool:
@@ -60,12 +61,12 @@ def _combo_confirmed(rb, third_sc: int) -> bool:
     1..0x7E, skipping the three combo scancodes, and abort if any other is down. ``third_sc``: 0x11 (W/Z, the 247B
     dev-credits combo) or 0x12 (E, the 25C7 game-over creators-photo combo). The third-key DGROUP flag is at
     [0x27F4 + third_sc]. Returns True only on an exact match, else the routine is a no-op."""
-    if rb(0x2811) == 0 or rb(0x282C) == 0 or rb(0x27F4 + third_sc) == 0:   # Ctrl & Alt & third key all held
+    if rb(INPUT_READY_B) == 0 or rb(INPUT_READY_C) == 0 or rb(KEY_TABLE + third_sc) == 0:   # Ctrl & Alt & third key all held
         return False
     for sc in range(1, 0x7F):
         if sc in (0x1D, 0x38, third_sc):
             continue
-        if rb(0x27F4 + sc) != 0:
+        if rb(KEY_TABLE + sc) != 0:
             return False
     return True
 

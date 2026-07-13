@@ -12,6 +12,7 @@ from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
+from pre2.native.dgroup_offsets import (ITEM_TOTAL, SCORE_MID_WORD, WARP_TABLE)
 
 _DS = DATA_SEG << 4
 # [asm 4fe1-4fff] effect-sprite types (relative to 0x35) the checkpoint restore must NOT overwrite — the
@@ -22,7 +23,7 @@ _TRANSIENT_TYPES = {0xD, 0x2C, 0x41, 0xA9, 0xAA, 0xB6, 0xE0}
 def native_51df(state) -> None:
     """[asm 51DF] Respawn cleanup: zero the object-backup scratch ``[0x6c12..+0x71]`` + ``[0x6c9e]``."""
     state.data[_DS + 0x6C12:_DS + 0x6C12 + 0x71] = b"\x00" * 0x71   # [asm 51e2-51e7] the item-count table
-    state.ww(0x6C9E, 0)                                            # [asm 51e9] item-total (unnamed word)
+    state.ww(ITEM_TOTAL, 0)                                            # [asm 51e9] item-total (unnamed word)
 
 
 def native_5063(state):
@@ -48,7 +49,7 @@ def _game_over_reset(state) -> None:
     g.cam_col_word = 0; g.cam_row_word = 0; g.row_factor = 0; g.fine_scroll = 0   # [asm 9b35-9b3e] camera reset (9b23)
     pv.sprite = 0x0D                                                # [asm 5078] the death pose
     g.level = 0                                                    # [asm 507e] restart at level 1
-    g.score_lo = 0; g.score_hi = 0; state.ww(0x6C0C, 0)            # [asm 5083-508f] score = 0
+    g.score_lo = 0; g.score_hi = 0; state.ww(SCORE_MID_WORD, 0)            # [asm 5083-508f] score = 0
     native_51df(state)                                             # [asm 5095] cleanup
 
 
@@ -138,7 +139,7 @@ def native_level_end(state, *, game_root: str) -> None:
     level = g.level
     if g.level_end_mode > 1:                                      # [asm 4C74] a WARP (not the normal +1 end)
         if level < 0xA:                                          # a main level -> its bonus level [0x2cf6+level]
-            g.level = state.rb(0x2CF6 + level)                  # [asm 4c8f-4c90] (jmp 4f65: NO +1) — warp table
+            g.level = state.rb(WARP_TABLE + level)                  # [asm 4c8f-4c90] (jmp 4f65: NO +1) — warp table
         else:                                                    # a bonus level -> the source main level, then +1
             # [asm 4c7e-4c85] reverse-lookup: scan [0x2cf6] for the entry whose value == this bonus level. The
             # table only maps the FIVE table-warp bonuses (0x00/0x0A/0x0B/0x0C/0x0E, reached by a `[0x6be6]=0xff`
@@ -149,7 +150,7 @@ def native_level_end(state, *, game_root: str) -> None:
             # If one ever did land here the ORIGINAL scans off the end of the 10-entry table into garbage and jumps
             # to a non-existent level (0x0F -> level 0x94) — i.e. the real game crashes too. Fail loud rather than
             # reproduce that crash.
-            src = next((i for i in range(0xA) if state.rb(0x2CF6 + i) == level), None)   # [asm 4c7e-4c85]
+            src = next((i for i in range(0xA) if state.rb(WARP_TABLE + i) == level), None)   # [asm 4c7e-4c85]
             if src is None:
                 raise Pre2HybridGap(f"native level-warp: bonus level {level:#x} not a [0x2cf6] table-warp bonus "
                                     f"(the original scans past the table into garbage here — an unreachable state; "
