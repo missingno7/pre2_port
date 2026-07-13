@@ -188,3 +188,71 @@ def to_image(gs: GameState, data) -> None:
     if len(blob) != hi - lo + 1:
         raise ValueError(f"entity arena: expected {hi - lo + 1} bytes, got {len(blob)}")
     data[DGROUP_BASE + lo:DGROUP_BASE + hi + 1] = blob
+
+
+def _owner_map() -> dict[int, str]:
+    """Every named DGROUP offset -> the graph node that owns it ('arena' for the entity arena)."""
+    owner: dict[int, str] = {}
+    for cls, fields in _node_specs().items():
+        for off, width in fields.values():
+            for k in range(width):
+                owner[(off + k) & 0xFFFF] = cls
+    lo, hi = ARENAS[_ENTITY_ARENA_KEY]
+    for o in range(lo, hi + 1):
+        owner[o] = "arena"
+    return owner
+
+
+class ObjectGraphBackend:
+    """The game running ON the object graph: named state lives in per-node byte buckets (grouped by the
+    graph's nodes) plus the entity-arena bucket; read-only residue stays in an image. Presents the same
+    offset-keyed rb/rw/wb/ww API as the other backends, so ``NativeGameState.backend`` swaps to it with
+    nothing else changing — proving the structured graph is a sufficient LIVE state of record, not just a
+    snapshot. ``graph()`` reifies the current buckets as a :class:`GameState` (typed nodes + record list);
+    ``materialize`` folds the buckets back over an image for the renderer / the byte-exact digest."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("_buckets", "_owner", "_img")
+
+    def __init__(self, seed, residue_image=None):
+        data = getattr(seed, "data", seed)
+        self._owner = _owner_map()
+        self._buckets: dict[str, dict[int, int]] = {}
+        for off, node in self._owner.items():
+            self._buckets.setdefault(node, {})[off] = data[DGROUP_BASE + off]
+        self._img = data if residue_image is None else residue_image
+
+    def rb(self, off: int) -> int:
+        off &= 0xFFFF
+        node = self._owner.get(off)
+        if node is None:
+            return self._img[DGROUP_BASE + off]
+        return self._buckets[node][off]
+
+    def wb(self, off: int, v: int) -> None:
+        off &= 0xFFFF
+        v &= 0xFF
+        node = self._owner.get(off)
+        if node is None:
+            self._img[DGROUP_BASE + off] = v
+        else:
+            self._buckets[node][off] = v
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v & 0xFF)
+        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+
+    def materialize(self, data=None) -> None:
+        data = self._img if data is None else data
+        for bucket in self._buckets.values():
+            for off, v in bucket.items():
+                data[DGROUP_BASE + off] = v
+
+    def graph(self) -> GameState:
+        """Reify the current live buckets as a typed object graph (nodes + entity record list)."""
+        scratch = bytearray(len(self._img))
+        self.materialize(scratch)
+        return from_image(scratch)
