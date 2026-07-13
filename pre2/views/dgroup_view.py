@@ -417,6 +417,8 @@ class PlayerGlobals(DgroupView):
     display_page  = _U16(0x2DD6)  # the CRTC display-start PAGE the present flips [2DD6; read at every present]
     input_source  = _U8(0x2879)   # DC1's source: 0 live keyboard / 1 demo-attract playback / 2 record [0DC1]
     level_end_mode = _U8(0x6BE6)  # the 4C69 level-end dispatch mode: 1 normal end / >1 warp [4C69/4C74]
+    checkpoint_x  = _U16(0x6BAD)  # the respawn/checkpoint player X the 4F6C respawn drops the player at [4fc2]
+    checkpoint_y  = _U16(0x6BAF)  # ... checkpoint Y [4fcb]
     level         = _U8(0x2D8A)   # the current level index [5B18]; 0xFF = none chosen yet [8ee9]
     mode          = _U8(0xB197)   # 0 = BEGINNER / 1 = EXPERT — the mode-select toggle [9941/8ee9]
     mode_copy     = _U8(0xB198)   # the committed copy the loader reads [994E]

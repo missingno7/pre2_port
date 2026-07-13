@@ -46,7 +46,10 @@ _ALLOWLIST = {"pre2/views/memory_adapter.py", "pre2/views/dgroup_view.py",
               "pre2/views/firefly_sim.py",        # the firefly-sim memory adapter
               "pre2/views/camera_pan.py"}         # the camera-pan memory adapter
 
-_VERB = re.compile(r"\b(?:rb|rw|wb|ww)\(|\.data\[|\bDATA_SEG\b|\bDGROUP_BASE\b")
+# The raw-DGROUP-access verbs. NOTE the last two: `d = state.data; d[_DS + off]` aliases `.data[` and evaded
+# an earlier version of this regex — so also count the DGROUP-relative address arithmetic (`_DS +`, `_DS_BASE
+# +`), which is the tell of raw image indexing regardless of the local alias name.
+_VERB = re.compile(r"\b(?:rb|rw|wb|ww)\(|\.data\[|\bDATA_SEG\b|\bDGROUP_BASE\b|\b_DS\s*\+|\b_DS_BASE\s*\+")
 _DEF = re.compile(r"\bdef\s+(?:rb|rw|wb|ww)\b")
 
 
