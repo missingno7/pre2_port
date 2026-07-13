@@ -32,17 +32,8 @@ def native_level_load_dgroup(state, level: int, *, game_root: str) -> None:
     """Reproduce the **deterministic DGROUP** half of ``3ed6`` over a NativeGameState: prologue scalars + clears,
     the SQZ load, the tile-index table, and the property-table memcpy. (The planar tile cache + object-table
     construction are the loader's other halves — see module docstring / ``native_level_load``.)"""
-    d = state.data
-
-    def rb(o): return d[_DS + o]
-
-    def wb(o, v): d[_DS + o] = v & 0xFF
-
-    def rw(o): return d[_DS + o] | (d[_DS + (o + 1)] << 8)
-
-    def ww(o, v):
-        d[_DS + o] = v & 0xFF
-        d[_DS + (o + 1)] = (v >> 8) & 0xFF
+    d = state.data                                       # `d` is kept for the segment-relative loads + bulk clears
+    rb, rw, wb, ww = state.rb, state.rw, state.wb, state.ww   # DGROUP scalars route through the backend seam
 
     # --- prologue [asm 3ede..3f26] ---
     wb(0x2D8A, level)                                   # current level/mode
@@ -87,78 +78,73 @@ def _s8(v: int) -> int:
     return v - 0x100 if v & 0x80 else v
 
 
-def _rebase_effect_sprites(d) -> None:
+def _rebase_effect_sprites(state) -> None:
     """4159 (called as 414d): rebase the float-effect ([0x8f1d], 70x stride 7) + terrain-entity
     ([0x9107], 16x stride 0xF) sprite refs [+4] from level-bank to engine-bank (-[0x8c89]+0x35)."""
-    dx = d[_DS + 0x8C89] | (d[_DS + 0x8C8A] << 8)
+    dx = state.rw(0x8C89)
 
     def rebase(seg_off, count, stride):
         for k in range(count):
             o = seg_off + k * stride + 4
-            v = d[_DS + o] | (d[_DS + o + 1] << 8)
+            v = state.rw(o)
             if v != 0xFFFF:
-                v = (v - dx + 0x35) & 0xFFFF
-                d[_DS + o] = v & 0xFF
-                d[_DS + o + 1] = (v >> 8) & 0xFF
+                state.ww(o, (v - dx + 0x35) & 0xFFFF)
     rebase(0x8F1D, 0x46, 7)
     rebase(0x9107, 0x10, 0xF)
 
 
-def _rebase_entity_sprites(d) -> None:
+def _rebase_entity_sprites(state) -> None:
     """4182: rebase the second-pass entity list [0x8489] (variable stride = [si], <=0x32) sprite ref
     [+2] across two banks (>= [0x8c8b] -> -[0x8c8b]+0x138; >= [0x8c89] -> -[0x8c89]+0x35), then reset
     [0x8c89]=0x35 / [0x8c8b]=0x138."""
-    dx = d[_DS + 0x8C89] | (d[_DS + 0x8C8A] << 8)
-    bx = d[_DS + 0x8C8B] | (d[_DS + 0x8C8C] << 8)
+    dx = state.rw(0x8C89)
+    bx = state.rw(0x8C8B)
     if dx != 0xFFFF:
         si = 0x8489
-        while d[_DS + si] <= 0x32:
-            ax = d[_DS + si + 2] | (d[_DS + si + 3] << 8)
+        while state.rb(si) <= 0x32:
+            ax = state.rw(si + 2)
             if ax != 0xFFFF:
                 if ax >= bx:
-                    ax = (ax - bx + 0x138) & 0xFFFF
-                    d[_DS + si + 2] = ax & 0xFF; d[_DS + si + 3] = (ax >> 8) & 0xFF
+                    state.ww(si + 2, (ax - bx + 0x138) & 0xFFFF)
                 elif ax >= dx:
-                    ax = (ax - dx + 0x35) & 0xFFFF
-                    d[_DS + si + 2] = ax & 0xFF; d[_DS + si + 3] = (ax >> 8) & 0xFF
-            si = (si + _s8(d[_DS + si])) & 0xFFFF
+                    state.ww(si + 2, (ax - dx + 0x35) & 0xFFFF)
+            si = (si + _s8(state.rb(si))) & 0xFFFF
     for o, v in ((0x8C89, 0x35), (0x8C8B, 0x138)):
-        d[_DS + o] = v & 0xFF; d[_DS + o + 1] = (v >> 8) & 0xFF
+        state.ww(o, v)
 
 
-def _ensure_password_seed(d) -> None:
+def _ensure_password_seed(state) -> None:
     """[asm 932F 9336..9396] Reproduce 932F's lazy one-time seed init: if the ``[0xA335]`` "computed" flag is
     clear, compute the BIOS-ROM checksum into ``[0xA333]`` (word) and set the flag. This is exactly the guard the
     ASM runs on the FIRST password-generator call — and in the mode-select path that first call IS this 40bd
     decor assignment (which is why the VM reaches gameplay with ``[0xA333]=0x20`` on the zeroed-BIOS GOG build).
     Without it native reads ``[0xA333]=0`` -> the decor sprites diverge from the VM. Idempotent."""
     from pre2.recovered.password import bios_seed
-    if d[_DS + 0xA335] != 0:                                 # [asm 933c] cmp byte [0xa335],0 / jne (already done)
+    if state.rb(0xA335) != 0:                               # [asm 933c] cmp byte [0xa335],0 / jne (already done)
         return
-    seed = bios_seed(d)                                     # [asm 9343..9390] the F000/option-ROM checksum
-    d[_DS + 0xA333] = seed & 0xFF                            # [asm 9392] mov [0xa333], dx
-    d[_DS + 0xA334] = (seed >> 8) & 0xFF
-    d[_DS + 0xA335] = 1                                     # [asm 9396] mov byte [0xa335], 1
+    seed = bios_seed(state.data)                           # [asm 9343..9390] the F000/option-ROM checksum (not DGROUP)
+    state.ww(0xA333, seed)                                  # [asm 9392] mov [0xa333], dx
+    state.wb(0xA335, 1)                                    # [asm 9396] mov byte [0xa335], 1
 
 
-def _assign_random_decor(d) -> None:
+def _assign_random_decor(state) -> None:
     """40bd: the random decorative-sprite assignment. Collect the float-effect entries ([0x8f1d], 70x stride 7)
     whose sprite ref ([si+4] & 0x1fff) is in [0x11b, 0x12b) into a pointer list at [0x6a88]; if the count is a
     nonzero multiple of 4, bubble-sort the pointers by the entry's first word, then deal each a pseudo-random
     sprite (0x11b + a 4-bit nibble of the level's password code 932F, MSB-first, groups of 4 reusing the code).
     Deterministic via the recovered generator [[pre2-level-passwords]] (seed = machine fingerprint [0xA333])."""
     from pre2.recovered.password import DEFAULT_ROT, level_code
-    _ensure_password_seed(d)                                # [asm 40bd -> 932F] the first 932F call inits the seed
+    _ensure_password_seed(state)                            # [asm 40bd -> 932F] the first 932F call inits the seed
 
     ptrs = []
     for k in range(0x46):
         si = 0x8F1D + k * 7
-        v = d[_DS + si + 4] | (d[_DS + si + 5] << 8)
+        v = state.rw(si + 4)
         if ((v & 0x1FFF) - 0x11B) & 0xFFFF <= 0xF:
             ptrs.append(si)
     # mirror [0x6a88] (words) for fidelity
     for i, p in enumerate(ptrs):
-        d[_DS + 0x6A88 + i * 2] = p & 0xFF; d[_DS + 0x6A88 + i * 2 + 1] = (p >> 8) & 0xFF
+        state.ww(0x6A88 + i * 2, p)
     bp = len(ptrs)
     if bp == 0 or bp & 3:
         return
@@ -167,14 +153,14 @@ def _assign_random_decor(d) -> None:
     while swapped:
         swapped = False
         for i in range(bp - 1):
-            a = d[_DS + ptrs[i]] | (d[_DS + ptrs[i] + 1] << 8)
-            b = d[_DS + ptrs[i + 1]] | (d[_DS + ptrs[i + 1] + 1] << 8)
+            a = state.rw(ptrs[i])
+            b = state.rw(ptrs[i + 1])
             if b < a:
                 ptrs[i], ptrs[i + 1] = ptrs[i + 1], ptrs[i]; swapped = True
     for i, p in enumerate(ptrs):
-        d[_DS + 0x6A88 + i * 2] = p & 0xFF; d[_DS + 0x6A88 + i * 2 + 1] = (p >> 8) & 0xFF
-    level = d[_DS + 0x2D8A] + (0x0A if d[_DS + 0xB198] else 0)
-    seed = d[_DS + 0xA333] | (d[_DS + 0xA334] << 8)
+        state.ww(0x6A88 + i * 2, p)
+    level = state.rb(0x2D8A) + (0x0A if state.rb(0xB198) else 0)
+    seed = state.rw(0xA333)
     code = level_code(level, seed=seed, rot=DEFAULT_ROT)
     # groups of 4 entries, each group re-using ``code``, 4 bits per entry MSB-first
     for g in range(0, bp, 4):
@@ -184,10 +170,10 @@ def _assign_random_decor(d) -> None:
             dx = (dx << 4) & 0xFFFF | (dx >> 12)        # rotate so the next nibble is the low 4 bits...
             nib = dx & 0xF                               # ...matching shl/rcl MSB-first extraction
             val = 0x11B + nib
-            d[_DS + di + 4] = val & 0xFF; d[_DS + di + 5] = (val >> 8) & 0xFF
+            state.ww(di + 4, val)
 
 
-def _self_patch_secret_tiles(d) -> None:
+def _self_patch_secret_tiles(state) -> None:
     """[asm 3ead] HIDE the secret/bonus tiles in the level-data grid. Walk the 0x50-entry bonus-cell list
     ``[0x8c8d]`` (stride 5): each entry's ``[+3]`` word ``bx`` is a cell offset into the level data (``[0x2dda]``).
     For a live entry (``bx != 0xFFFF``) swap ``level_data[bx]`` with the entry's ``[+0]`` byte — the HIDDEN tile —
@@ -195,30 +181,31 @@ def _self_patch_secret_tiles(d) -> None:
     Then add the count to ``[0x2a74]`` (the level's collectible total the tally reads). WITHOUT this the secret
     tiles render already-revealed (and [0x2a74] stays 0). Runs after 4182, before 40bd (so the count is doubled by
     ``_count_decor``)."""
-    seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)
+    d = state.data                                              # `d` for the level-data segment cells (es=[0x2dda])
+    seg = state.rw(0x2DDA)
     base = (seg << 4) & 0xFFFFF
     dx = 0
     for k in range(0x50):                                        # [asm 3eb5 cx=0x50]
         si = 0x8C8D + k * 5                                      # [asm 3eb2/3ecb stride 5]
-        bx = d[_DS + si + 3] | (d[_DS + si + 4] << 8)            # [asm 3eba] cell offset
+        bx = state.rw(si + 3)                                    # [asm 3eba] cell offset
         if bx == 0xFFFF:                                         # [asm 3ebd/3ec0]
             continue
         dx += 1                                                  # [asm 3ec2]
         cell = (base + bx) & 0xFFFFF
-        al = d[_DS + si]                                         # [asm 3ec3] the hidden-tile replacement
-        d[_DS + si + 1] = d[cell]                                # [asm 3ec8] stash the original (revealed) tile
-        d[cell] = al                                             # [asm 3ec5] xchg -> patch the cell to hidden
-    v = ((d[_DS + 0x2A74] | (d[_DS + 0x2A75] << 8)) + dx) & 0xFFFF   # [asm 3ed0] [0x2a74] += count
-    d[_DS + 0x2A74] = v & 0xFF
-    d[_DS + 0x2A75] = (v >> 8) & 0xFF
+        al = state.rb(si)                                        # [asm 3ec3] the hidden-tile replacement
+        state.wb(si + 1, d[cell])                                # [asm 3ec8] stash the original (revealed) tile
+        d[cell] = al                                             # [asm 3ec5] xchg -> patch the cell to hidden (segment)
+    v = (state.rw(0x2A74) + dx) & 0xFFFF                         # [asm 3ed0] [0x2a74] += count
+    state.ww(0x2A74, v)
 
 
-def _dup_double_buffer(d) -> None:
+def _dup_double_buffer(state) -> None:
     """4065: dup the rebased [0x815e..] block to [0x9203..] (0x10a5 bytes, the working copy)."""
+    d = state.data                                              # a bulk DGROUP block move (slice)
     d[_DS + 0x9203:_DS + 0x9203 + 0x10A5] = d[_DS + 0x815E:_DS + 0x815E + 0x10A5]
 
 
-def _build_trigger_bank(d) -> None:
+def _build_trigger_bank(state) -> None:
     """[asm 41CA] SAVE the pristine proximity-scenery map blocks into the ``[0x2875]`` bank. For each live
     ``[0x83F3]`` entry (15 x stride 0xA, ``[+0]`` != 0xFFFF): the block spans from ``[+0] - [+8]*0x100`` (the
     trigger top minus the countdown rows — everything the collapse will ever shift) over ``[+3]+[+8]`` rows x
@@ -229,9 +216,9 @@ def _build_trigger_bank(d) -> None:
     backup keeps the pre-41CA ``[+6]`` (0xFFFF) — 5237's 5251 restore puts 0xFFFF back each respawn, exactly
     as observed in the L0xD snapshots."""
     from pre2.views.dgroup_view import ProximityView, SegmentBackend
-    v = ProximityView(d)
-    bank = SegmentBackend(d, v.bank_seg)                             # [asm 41ca] es = [0x2875]
-    game_map = SegmentBackend(d, v.map_seg)                          # [asm 41fc] ds = [0x2DDA]
+    v = ProximityView(state)
+    bank = SegmentBackend(state, v.bank_seg)                         # [asm 41ca] es = [0x2875]
+    game_map = SegmentBackend(state, v.map_seg)                      # [asm 41fc] ds = [0x2DDA]
     di = 0                                                           # [asm 41ce]
     bank.ww(0, 0xFFFF)                                               # [asm 41d0] empty-bank terminator
     for trig in v.triggers:                                          # [asm 41d5/41d8] 15 entries
@@ -257,43 +244,40 @@ def native_level_load_objects(state) -> None:
     """The DGROUP-only object/effect-table setup that runs after the property copy [asm 4059..409d]:
     the two sprite-bank rebases + the double-buffer dup. (42af tile tables, 3ead level-data patch, 40bd
     [0x6a88] index, 41ca trigger sprites are the loader's other, separately-scoped halves.)"""
-    d = state.data
-    _per_level_pointers(d)           # 4038..4056
-    _rebase_effect_sprites(d)        # 414d
-    _rebase_entity_sprites(d)        # 4182
-    _self_patch_secret_tiles(d)      # 3ead: hide the secret/bonus tiles + count into [0x2a74]
-    _assign_random_decor(d)          # 40bd
-    _dup_double_buffer(d)            # 4065
-    _build_trigger_bank(d)           # 41ca: save the pristine scenery blocks -> [0x2875] (52D2/5427 read them)
-    _count_decor(d)                  # 4073..40bb
+    _per_level_pointers(state)       # 4038..4056
+    _rebase_effect_sprites(state)    # 414d
+    _rebase_entity_sprites(state)    # 4182
+    _self_patch_secret_tiles(state)  # 3ead: hide the secret/bonus tiles + count into [0x2a74]
+    _assign_random_decor(state)      # 40bd
+    _dup_double_buffer(state)        # 4065
+    _build_trigger_bank(state)       # 41ca: save the pristine scenery blocks -> [0x2875] (52D2/5427 read them)
+    _count_decor(state)              # 4073..40bb
 
 
-def _per_level_pointers(d) -> None:
+def _per_level_pointers(state) -> None:
     """4038..4056: per-level word [0x2d40+level*2] -> [0x2dbc] (level-advance/scroll), [0x2dbe]=0; and the
     two header words [0x8160]/[0x8162] (from the property block) -> [0x6bad]/[0x6baf]."""
-    level = d[_DS + 0x2D8A]
+    level = state.rb(0x2D8A)
     for dst, src in ((0x2DBC, 0x2D40 + level * 2), (0x6BAD, 0x8160), (0x6BAF, 0x8162)):
-        d[_DS + dst] = d[_DS + src]; d[_DS + dst + 1] = d[_DS + src + 1]
-    d[_DS + 0x2DBE] = 0; d[_DS + 0x2DBF] = 0
+        state.ww(dst, state.rw(src))
+    state.ww(0x2DBE, 0)
 
 
-def _count_decor(d) -> None:
+def _count_decor(state) -> None:
     """4073..40bb: count float-effect entries whose (rebased) sprite [+4] is in [0x6e,0x75] or [0x80,0xdb];
     add to [0x2a78]; then if level<0xA and [0x2cf6+level]!=0xff, double [0x2a78] and [0x2a74]."""
     dx = 0
     for k in range(0x46):
-        ax = d[_DS + 0x8F1D + k * 7 + 4] | (d[_DS + 0x8F1D + k * 7 + 5] << 8)
+        ax = state.rw(0x8F1D + k * 7 + 4)
         if ax == 0xFFFF or ax < 0x6E or ax > 0xDB:
             continue
         if ax >= 0x80 or ax <= 0x75:
             dx += 1
-    v = (d[_DS + 0x2A78] | (d[_DS + 0x2A79] << 8)) + dx
-    d[_DS + 0x2A78] = v & 0xFF; d[_DS + 0x2A79] = (v >> 8) & 0xFF
-    level = d[_DS + 0x2D8A]
-    if level < 0x0A and d[_DS + 0x2CF6 + level] != 0xFF:
+    state.ww(0x2A78, (state.rw(0x2A78) + dx) & 0xFFFF)
+    level = state.rb(0x2D8A)
+    if level < 0x0A and state.rb(0x2CF6 + level) != 0xFF:
         for o in (0x2A78, 0x2A74):
-            v = ((d[_DS + o] | (d[_DS + o + 1] << 8)) << 1) & 0xFFFF
-            d[_DS + o] = v & 0xFF; d[_DS + o + 1] = (v >> 8) & 0xFF
+            state.ww(o, (state.rw(o) << 1) & 0xFFFF)
 
 
 def native_level_load_planar(state) -> None:
@@ -306,10 +290,9 @@ def native_level_load_planar(state) -> None:
     — not the simple per-frame ``[0x2dd8]`` bank the live bridge path uses. Recovering ``0x492`` + that gate is a
     follow-up; until then the shared/common sprites are left empty. See [[pre2-level-init-island]]."""
     from pre2.views.sprites import compute_local_slots, write_slots
-    d = state.data
-    seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDB] << 8)
-    level = d[_DS + 0x2D8A]
-    bh = d[_DS + 0x2D30 + level]
+    seg = state.rw(0x2DDA)
+    level = state.rb(0x2D8A)
+    bh = state.rb(0x2D30 + level)
     base_seg = (seg + (bh << 4)) & 0xFFFF
     write_slots(state, compute_local_slots(state, base_seg))         # 4316 (local)
 
@@ -358,24 +341,23 @@ def native_level_load_anim_tables(state) -> None:
     maps to itself in tables 0/1/2 and 0 in table 3; an ANIMATED tile (bit 0x80 set) consumes 3 consecutive
     indices and fills a rotated 3-frame cycle (tables 0/1/2 = the three frames t/t+1/t+2, each rotated) with 1 in
     table 3. [0x6bbd] = 1 iff the level has any animated tile. Deterministic; reads [0x805E] (loaded by dgroup)."""
-    d = state.data
-    T0, T1, T2, T3, FLAG = 0x6688, 0x6788, 0x6888, 0x6988, 0x805E
+    T0, T1, T2, T3, FLAG = 0x6688, 0x6788, 0x6888, 0x6988, 0x805E   # the 4 remap-frame tables + the anim-flag table
     has_anim = 0
     bx = 0
     while bx < 0x100:                                              # [asm 430d: or bh,bh / je]
-        if (d[_DS + FLAG + bx] & 0x80) == 0:                       # [asm 42bb] static tile
+        if (state.rb(FLAG + bx) & 0x80) == 0:                     # [asm 42bb] static tile
             t = bx & 0xFF
-            d[_DS + T0 + bx] = t; d[_DS + T1 + bx] = t; d[_DS + T2 + bx] = t; d[_DS + T3 + bx] = 0
+            state.wb(T0 + bx, t); state.wb(T1 + bx, t); state.wb(T2 + bx, t); state.wb(T3 + bx, 0)
             bx += 1                                                # [asm 42d3 -> 430c]
         else:                                                      # [asm 42d5] animated: rotated 3-frame cycle
             has_anim = 1
             t = bx & 0xFF; t1 = (t + 1) & 0xFF; t2 = (t + 2) & 0xFF
-            d[_DS + T0 + bx] = t;  d[_DS + T0 + bx + 1] = t1; d[_DS + T0 + bx + 2] = t2
-            d[_DS + T1 + bx] = t1; d[_DS + T1 + bx + 1] = t2; d[_DS + T1 + bx + 2] = t
-            d[_DS + T2 + bx] = t2; d[_DS + T2 + bx + 1] = t;  d[_DS + T2 + bx + 2] = t1
-            d[_DS + T3 + bx] = 1;  d[_DS + T3 + bx + 1] = 1;  d[_DS + T3 + bx + 2] = 1
+            state.wb(T0 + bx, t);  state.wb(T0 + bx + 1, t1); state.wb(T0 + bx + 2, t2)
+            state.wb(T1 + bx, t1); state.wb(T1 + bx + 1, t2); state.wb(T1 + bx + 2, t)
+            state.wb(T2 + bx, t2); state.wb(T2 + bx + 1, t);  state.wb(T2 + bx + 2, t1)
+            state.wb(T3 + bx, 1);  state.wb(T3 + bx + 1, 1);  state.wb(T3 + bx + 2, 1)
             bx += 3                                                # [asm 430a/430b/430c: inc bx x3]
-    d[_DS + 0x6BBD] = has_anim                                     # [asm 4311] any-animated flag
+    state.wb(0x6BBD, has_anim)                                     # [asm 4311] any-animated flag
 
 
 def native_level_load_shared(state, *, game_root: str) -> None:
@@ -392,14 +374,14 @@ def native_level_load_shared(state, *, game_root: str) -> None:
     # reads each frame (read_foreground_state / render_frame), so we SAVE it, load UNION there only to demux into
     # the cache (UNION isn't read after the cache is filled), then RESTORE the grid. Otherwise the grid becomes
     # UNION bytes -> scattered tiles + garbage tile types.
-    saved_bump = d[_DS + 0x2875] | (d[_DS + 0x2875 + 1] << 8)
-    lvl_seg = d[_DS + 0x2DDA] | (d[_DS + 0x2DDA + 1] << 8)
+    saved_bump = state.rw(0x2875)
+    lvl_seg = state.rw(0x2DDA)
     lvl_base = (lvl_seg << 4) & 0xFFFFF
     grid = bytes(d[lvl_base:lvl_base + 0x12000])                    # UNION decompresses to ~0x11000; save + margin
-    d[_DS + 0x2875] = lvl_seg & 0xFF; d[_DS + 0x2875 + 1] = (lvl_seg >> 8) & 0xFF
+    state.ww(0x2875, lvl_seg)
     union_seg = load_sqz_by_dx(state, 0x0A25, game_root=game_root)  # [asm 0699->107b] decompress UNION.SQZ
-    d[_DS + 0x2875] = saved_bump & 0xFF; d[_DS + 0x2875 + 1] = (saved_bump >> 8) & 0xFF
-    d[_DS + 0x2DDC] = union_seg & 0xFF; d[_DS + 0x2DDC + 1] = (union_seg >> 8) & 0xFF
+    state.ww(0x2875, saved_bump)
+    state.ww(0x2DDC, union_seg)
     write_slots(state, compute_shared_slots(state, union_seg))      # [asm 4389] demux code>=0x100 into the cache
     d[lvl_base:lvl_base + 0x12000] = grid                          # restore the level-data grid UNION overwrote
 
@@ -409,13 +391,13 @@ def native_player_init(state) -> None:
     0x74 object slots free (`[di+4]=0xFFFF`, `[di+0x11]=0`, stride 0x12 from `[0x4f0a]`), then sets the player
     position from the level's start point in the property tables: X=`[0x8160]`, Y=`[0x8162]`. [asm 55fc]"""
     d = state.data
-    d[_DS + 0x4F1C:_DS + 0x4F1C + 0x40B * 2] = b"\x00" * (0x40B * 2)
-    for k in range(0x74):
-        o = _DS + 0x4F0A + k * 0x12
-        d[o + 4] = 0xFF; d[o + 5] = 0xFF
-        d[o + 0x11] = 0
-    for dst, src in ((0x4F1C, 0x8160), (0x4F1E, 0x8162)):
-        d[_DS + dst] = d[_DS + src]; d[_DS + dst + 1] = d[_DS + src + 1]
+    d[_DS + 0x4F1C:_DS + 0x4F1C + 0x40B * 2] = b"\x00" * (0x40B * 2)   # a bulk object-pool clear (slice)
+    for k in range(0x74):                                        # mark 0x74 object slots free (stride 0x12)
+        o = 0x4F0A + k * 0x12
+        state.ww(o + 4, 0xFFFF)                                  # [di+4] = 0xFFFF (dead)
+        state.wb(o + 0x11, 0)                                    # [di+0x11] = 0
+    for dst, src in ((0x4F1C, 0x8160), (0x4F1E, 0x8162)):        # player start pos from the property header
+        state.ww(dst, state.rw(src))
 
 
 def native_level_load(state, level: int, *, game_root: str) -> None:
