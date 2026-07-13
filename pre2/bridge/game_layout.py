@@ -71,3 +71,59 @@ def rng_to_image(rng: Rng, data) -> None:
     data = getattr(data, "data", data)
     for f, off, w, _s in RNG_LAYOUT:
         _wr(data, 0, off, w, getattr(rng, f))
+
+
+class DataclassBackend:
+    """Run the game with the PLAYER's live state as a real :class:`Player` dataclass, not bytes.
+
+    A north-star step: ``NativeGameState.backend`` swaps to this and the gameplay tick runs unchanged, but every
+    read/write to the player record (0x4F1C..0x4F2D) is routed — via the bridge layout — to/from the fields of a
+    live ``Player`` object (``self.player.x``, ``.sprite``, ...). Everything else stays in the image. So the
+    player is a genuine object graph node during the tick; the offsets live ONLY here in the bridge mapping, not
+    in the game logic or the store. ``materialize`` folds the player object back to bytes for the digest.
+    """
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("player", "_img", "_pmap")
+
+    def __init__(self, seed):
+        data = getattr(seed, "data", seed)
+        self._img = data
+        self.player = player_from_image(data)
+        # player record byte offset (relative to PLAYER_BASE) -> (field, byte_index, width, signed)
+        self._pmap: dict[int, tuple] = {}
+        for f, off, w, s in PLAYER_LAYOUT:
+            for k in range(w):
+                self._pmap[off + k] = (f, k, w, s)
+
+    def rb(self, off: int) -> int:
+        off &= 0xFFFF
+        m = self._pmap.get((off - PLAYER_BASE) & 0xFFFF)
+        if m is None:
+            return self._img[DGROUP_BASE + off]
+        f, k, w, _s = m
+        return (getattr(self.player, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
+
+    def wb(self, off: int, val: int) -> None:
+        off &= 0xFFFF
+        val &= 0xFF
+        m = self._pmap.get((off - PLAYER_BASE) & 0xFFFF)
+        if m is None:
+            self._img[DGROUP_BASE + off] = val
+            return
+        f, k, w, s = m
+        v = getattr(self.player, f) & ((1 << (8 * w)) - 1)
+        v = (v & ~(0xFF << (8 * k))) | (val << (8 * k))
+        if s and v & (1 << (8 * w - 1)):
+            v -= 1 << (8 * w)
+        setattr(self.player, f, v)
+
+    def rw(self, off: int) -> int:
+        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
+
+    def ww(self, off: int, v: int) -> None:
+        self.wb(off, v & 0xFF)
+        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+
+    def materialize(self, data=None) -> None:
+        player_to_image(self.player, self._img if data is None else data)
