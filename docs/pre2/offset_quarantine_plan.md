@@ -164,8 +164,18 @@ Shipped-layer rule: no `rb(`/`rw(`/`wb(`/`ww(`, no `state.data[`, no `<< 4` / `D
 numeric-literal first arg to a view/record constructor. Starts **advisory** (shrinking count), ratchets to
 **enforcing** per file as each is cleaned.
 
-**Phase 4 — the FieldBackend product flip.** Run the tick core on the name-keyed store; the byte image is no
-longer the product's state. Proven by `verify_field_flip.py` per-tick round-trip + the digest corpus.
+**Phase 4 — the FieldBackend product flip. ✅ PROVEN (2026-07-13).** The whole gameplay tick runs with named
+mutable state held in a `FieldBackend`, OFF the byte image. Mechanism: a swappable `NativeGameState.backend`
+(routes every rb/rw/wb/ww; `apply_contract`/`_coerce_backend`/`readers` all prefer it — so any `SomeView(state)`
+follows the swap); `HybridBackend` = named bytes in the FieldBackend + residue in the image, with
+`materialize()` folding back for the renderer/digest. `scripts/verify_hybrid_tick.py` runs the actual tick on
+the hybrid vs the reference and drove out every raw-`.data` bypass, module by module (the walker, object_render
+incl. a `ByteBackend(mem)` bug in `read_sprite`, particles, camera_scroll, the player FSM, firefly-sim,
+camera_pan, and `_inject`'s idle-timer). It now reads **FULL for the whole corpus** — gorilla 919 / L6 207 /
+idle-fidget 187 / cold 15. **The product-flip pattern is settled:** run gameplay on the hybrid, then
+`materialize()` before the numpy renderer (materialise makes the DGROUP image byte-identical to the reference,
+so the render is correct transitively). The offsets become runtime-dead once the product default swaps to the
+hybrid — the door Phase 5 walks through. Gated by `tests/test_hybrid_tick.py`.
 
 **Phase 5 — the object model + the serializer.** Wrap the name-keyed state as real dataclasses; build the
 bit-exact serializer (§4) in the bridge; migrate the remaining read-only content (§3c). Detached, the product
