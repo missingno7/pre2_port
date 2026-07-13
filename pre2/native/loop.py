@@ -32,7 +32,7 @@ from pre2.native.camera_scroll import _v_scroll_down, _v_scroll_up, native_camer
 from pre2.views.camera_pan import apply_camera_pan
 from pre2.native.player import native_player_interaction, native_player_step
 from pre2.native.dgroup_offsets import (
-    BURST_POS_X, BURST_POS_Y, BURST_SPRITE, COMBO_COMPLETE_6BE2, FRAME_TIMER, IDLE_CLOCK, IDLE_CLOCK_HI, LEVEL_DATA_SEG, PLAYER_Y, ROW_FACTOR, SCROLL_ACCUM)
+    BONUS_LETTERS_MASK, BURST_POS_X, BURST_POS_Y, BURST_SPRITE, CAM_H_FOLLOW_GATE, COMBO_COMPLETE_6BE2, FINE_SCROLL, FRAME_TIMER, IDLE_CLOCK, IDLE_CLOCK_HI, LEVEL_DATA_SEG, PENDING_PICKUP_6BE1, PLAYER_Y, REWARD_ARM_HI, REWARD_ARM_LO, ROW_FACTOR, SCROLL_ACCUM, SCROLL_GATE_6BD9, SHAKE_MAGNITUDE, TERRAIN_ENTITY_BASE, UTENSILS_MASK)
 
 
 def _apply_bytes(state, writes) -> None:
@@ -207,7 +207,7 @@ def native_cave_teleport(state, si):
     player.yvel = 0                                           # [asm 532C]
     for k in range(1, 10):                                    # [asm 5332] 30C6 vertical fade-out (VRAM-only)
         yield ("fade", k)
-    _wb(state, 0x6BC4, 0)                                     # [asm 5335] vertical sub-tile accumulator
+    _wb(state, FINE_SCROLL, 0)                                     # [asm 5335] vertical sub-tile accumulator
     saved_8164 = g.cam_left                                   # [asm 533A] push [0x8164]
     _ww(state, SCROLL_ACCUM, 0xEC)                                  # [asm 533F] pan clamp -> max (don't block the pan)
     player.x = (dest_tile & 0xFF) << 4                        # [asm 5350] player X = tile.lo << 4
@@ -223,15 +223,15 @@ def native_cave_teleport(state, si):
             raise Pre2HybridGap(f"cave pan blocked horizontally at [0x2DE4]={g.cam_col} dest={dest_x}")
         yield ("pan",)
     _ww(state, SCROLL_ACCUM, saved_8164)                            # [asm 538A] pop [0x8164]
-    _wb(state, 0x6BD9, flag)                                 # [asm 5391]
-    _wb(state, 0x6BE1, 0)                                     # [asm 5394] disarm the trigger
+    _wb(state, SCROLL_GATE_6BD9, flag)                                 # [asm 5391]
+    _wb(state, PENDING_PICKUP_6BE1, 0)                                     # [asm 5394] disarm the trigger
     if g.level == 5:                                       # [asm 5399] level-6 (inside-a-tree) boss re-init
-        _wb(state, 0x8166, g.level_flags & 1)                   # [asm 53A0]
+        _wb(state, CAM_H_FOLLOW_GATE, g.level_flags & 1)                   # [asm 53A0]
         for off, val in ((0xA324, 0), (0xA325, 5), (0xA326, 0), (0xA328, 0), (0xA32A, 1),
                          (0xA329, 0), (0xA32B, 0x6E), (0xA32C, 8)):    # [asm 53A5-53CD]
             _wb(state, off, val)
         for k in range(0x69):                                # [asm 53CD-53D5] fill [0x5570..] with 0xFF
-            _wb(state, 0x5570 + k, 0xFF)
+            _wb(state, TERRAIN_ENTITY_BASE + k, 0xFF)
     # [asm 53D7-53F2] the arrival mini-pass (35A1/3A27/3721 = render; the gameplay calls run natively):
     _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 53DD] 4907
     apply_ds(state, project_particles(rb, rw))                # [asm 53E0] 8922
@@ -417,11 +417,11 @@ def native_special_event(state) -> None:
         _ww(state, BURST_POS_Y, (pv.y - 0x70) & 0xFFFF)    # [asm 67E4] pos Y = player Y - 0x70
         _ww(state, BURST_SPRITE, 0x6E)                            # [asm 67ED] reward sprite id
         apply_ds(state, spawn_effect_burst(rb, rw, 0, 0, 1))   # [asm 67FA] 8D1B: spawn 1
-        _wb(state, 0x6CA7, 0)                               # [asm 67FD] reset the letters mask
-        _wb(state, 0x6BFF, 1)                              # [asm 6802]
-        _wb(state, 0x6C00, 0x2C)                           # [asm 6807]
+        _wb(state, BONUS_LETTERS_MASK, 0)                               # [asm 67FD] reset the letters mask
+        _wb(state, REWARD_ARM_LO, 1)                              # [asm 6802]
+        _wb(state, REWARD_ARM_HI, 0x2C)                           # [asm 6807]
     elif (g.utensils_mask & 0x38) == 0x38:                       # [asm 680D-6814] the [0x6CA8] 0x38-group is complete
-        _wb(state, 0x6CA8, g.utensils_mask & 0xC7)              # [asm 6816] clear those bits
+        _wb(state, UTENSILS_MASK, g.utensils_mask & 0xC7)              # [asm 6816] clear those bits
         _ww(state, COMBO_COMPLETE_6BE2, 0x294)                          # [asm 681B]
 
 
@@ -435,7 +435,7 @@ def native_camera_shake(state) -> None:
     pv = PlayerView(state)
     res = apply_camera_shake(g.row_factor, g.camera_shake, g.frame_blink, pv.anim_b, pv.y)
     _ww(state, ROW_FACTOR, res.row_factor)
-    _wb(state, 0x6BEA, res.magnitude)
+    _wb(state, SHAKE_MAGNITUDE, res.magnitude)
     _ww(state, PLAYER_Y, res.h_scroll)
 
 

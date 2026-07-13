@@ -30,6 +30,8 @@ __all__ = ["object_tick", "HANDLERS", "Pre2ObjectGap", "OBJ_BASE", "OBJ_STRIDE",
 
 OBJ_BASE = 0x4FD0      # [asm 684E] base of the 12-slot object record list
 OBJ_STRIDE = 0x12      # [asm 690A] 18-byte records
+ANIM_READY = 0xA340    # object_update's per-step anim-ready scratch byte
+SHAKE_MAG = 0x6BEA     # the camera screen-shake magnitude [asm 68B1]
 OBJ_COUNT = 12         # [asm 6851 bp=0xC]
 
 # handler-address (cs:[idx*2 + 0x6AA9]) -> recovered AI handler. All witnessed types (0-12).
@@ -119,9 +121,9 @@ def object_tick(mem) -> None:
             anim = advance_animation(s.anim_ptr, mem.rw, s.sprite, mem.rb(si + 9), mem.scale())
         except ObjectScaleUnsupported as e:
             raise Pre2ObjectGap(f"slot {slot}: {e}") from e
-        s.sprite = anim.sprite_id; s.anim_ptr = anim.script_ptr; mem.wb(0xA340, anim.attr_a340)
+        s.sprite = anim.sprite_id; s.anim_ptr = anim.script_ptr; mem.wb(ANIM_READY, anim.attr_a340)
         if anim.shake:                                           # [asm 68B1] zoom level 7 ([0x6BE2]==7) arms the
-            mem.wb(0x6BEA, 9)                                    #   screen shake (recovered apply_camera_shake reads it)
+            mem.wb(SHAKE_MAG, 9)                                    #   screen shake (recovered apply_camera_shake reads it)
 
         idx = mem.rb(d + 1)                                      # [68EC] mov bl,[bx+1]
         tbl = (idx << 1) & 0xFF                                  # [68EF-68F1] xor bh,bh ; shl bl,1 (8-BIT: the

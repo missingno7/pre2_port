@@ -80,6 +80,7 @@ PLAYER = 0x4F1C            # player X (si in loop1)
 PLAYER_Y = 0x4F1E
 PLAYER_YVEL = 0x4F2A
 PLAYER_DEATH = 0x4F2D      # death-state byte (0 = alive)
+PLAYER_RUN = 0x4F2C        # the player run-state flag (= PlayerView.run_flag)
 KNOCKBACK_Y = 0xA331       # [0xA331] hurt/knockback Y delta
 HURT_SFX_TABLE = 0xA3E5    # [bx-0x5C1B] escalating hurt-effect ids
 SCALE_LEVEL = 0x6BE2       # object_update's sprite "scale" level (decremented 16/frame by player.py); non-zero
@@ -412,7 +413,7 @@ def loop2_handler(num, rb, rw, si, find_free):
         ov = _Overlay(rb)                                 # VERIFIED byte-exact on the skull-trap witness 202721
         #                                                   (whole-pass shadow: predicted writes + completeness)
         ov.wb(PLAYER_DEATH, 0x2C)                         # [8655] enter hurt/death state
-        ov.wb(0x4F2C, 0)                                  # [865A]
+        ov.wb(PLAYER_RUN, 0)                                  # [865A]
         ov.wb(CUR_ANIM, 8)                                # [865F] anim 8
         _bone_burst(ov)                                   # [8664] 867E scatter the player's bones
         ov.wb(SHAKE, 7)                                   # [8667]
@@ -464,7 +465,7 @@ def _boss_projectile(rb, rw):
         ov.merge_bytes(_offcamera_trigger(ov.rb))         # [861F] 65B3 death/respawn (byte-level dict)
         return {o: (v, 1) for o, v in ov.b.items()}, []
     ov.wb(PLAYER_DEATH, 0x2C)                              # [862A] hurt state
-    ov.wb(0x4F2C, 0)                                       # [862F]
+    ov.wb(PLAYER_RUN, 0)                                       # [862F]
     ov.wb(CUR_ANIM, 8)                                     # [8634] anim 8
     e = (ov.rb(ENERGY) - 1) & 0xFF                         # [8639] dec [0x27D6]
     ov.wb(ENERGY, 1)                                       # [8641] force ENERGY=1 so 867E scatters 6 bones

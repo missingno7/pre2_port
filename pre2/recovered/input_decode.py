@@ -29,7 +29,8 @@ MODE = 0x2879        # input source: 0=live keyboard, 1=demo playback, 2=record
 DEMO_PTR = 0x287A    # demo buffer cursor (word; entries are 2 bytes at DS:[ptr+0x3F])
 DEMO_BYTE = 0x287C   # current packed input byte (playback)
 DEMO_CNT = 0x287D    # remaining repeat count for DEMO_BYTE (playback)
-DEMO_FLAG = 0x6BE5   # set on a pending demo flag ([0x2874]) or the 0x55AA end sentinel
+DEMO_FLAG = 0x6BE5   # set on a pending demo flag (PENDING_KEY) or the 0x55AA end sentinel
+PENDING_KEY = 0x2874   # the DC1 pending make-code / demo any-key latch [asm 0DD6]
 DEMO_HDR_LEVEL = 0x83E   # demo header: level id ([0x2D8A]) stamped at ptr==0
 LEVEL = 0x2D8A
 RECORD_LIMIT = 0x7FC     # demo buffer is full once the cursor reaches this
@@ -82,7 +83,7 @@ def decode_input(rb, rw):
 
     # --- demo-decode head: modes 1 and 2 (mode 0 jumps past it) -------------- [asm 0DCF je 0xE51]
     if mode != 0:
-        if rb(0x2874) != 0:                  # [asm 0DD6..0DDD]
+        if rb(PENDING_KEY) != 0:                  # [asm 0DD6..0DDD]
             writes[DEMO_FLAG] = (1, 1)
         if ptr != 0 and rb(DEMO_CNT) != 0:   # reuse the current byte [asm 0DE6/0DEA jne 0xE0E]
             writes[DEMO_CNT] = ((rb(DEMO_CNT) - 1) & 0xFF, 1)   # [asm 0E0E dec [287D]]

@@ -48,7 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.no_lint:
-        for linter in ("lint.py", "offset_lint.py"):        # import-boundary + the offset-ban ratchet
+        # import-boundary + the offset-ban ratchet + the bare-offset-hex naming guard
+        for linter in ("lint.py", "offset_lint.py", "offset_name_lint.py"):
             lint_result = subprocess.run([sys.executable, str(ROOT / "scripts" / linter)])
             if lint_result.returncode != 0:
                 return lint_result.returncode

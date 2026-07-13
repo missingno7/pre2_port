@@ -137,6 +137,16 @@ SCROLL_ACCUM        = 0x8164   # the scroll accumulator, reset on a snap-to-dest
 UNK_78C4            = 0x78C4   # role not yet evidenced (a scroll-adjacent word)
 COMBO_COMPLETE_6BE2 = 0x6BE2   # set to 0x294 when the [0x6CA8] utensil group completes
 
+# ---- camera shake / follow gates + bonus arming (loop) ------------------------------------------------
+SHAKE_MAGNITUDE     = 0x6BEA   # the camera screen-shake magnitude [asm 026D / 4C30]
+CAM_H_FOLLOW_GATE   = 0x8166   # gates the horizontal camera-follow (57A8 runs unless set) [asm 5643]
+PENDING_PICKUP_6BE1 = 0x6BE1   # a pending-pickup / trigger-active flag matched vs the player tile [asm 549A]
+REWARD_ARM_LO       = 0x6BFF   # the bonus-reward arm flag pair [asm 8D1B]
+REWARD_ARM_HI       = 0x6C00   # ...
+BONUS_LETTERS_MASK  = 0x6CA7   # the BONUS-letters collected mask (= PlayerGlobals.bonus_letters)
+UTENSILS_MASK       = 0x6CA8   # the utensils collected mask (= PlayerGlobals.utensils_mask)
+TERRAIN_ENTITY_BASE = 0x5570   # the terrain-entity projection record base [asm 5570]
+
 # ---- the reward-burst (player_interaction 67DE) -------------------------------------------------------
 BURST_POS_X         = 0xA336   # the reward-burst spawn position X = player X [asm 67DE]
 BURST_POS_Y         = 0xA338   # ... position Y = player Y - 0x70 [asm 67E4]
@@ -148,6 +158,7 @@ ROW_FACTOR          = 0x6BF8   # the row-stride factor the camera shake writes (
 
 # ---- bulk state blocks + lookup tables (referenced as slice bounds) -----------------------------------
 TIMER_STATE_BLOCK   = 0x6BC4   # the timer/state block zeroed at re-init (starts at fine_scroll) [asm 5247]
+FINE_SCROLL         = 0x6BC4   # scalar alias of the block start: the sub-tile fine-scroll accumulator byte
 DBL_BUFFER          = 0x815E   # the working double-buffer block (the property header lives at +2/+4) [5251]
 DBL_BUFFER_BACKUP   = 0x9203   # the pristine double-buffer backup 5237 restores from [asm 5251]
 FILL_BLOCK_7DE6     = 0x7DE6   # a 0xFF-filled state block [asm 5295]
