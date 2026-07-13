@@ -3,7 +3,7 @@
   "pre2/native/assets.py": 7,
   "pre2/native/attract_title.py": 2,
   "pre2/native/camera_scroll.py": 27,
-  "pre2/native/front_end.py": 67,
+  "pre2/native/front_end.py": 57,
   "pre2/native/game_tick_demo.py": 17,
   "pre2/native/gameover_scene.py": 3,
   "pre2/native/input.py": 4,
