@@ -69,29 +69,45 @@ class NamedObjectBackend:
     detachable bridge. (Contrast the bridge's ``DataclassBackend``, which maps by OFFSET and is verification-
     only.) Writes are masked to the field width so the stored value matches the byte-image representation."""
 
-    __slots__ = ("_objs",)
+    __slots__ = ("_objs", "_fields")
 
     def __init__(self):
-        self._objs = {}
+        self._objs = {}      # view_cls -> dataclass instance (a whole view maps to one object)
+        self._fields = {}    # field-name -> dataclass instance (a mega-view's fields span many objects)
 
     def register(self, view_cls, obj) -> "NamedObjectBackend":
         """Route every ``view_cls`` field access to ``obj`` (its matching ``pre2/game`` dataclass)."""
         self._objs[view_cls] = obj
         return self
 
+    def register_field(self, name: str, obj) -> "NamedObjectBackend":
+        """Route the single field ``name`` to ``obj`` — for mega-views (e.g. PlayerGlobals) whose fields are
+        spread across many cluster dataclasses (Camera / Motion / Input / ...)."""
+        self._fields[name] = obj
+        return self
+
+    def register_fields(self, mapping) -> "NamedObjectBackend":
+        """Bulk :meth:`register_field` from a ``{name: obj}`` mapping."""
+        self._fields.update(mapping)
+        return self
+
     def object_for(self, view_cls):
         return self._objs[view_cls]
+
+    def _obj(self, view, name: str):
+        obj = self._objs.get(type(view))
+        return obj if obj is not None else self._fields[name]
 
     def read_field(self, view, name: str, width: int, signed: bool) -> int:
         # mask to the field width FIRST (the dataclass may hold the value in signed or raw form), then
         # sign-extend — matching the proven DataclassBackend/_S16 read convention exactly.
-        v = getattr(self._objs[type(view)], name) & ((1 << (8 * width)) - 1)
+        v = getattr(self._obj(view, name), name) & ((1 << (8 * width)) - 1)
         if signed and v & (1 << (8 * width - 1)):
             v -= 1 << (8 * width)
         return v
 
     def write_field(self, view, name: str, width: int, v: int) -> None:
-        setattr(self._objs[type(view)], name, v & ((1 << (8 * width)) - 1))
+        setattr(self._obj(view, name), name, v & ((1 << (8 * width)) - 1))
 
 
 class RngNamedView(NamedView):

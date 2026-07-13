@@ -85,6 +85,29 @@ def test_production_player_view_is_name_capable_byte_exact():
             assert getattr(off_view, f) == getattr(name_view, f), f"production PlayerView.{f} diverged"
 
 
+def test_globals_megaview_is_name_capable_byte_exact():
+    """P2, the hard case: PlayerGlobals is a MEGA-view (100+ fields spread across ~16 cluster dataclasses —
+    Camera / Motion / Input / CameraScript / BossScript / ...). Field-name routing (register_fields), resolved
+    by OFFSET in the bridge so cluster-local name collisions can't mis-route, lets the whole mega-view resolve
+    name-first. Proven: every routed globals field reads identically over the image (offset path) and over the
+    live cluster dataclasses (name path), across real post-tick states."""
+    from pre2.bridge.game_layout import globals_field_routing
+    from pre2.views.dgroup_view import PlayerGlobals
+    from pre2.views.named_view import NamedObjectBackend
+
+    states = _real_player_states()
+    total_checked = 0
+    for img in states:
+        _insts, routing = globals_field_routing(img)
+        assert len(routing) > 80, f"expected the bulk of the globals mega-view routed, got {len(routing)}"
+        off_view = PlayerGlobals(ByteBackend_wrap(img))
+        name_view = PlayerGlobals(NamedObjectBackend().register_fields(routing))
+        for name in routing:
+            assert getattr(off_view, name) == getattr(name_view, name), f"globals mega-view .{name} diverged"
+            total_checked += 1
+    assert total_checked > 600      # 8 states x 90+ fields
+
+
 def test_named_object_backend_has_no_offsets():
     """The shipped name-keyed path must contain no DGROUP offsets at all — resolution is getattr by name."""
     import inspect

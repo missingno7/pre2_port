@@ -226,6 +226,35 @@ def rng_to_image(rng: Rng, data) -> None:
         _wr(data, 0, off, w, getattr(rng, f))
 
 
+def globals_field_routing(image):
+    """Build ``{PlayerGlobals-field-name: cluster-instance}`` for the scalar globals clusters (camera, motion,
+    input, level_state, ..., the count==1 non-player/rng, non-EffectSlot routes), resolving each view field to
+    the cluster instance that owns its OFFSET — so cluster-local dataclass name collisions (camera_script vs
+    boss_script both have a ``script_ptr`` field, at different offsets) never mis-route. Bridge-only (uses
+    offsets). Returns ``(instances, routing)`` — feed ``routing`` to NamedObjectBackend.register_fields to back
+    the whole PlayerGlobals mega-view name-first."""
+    from pre2.views.dgroup_view import PlayerGlobals
+    data = getattr(image, "data", image)
+    off_to_inst = {}
+    instances = []
+    for attr, cls, layout, base, count, stride in _ROUTES:
+        if count != 1 or attr in ("player", "rng") or cls is EffectSlot:
+            continue
+        inst = _obj_from_image(cls, layout, data, base)
+        instances.append(inst)
+        for f, off, _w, _s in layout:
+            off_to_inst[base + off] = (inst, f)
+    routing = {}
+    for name in dir(PlayerGlobals):
+        desc = getattr(PlayerGlobals, name, None)
+        off = getattr(desc, "off", None)
+        if off is not None and off in off_to_inst:
+            inst, dc_field = off_to_inst[off]
+            if dc_field == name:                 # the cluster field must carry the SAME name the view uses
+                routing[name] = inst
+    return instances, routing
+
+
 class NamedImageBackend:
     """Resolves a NAME-keyed view's fields (pre2/views/named_view) against the byte image via an offset layout.
     The DETACHABLE image resolver: it lets ONE name-keyed view definition serve the byte/verification path too
