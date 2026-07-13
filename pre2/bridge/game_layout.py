@@ -12,7 +12,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import Actor, Camera, Input, LevelState, Player, Progress, Rng
+from pre2.game.model import Actor, Camera, Input, LevelState, Motion, Player, Progress, Rng
 
 DGROUP_BASE = 0x1A0F << 4
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
@@ -38,6 +38,12 @@ LEVEL_STATE_LAYOUT = [
     ("flags", 0x8166, 1, False), ("end_mode", 0x6BE6, 1, False), ("respawn_state", 0x6BE4, 1, False),
     ("end_signal", 0x6BE5, 1, False), ("checkpoint_x", 0x6BAD, 2, False), ("checkpoint_y", 0x6BAF, 2, False),
     ("grid_dirty", 0x2DF4, 1, False),
+]
+MOTION_LAYOUT = [
+    ("airborne", 0x6BF3, 1, False), ("fall_frames", 0x6BD2, 1, False), ("fall_latch", 0x6BD1, 1, False),
+    ("fall_grace", 0x6BE0, 1, False), ("low_gravity", 0x6BC7, 1, False), ("fly_timer", 0x6BC8, 1, False),
+    ("idle_timer", 0x6BD3, 1, False), ("anim_gate", 0x6BD0, 1, False), ("charge", 0x6BCE, 1, False),
+    ("hurt_cooldown", 0x6BC9, 1, False),
 ]
 # the 12-slot object/enemy list at 0x4FD0 (stride 0x12); the offsets are relative to each slot
 ACTOR_LAYOUT = [
@@ -122,6 +128,7 @@ _ROUTES = [
     ("progress", Progress, PROGRESS_LAYOUT, 0, 1, 0),
     ("input", Input, INPUT_LAYOUT, 0, 1, 0),
     ("level_state", LevelState, LEVEL_STATE_LAYOUT, 0, 1, 0),
+    ("motion", Motion, MOTION_LAYOUT, 0, 1, 0),
     ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
 ]
 

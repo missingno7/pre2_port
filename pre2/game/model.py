@@ -121,6 +121,22 @@ class Input:
 
 
 @dataclass
+class Motion:
+    """The player's gravity / fall / animation-gate state + the small per-frame timers the FSM ticks."""
+
+    airborne: int = 0       # no ground under the player
+    fall_frames: int = 0    # descending-fall counter
+    fall_latch: int = 0     # fall-started latch
+    fall_grace: int = 0     # coyote-time grace
+    low_gravity: int = 0    # low-gravity / attack-invuln flag
+    fly_timer: int = 0
+    idle_timer: int = 0     # idle/fidget clock gate
+    anim_gate: int = 0      # hold-current-anim / FSM-route gate
+    charge: int = 0
+    hurt_cooldown: int = 0
+
+
+@dataclass
 class LevelState:
     """The level / transition state — end mode, respawn + end signals, checkpoint, and redraw flags."""
 
