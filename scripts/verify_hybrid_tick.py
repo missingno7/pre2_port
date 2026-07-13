@@ -102,7 +102,7 @@ def main() -> int:
           if frontier else "PROVEN: the named field store is a sufficient state of record for the gameplay tick.")
     if frontier:
         print("native module to route through state.backend (the flip's remaining work).")
-    return 0
+    return 1 if frontier else 0
 
 
 if __name__ == "__main__":

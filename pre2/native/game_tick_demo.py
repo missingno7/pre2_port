@@ -187,11 +187,16 @@ def record_from_vm(rt, *, advance_one_frame, max_ticks: int = 100_000) -> GameTi
 
 
 def _inject(state: NativeGameState, keys: bytes, idle: int | None = None) -> None:
+    # An EXTERNAL input injection must reach every reader regardless of the backend routing (the idle timer
+    # 0x27F0 and some key cells are read both through the seam and via raw .data). Write BOTH the backend
+    # (so a hybrid field store sees it) and the raw image (so non-routed readers see it).
     for o, v in zip(KBD, keys):
+        state.wb(o, v)
         state.data[DS_BASE + o] = v
     if idle is not None:                              # inject the VM's PIT idle-timer so the idle-fidget selector
-        state.data[DS_BASE + 0x27F0] = idle & 0xFF   # (5DC9: [0x27F0]&0x1FF) picks the SAME pose as the VM — the
-        state.data[DS_BASE + 0x27F1] = (idle >> 8) & 0xFF   # counter is not VM-less-reproducible (PIT-driven)
+        state.ww(0x27F0, idle)                        # (5DC9: [0x27F0]&0x1FF) picks the SAME pose as the VM — the
+        state.data[DS_BASE + 0x27F0] = idle & 0xFF   # counter is not VM-less-reproducible (PIT-driven)
+        state.data[DS_BASE + 0x27F1] = (idle >> 8) & 0xFF
 
 
 def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | None]:
