@@ -19,7 +19,10 @@ none of it.
 from __future__ import annotations
 
 from pre2.bridge.game_layout import DataclassBackend
+from pre2.native.seams import RENDER_COUNTERS
 from pre2.views.dgroup_view import ByteBackend
+
+_DS_BASE = 0x1A0F << 4
 
 
 def to_object_store(state, readonly_image: bool = True) -> None:
@@ -28,11 +31,22 @@ def to_object_store(state, readonly_image: bool = True) -> None:
 
 
 def materialize(state) -> None:
-    """Fold the object graph's state back into ``state.data`` so a renderer / digest / transition sees a
-    whole, current DGROUP image. A no-op when the state is already image-backed."""
+    """Fold the object graph's GAMEPLAY state back into ``state.data`` so a renderer / digest / transition sees
+    a whole, current DGROUP image. A no-op when the state is already image-backed.
+
+    The render-owned per-frame counters (``RENDER_COUNTERS`` — the anim-remap throttle, the dither rotation, the
+    ISR timer tick) are NOT gameplay state: the renderer steps them and they persist in the image across frames.
+    A gameplay materialize must not reset them (doing so freezes the animated-tile remap / dither), so they are
+    preserved across the fold. This is what lets the real render loop run every frame on the object store —
+    proven byte-exact by scripts/verify_object_render.py."""
     mat = getattr(state.backend, "materialize", None)
-    if mat is not None:
-        mat(state.data)
+    if mat is None:
+        return
+    base = _DS_BASE
+    saved = [(o, state.data[base + o]) for o in RENDER_COUNTERS]
+    mat(state.data)
+    for o, v in saved:
+        state.data[base + o] = v
 
 
 def enter_image_mode(state) -> None:

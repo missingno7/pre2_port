@@ -40,6 +40,10 @@ _RENDER_DRAWLIST = set(range(0x52E8, 0x5450)) | set(range(0x8F1D, 0x9107))
 #  - 3668's redraw counters [0x6bd4] + [0x6bc3] (the 0x66->0x68 dither rotation) + the ISR timer tick [0x27ee]
 _PAGE_FLIP = {0x2DD6, 0x2DD7, 0x2DD8, 0x2DD9}
 _RENDER_COUNTERS = {0x27EE, 0x27EF, 0x6BD4, 0x6BC3}
+#: public alias — the render-owned per-frame counters (anim-remap throttle, dither rotation, ISR timer tick).
+#: They persist in the image across frames and are stepped by native_render, NOT by the gameplay tick, so a
+#: gameplay->image materialize (object_runtime) must NOT clobber them. See scripts/verify_object_render.py.
+RENDER_COUNTERS = _RENDER_COUNTERS
 # 35A1 (dirty-grid redraw) + 3A27 (scroll-copy) own the smooth HORIZONTAL-scroll render state (5643/camera_follow
 # does only the vertical): the displayed scroll-X counter [0x2de0], the scroll-copy SOURCE pointer [0x2dba/bb]
 # (calc_scroll_source; render_frame's `scroll_src` ring-buffer offset — the renderer 3A27/348D owns it, the
