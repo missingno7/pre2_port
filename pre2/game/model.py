@@ -60,6 +60,28 @@ class Rng:
 
 
 @dataclass
+class Actor:
+    """One entry of the 12-slot object/enemy list — a moving game actor. ``sprite == 0xFFFF`` means the slot is
+    free. Real game object: position, velocity, animation, and combat state, no offsets."""
+
+    x: int = 0
+    y: int = 0
+    sprite: int = 0xFFFF   # packed anim-frame word; 0xFFFF = empty slot
+    def_ptr: int = 0       # -> the read-only type-definition record
+    xvel: int = 0
+    yvel: int = 0
+    anim_ptr: int = 0      # the anim-script cursor
+    state: int = 0         # behaviour state byte (0xFF = dead)
+    hp: int = 0
+    hits: int = 0          # hit accumulator
+    life: int = 0          # anim/life counter
+
+    @property
+    def empty(self) -> bool:
+        return self.sprite == 0xFFFF
+
+
+@dataclass
 class Camera:
     """The scrolling camera — its cell column/row and the fine sub-cell scroll state."""
 

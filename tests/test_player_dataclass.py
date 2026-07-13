@@ -24,8 +24,10 @@ def test_tick_runs_with_player_as_a_live_dataclass():
     obj = NativeGameState(bytearray(gtd.seed))
     obj.backend = DataclassBackend(obj)
     # the live store routes several structures to real offset-free dataclasses
+    from pre2.game.model import Actor
     assert isinstance(obj.backend.player, Player) and isinstance(obj.backend.rng, Rng)
     assert isinstance(obj.backend.camera, Camera) and isinstance(obj.backend.progress, Progress)
+    assert len(obj.backend.actors) == 12 and all(isinstance(a, Actor) for a in obj.backend.actors)
 
     for i in range(min(gtd.n_ticks, 15)):
         idle = gtd.idle[i] if i < len(gtd.idle) else None

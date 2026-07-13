@@ -12,7 +12,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 """
 from __future__ import annotations
 
-from pre2.game.model import Camera, Input, LevelState, Player, Progress, Rng
+from pre2.game.model import Actor, Camera, Input, LevelState, Player, Progress, Rng
 
 DGROUP_BASE = 0x1A0F << 4
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
@@ -39,6 +39,13 @@ LEVEL_STATE_LAYOUT = [
     ("end_signal", 0x6BE5, 1, False), ("checkpoint_x", 0x6BAD, 2, False), ("checkpoint_y", 0x6BAF, 2, False),
     ("grid_dirty", 0x2DF4, 1, False),
 ]
+# the 12-slot object/enemy list at 0x4FD0 (stride 0x12); the offsets are relative to each slot
+ACTOR_LAYOUT = [
+    ("x", 0x00, 2, False), ("y", 0x02, 2, False), ("sprite", 0x04, 2, False), ("def_ptr", 0x06, 2, False),
+    ("xvel", 0x08, 2, False), ("yvel", 0x0A, 2, False), ("anim_ptr", 0x0C, 2, False),
+    ("state", 0x0E, 1, False), ("hp", 0x0F, 1, False), ("hits", 0x10, 1, False), ("life", 0x11, 1, False),
+]
+ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE = 0x4FD0, 12, 0x12
 
 # (field, offset, width, signed). Player offsets are relative to PLAYER_BASE; Rng offsets are absolute DGROUP.
 PLAYER_LAYOUT = [
@@ -105,15 +112,17 @@ def _obj_to_image(obj, layout, data, base=0):
         _wr(data, base, off, w, getattr(obj, f))
 
 
-# the structures routed to live dataclasses: (attribute, class, layout, base). Everything else stays in the
-# image. Grows toward the endpoint (whole tick on objects) one structure at a time.
+# the structures routed to live dataclasses: (attribute, class, layout, base, count, stride). count>1 = a LIST
+# of `count` objects at base + k*stride. Everything else stays in the image. Grows toward the endpoint (whole
+# tick on objects) one structure at a time.
 _ROUTES = [
-    ("player", Player, PLAYER_LAYOUT, PLAYER_BASE),
-    ("rng", Rng, RNG_LAYOUT, 0),
-    ("camera", Camera, CAMERA_LAYOUT, 0),
-    ("progress", Progress, PROGRESS_LAYOUT, 0),
-    ("input", Input, INPUT_LAYOUT, 0),
-    ("level_state", LevelState, LEVEL_STATE_LAYOUT, 0),
+    ("player", Player, PLAYER_LAYOUT, PLAYER_BASE, 1, 0),
+    ("rng", Rng, RNG_LAYOUT, 0, 1, 0),
+    ("camera", Camera, CAMERA_LAYOUT, 0, 1, 0),
+    ("progress", Progress, PROGRESS_LAYOUT, 0, 1, 0),
+    ("input", Input, INPUT_LAYOUT, 0, 1, 0),
+    ("level_state", LevelState, LEVEL_STATE_LAYOUT, 0, 1, 0),
+    ("actors", Actor, ACTOR_LAYOUT, ACTOR_BASE, ACTOR_COUNT, ACTOR_STRIDE),
 ]
 
 
@@ -135,27 +144,31 @@ class DataclassBackend:
         data = getattr(seed, "data", seed)
         self._img = data
         self._objs: dict[str, object] = {}
-        # absolute dgroup offset -> (attr, field, byte_index, width, signed)
+        # absolute dgroup offset -> (object, field, byte_index, width, signed) — mapped straight to the instance
         self._map: dict[int, tuple] = {}
-        for attr, cls, layout, base in _ROUTES:
-            self._objs[attr] = _obj_from_image(cls, layout, data, base)
-            for f, off, w, s in layout:
-                for k in range(w):
-                    self._map[(base + off + k) & 0xFFFF] = (attr, f, k, w, s)
+        for attr, cls, layout, base, count, stride in _ROUTES:
+            insts = [_obj_from_image(cls, layout, data, base + k * stride) for k in range(count)]
+            self._objs[attr] = insts[0] if count == 1 else insts
+            for k, inst in enumerate(insts):
+                b0 = base + k * stride
+                for f, off, w, s in layout:
+                    for bk in range(w):
+                        self._map[(b0 + off + bk) & 0xFFFF] = (inst, f, bk, w, s)
 
     # convenience accessors
     player = property(lambda self: self._objs["player"])
     rng = property(lambda self: self._objs["rng"])
     camera = property(lambda self: self._objs["camera"])
     progress = property(lambda self: self._objs["progress"])
+    actors = property(lambda self: self._objs["actors"])
 
     def rb(self, off: int) -> int:
         off &= 0xFFFF
         m = self._map.get(off)
         if m is None:
             return self._img[DGROUP_BASE + off]
-        attr, f, k, w, _s = m
-        return (getattr(self._objs[attr], f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
+        inst, f, k, w, _s = m
+        return (getattr(inst, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
 
     def wb(self, off: int, val: int) -> None:
         off &= 0xFFFF
@@ -164,12 +177,12 @@ class DataclassBackend:
         if m is None:
             self._img[DGROUP_BASE + off] = val
             return
-        attr, f, k, w, s = m
-        v = getattr(self._objs[attr], f) & ((1 << (8 * w)) - 1)
+        inst, f, k, w, s = m
+        v = getattr(inst, f) & ((1 << (8 * w)) - 1)
         v = (v & ~(0xFF << (8 * k))) | (val << (8 * k))
         if s and v & (1 << (8 * w - 1)):
             v -= 1 << (8 * w)
-        setattr(self._objs[attr], f, v)
+        setattr(inst, f, v)
 
     def rw(self, off: int) -> int:
         return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
@@ -180,5 +193,7 @@ class DataclassBackend:
 
     def materialize(self, data=None) -> None:
         data = self._img if data is None else data
-        for attr, _cls, layout, base in _ROUTES:
-            _obj_to_image(self._objs[attr], layout, data, base)
+        for attr, _cls, layout, base, count, stride in _ROUTES:
+            insts = self._objs[attr] if count > 1 else [self._objs[attr]]
+            for k, inst in enumerate(insts):
+                _obj_to_image(inst, layout, data, base + k * stride)
