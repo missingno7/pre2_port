@@ -36,13 +36,12 @@ def _sar16(v: int, n: int) -> int:
 
 
 def _wb(state, off: int, val: int) -> None:
-    state.data[(_DS_BASE + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
+    state.wb(off, val)                                   # through the backend seam (Phase 4)
 
 
 def _ww(state, off: int, val: int) -> None:
-    b = (_DS_BASE + (off & 0xFFFF)) & 0xFFFFF
-    state.data[b] = val & 0xFF
-    state.data[(b + 1) & 0xFFFFF] = (val >> 8) & 0xFF
+    _wb(state, off, val)
+    _wb(state, off + 1, val >> 8)
 
 
 def _rb_cs(state, off: int) -> int:

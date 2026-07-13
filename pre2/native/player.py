@@ -44,8 +44,8 @@ _BASE = (DATA_SEG << 4) & 0xFFFFF
 
 
 def _w(state, off: int, val: int, width: int) -> None:
-    for k in range(width):
-        state.data[(_BASE + ((off + k) & 0xFFFF)) & 0xFFFFF] = (val >> (8 * k)) & 0xFF
+    for k in range(width):                               # through the backend seam (Phase 4)
+        state.wb((off + k) & 0xFFFF, (val >> (8 * k)) & 0xFF)
 
 
 def _keycombo_active(rb) -> bool:
