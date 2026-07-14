@@ -68,7 +68,9 @@ _SPARSE = [
     ("render_ptr_scratch", (0x2DBE, 0x2DBF, 0x2DF2, 0x2DF6, 0x2DF7)),
     # player_flag_scratch trimmed: page_dirty/firefly_scratch_a/b (0x6BBD/0x6BC0/0x6BC1) now named (SceneryState);
     # folded in the lone leftover from misc_scratch (0x6BFF); scroll_dir (0x6BED), cam_scroll_idle (0x6BEE) and
-    # scroll_target_row (0x6BF1-2) are now named (Camera)
+    # scroll_target_row (0x6BF1-2) are now named (Camera). 0x6BD6: NOT a naming gap -- it's the natural carry
+    # target of the 26FA record-mutation's `inc word [0x6bd5]` (confirmed via capstone, 1030:2708) rolling
+    # over the adjacent frame_blink/tick byte; nothing reads it, so it stays unnamed scratch on purpose.
     ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BFA, 0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE, 0x6BFF)),
     # camera_hud_scratch fully consumed by AttackState + HitScratch -> removed
     # misc_scratch fully consumed by AttractState/SceneryState (0x6BFF folded above) -> removed

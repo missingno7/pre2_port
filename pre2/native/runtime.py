@@ -161,6 +161,12 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
         return planes, page
 
     def _ww_ctr():
+        # A genuine 16-bit op, not a naming gap: capstone on the decompressed image confirms 1030:2708 is
+        # `inc word ptr [0x6bd5]` (the 26FA record-mutation entry), unlike every OTHER site touching this
+        # address (51F0's `test byte ptr [0x6bd5],3`, PlayerGlobals.frame_blink, ScrollScriptView.tick), which
+        # read/write only the low byte. The word op means a low-byte carry (0xFF->0x00) also increments the
+        # adjacent byte 0x6BD6 -- currently unnamed scratch (game_layout.py's player_flag_scratch) that no
+        # recovered/native code reads, so the carry is harmless today but is real canonical DGROUP state.
         state.ww(FRAME_TIMER, (state.rw(FRAME_TIMER) + 1) & 0xFFFF)          # [0x6BD5]++ (51F0/count-up timing read it)
 
     # [asm 316F->318B-31AA] clear the object/effect slots for the tally. The VM does this at the iris-close
