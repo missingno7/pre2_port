@@ -17,7 +17,7 @@ proof, exactly like the object_tick / combat_interaction precedents.
 from __future__ import annotations
 
 from pre2.islands import oracle_link
-from pre2.views.dgroup_view import (DebrisSlot, EffectParticle, PopupSlot, ProjectileSlot,
+from pre2.views.dgroup_view import (DebrisSlot, EffectParticle, PlayerGlobals, PopupSlot, ProjectileSlot,
                                     WidthContractBackend)
 from pre2.views.tables import Tables
 
@@ -109,7 +109,6 @@ GRAVITY = 9                  # [asm 615C] Yvel += 9 / frame
 YVEL_CAP = 0x100             # [asm 615F] stop integrating gravity once Yvel+9 would reach 0x100
 X_MAX = 0x1000               # [asm 6149] world-X bounce bound
 LIFE_CLAMP = 0x32            # [asm 612B] special ids cap their lifetime here
-FREEZE_FLAG = 0x6BD5         # [asm 61E3] bit0 -> skip the sprite animation
 MAP_SEG_PTR = 0x2DDA         # [asm 6106] [0x2DDA] = the level-map (es) segment
 ANIM_WRAP_AT = 0x49          # [asm 61F9] sprite cycles ..->0x49 ->0x46
 ANIM_WRAP_TO = 0x46
@@ -130,7 +129,7 @@ def tick_particles(rw, rb, read_tile):
     Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
     tbl = Tables(rb)
-    freeze = rb(FREEZE_FLAG) & 1
+    freeze = PlayerGlobals(WidthContractBackend(rb, rw, writes)).frame_blink & 1   # read by name (0x6BD5)
     b = PARTICLE_LO
     for _ in range(PARTICLE_N):
         pt = EffectParticle(WidthContractBackend(rb, rw, writes), b)
