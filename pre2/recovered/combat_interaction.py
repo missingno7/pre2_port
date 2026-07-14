@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import DictBackend, ObjectSlot, PlayerGlobals, PlayerView
+from pre2.views.dgroup_view import DictBackend, ObjectDef, ObjectSlot, PlayerGlobals, PlayerView, WidthContractBackend
 
 # --- globals this island reads/writes -------------------------------------------------
 SPAWN_X = 0xA336      # effect-spawn world X (cell << 4)
@@ -405,27 +405,29 @@ def projectile_vs_enemies(rb, rw, si):
     writes: dict[int, int] = {}
     sfx: list[int] = []
 
+    be = WidthContractBackend(rb, rw)                                           # read the enemy record by name
     di = ENEMY_SLOTS_LO
     for _ in range(ENEMY_SLOTS_N):
-        if rw((di + 4) & 0xFFFF) != 0xFFFF and rb((di + 0xE) & 0xFFFF) != 0xFF:  # [asm 8C27/8C2D]
-            bx = rw((di + 6) & 0xFFFF)
-            if not (rb((bx + 4) & 0xFFFF) & DEF_NONCOLLIDE):                     # [asm 8C36] collidable
+        enemy = ObjectSlot(be, di)
+        if enemy.sprite != 0xFFFF and enemy.state != 0xFF:                      # [asm 8C27/8C2D]
+            bx = enemy.def_ptr                                                  # [di+6] the type-def ptr
+            if not (ObjectDef(be, bx).d4 & DEF_NONCOLLIDE):                     # [asm 8C36] collidable
                 hit, hb = hitbox_overlap(rb, rw, si, di)                         # [asm 8C3C] 8D7B
                 for off, (val, width) in hb.items():                            # 8D7B's [0xA330]/[0xA331]
                     writes[off & 0xFFFF] = val & 0xFF
                     if width == 2:
                         writes[(off + 1) & 0xFFFF] = (val >> 8) & 0xFF
                 if hit:                                                          # [asm 8C3F] jae skips
-                    writes[(di + 5) & 0xFFFF] = rb((di + 5) & 0xFFFF) | 0x40     # [asm 8C41] mark hit
-                    hp = rb((di + 0xF) & 0xFFFF)
+                    writes[(di + 5) & 0xFFFF] = enemy.flags | 0x40              # [asm 8C41] mark hit
+                    hp = enemy.hp
                     writes[(di + 0xF) & 0xFFFF] = (hp - damage) & 0xFF           # [asm 8C48] HP -= damage
                     if hp < damage:                                             # [asm 8C4B] borrow -> kill
                         sfx.append(KILL_SFX)                                     # [asm 8C50] play_sfx(2)
                         for off, val in death_handler(rb, rw, bx, di, si).items():
                             writes[off & 0xFFFF] = val & 0xFF
                     else:                                                        # [asm 8C58] knockback
-                        kb = _s16(rw((di + 8) & 0xFFFF)) >> 2                     # ax = [di+8] >> 2 (arith)
-                        nx = (rw(di) - kb) & 0xFFFF
+                        kb = _s16(enemy.xvel) >> 2                               # ax = [di+8] >> 2 (arith)
+                        nx = (enemy.x - kb) & 0xFFFF
                         writes[di] = nx & 0xFF
                         writes[(di + 1) & 0xFFFF] = (nx >> 8) & 0xFF
                     cons = (si + 4) & 0xFFFF                                      # [asm 8C61] consume source
