@@ -20,6 +20,15 @@ class ObjectRef:
 
 
 @dataclass(frozen=True)
+class ArenaRef:
+    """A reference to one record of the variable-stride entity ARENA, by its position (index) in the entity list.
+    Unlike ``ObjectRef`` (a fixed base+stride pool), the arena's record boundaries vary per state, so the bridge
+    resolves this against the live parse — an ``entities[i]`` reference, never an offset."""
+
+    index: int
+
+
+@dataclass(frozen=True)
 class RawRef:
     """The OPAQUE fallback: a stored pointer we have not reverse-engineered yet, or a stale (freed-slot) pointer
     that is serialised but never dereferenced. Holds the raw 16-bit value verbatim with NO semantic claim, so it

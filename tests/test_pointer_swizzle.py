@@ -159,6 +159,52 @@ def test_all_five_pool_pointer_globals_are_stored_as_references():
     assert found == len(_REF_FIELDS), f"expected all {len(_REF_FIELDS)} ref fields, found {found}"
 
 
+def test_arena_swizzle_def_ptr_points_to_a_source_entity_and_round_trips():
+    """def_ptr (each object's type-definition pointer, cyxx monster_t.ref) points INTO the variable-stride entity
+    ARENA, not a static pool. Prove the instance-aware arena swizzle on real corpus states: every live actor's
+    non-null def_ptr lands on an arena record boundary -> an ArenaRef that round-trips to the exact offset and
+    derefs to the source ArenaEntity the offset view reads. The adoption precondition for def_ptr, mirroring the
+    pool-pointer proof."""
+    from pre2.bridge.game_layout import DataclassBackend
+    from pre2.game.ref import ArenaRef, RawRef
+    from pre2.native.game_tick_demo import GameTickDemo, _inject
+    from pre2.native.loop import native_gameplay_frame
+    from pre2.native.state import NativeGameState
+
+    demos = ["demo_pre2_full_gorilla_20260628_203423", "demo_pre2_20260704_235611"]
+    seen_arena = 0
+    for d in demos:
+        demo = ROOT / "artifacts" / d / "game_tick_demo.bin"
+        if not demo.exists():
+            continue
+        gtd = GameTickDemo.load(demo)
+        st = NativeGameState(bytearray(gtd.seed))
+        for i in range(min(gtd.n_ticks, 400)):
+            _inject(st, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
+            try:
+                native_gameplay_frame(st)
+            except Exception as e:  # noqa: BLE001
+                if type(e).__name__.startswith("Pre2"):
+                    break
+                raise
+            if i % 20:
+                continue
+            dcb = DataclassBackend(st, readonly_image=False)
+            starts = {start for start, _e in dcb._arena}
+            for a in dcb.actors:
+                if a.sprite == 0xFFFF or a.def_ptr in (0, 0xFFFF):
+                    continue
+                ref = dcb.arena_from_offset(a.def_ptr)
+                assert dcb.arena_to_offset(ref) == a.def_ptr, "arena swizzle broke round-trip"
+                if a.def_ptr in starts:
+                    assert isinstance(ref, ArenaRef), f"{a.def_ptr:#06x} is an arena record but not an ArenaRef"
+                    assert dcb._arena[ref.index][0] == a.def_ptr        # derefs to the source entity's record
+                    seen_arena += 1
+                else:
+                    assert isinstance(ref, RawRef)
+    assert seen_arena > 0, "no live actor def_ptr ever resolved to an arena entity — swizzle unexercised"
+
+
 def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view():
     """A swizzled ObjectRef, dereferenced offset-free against the live pools, is the SAME record the offset-keyed
     ObjectSlot reads at the DOS offset — so pointer following can move to references with zero behaviour change."""

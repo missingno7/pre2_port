@@ -421,6 +421,26 @@ class DataclassBackend:
     actors = property(lambda self: self._objs["actors"])
     entities = property(lambda self: self._objs["entities"])
 
+    def arena_from_offset(self, v: int):
+        """Instance-aware swizzle for a pointer INTO the variable-stride entity arena: a raw offset that hits a
+        record boundary of THIS state's parsed arena -> an ``ArenaRef(index)``; anything else -> an opaque
+        ``RawRef`` (round-trips exactly). Distinct from the static pool ``pointer_layout.from_offset``."""
+        from pre2.game.ref import ArenaRef, RawRef
+        v &= 0xFFFF
+        for idx, (start, _e) in enumerate(self._arena):
+            if start == v:
+                return ArenaRef(idx)
+        return RawRef(v)
+
+    def arena_to_offset(self, ref) -> int:
+        """``ArenaRef``/``RawRef`` -> the exact 16-bit arena offset it referenced in this state."""
+        from pre2.game.ref import ArenaRef, RawRef
+        if isinstance(ref, RawRef):
+            return ref.value & 0xFFFF
+        if isinstance(ref, ArenaRef):
+            return self._arena[ref.index][0] & 0xFFFF
+        raise TypeError(f"not an arena reference: {ref!r}")
+
     def rb(self, off: int) -> int:
         off &= 0xFFFF
         m = self._map.get(off)
