@@ -508,6 +508,8 @@ class PlayerGlobals(DgroupView):
     #                               [5D95]; bit2 = top-kill fence [5AF1]
     unk_6BFE      = _U8(0x6BFE)   # post-worker: nonzero -> the 64DF soft-land tail instead of air physics
     #                               [5B38]; zeroed by the jump body [5F41]; gates the attack Yvel nudge [6004]
+    aura_toggle   = _U8(0x6BCC)   # cleared at level-init [asm 01f5]; also the idx0 aura-handler's alternating
+    #                               +/-0xC0 side flag (PlayerState.aura_toggle) -- role beyond that not evidenced
 
     # --- the FSM's own state (pre2/recovered/player.py) ---
     idle_timer    = _U8(0x6BD3)   # sat-inc per run/attack frame [5EF9/5F9F]; >=0x1E = long idle [5D49];
@@ -751,6 +753,8 @@ class ScrollScriptView(DgroupView):
     rng_c         = _U8(0x2CEE)
     rng_d         = _U16(0x2CEF)
     flakes        = _U16Array(0x6CA9, 0x100)   # the 0x100-word flake-position array [asm 3988]
+    script_table  = _U16Array(0x2D40, 0x10)    # per-level scroll-script source table: ptr = [0x2D40+level*2]
+    #                               [native_5237 5237/52b3]
 
     @property
     def script(self) -> _ScriptEntry:
