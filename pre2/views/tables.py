@@ -40,6 +40,7 @@ PLAYER_ANIM_HEIGHT = 0x7191  # player anim frame -> vertical extent (byte-indexe
 SPAWN_OFFSET_TABLE = 0x5CBD   # spawn ring -> signed X offset (word), indexed by the ring's absolute cursor value
 ANIM_FRAME_TABLE = 0xA86F     # per-entity anim-frame descriptor table (section-marked scan)
 ANIM_SECTION_MARKER = 0x7D01
+SPEED_CURVE = 0x78C6          # distance-from-target -> vertical scroll speed [camera_scroll _v_speed]
 
 
 class Tables:
@@ -47,11 +48,12 @@ class Tables:
     ``t.floor_props[tile]`` / ``t.cos[angle]`` / ``t.sprite_half_w(id)``."""
 
     __slots__ = ("_rb", "_read_word", "floor_props", "ceil_props", "tile_props", "cos", "sin", "sprite_geom",
-                 "player_anim_height")
+                 "player_anim_height", "speed_curve")
 
     def __init__(self, read_byte, read_word=None):
         self._rb = read_byte
         self._read_word = read_word    # optional native word reader (for word-granular asset reads); else compose
+        self.speed_curve = ByteTable(read_byte, SPEED_CURVE)
         self.floor_props = ByteTable(read_byte, FLOOR_PROPS)
         self.ceil_props = ByteTable(read_byte, CEIL_PROPS)
         self.tile_props = ByteTable(read_byte, TILE_PROPS)

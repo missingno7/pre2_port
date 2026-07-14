@@ -33,14 +33,14 @@ def native_3af2(state) -> None:
     renderer's job and are not produced here."""
     d = state.data
     g, pv = PlayerGlobals(state), PlayerView(state)
-    g.cam_col_word = 0; g.cam_row_word = 0; g.col_ring = 0; g.unk_2DEA = 0   # [asm 3afe-3b07] reset camera cells
+    g.cam_col_word = 0; g.cam_row_word = 0; g.col_ring = 0; g.row_ring = 0   # [asm 3afe-3b07] reset camera cells
     for _ in range(8000):                                           # [asm 3b35] 5634: snap-scroll to convergence
         _wb_cs(state, SCROLL_DONE_FLAG, 1)                          # [asm 5634] set the snap flag (forces dl=0x10)
         if g.unk_6BD9 == 0 and not (g.level_flags & 2):            # [asm 564e/5655] 5649 gate
             _h_follow(state)                                       # [asm 565c] 57a8 horizontal follow
         _v_follow(state)                                           # [asm 565f] 5663 vertical follow
         _wb_cs(state, SCROLL_DONE_FLAG, 0)                          # [asm 563d] clear the snap flag
-        if g.unk_6BED == 0:                                        # [asm 3b38] both axes idle -> converged (word 0x6bed)
+        if g.scroll_dir == 0 and g.cam_scroll_idle == 0:           # [asm 3b38] both axes idle -> converged (word 0x6bed)
             break
     if not (g.level_flags & 2):                                     # [asm 3b41] (not the gated mode)
         px_tile = _sar16(pv.x, 4)

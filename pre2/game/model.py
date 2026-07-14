@@ -41,6 +41,11 @@ class Player:
         return (self.sprite >> 8) & 0xFF
 
     @property
+    def move_flag(self) -> int:
+        """``xvel``'s high byte (bit 0x80 = moving left) — the DOS ``move_flag`` alias, derived not stored."""
+        return (self.xvel & 0xFFFF) >> 8
+
+    @property
     def facing_lo(self) -> int:
         """``facing``'s low byte — the anim-mirror flag the DOS view exposes as ``facing_lo``."""
         return self.facing & 0xFF
@@ -307,6 +312,12 @@ class Camera:
     row: int = 0          # camera cell row
     fine_scroll: int = 0  # sub-cell pixel scroll
     row_factor: int = 0   # the row-stride factor the renderer multiplies by
+    scroll_anim_ctr: int = 0        # sat-inc per vertical scroll step, drives the tile-row redraw animation
+    scroll_copy_src: int = 0        # the vertical-scroll VRAM copy-source offset (calc_scroll_source's result)
+    cam_scroll_idle: int = 0        # the vertical scroll-follow active flag (nonzero = scrolling toward target)
+    scroll_dir: int = 0             # the horizontal scroll-follow direction state (0 idle/1 right/2 left)
+    scroll_target_row: int = 0      # the vertical scroll-follow's target row
+    scroll_speed_curve_ptr: int = 0  # an alternate scroll-speed curve base (grid_dirty selects it over the fixed curve)
 
     # read/write aliases of the DOS view's field names (cam_col_word/cam_col are the same word as `col`)
     @property
@@ -503,6 +514,8 @@ class LevelState:
     checkpoint_x: int = 0
     checkpoint_y: int = 0
     grid_dirty: int = 0
+    level_prop_header: int = 0  # the level's top-row property header (indexes the LEVEL_PROP table -> the
+    #                              level-top camera clamp) [camera_scroll _v_scroll_apply]
 
     @property
     def level_flags(self) -> int:
@@ -595,6 +608,7 @@ class SceneryState:
     page_dirty: int = 0          # one-tile direct re-blit page flag
     grid_dirty_token: int = 0    # the whole-grid-dirty companion token (0x55AA)
     col_ring: int = 0            # the background column ring index
+    row_ring: int = 0            # the row-ring buffer index (camera_y % 0xC), written alongside col_ring
     sprite_bank_lo: int = 0      # entity sprite-ref rebase bank base A
     sprite_bank_hi: int = 0      # ... bank base B
     firefly_scratch_a: int = 0   # the firefly pass's per-frame scratch pair

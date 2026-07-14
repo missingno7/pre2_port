@@ -53,12 +53,13 @@ _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 _SPARSE = [
     # input_scratch trimmed: in_aux (0x27E9) + idle_clock (0x27F0-1) are now named (AttractState)
     ("input_scratch", (0x27F2, 0x27F3, 0x287A, 0x287B)),
-    # render_ptr_scratch trimmed: col_ring (0x2DE8-9) is now named (SceneryState)
-    ("render_ptr_scratch", (0x2DBA, 0x2DBB, 0x2DBE, 0x2DBF, 0x2DEA, 0x2DEB, 0x2DF2, 0x2DF5, 0x2DF6, 0x2DF7)),
+    # render_ptr_scratch trimmed: col_ring (0x2DE8-9) is now named (SceneryState); scroll_copy_src (0x2DBA-B),
+    # row_ring (0x2DEA-B) and scroll_anim_ctr (0x2DF5) are now named (Camera/SceneryState)
+    ("render_ptr_scratch", (0x2DBE, 0x2DBF, 0x2DF2, 0x2DF6, 0x2DF7)),
     # player_flag_scratch trimmed: page_dirty/firefly_scratch_a/b (0x6BBD/0x6BC0/0x6BC1) now named (SceneryState);
-    # folded in the lone leftover from misc_scratch (0x6BFF)
-    ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BED, 0x6BEE, 0x6BF1, 0x6BF2, 0x6BFA, 0x6BFB, 0x6BFC, 0x6BFD,
-                             0x6BFE, 0x6BFF)),
+    # folded in the lone leftover from misc_scratch (0x6BFF); scroll_dir (0x6BED), cam_scroll_idle (0x6BEE) and
+    # scroll_target_row (0x6BF1-2) are now named (Camera)
+    ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BFA, 0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE, 0x6BFF)),
     # camera_hud_scratch fully consumed by AttackState + HitScratch -> removed
     # misc_scratch fully consumed by AttractState/SceneryState (0x6BFF folded above) -> removed
 ]
@@ -94,6 +95,9 @@ _ROR = 0x28C1                 # the 1-word rotate generator
 CAMERA_LAYOUT = [
     ("col", 0x2DE4, 2, False), ("row", 0x2DE6, 2, False),
     ("fine_scroll", 0x6BC4, 1, False), ("row_factor", 0x6BF8, 2, False),
+    ("scroll_anim_ctr", 0x2DF5, 1, False), ("scroll_copy_src", 0x2DBA, 2, False),
+    ("cam_scroll_idle", 0x6BEE, 1, False), ("scroll_dir", 0x6BED, 1, False),
+    ("scroll_target_row", 0x6BF1, 2, False), ("scroll_speed_curve_ptr", 0x78C4, 2, False),
 ]
 PROGRESS_LAYOUT = [
     ("score_lo", 0x6C0E, 2, False), ("score_hi", 0x6C10, 2, False),
@@ -107,7 +111,7 @@ INPUT_LAYOUT = [
 LEVEL_STATE_LAYOUT = [
     ("flags", 0x8166, 1, False), ("end_mode", 0x6BE6, 1, False), ("respawn_state", 0x6BE4, 1, False),
     ("end_signal", 0x6BE5, 1, False), ("checkpoint_x", 0x6BAD, 2, False), ("checkpoint_y", 0x6BAF, 2, False),
-    ("grid_dirty", 0x2DF4, 1, False),
+    ("grid_dirty", 0x2DF4, 1, False), ("level_prop_header", 0x815E, 2, False),
 ]
 PLAYER_STATE_LAYOUT = [
     ("trail_ring", 0x6BBE, 2, False), ("glider", 0x6BC5, 1, False), ("fly_hold", 0x6BC6, 1, False),
@@ -150,6 +154,7 @@ SCENERY_STATE_LAYOUT = [
     ("map_rows", 0x2CF5, 1, False), ("dipping_tile", 0x6BAB, 2, False),
     ("current_hit_object", 0x6BB1, 2, False),
     ("page_dirty", 0x6BBD, 1, False), ("grid_dirty_token", 0x2DE0, 2, False), ("col_ring", 0x2DE8, 2, False),
+    ("row_ring", 0x2DEA, 2, False),
     ("sprite_bank_lo", 0x8C89, 2, False), ("sprite_bank_hi", 0x8C8B, 2, False),
     ("firefly_scratch_a", 0x6BC0, 1, False), ("firefly_scratch_b", 0x6BC1, 1, False),
     ("collected_linked", 0x2A7A, 2, False), ("display_page", 0x2DD6, 2, False), ("cam_left", 0x8164, 2, False),

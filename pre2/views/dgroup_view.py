@@ -518,20 +518,35 @@ class PlayerGlobals(DgroupView):
     hurt_cooldown = _U8(0x6BC9)   # the crush-damage cooldown (reload 5; a life on underflow) [asm 8254]
     bonus_flash   = _U8(0x6C00)   # the bonus-collect flash timer (render_state; timer-decremented) [5A7E]
     fine_scroll   = _U8(0x6BC4)   # sub-tile pixel scroll 0..15 (the frame engine) [frame VAR_FINE_SCROLL]
+    scroll_copy_src = _U16(0x2DBA)  # the vertical-scroll VRAM copy-source offset (calc_scroll_source's result)
+    #                               [camera_scroll _v_scroll_up/_down 33F8/3394 -> the 3588 tile-row redraw]
     col_ring      = _U16(0x2DE8)  # the background column ring index (camera_x % ring) [frame VAR_COL_RING]
-    unk_2DEA      = _U16(0x2DEA)  # written alongside col_ring; exact role not yet evidenced
+    row_ring      = _U16(0x2DEA)  # the row-ring buffer index (camera_y % 0xC), written alongside col_ring
+    #                               [camera_scroll _v_scroll_up/_down 33F5/338F]
+    scroll_anim_ctr = _U8(0x2DF5)  # sat-inc per vertical scroll step, drives the tile-row redraw animation
+    #                               [camera_scroll _v_scroll_down/_up 33C4/3373]
     firefly_scratch_a = _U8(0x6BC0)  # the firefly pass's per-frame scratch pair [firefly_sim]
     firefly_scratch_b = _U8(0x6BC1)
     row_factor    = _U16(0x6BF8)  # the row-stride factor (0x28 * this) the shake writes [frame/camera_shake]
     unk_6BFA      = _U16(0x6BFA)  # shake-adjacent state; role not yet evidenced
     unk_6BFC      = _U16(0x6BFC)
     timer_6BE8    = _U8(0x6BE8)   # one of the 5A47 countdown timers (TIMER_BYTES); consumer not yet mapped
-    unk_6BED      = _U16(0x6BED)  # scroll-adjacent state; role not yet evidenced
-    unk_6BF1      = _U16(0x6BF1)
+    cam_scroll_idle = _U8(0x6BEE)  # the vertical scroll-follow active flag (nonzero = scrolling toward
+    #                               scroll_target_row) [camera_scroll _v_follow/_v_scroll_apply 56D9/5703]
+    scroll_dir    = _U8(0x6BED)   # the horizontal scroll-follow direction state (0 idle/1 right/2 left)
+    #                               [camera_scroll _h_follow/_h_init 57CC/5813] -- BYTE-width: 0x6BED is one
+    #                               byte, immediately followed by the unrelated cam_scroll_idle byte at 0x6BEE;
+    #                               level_init's [asm 3b38] "both axes idle" check reads them together as one
+    #                               word == 0, reproduced explicitly as scroll_dir==0 and cam_scroll_idle==0.
+    scroll_target_row = _U16(0x6BF1)  # the vertical scroll-follow's target row [camera_scroll _v_follow 56D9]
     scroll_phase  = _U8(0x6C05)   # the camera/scroll phase counter (757A sat-inc) [asm 757A/8131]
     scroll_vx     = _U16(0x6C06)  # the scroll-cursor X velocity [asm 70FE/815E]
     scroll_vy     = _U16(0x6C08)  # ... Y velocity (gravity 0x10, cap 0xE0) [asm 7118/8144]
     script_last   = _U16(0x6C0A)  # camera-script pointer last seen; a change resets script_cursor [asm 7537]
+    level_prop_header = _U16(0x815E)  # the level's top-row property header [camera_scroll _v_scroll_apply
+    #                               56EA, indexes LEVEL_PROP table -> the level-top camera clamp]
+    scroll_speed_curve_ptr = _U16(0x78C4)  # an alternate scroll-speed curve base (grid_dirty selects it over
+    #                               the fixed 0x78C6 table) [camera_scroll _v_speed 5750/578A]
 
     bonus_letters = _U8(0x6CA7)   # the collected BONUS-letters bitmask (0x1F = all five -> reward) [67D7]
     utensils_mask = _U8(0x6CA8)   # the collected-utensils bitmask (fresh start zeroes it) [asm 0155]
@@ -868,6 +883,8 @@ class PlayerView(RenderSlot):
     __slots__ = ()
 
     xvel        = _S16(0x06)    # 0x4F22 — X velocity, 12.4 fixed [asm 5A0F integrate]
+    move_flag   = _U8(0x07)     # 0x4F23 — high byte of xvel (width alias): bit7 = moving-left sign
+    #                              [camera_scroll _h_init 57FD — the horizontal-follow direction pick]
     motion_mode = _U8(0x08)     # 0x4F24 — kinematics mode/shift (friction = 0xC >> mode; launchers set 2/3)
     facing      = _S16(0x09)    # 0x4F25 — +1 / -1 (the FSM's word)
     facing_lo   = _U8(0x09)     # 0x4F25 low byte — the anim-mirror flag (width alias of ``facing``)
