@@ -147,7 +147,8 @@ def test_all_five_pool_pointer_globals_are_stored_as_references():
     from pre2.game.ref import ObjectRef, RawRef
     from pre2.native.state import NativeGameState
 
-    assert _REF_FIELDS == {"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b"}
+    assert _REF_FIELDS == {"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b",
+                          "proj_slot_ptr"}
     st = NativeGameState(bytearray(0x10000 + (0x1A0F << 4)))
     dcb = DataclassBackend(st, readonly_image=False)
     found = 0

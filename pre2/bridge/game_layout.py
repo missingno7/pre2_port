@@ -24,8 +24,8 @@ _BUFFERS = [
     ("level_scratch_lo", 0x003F, 0x6D - 0x3F), ("level_scratch_mid", 0x0535, 0x1E),
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
     # proj_slot_scratch (0xA32E..0xA340) split around the now-named hit_flag/hit_detail/burst_*/spawned_ptr/
-    # anim_ready fields (SpawnCursor/HitScratch): the 3 residual un-named ranges.
-    ("proj_slot_scratch_a", 0xA32E, 2), ("proj_slot_scratch_b", 0xA333, 3), ("proj_slot_scratch_c", 0xA33C, 2),
+    # anim_ready/proj_slot_ptr fields (SpawnCursor/HitScratch): the 2 residual un-named ranges.
+    ("proj_slot_scratch_b", 0xA333, 3), ("proj_slot_scratch_c", 0xA33C, 2),
     # camera_target_scratch (0xA3F7..0xA426) trimmed to the un-named middle (CameraScript covers both ends)
     ("camera_target_scratch", 0xA407, 0xA41F - 0xA407),
     # effect_source_camera trimmed to end right before the now-named SpawnCursor fields (0x91FC..0x9202)
@@ -71,7 +71,8 @@ DGROUP_BASE = 0x1A0F << 4
 # pointers. The bridge swizzles ref<->offset at the byte boundary (rb/wb + the (de)serialiser) via
 # pointer_layout, so the byte image stays identical while the shipped model holds a real reference. This set is
 # the ONLY coupling that marks a field as a swizzled pointer; it grows one pointer family at a time.
-_REF_FIELDS = frozenset({"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b"})
+_REF_FIELDS = frozenset({"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b",
+                        "proj_slot_ptr"})
 # fields that reference the variable-stride entity ARENA (instance-aware swizzle, not the static pool one).
 _ARENA_REF_FIELDS = frozenset({"def_ptr"})
 # (class, field) pairs that are CURSORS into a read-only loaded asset (AssetCursor via the static pool/asset
@@ -110,7 +111,8 @@ LEVEL_STATE_LAYOUT = [
 ]
 PLAYER_STATE_LAYOUT = [
     ("trail_ring", 0x6BBE, 2, False), ("glider", 0x6BC5, 1, False), ("fly_hold", 0x6BC6, 1, False),
-    ("last_land_y", 0x6BCA, 2, False), ("input_suppress", 0x6BCD, 1, False), ("anim_hi", 0x6BCF, 1, False),
+    ("last_land_y", 0x6BCA, 2, False), ("aura_toggle", 0x6BCC, 1, False),
+    ("input_suppress", 0x6BCD, 1, False), ("anim_hi", 0x6BCF, 1, False),
     ("frame_blink", 0x6BD5, 1, False), ("input_lr", 0x6BDB, 1, False), ("input_ud", 0x6BDC, 1, False),
     ("drop_gate", 0x6BE1, 1, False), ("scale_level", 0x6BE2, 2, False), ("camera_shake", 0x6BEA, 1, False),
     ("run_count", 0x6BEB, 2, False), ("friction", 0x6BF6, 2, False),
@@ -135,7 +137,7 @@ SPAWN_CURSOR_LAYOUT = [
     ("spawn_count", 0x91FC, 2, False), ("cam_state", 0x91FE, 1, False), ("cursor_x", 0x91FF, 2, False),
     ("cursor_y", 0x9201, 2, False), ("burst_x", 0xA336, 2, False), ("burst_y", 0xA338, 2, False),
     ("burst_sprite", 0xA33A, 2, False), ("spawned_ptr", 0xA33E, 2, False), ("anim_ready", 0xA340, 1, False),
-    ("spawn_offset_ring", 0xA341, 2, False),
+    ("spawn_offset_ring", 0xA341, 2, False), ("proj_slot_ptr", 0xA32E, 2, False),
 ]
 CAMERA_SCRIPT_LAYOUT = [
     ("cam_timer", 0xA3F7, 2, False), ("cmd_byte", 0xA3F9, 1, False), ("dist_dir", 0xA3FA, 1, False),

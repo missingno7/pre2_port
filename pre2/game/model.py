@@ -400,6 +400,7 @@ class PlayerState:
     glider: int = 0          # glider / flying gate
     fly_hold: int = 0        # glider hold budget
     last_land_y: int = 0     # Y of the last landing (fall-height source)
+    aura_toggle: int = 0     # the idx0 aura-handler's alternating +/-0xC0 side flag
     input_suppress: int = 0  # nonzero forces the input bitmask to 0
     anim_hi: int = 0         # advance_anim's raw frame high byte
     frame_blink: int = 0     # frame counter gating the trail emit / blink; DOS view name: frame_stamp
@@ -522,6 +523,7 @@ class SpawnCursor:
     spawned_ptr: object = field(default_factory=lambda: RawRef(0))  # the just-spawned burst-slot pointer (ObjectRef)
     anim_ready: int = 0        # object_update's per-step anim-ready scratch byte
     spawn_offset_ring: int = 0  # 16-slot ring index into the spawn X-offset table
+    proj_slot_ptr: object = field(default_factory=lambda: RawRef(0))  # the last-projected object slot (ObjectRef)
 
 
 @dataclass
