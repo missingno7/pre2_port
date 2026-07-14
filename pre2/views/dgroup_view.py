@@ -477,7 +477,9 @@ class PlayerGlobals(DgroupView):
     current_hit_object = _U16(0x6BB1)  # cyxx current_hit_object: the FSM's current-object ptr; NULL on the player path [6698]
     dipping_tile  = _U16(0x6BAB)  # map offset of the currently-sagging bridge tile; 0x55AA = none [5BBB/5BF4]
     grid_dirty    = _U8(0x2DF4)   # whole-grid redraw request [5C82]
-    grid_dirty_token = _U16(0x2DE0)  # its 0x55AA companion token [5C87]
+    grid_dirty_token = _U16(0x2DE0)  # its 0x55AA companion token [5C87]; a genuine union -- native_sync_
+    #                               render_state also stamps this word with the render-mirror previous-camera
+    #                               cell X (the pair to prev_cam_cell_y at 0x2DE2)
     page_dirty    = _U8(0x6BBD)   # one-tile direct re-blit page flag (the 653D path) [659C]
     cam_col       = _U8(0x2DE4)   # camera tile column [6546] (byte read — the on-screen test)
     cam_row       = _U8(0x2DE6)   # camera tile row [6551]
@@ -558,6 +560,9 @@ class PlayerGlobals(DgroupView):
     col_ring      = _U16(0x2DE8)  # the background column ring index (camera_x % ring) [frame VAR_COL_RING]
     row_ring      = _U16(0x2DEA)  # the row-ring buffer index (camera_y % 0xC), written alongside col_ring
     #                               [camera_scroll _v_scroll_up/_down 33F5/338F]
+    prev_cam_cell_y = _U16(0x2DE2)  # render-mirror previous-camera cell Y [native_sync_render_state]
+    anim_remap_ptr = _U16(0x6BC2)   # the animated-tile remap frame pointer (367D steps it per redraw)
+    anim_remap_thresh = _U8(0x6BD4)  # its threshold/counter byte
     scroll_anim_ctr = _U8(0x2DF5)  # sat-inc per vertical scroll step, drives the tile-row redraw animation
     #                               [camera_scroll _v_scroll_down/_up 33C4/3373]
     firefly_scratch_a = _U8(0x6BC0)  # the firefly pass's per-frame scratch pair [firefly_sim]

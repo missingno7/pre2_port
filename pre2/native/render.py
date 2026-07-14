@@ -14,12 +14,10 @@ from __future__ import annotations
 from pre2.native.vga import _dac8
 
 from pre2.views.foreground_tiles import read_foreground_state
-from pre2.views.dgroup_view import PlayerGlobals
+from pre2.views.dgroup_view import PlayerGlobals, RenderSlot
 from pre2.views.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.views.gameplay_effects import capture_gameplay_effects
 from pre2.views.particles import read_particles
-from pre2.native.dgroup_offsets import (
-    ANIM_REMAP_PTR, ANIM_REMAP_THRESH, COL_RING, PALETTE_PTR_TABLE, PREV_CAM_CELL_X, PREV_CAM_CELL_Y, ROW_RING, SCROLL_COPY_SRC)
 
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
 
@@ -44,8 +42,8 @@ def native_load_level_palette(state, dos) -> None:
     what ``0ba0`` does via int 10h ax=0x1012/cx=0x10 (``native_load_dac_palette``). native_level_init skips 0ba0 as
     'render' (it touches no DGROUP, only the DAC), so without this a different ``--level`` shows the bootstrap
     snapshot's palette. The per-level palettes are global in DGROUP, so this just selects the right one."""
-    level = PlayerGlobals(state).level
-    table_off = state.rw(PALETTE_PTR_TABLE + level * 2)              # [0x2D00 + level*2] the per-level palette pointer table
+    from pre2.views.dgroup_view import LightFadeView
+    table_off = LightFadeView(state).level_palette                    # [0x2D00 + level*2] the per-level palette pointer table
     native_load_dac_palette(state, dos, table_off, 0x10)
 
 
@@ -61,17 +59,18 @@ def native_sync_render_state(state) -> None:
     g = PlayerGlobals(state)
     cam_x = g.cam_col_word
     cam_y = g.cam_row_word
-    for off, val in ((COL_RING, cam_x % _RING_COLS), (ROW_RING, cam_y % _RING_ROWS),
-                     (PREV_CAM_CELL_X, cam_x), (PREV_CAM_CELL_Y, cam_y)):
-        state.ww(off, val)                                 # the render-mirror ring indices + prev-camera cells
+    g.col_ring = cam_x % _RING_COLS                        # the render-mirror ring indices + prev-camera cells
+    g.row_ring = cam_y % _RING_ROWS
+    g.grid_dirty_token = cam_x    # 0x2DE0: a union with the 0x55AA grid-dirty sentinel (see the field's docstring)
+    g.prev_cam_cell_y = cam_y
     # Also re-derive the scroll-copy SOURCE [0x2DBA] (the ring offset build_background_ring places tiles at)
     # from the freshly-derived ring indices. native_camera_follow sets it during normal gameplay, but a camera
     # JUMP that bypasses the follow — the death-respawn checkpoint (native_3af2) or a level start at a non-origin
     # camera — leaves it pointing at the OLD ring position, so the rebuild lays the correct tiles at the wrong
     # column offset (the level-6 respawn glitch: a narrow tree top rendered full-width + a garbage band).
     from pre2.recovered.frame_renderer import calc_scroll_source
-    src = calc_scroll_source(state.rw(COL_RING), state.rb(ROW_RING)) & 0xFFFF
-    state.ww(SCROLL_COPY_SRC, src)
+    src = calc_scroll_source(g.col_ring, g.row_ring & 0xFF) & 0xFFFF
+    g.scroll_copy_src = src
 
     # Advance the animated-tile remap cycle (1030:367D) — the render-cluster step the gameplay pass omits. The
     # VM steps [0x6BC2]/[0x6BD4] once per redraw, BEFORE the grid walk reads the current remap table, so without
@@ -80,13 +79,13 @@ def native_sync_render_state(state) -> None:
     # render-state ([0x6BC2]/[0x6BD4] are excluded from the gameplay verify), so it belongs here — run exactly
     # once per displayed frame, matching the VM's per-redraw cadence.
     from pre2.recovered.animation import advance_animation
-    fp = state.rw(ANIM_REMAP_PTR)                                  # the animated-tile remap frame pointer + threshold
-    thr = state.rb(ANIM_REMAP_THRESH)
+    fp = g.anim_remap_ptr                                          # the animated-tile remap frame pointer + threshold
+    thr = g.anim_remap_thresh
     active = g.page_dirty != 0
     speed = g.friction
     fp, thr, _ = advance_animation(fp, thr, active, speed)
-    state.ww(ANIM_REMAP_PTR, fp)
-    state.wb(ANIM_REMAP_THRESH, thr)
+    g.anim_remap_ptr = fp
+    g.anim_remap_thresh = thr
 
 
 _LIGHT_DARK_PAL = 0xACB7   # [asm 6791] the fixed "lights off" dark 16-colour palette (6-bit RGB)
@@ -185,14 +184,15 @@ def native_render(state, dos, display_page: int, *, game_root: str,
     # leaving the flag set would desync the next frame's carried-forward state from the VM's cleared record.
     saved = None
     if flash:
-        saved = [(off, state.rb(off + 5)) for off in flash]       # the render-slot flags byte (opaque-flash bit)
+        saved = [(off, RenderSlot(state, off).flags) for off in flash]   # the flags byte (opaque-flash bit)
         for off in flash:
-            state.wb(off + 5, state.rb(off + 5) | 0x40)
+            slot = RenderSlot(state, off)
+            slot.flags = slot.flags | 0x40
     try:
         gvs = capture_game_visual_state(state, dos, display_page, game_root=game_root, effects=fx,
                                         force_gameplay=force_gameplay)
     finally:
         if saved is not None:
             for off, v in saved:
-                state.wb(off + 5, v)
+                RenderSlot(state, off).flags = v
     return render_game_visual_state(gvs)

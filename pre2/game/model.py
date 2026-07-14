@@ -323,6 +323,11 @@ class Camera:
     scroll_dir: int = 0             # the horizontal scroll-follow direction state (0 idle/1 right/2 left)
     scroll_target_row: int = 0      # the vertical scroll-follow's target row
     scroll_speed_curve_ptr: int = 0  # an alternate scroll-speed curve base (grid_dirty selects it over the fixed curve)
+    prev_cam_cell_y: int = 0   # render-mirror previous-camera cell Y [native_sync_render_state]; the paired
+    #                            X cell is SceneryState.grid_dirty_token (0x2DE0) -- a genuine union with the
+    #                            whole-grid-dirty 0x55AA sentinel
+    anim_remap_ptr: int = 0    # the animated-tile remap frame pointer (367D steps it per redraw)
+    anim_remap_thresh: int = 0  # its threshold/counter byte
 
     # read/write aliases of the DOS view's field names (cam_col_word/cam_col are the same word as `col`)
     @property

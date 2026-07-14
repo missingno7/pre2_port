@@ -107,6 +107,8 @@ CAMERA_LAYOUT = [
     ("scroll_anim_ctr", 0x2DF5, 1, False), ("scroll_copy_src", 0x2DBA, 2, False),
     ("cam_scroll_idle", 0x6BEE, 1, False), ("scroll_dir", 0x6BED, 1, False),
     ("scroll_target_row", 0x6BF1, 2, False), ("scroll_speed_curve_ptr", 0x78C4, 2, False),
+    ("prev_cam_cell_y", 0x2DE2, 2, False),
+    ("anim_remap_ptr", 0x6BC2, 2, False), ("anim_remap_thresh", 0x6BD4, 1, False),
 ]
 PROGRESS_LAYOUT = [
     ("score_lo", 0x6C0E, 2, False), ("score_hi", 0x6C10, 2, False), ("score_mid", 0x6C0C, 2, False),
