@@ -2024,8 +2024,18 @@ def main(argv=None) -> int:
                 native_load_song(state, native_level_song_name(state), gr)   # the NEW level's song (else the
                 #                                                              previous level's music keeps playing)
                 reveal_level(state, dos)
-            if args.debug and settings["god"]:                     # Develop tab: keep the energy topped up
-                PlayerGlobals(state).energy = 3                        # [asm 52a8] full hearts, refreshed pre-tick
+            if args.debug and settings["god"]:                     # Develop tab: god mode (a --debug cheat)
+                _pg = PlayerGlobals(state)
+                _pg.energy = 3                                        # [asm 52a8] full hearts, refreshed pre-tick
+                # PIN lives so a fall or a spike never costs one and 0-lives game-over can never fire (issue #10:
+                # topping energy alone still let falls/spikes drain lives to a game over). Pin to the highest seen
+                # (>=3) so legit extra-life pickups still count; deaths decrement to pin-1 then get pinned back.
+                _lv = ref.get("god_lives")
+                _lv = max(_pg.lives, 3) if _lv is None else max(_lv, _pg.lives)
+                ref["god_lives"] = _lv
+                _pg.lives = _lv
+            elif ref.get("god_lives") is not None:                  # god mode switched off -> real lives resume
+                ref["god_lives"] = None
             record_reached(progress, PlayerGlobals(state).level, bool(PlayerGlobals(state).mode), gr)  # unlock this
             #    checkpoint on the CONTINUE screen (cheap no-op unless it advanced the furthest level on this path)
             drive_input(state)
