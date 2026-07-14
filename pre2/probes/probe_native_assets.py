@@ -16,7 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from pre2.codecs.sqz import sqz_bump_advance, unpack_sqz
-from pre2.native.assets import LOAD_PTR, load_sqz
+from pre2.native.assets import load_sqz
+
+LOAD_PTR = 0x2875   # DS:[0x2875] — the stacking load-buffer pointer (pre2.views.dgroup_view.LoaderGlobals.load_top)
 from pre2.native.state import DATA_SEG, NativeGameState
 
 _DS = DATA_SEG << 4

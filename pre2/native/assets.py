@@ -16,15 +16,9 @@ from pathlib import Path
 
 from pre2.codecs.sqz import sqz_bump_advance, unpack_sqz
 from pre2.native.state import DATA_SEG
+from pre2.views.dgroup_view import LoaderGlobals
 
-LOAD_PTR = 0x2875          # DS:[0x2875] — the stacking load-buffer pointer (segment of the next free paragraph)
 _DS_BASE = (DATA_SEG << 4) & 0xFFFFF
-
-
-def _ww(state, off: int, val: int) -> None:
-    b = (_DS_BASE + (off & 0xFFFF)) & 0xFFFFF
-    state.data[b] = val & 0xFF
-    state.data[(b + 1) & 0xFFFFF] = (val >> 8) & 0xFF
 
 
 def read_cstring(state, off: int) -> str:
@@ -53,10 +47,11 @@ def load_sqz(state, name: str, *, game_root: str) -> int:
     segment it landed at (what 107B returns in AX). [asm 1030:107B + the allocator bump @147D/1208/10E6]"""
     raw = resolve_game_path(game_root, name).read_bytes()
     out = unpack_sqz(raw)
-    out_seg = state.rw(LOAD_PTR)
+    g = LoaderGlobals(state)
+    out_seg = g.load_top
     base = (out_seg << 4) & 0xFFFFF
     state.data[base:base + len(out)] = out
-    _ww(state, LOAD_PTR, (out_seg + sqz_bump_advance(raw)) & 0xFFFF)
+    g.load_top = (out_seg + sqz_bump_advance(raw)) & 0xFFFF
     return out_seg
 
 
