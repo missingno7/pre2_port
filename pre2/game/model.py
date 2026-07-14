@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pre2.game.ref import RawRef
+
 
 @dataclass
 class Player:
@@ -463,7 +465,10 @@ class SceneryState:
 
     map_rows: int = 0            # the map's bottom row bound
     dipping_tile: int = 0        # map offset of the currently-sagging bridge tile; 0x55AA = none
-    current_object: int = 0      # the FSM's current-object pointer; NULL outside object-vs-object collision
+    # cyxx `current_hit_object`: the FSM's current-object pointer; NULL outside object-vs-object collision. Stored
+    # as an offset-free reference (pre2.game.ref) — a real game holds a REFERENCE to the object, not a raw address.
+    # The bridge swizzles ref<->offset when (de)serialising the byte image. Default = the null sentinel.
+    current_hit_object: object = field(default_factory=lambda: RawRef(0))
     page_dirty: int = 0          # one-tile direct re-blit page flag
     grid_dirty_token: int = 0    # the whole-grid-dirty companion token (0x55AA)
     col_ring: int = 0            # the background column ring index

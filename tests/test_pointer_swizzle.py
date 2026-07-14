@@ -118,6 +118,28 @@ def test_swizzle_handles_the_real_pointer_values_the_game_stores():
     assert seen_objectref > 0, "no real pointer ever resolved to a pool ObjectRef — swizzle unexercised on real data"
 
 
+def test_current_hit_object_is_adopted_as_a_reference_in_the_shipped_model():
+    """ADOPTION proof: the shipped model's `SceneryState.current_hit_object` (cyxx name) genuinely stores an
+    offset-free reference — NOT a raw 16-bit offset — while the bridge swizzles ref<->offset at the byte
+    boundary so the tick stays byte-exact. Writing a pool offset through rb/rw stores an ObjectRef; reading it
+    back reproduces the exact offset."""
+    from pre2.bridge.game_layout import DataclassBackend
+    from pre2.game.ref import ObjectRef, RawRef
+    from pre2.native.state import NativeGameState
+
+    st = NativeGameState(bytearray(0x10000 + (0x1A0F << 4)))
+    dcb = DataclassBackend(st, readonly_image=False)
+    sc = dcb._objs["scenery_state"]
+    assert isinstance(sc.current_hit_object, (ObjectRef, RawRef)), "field must hold a reference, not an int"
+
+    st.backend = dcb
+    dcb.ww(0x6BB1, 0x4FD0)                                    # write actors[0]'s offset via the byte path
+    assert sc.current_hit_object == ObjectRef("actors", 0), "a pool offset must be stored as an ObjectRef"
+    assert dcb.rw(0x6BB1) == 0x4FD0, "reading the ref back must reproduce the exact offset"
+    dcb.ww(0x6BB1, 0x0000)                                    # the null sentinel
+    assert isinstance(sc.current_hit_object, RawRef) and dcb.rw(0x6BB1) == 0
+
+
 def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view():
     """A swizzled ObjectRef, dereferenced offset-free against the live pools, is the SAME record the offset-keyed
     ObjectSlot reads at the DOS offset — so pointer following can move to references with zero behaviour change."""

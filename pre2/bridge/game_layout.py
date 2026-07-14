@@ -65,6 +65,13 @@ _SPARSE = [
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
 
 DGROUP_BASE = 0x1A0F << 4
+
+# dataclass fields stored as offset-free references (pre2.game.ref.ObjectRef/RawRef) instead of raw 16-bit
+# pointers. The bridge swizzles ref<->offset at the byte boundary (rb/wb + the (de)serialiser) via
+# pointer_layout, so the byte image stays identical while the shipped model holds a real reference. This set is
+# the ONLY coupling that marks a field as a swizzled pointer; it grows one pointer family at a time.
+_REF_FIELDS = frozenset({"current_hit_object"})
+
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
 _RNG_LCG = 0x2CEC             # the 4-byte LCG mixer
 _ROR = 0x28C1                 # the 1-word rotate generator
@@ -126,7 +133,8 @@ CAMERA_SCRIPT_LAYOUT = [
     ("target_b", 0xA425, 2, False),
 ]
 SCENERY_STATE_LAYOUT = [
-    ("map_rows", 0x2CF5, 1, False), ("dipping_tile", 0x6BAB, 2, False), ("current_object", 0x6BB1, 2, False),
+    ("map_rows", 0x2CF5, 1, False), ("dipping_tile", 0x6BAB, 2, False),
+    ("current_hit_object", 0x6BB1, 2, False),
     ("page_dirty", 0x6BBD, 1, False), ("grid_dirty_token", 0x2DE0, 2, False), ("col_ring", 0x2DE8, 2, False),
     ("sprite_bank_lo", 0x8C89, 2, False), ("sprite_bank_hi", 0x8C8B, 2, False),
     ("firefly_scratch_a", 0x6BC0, 1, False), ("firefly_scratch_b", 0x6BC1, 1, False),
@@ -279,13 +287,24 @@ class NamedImageBackend:
 
 def _obj_from_image(cls, layout, data, base=0):
     data = getattr(data, "data", data)
-    return cls(**{f: _rd(data, base, off, w, s) for f, off, w, s in layout})
+    vals = {}
+    for f, off, w, s in layout:
+        v = _rd(data, base, off, w, s)
+        if f in _REF_FIELDS:                     # swizzle the raw offset -> an offset-free reference
+            from pre2.bridge.pointer_layout import from_offset
+            v = from_offset(v & 0xFFFF)
+        vals[f] = v
+    return cls(**vals)
 
 
 def _obj_to_image(obj, layout, data, base=0):
     data = getattr(data, "data", data)
     for f, off, w, _s in layout:
-        _wr(data, base, off, w, getattr(obj, f))
+        v = getattr(obj, f)
+        if f in _REF_FIELDS:                     # swizzle the reference back to its exact 16-bit offset
+            from pre2.bridge.pointer_layout import to_offset
+            v = to_offset(v)
+        _wr(data, base, off, w, v)
 
 
 # the structures routed to live dataclasses: (attribute, class, layout, base, count, stride). count>1 = a LIST
@@ -408,6 +427,9 @@ class DataclassBackend:
         if m is None:                               # un-routed -> the read-only loaded tables
             return self._level_data[off]
         inst, f, k, w, _s = m
+        if f in _REF_FIELDS:                        # a swizzled pointer: project the ref -> its offset, byte k
+            from pre2.bridge.pointer_layout import to_offset
+            return (to_offset(getattr(inst, f)) >> (8 * k)) & 0xFF
         if w == 0:                                  # a bytearray byte (record body / working buffer)
             return getattr(inst, f)[k]
         return (getattr(inst, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
@@ -423,6 +445,12 @@ class DataclassBackend:
             self._level_data[off] = val
             return
         inst, f, k, w, s = m
+        if f in _REF_FIELDS:                        # a swizzled pointer: patch byte k of the offset, re-swizzle
+            from pre2.bridge.pointer_layout import from_offset, to_offset
+            cur = to_offset(getattr(inst, f))
+            cur = (cur & ~(0xFF << (8 * k))) | (val << (8 * k))
+            setattr(inst, f, from_offset(cur & 0xFFFF))
+            return
         if w == 0:                                  # a bytearray byte (record body / working buffer)
             getattr(inst, f)[k] = val
             return

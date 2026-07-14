@@ -443,7 +443,7 @@ class PlayerGlobals(DgroupView):
     trail_ring    = _U16(0x6BBE)  # the landing-dust / trail effect ring cursor (5E18's ring) [6483]
     anim_gate     = _U8(0x6BD0)   # nonzero: hold the current anim / route the FSM into the 5F93 override tail
     #                               [63E2/5F35]; the attack writes it from the anim high byte's ~bit6 [5FC3]
-    current_object = _U16(0x6BB1)  # the FSM's current-object pointer; NULL on the player's own collision [6698]
+    current_hit_object = _U16(0x6BB1)  # cyxx current_hit_object: the FSM's current-object ptr; NULL on the player path [6698]
     dipping_tile  = _U16(0x6BAB)  # map offset of the currently-sagging bridge tile; 0x55AA = none [5BBB/5BF4]
     grid_dirty    = _U8(0x2DF4)   # whole-grid redraw request [5C82]
     grid_dirty_token = _U16(0x2DE0)  # its 0x55AA companion token [5C87]

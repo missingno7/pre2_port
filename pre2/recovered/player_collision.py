@@ -254,7 +254,7 @@ def collision_land(rb, rw, read_es, di: int) -> dict:
 def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
     """[asm 668B] The Yvel==0 head-bump branch — the "push out of a solid ceiling" nudge.
 
-    It pushes the object pointed to by ``g.current_object`` one tile toward the open side. The catch: on the
+    It pushes the object pointed to by ``g.current_hit_object`` one tile toward the open side. The catch: on the
     PLAYER's own collision that pointer is never populated — it is NULL (0) — so the routine dereferences low
     DGROUP (``[0x0000]``/``[0x0002]``) as a bogus X/Y, lands on a cell far off the map (a 0xFF border tile that
     is never ceiling-solid), and returns without writing. So for the player this is a latent **no-op / dead
@@ -266,7 +266,7 @@ def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
     p, g, _ = _views(rb, rw)
     if (p.sprite & 0xFF) in (0x0A, 0x15):                        # [668E/6692] two anim states -> no push-out
         return {}
-    ptr = g.current_object                                       # [6698] di = current object (NULL on the player path)
+    ptr = g.current_hit_object                                   # [6698] di = current object (NULL on the player path)
     col = (_s16(rw(ptr)) >> 4) & 0xFF                            # [66A5-66A9] sar (X word),4
     row = (_s16(rw((ptr + 2) & 0xFFFF)) >> 4) & 0xFF            # [669E-66A3] sar (Y word),4
     cell = ((row << 8) | col) & 0xFFFF                           # [66AB] di = (row<<8)|col
