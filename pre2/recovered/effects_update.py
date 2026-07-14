@@ -17,7 +17,8 @@ proof, exactly like the object_tick / combat_interaction precedents.
 from __future__ import annotations
 
 from pre2.islands import oracle_link
-from pre2.views.dgroup_view import EffectParticle, ProjectileSlot, WidthContractBackend
+from pre2.views.dgroup_view import (DebrisSlot, EffectParticle, PopupSlot, ProjectileSlot,
+                                    WidthContractBackend)
 from pre2.views.tables import Tables
 
 
@@ -54,14 +55,16 @@ DEAD = 0xFFFF        # [+4] sentinel for a free slot
 def tick_debris_pool(rw):
     """[asm 60DF] ``rw(off)`` reads a DGROUP word. Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
+    be = WidthContractBackend(rw, rw, writes)   # word-only pool: reads via rw, writes accumulate the contract
     b = DEBRIS_POOL_LO
     for _ in range(DEBRIS_POOL_N):
-        if rw((b + 4) & 0xFFFF) != DEAD:                       # [asm 60E5] active?
-            writes[(b + 2) & 0xFFFF] = ((rw((b + 2) & 0xFFFF) - 1) & 0xFFFF, 2)   # [asm 60EB] dec [+2]
-            life = (rw((b + 0xC) & 0xFFFF) - 1) & 0xFFFF        # [asm 60EE] dec [+0xC]
-            writes[(b + 0xC) & 0xFFFF] = (life, 2)
+        slot = DebrisSlot(be, b)
+        if slot.sprite != DEAD:                                # [asm 60E5] active?
+            slot.timer = (slot.timer - 1) & 0xFFFF             # [asm 60EB] dec [+2]
+            life = (slot.lifetime - 1) & 0xFFFF                # [asm 60EE] dec [+0xC]
+            slot.lifetime = life
             if life == 0:                                      # [asm 60F1] jne -> survive
-                writes[(b + 4) & 0xFFFF] = (DEAD, 2)           # [asm 60F3] free
+                slot.sprite = DEAD                             # [asm 60F3] free
         b = (b + STRIDE) & 0xFFFF
     return writes
 
@@ -83,12 +86,14 @@ POPUP_ANIM_END = 0x3A     # [+4] anim id counts up; on reaching 0x3A the slot is
 def tick_popup_ring(rw):
     """[asm 581E] ``rw(off)`` reads a DGROUP word. Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
+    be = WidthContractBackend(rw, rw, writes)   # word-only ring: reads via rw, writes accumulate the contract
     si = rw(POPUP_RING_PTR) & 0xFFFF
     for _ in range(POPUP_RING_N):
-        ax = rw((si + 4) & 0xFFFF) & 0x1FFF                    # [asm 5825-5828] mov ax,[si+4]; and ah,0x1F
-        writes[(si + 2) & 0xFFFF] = ((rw((si + 2) & 0xFFFF) - 1) & 0xFFFF, 2)  # [asm 5831] dec [+2]
+        slot = PopupSlot(be, si)
+        ax = slot.anim & 0x1FFF                                # [asm 5825-5828] mov ax,[si+4]; and ah,0x1F
+        slot.timer = (slot.timer - 1) & 0xFFFF                 # [asm 5831] dec [+2]
         ax = (ax + 1) & 0xFFFF                                 # [asm 5830] inc ax
-        writes[(si + 4) & 0xFFFF] = ((ax if ax < POPUP_ANIM_END else 0xFFFF), 2)  # [asm 5834-583C]
+        slot.anim = ax if ax < POPUP_ANIM_END else 0xFFFF      # [asm 5834-583C]
         si = (si - STRIDE) & 0xFFFF                            # [asm 5841] sub si,0x12
         if si < POPUP_RING_LO:                                 # [asm 5844-584A] wrap
             si = POPUP_RING_HI

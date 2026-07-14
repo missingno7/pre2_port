@@ -784,6 +784,29 @@ class RenderSlot(StructView):
         return self._backend.rw(self._base + 4) & 0x1FFF
 
 
+class DebrisSlot(StructView):
+    """One slot of the 16-entry debris/effect pool (0x5450, stride 0x12) the 60DF lifetime tick walks. Free when
+    ``sprite`` [+4] is 0xFFFF; each active slot decrements ``timer`` [+2] and ``lifetime`` [+0xC], freeing the
+    slot when the lifetime hits exactly 0. Names the three word fields the tick touches."""
+
+    __slots__ = ()
+
+    timer    = _U16(2)     # [+2] the secondary per-slot countdown
+    sprite   = _U16(4)     # [+4] sprite id; 0xFFFF = free slot
+    lifetime = _U16(0xC)   # [+0xC] lifetime; slot frees when this reaches 0
+
+
+class PopupSlot(StructView):
+    """One slot of the 5-entry popup/score ring (walked down from head [0x6BBE], wrapping 0x4F76->0x4FBE,
+    stride 0x12) the 581E tick advances. ``timer`` [+2] decrements; ``anim`` [+4] (masked, then +1) frees the
+    slot to 0xFFFF once it reaches 0x3A."""
+
+    __slots__ = ()
+
+    timer = _U16(2)   # [+2] per-slot countdown
+    anim  = _U16(4)   # [+4] anim id (low 0x1FFF); 0x3A -> free (0xFFFF)
+
+
 class EffectSource(StructView):
     """One entry of the on-screen effect/particle SOURCE list (0x8F1D, stride 7) — the record
     ``project_particles`` (8922) animates and projects into a render slot. Names its 4 fields so the projection
