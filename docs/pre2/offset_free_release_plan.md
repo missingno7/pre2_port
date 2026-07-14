@@ -13,13 +13,19 @@ arithmetic must become name/reference access (`slot.field`, `for slot in actors`
 runtime flip is all-or-nothing (an offset-free backend can't resolve a single raw offset), so the dissolve must
 reach **0 raw-logic** before the flip works.
 
-## Driver: the raw-logic ratchet (target 0)
+## Honest scoreboard (measured in the ACTUAL release closure — not just pre2/game)
 
-`python scripts/measure_name_frontier.py` reports `logic` raw-access count. It must only ever go DOWN.
+The earlier `test_model_detached` gate only checked `pre2/game` (the model, which IS clean) and so misrepresented
+the milestone. The RELEASE runs `pre2/native` + `pre2/recovered` + `pre2/views`, and those still carry offsets.
+Two honest metrics, both must reach **0**:
 
-| date | raw-logic | notes |
-|------|-----------|-------|
-| 2026-07-14 | 192,631 | baseline at the start of the flip (74.6% of the nameable surface done) |
+| date | offset-const defs in the release closure | raw-logic offset accesses | notes |
+|------|------------------------------------------|---------------------------|-------|
+| 2026-07-14 | 742 (across 125 shipped files) | 192,631 | the true starting state; my "detached" claim covered only pre2/game |
+
+Offsets concentrate in: dgroup_offsets 139, object_spawn 104, player_interaction 47, combat_interaction 36,
+player 31, player_collision 26, + the views/* render layer. `python scripts/measure_name_frontier.py` tracks the
+access count; a per-closure offset-const audit tracks the def count. Both ratchet DOWN only.
 
 Per-module roadmap (ranked): object_spawn 69k, player_interaction 31k, player_collision 19k, object_tick 19k,
 combat_interaction 11k, player 10k, input_decode 10k, object_inject 9k, loop 7k, camera_scroll 3k, others <2k.

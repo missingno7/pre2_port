@@ -1,10 +1,10 @@
-"""The DETACHMENT gate: the shipped game model (pre2/game) is a clean, independent object graph — it imports
-NOTHING from the detachable bridge / verification / recovered layers and contains no DGROUP memory idioms.
+"""Partial detachment gate: the game MODEL (pre2/game) is a clean, independent object graph.
 
-This is the north star of the object-model milestone made enforceable: the release ships pre2/game (dataclasses +
-references) and needs none of the offset layout, byte image, serializer, VM oracle, or recovered ASM transcription
-— those are all attachable-on-demand for verification, on the far side of the bridge. If this test fails, the
-model has grown a dependency back into the machinery it is supposed to be independent of.
+SCOPE (important, do not over-read): this checks ONLY pre2/game. It does NOT prove the *release* is offset-free —
+the released dist also runs pre2/native + pre2/recovered + pre2/views, which STILL carry ~742 offset constants and
+~192k raw offset accesses (see docs/pre2/offset_free_release_plan.md). The whole-closure gate (zero offsets across
+the shipped closure) is the FINISH of the offset-free-release milestone and is not done yet. This test only
+guarantees the model layer stays clean while the dissolve grind removes offsets from the rest.
 """
 import ast
 from pathlib import Path
