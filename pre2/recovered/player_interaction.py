@@ -221,6 +221,7 @@ ENTITY2 = 0x50A8           # the 52-entry pickup/entity list (objects 23+i in cy
 ENERGY = 0x27D6           # player energy (0..3)  [NOT lives — my earlier mislabel]
 LIVES = 0x27D8            # [65DA] 1-up count (cap 0x63=99)
 BONUS_ENERGY_CTR = 0x6BC9  # small-energy-bonus accumulator (6 -> +1 energy)
+                          # (UNION offset: the combat-spawn path names this HURT_COOLDOWN; cyxx: bonus_energy_counter)
 LETTERS_MASK = 0x6CA7     # BONUS letters bitmask
 UTENSILS_MASK = 0x6CA8    # utensils/tools bitmask
 CLUB_TYPE = 0x7B18        # equipped club/weapon type (0..3)

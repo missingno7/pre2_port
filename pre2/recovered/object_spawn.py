@@ -336,6 +336,7 @@ def player_cursor_dist(rw):
 
 # --- 824D: the player-hurt effect at the bottom of the camera-boundary crush chain (81B4->81F3->824D) ---
 HURT_COOLDOWN = 0x6BC9    # damage cooldown; reloads to 5 and costs energy on underflow
+                         # (UNION offset: the pickup path names this BONUS_ENERGY_CTR; cyxx: bonus_energy_counter)
 ENERGY = 0x27D6           # hit-points within a life (= PlayerGlobals.energy; was misnamed LIVES here)
 HURT_FX_X = 0xA336        # spawn_effect_burst reads this as its SPAWN_X
 HURT_FX_Y = 0xA338        # ... SPAWN_Y (player_Y - 0x30)

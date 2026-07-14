@@ -37,6 +37,7 @@ BRIDGE_FLAG_TABLE = 0x805E        # [asm 5BCE] tile id -> bit 0x20 marks a bridg
 DIRTY_KIND_TABLE = 0x4DF8         # [asm 5C7B] tile id -> 0 redraw (653D) / >=1 grid-dirty flags
 SIDE_FLAG_TABLE = 0x805E          # [asm 6531] tile id -> bit 0x10 marks a side-solid (wall) tile
 WALL_MARKER_LIST = 0x6EA9         # [asm 64FA] 10x 8-byte wall-impact markers; slot free when word == 0x55AA
+                                 # (UNION region: firefly_sim reads 0x6EA9 as the 20-slot firefly swarm; cyxx: fly_tbl)
 WALL_MARKER_END = 0x6F49          # [asm 6525] one past the last marker slot
 PLAYER_ANIM_HEIGHT_TABLE = 0x7191  # [asm 5AAF] anim frame -> player vertical extent (scan-loop row count)
 

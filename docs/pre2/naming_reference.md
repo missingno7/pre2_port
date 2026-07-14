@@ -12,16 +12,25 @@ transfers.
 > License note: field *names* are facts (not copyrightable) and safe to use as a reference. Do **not** vendor or
 > paste cyxx source into this repo — cross-reference only. Verify the repo's license before copying anything.
 
-## A. Corrections this surfaced (names we had wrong)
+## A. What this surfaced: dual-use (UNION) offsets — do NOT blind-rename
 
-| our current name | offset | cyxx says it is | action |
+Investigating the apparent "corrections" revealed that the top ones are **dual-use offsets**: the DOS game reuses
+the same byte(s) for different purposes across code paths (a classic tight-memory technique). Our per-call-site
+names are each ASM-evidence-based and capture the LOCAL meaning — which is *more* informative than a single global
+name. cyxx, being a clean reimplementation, split or picked one canonical meaning. So cyxx is a **cross-reference /
+disambiguation aid**, NOT a find-replace source. Verified unions:
+
+| offset | our name(s) — each ASM-cited | cyxx canonical | verdict |
 |---|---|---|---|
-| `wall_markers[20]` @ 0x6EA9 | 0x6EA9 | **`fly_tbl[20]`** — the fireflies | rename → `fireflies` |
-| cluster `CameraScript` @ 0xA3F7+ | 0xA3F7.. | **`boss` (gorilla)** — draw/change counters, obj1/2/3 | rename → `Boss`/`GorillaBoss` |
-| cluster `Scroll` (`to_dark`/`to_light`/`lights_off`) | 0x6C01/2/4 | **`light`** — day/night palette cycle | split: light vs scroll |
-| `Motion.low_gravity` @ 0x6BC7 | 0x6BC7 | `player_gravity_flag` (0/1/2) | confirm (not "glide gate") |
-| `Motion.hurt_cooldown` @ 0x6BC9 | 0x6BC9 | `bonus_energy_counter` | rename → `bonus_energy_counter` |
-| `HitScratch.quake_dist*` | 0xA30E | `monster.type10_dist` (monster proximity) | rename → `monster_dist` |
+| **0x6EA9** | `WALL_MARKER_LIST` (collision, asm 64FA) **and** the firefly swarm slots (asm 54AB) — same 0x55AA-dead sentinel | `fly_tbl` | UNION — keep both; region reused per level |
+| **0x6BC9** | `HURT_COOLDOWN` (combat spawn, asm 8276) **and** `BONUS_ENERGY_CTR` (pickup, asm 868E) | `bonus_energy_counter` | UNION — keep both per-context names |
+| `Motion.low_gravity` @ 0x6BC7 | glide/float gate (asm) | `player_gravity_flag` (0/1/2) | cyxx clarifies it's tri-state; note in comment, keep field |
+| cluster `CameraScript` @ 0xA3F7+ | camera-target + script cursor | overlaps `boss` (gorilla) `obj1/2/3`, `hdir`, `x_dist` | PARTIAL overlap — needs per-field check, not a wholesale rename |
+| `Scroll.to_dark/to_light/lights_off` @ 0x6C01/2/4 | palette day/night fields | `light {palette_flag1/2,state}` | matches — safe to note; the cluster mixes light + scroll |
+
+**Rule going forward:** cyxx names are a reference in [naming_reference.md](naming_reference.md), added as
+cross-ref *comments*, not blind renames. Only rename where a field is genuinely un-named/placeholdered on our side
+(no evidence-based name exists yet), or where a single meaning is unambiguous and un-conflicted.
 
 ## B. Globals: `vars_t` → our clusters
 
@@ -114,11 +123,17 @@ reproduce a byte-exact DOS image for verification. No offset ever appears in shi
 `spr_offs_tbl[922]` / `spr_size_tbl[922]` (sprite geometry), `palettes_tbl[16]`. These are loaded input → in the
 object model they become **named, index-addressed loaded arrays**, not offset reads.
 
-## Worklist (apply in this order)
+## Worklist (revised after the union finding)
 
-1. **Rename the corrections** (§A) — low-risk pure renames, byte-exact, immediately reduces confusion.
-2. **Adopt `vars_t` names** for the globals clusters (§B) — rename our invented cluster names to cyxx's.
-3. **Arena bodies** (§C) — apply the `object_t` union names in `object_inject`; the placeholder tier shrinks to
-   cyxx's own `unk`s.
+1. **Cross-ref comments, not renames** (§A) — where cyxx and our name differ on a *union* offset, add the cyxx
+   name as a `# cyxx: <name>` comment; keep our per-context ASM-evidence names. NO wholesale renames.
+2. **Fill genuinely-missing globals** (§B "to locate") — for fields we never named (score_extra_life,
+   player_club_*, current_platform_dx/dy, orb_tbl, snow, panel, ...), adopt cyxx's names directly; no conflict.
+3. **Arena bodies** (§C) — apply the `object_t` union names in `object_inject`; placeholder only cyxx's own
+   `unk`s. This is where the naming reference pays off most (it was the hardest un-reversed tier).
 4. **Pointer swizzle** (§E) — the design step: store refs/indices, teach the bridge serializer to swizzle.
 5. **Loaded tables** (§F) — name + index-address them.
+
+**Key lesson:** the DOS build reuses bytes across code paths (unions). Our per-call-site names are a feature, not
+a bug — cyxx's single canonical name can lose the local meaning. Treat cyxx as authoritative for *structure and
+un-named fields*, and as a cross-reference (not an override) for offsets we already name from ASM evidence.
