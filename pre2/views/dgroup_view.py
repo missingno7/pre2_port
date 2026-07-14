@@ -627,6 +627,13 @@ class PlayerGlobals(DgroupView):
     joystick_cfg   = _U8(0x27E4)   # bit7 set => joystick absent [asm 0D6C..0D72]
     joystick_disable = _U8(0x27D9)  # nonzero => joystick absent [asm 0D74..0D79]
 
+    # --- the 247B/25C7 cheat-combo gate: raw scancode-held flags, distinct from the six DECODED input flags ---
+    combo_ready_a = _U8(0x2805)   # [asm 247B-2486] one of the three combo-armed flags (al = B & C & A)
+    combo_ready_b = _U8(0x2811)   # ...
+    combo_ready_c = _U8(0x282C)   # ...
+    f1_key        = _U8(0x282F)   # scancode 0x3B (F1) held -- the debug kill-self key [asm 586B]
+    f2_key        = _U8(0x2830)   # scancode 0x3C (F2) held -- the debug abort/game-over key [asm 587C]
+
 
 #: Back-compat alias — the class began as the collision island's globals and grew into the player's.
 CollisionGlobals = PlayerGlobals

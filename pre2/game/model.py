@@ -382,6 +382,11 @@ class Input:
     demo_cnt: int = 0       # remaining repeat count for demo_byte (playback)
     joystick_cfg: int = 0     # bit7 set => joystick absent
     joystick_disable: int = 0  # nonzero => joystick absent
+    combo_ready_a: int = 0   # the 247B/25C7 cheat-combo gate: one of three combo-armed scancode flags
+    combo_ready_b: int = 0
+    combo_ready_c: int = 0
+    f1_key: int = 0          # scancode 0x3B (F1) held -- the debug kill-self key
+    f2_key: int = 0          # scancode 0x3C (F2) held -- the debug abort/game-over key
 
     # read/write aliases of the DOS view's field names
     @property
