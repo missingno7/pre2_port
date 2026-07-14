@@ -939,6 +939,9 @@ class ProjectileSlot(RenderSlot):
     facing    = _U8(0x07)    # width alias of xvel's high byte: the facing byte (bit7) [asm 6256]
     anim_ptr  = _U16(0x0C)   # width alias of spawn_ptr: the live anim-script cursor [asm 6244]
     yvel      = _U16(0x0E)   # width alias of yoff: Y velocity [asm 6236]
+    # the attract-title scene (8F2D..9046) reuses this SAME 4-slot arena for the dino / bounce objects,
+    # walked by the generic 9047 anim stepper instead of the projectile physics -- another genuine union.
+    flip_byte = _U8(0x09)    # width alias of RenderSlot.source's low byte: the facing/flip flag [asm 905D]
 
     @property
     def free(self) -> bool:
