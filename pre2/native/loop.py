@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from pre2.views.dgroup_view import PlayerGlobals, PlayerView, apply_contract
+from pre2.views.dgroup_view import CaveTriggerEntry, PlayerGlobals, PlayerView, RenderSlot, apply_contract
 from pre2.views.memory_adapter import apply_ds, readers, tile_reader
 from pre2.views.object_tick import LiveWalkerMem
 from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
@@ -31,7 +31,7 @@ from pre2.native.camera_scroll import _v_scroll_down, _v_scroll_up, native_camer
 from pre2.views.camera_pan import apply_camera_pan
 from pre2.native.player import native_player_interaction, native_player_step
 from pre2.native.dgroup_offsets import (
-    BONUS_LETTERS_MASK, BURST_POS_X, BURST_POS_Y, BURST_SPRITE, CAM_H_FOLLOW_GATE, COMBO_COMPLETE_6BE2, FINE_SCROLL, FRAME_TIMER, IDLE_CLOCK, IDLE_CLOCK_HI, LEVEL_DATA_SEG, PENDING_PICKUP_6BE1, PLAYER_Y, REWARD_ARM_HI, REWARD_ARM_LO, ROW_FACTOR, SCROLL_ACCUM, SCROLL_GATE_6BD9, SHAKE_MAGNITUDE, TERRAIN_ENTITY_BASE, UTENSILS_MASK)
+    BONUS_LETTERS_MASK, BURST_POS_X, BURST_POS_Y, BURST_SPRITE, CAM_H_FOLLOW_GATE, COMBO_COMPLETE_6BE2, FINE_SCROLL, FRAME_TIMER, IDLE_CLOCK, IDLE_CLOCK_HI, PENDING_PICKUP_6BE1, PLAYER_Y, REWARD_ARM_HI, REWARD_ARM_LO, ROW_FACTOR, SCROLL_ACCUM, SCROLL_GATE_6BD9, SHAKE_MAGNITUDE, TERRAIN_ENTITY_BASE, UTENSILS_MASK)
 
 
 def _apply_bytes(state, writes) -> None:
@@ -148,8 +148,7 @@ def native_object_system_step(state) -> None:
     g = PlayerGlobals(state)
     native_object_spawn_step(state)                       # [asm 6822..6B..] camera_engine / tick_mode9_boss
     object_tick(LiveWalkerMem(_NativeCpuView(state)))     # [asm 684E..6912] per-slot walker, in place
-    es = rw(LEVEL_DATA_SEG)
-    eb = (es << 4) & 0xFFFFF
+    eb = (g.map_seg << 4) & 0xFFFFF
     read_es = lambda o: state.data[(eb + (o & 0xFFFF)) & 0xFFFFF]   # noqa: E731 — level map (read-only)
     # [asm 6913..698B] the second pass: the OBJECT-GRAPH path (named state/references — the gameplay abstraction,
     # docs/pre2/offset_free_release_plan.md) when state.backend carries real objects (duck-typed, no bridge
@@ -174,15 +173,12 @@ def native_trigger_scan(state) -> None:
     raises :class:`Pre2CaveTeleport` (BEFORE mutating anything) — the caller drives the multi-frame 5326
     transition via the ``native_cave_teleport`` generator (fade-out curtain, hidden pan, mini-pass, reveal,
     then the frame's remainder)."""
-    rb, rw = readers(state)
     g = PlayerGlobals(state)
     if g.drop_gate != 0 and g.glider == 0:                  # [asm 5305 je / 530C jne] the trigger arm gate
         dx = PlayerView(state).tile_coords                  # [asm 5313 -> 549A] the player's packed tile coord
-        si = 0x8367                                         # [asm 5316]
-        for _ in range(0x14):                               # [asm 5319 cx=0x14] the 20-entry table
-            if rw(si) == dx:                                # [asm 531C je 5326] a match -> the cave teleport
-                raise Pre2CaveTeleport(si)
-            si = (si + 7) & 0xFFFF                          # [asm 5320 stride 7]
+        for entry in g.cave_triggers:                       # [asm 5319 cx=0x14] the 20-entry table
+            if entry.source == dx:                          # [asm 531C je 5326] a match -> the cave teleport
+                raise Pre2CaveTeleport(entry.offset)
         # [asm 5325] no match -> ret (a byte-exact no-op)
 
 
@@ -211,10 +207,11 @@ def native_cave_teleport(state, si):
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     player = PlayerView(state)
-    dest_cam = rw((si + 2) & 0xFFFF)                          # [si+2] destination camera (packed lo=X, hi=Y)
+    trig = CaveTriggerEntry(state, si)
+    dest_cam = trig.dest_cam                                  # [si+2] destination camera (packed lo=X, hi=Y)
     dest_x, dest_y = dest_cam & 0xFF, (dest_cam >> 8) & 0xFF
-    dest_tile = rw((si + 4) & 0xFFFF)                         # [si+4] destination player tile
-    flag = rb((si + 6) & 0xFFFF)                              # [si+6] -> [0x6BD9]
+    dest_tile = trig.dest_tile                                # [si+4] destination player tile
+    flag = trig.flag                                          # [si+6] -> [0x6BD9]
     player.xvel = 0                                           # [asm 5326]
     player.yvel = 0                                           # [asm 532C]
     for k in range(1, 10):                                    # [asm 5332] 30C6 vertical fade-out (VRAM-only)
@@ -451,12 +448,8 @@ def native_camera_shake(state) -> None:
     _ww(state, PLAYER_Y, res.h_scroll)
 
 
-_COMBAT_SLOTS_LO = 0x4F2E     # [asm 88D7] first thrown-weapon slot
-_COMBAT_STRIDE = 0x12
-_COMBAT_N = 4
 _PLAYER_SRC = 0x4F0A          # [asm 88FC] the player's collision sprite
 _COMBAT_FLAG = 0xA312         # [asm 88DD] full-tolerance flag (read by hitbox_overlap 8D7B)
-_SCRIPTED_POSE = 0x6BC5       # [asm 88F5] scripted-pose gate (skips the player pass)
 _PLAYER_YVEL = 0x4F2A         # [asm 890F/8916] player Yvel (bounce on a hit/collect)
 
 
@@ -472,14 +465,14 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
     # Enhanced STEREO: the kill sound pans to the enemy's on-screen position (_slot = the hit enemy's object
     # record; [+0] its world X). A projectile kills from a distance, so this is the enemy's spot, not the player's.
     from pre2.native.audio import sfx_screen_x
-    sx = sfx_screen_x(state, rw(_slot & 0xFFFF)) if (sfx and _slot is not None) else None
+    sx = sfx_screen_x(state, RenderSlot(state, _slot & 0xFFFF).x) if (sfx and _slot is not None) else None
     native_emit_sfx(state, sfx, sx)                                   # emit the kill sound (play_sfx 2)
     did = hit                                                        # [asm 88EB/8908] jb -> skip the bonus scan
     if not hit:                                                      # CF=0 -> source-vs-BONUS pickup
         ds, mapw, _redraws, collected = bonus_pickup_scan(rb, rw, si)   # [asm 899E]
         _apply_bytes(state, ds)
         if mapw:                                                     # the collected tiles' level-map rewrites (es=[0x2DDA])
-            eb = (rw(LEVEL_DATA_SEG) << 4) & 0xFFFFF
+            eb = (PlayerGlobals(state).map_seg << 4) & 0xFFFFF
             for off, (val, width) in mapw.items():
                 state.data[(eb + (off & 0xFFFF)) & 0xFFFFF] = val & 0xFF
                 if width == 2:
@@ -498,14 +491,14 @@ def native_combat_pass(state) -> None:
     ([0x50A8]/[0x5450]), damages/kills enemies, consumes hit projectiles, collects secret/bonus tiles, and
     bounces the player ([0x4f2a]) on a hit/collect. GAMEPLAY-coupled (feeds the effect pools + enemy state read
     back next frame) — the render classification wrongly skipped it, so native forward-diverged at the first hit."""
-    rb, rw = readers(state)
+    g = PlayerGlobals(state)
     _wb(state, _COMBAT_FLAG, 1)                                      # [asm 88DD] [0xA312] = 1 (relax the bounce test)
-    for k in range(_COMBAT_N):                                       # [asm 88D7/88DA] the 4 projectile slots
-        si = (_COMBAT_SLOTS_LO + k * _COMBAT_STRIDE) & 0xFFFF
-        if rw((si + 4) & 0xFFFF) != 0xFFFF:                          # [asm 88E2] slot occupied?
-            _combat_source_pass(state, si, bounce=False)
-    if rb(_SCRIPTED_POSE) == 0:                                      # [asm 88F5] not a scripted pose
-        if rw((_PLAYER_SRC + 4) & 0xFFFF) != 0xFFFF:                # [asm 88FF] the player sprite present?
+    for entry in g.projectiles:                                      # [asm 88D7/88DA] the 4 projectile slots
+        if entry.sprite != 0xFFFF:                                   # [asm 88E2] slot occupied?
+            _combat_source_pass(state, entry.offset, bounce=False)
+    if g.glider == 0:                                                # [asm 88F5] not a scripted pose (shares
+        #                                                              PlayerGlobals.glider's byte, 0x6BC5)
+        if RenderSlot(state, _PLAYER_SRC).sprite != 0xFFFF:          # [asm 88FF] the player sprite present?
             _combat_source_pass(state, _PLAYER_SRC, bounce=True)
     _wb(state, _COMBAT_FLAG, 0)                                      # [asm 891C] [0xA312] = 0
 

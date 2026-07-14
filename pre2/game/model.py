@@ -614,6 +614,7 @@ class SceneryState:
     pointer, redraw flags, the sprite-ref rebase banks, and the render-mirror display page."""
 
     map_rows: int = 0            # the map's bottom row bound
+    map_seg: int = 0             # the loaded level-data base segment (es for the tile grid)
     dipping_tile: int = 0        # map offset of the currently-sagging bridge tile; 0x55AA = none
     # cyxx `current_hit_object`: the FSM's current-object pointer; NULL outside object-vs-object collision. Stored
     # as an offset-free reference (pre2.game.ref) — a real game holds a REFERENCE to the object, not a raw address.

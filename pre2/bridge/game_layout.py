@@ -159,7 +159,7 @@ CAMERA_SCRIPT_LAYOUT = [
     ("target_b", 0xA425, 2, False),
 ]
 SCENERY_STATE_LAYOUT = [
-    ("map_rows", 0x2CF5, 1, False), ("dipping_tile", 0x6BAB, 2, False),
+    ("map_rows", 0x2CF5, 1, False), ("map_seg", 0x2DDA, 2, False), ("dipping_tile", 0x6BAB, 2, False),
     ("current_hit_object", 0x6BB1, 2, False),
     ("page_dirty", 0x6BBD, 1, False), ("grid_dirty_token", 0x2DE0, 2, False), ("col_ring", 0x2DE8, 2, False),
     ("row_ring", 0x2DEA, 2, False),

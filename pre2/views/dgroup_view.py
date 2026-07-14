@@ -491,6 +491,7 @@ class PlayerGlobals(DgroupView):
     end_signal    = _U8(0x6BE5)   # 1 = game over (no lives) [65D0]; 0xFF = game complete (level 0xE) [5B1F];
     #                               doubles as DC1's demo-end sentinel flag (the ASM reuses the byte)
     map_rows      = _U8(0x2CF5)   # the map's bottom row bound [5B9D/5B0A]
+    map_seg       = _U16(0x2DDA)  # the loaded level-data base segment (es for the tile grid) [asm 3f2b]
     display_page  = _U16(0x2DD6)  # the CRTC display-start PAGE the present flips [2DD6; read at every present]
     input_source  = _U8(0x2879)   # DC1's source: 0 live keyboard / 1 demo-attract playback / 2 record [0DC1]
     level_end_mode = _U8(0x6BE6)  # the 4C69 level-end dispatch mode: 1 normal end / >1 warp [4C69/4C74]
@@ -1040,6 +1041,18 @@ class WallMarker(StructView):
         return self.x == 0x55AA                             # [asm 64FD]
 
 
+class CaveTriggerEntry(StructView):
+    """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
+    5316; native_cave_teleport 5326]."""
+
+    __slots__ = ()
+
+    source    = _U16(0)   # matched against the player's packed tile coord [asm 531C]
+    dest_cam  = _U16(2)   # destination camera (packed lo=X, hi=Y)
+    dest_tile = _U16(4)   # destination player tile
+    flag      = _U8(6)    # -> PlayerGlobals.unk_6BD9 (the scroll-follow gate) [asm 5391]
+
+
 class L6Projectile(StructView):
     """One level-6 tree-boss falling projectile (the 5-slot list at 0x7DAF, stride 0xB) — free when
     ``sprite`` is 0xFFFF. Integrated per frame (Y by ``fall_vel>>4``, X by the oscillating drift
@@ -1149,6 +1162,7 @@ PlayerGlobals.effect_sources = StructArray(0x8F1D, 7, 0x46, EffectSource)   # th
 PlayerGlobals.bonus_cells = StructArray(0x8C8D, 5, 0x50, BonusCellSlot)     # the 80-cell bonus/collectible list
 PlayerGlobals.item_snapshot = _U16Array(0x6C12, 0x47)    # native_4f6c's effect-source snapshot (0x46 + end marker)
 PlayerGlobals.active_flag_snapshot = _U8Array(0xA2A8, 0x50)   # native_4f6c's respawn active-flag snapshot
+PlayerGlobals.cave_triggers = StructArray(0x8367, 7, 20, CaveTriggerEntry)  # the cave/teleport trigger table
 PlayerGlobals.trail_ring_slots = StructArray(0x4F76, 0x12, 5, RenderSlot)   # the trail/dust ring (the cursor
 #     g.trail_ring walks DOWN with wrap 0x4F76 -> 0x4FBE) [5E2E-5E37]
 PlayerGlobals.effect_row = StructArray(0x56A2, 0x12, 8, RenderSlot)         # the 7585 effect/boss-health row
