@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from pre2.recovered.object_update import on_screen_tile
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import DictBackend, PlayerGlobals, RngView, WidthContractBackend
+from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, RngView, StructView, WidthContractBackend,
+                                    _U8, _U16)
 from pre2.views.tables import Tables
 
 __all__ = ["OBJ_BASE", "OBJ_STRIDE", "OBJ_COUNT", "find_free_object_slot", "ProjectResult", "project_entity"]
@@ -418,27 +419,28 @@ B198 = 0xB198               # [0xB198] != 1 -> entries with the [si+1]&0x80 skip
 ENTITY_STRIDE_END = 0x32    # [si] >= this ends the walk
 
 
-class LiveEntityRecord:
-    """A live view of ONE 2nd-pass entity record at cursor ``si``, reading its header fields through the tick's
-    ``rb``/``rw`` (so it reflects committed writes). Names the record-relative offsets so the walk speaks the
-    entity's vocabulary — ``rec.sprite_ref`` / ``rec.handler_idx`` / ``rec.off_screen_cull`` — instead of raw
-    ``rw(si+2)`` / ``rb(si+1)&0x7f`` / ``rb(si+1)&0x80``. The live twin of
-    :class:`pre2.bridge.state_object.EntityRecord` (the snapshot form); the field offsets are the same."""
+class LiveEntityRecord(StructView):
+    """A live, NAME-keyed view of ONE 2nd-pass entity record at cursor ``si`` (``_base``), reading its header
+    fields through the backend (so it reflects committed writes AND routes name-capably — the header reads are
+    view accesses, not raw ``rb(si+off)``). Names the record-relative offsets so the walk speaks the entity's
+    vocabulary — ``rec.sprite_ref`` / ``rec.handler_idx`` / ``rec.off_screen_cull``. The live twin of
+    :class:`pre2.bridge.state_object.EntityRecord` (the snapshot form); the field offsets are the same.
+    ``si`` aliases the StructView ``_base`` so the walk can advance the cursor (``rec.si += stride``)."""
 
-    _STRIDE, _FLAGS1, _SPRITE_REF, _MODE = 0, 1, 2, 4    # record-relative header offsets
-    __slots__ = ("_rb", "_rw", "si")
+    __slots__ = ()
 
-    def __init__(self, rb, rw, si: int):
-        self._rb, self._rw = rb, rw
-        self.si = si & 0xFFFF
-
-    @property
-    def stride(self) -> int:                             # [+0] record length in bytes
-        return self._rb((self.si + self._STRIDE) & 0xFFFF)
+    stride     = _U8(0)     # [+0] record length in bytes
+    flags1     = _U8(1)     # [+1] bit7 = off-screen-cull, bits0-6 = handler index
+    sprite_ref = _U16(2)    # [+2] word; 0xFFFF = empty
+    _mode      = _U8(4)     # [+4] the record mode byte (bit2 = skip)
 
     @property
-    def flags1(self) -> int:                             # [+1] bit7 = off-screen-cull, bits0-6 = handler index
-        return self._rb((self.si + self._FLAGS1) & 0xFFFF)
+    def si(self) -> int:
+        return self._base
+
+    @si.setter
+    def si(self, v: int) -> None:
+        self._base = v & 0xFFFF
 
     @property
     def handler_idx(self) -> int:
@@ -449,16 +451,12 @@ class LiveEntityRecord:
         return bool(self.flags1 & 0x80)
 
     @property
-    def sprite_ref(self) -> int:                         # [+2] word; 0xFFFF = empty
-        return self._rw((self.si + self._SPRITE_REF) & 0xFFFF)
-
-    @property
     def empty(self) -> bool:
         return self.sprite_ref == 0xFFFF
 
     @property
     def skip_flag(self) -> bool:                         # [+4] bit2 = skip
-        return bool(self._rb((self.si + self._MODE) & 0xFFFF) & 4)
+        return bool(self._mode & 4)
 
 
 def second_pass_tick(rb, rw, apply_writes, read_es, cam_x, cam_y):
@@ -474,7 +472,7 @@ def second_pass_tick(rb, rw, apply_writes, read_es, cam_x, cam_y):
     through those committed writes."""
     b198 = rb(B198)
     find_free = lambda: find_free_object_slot(lambda s: rw(OBJ_BASE + s * OBJ_STRIDE + 4))   # noqa: E731
-    rec = LiveEntityRecord(rb, rw, ENTITY_LIST)                   # entry 0 = the player
+    rec = LiveEntityRecord(WidthContractBackend(rb, rw), ENTITY_LIST)   # entry 0 = the player (name-keyed walk)
     while True:
         stride = rec.stride                                      # [6916] read the record length once
         if stride >= ENTITY_STRIDE_END:
