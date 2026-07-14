@@ -33,7 +33,7 @@ from pre2.native.state import NativeGameState
 from pre2.recovered.input_decode import _KBD_SOURCES
 from pre2.native.seams import (DECODE, DS_BASE, FRAME_TOP, GAP_SITE, KBD, KEY_SAMPLE,
                                _FWD_EXCL, _SLOT5_PAGE, _SLOT_BASE, _SLOT_STRIDE)
-from pre2.native.dgroup_offsets import IDLE_CLOCK
+from pre2.views.dgroup_view import PlayerGlobals
 
 DS = 0x1A0F
 FIDGET_READ = 0x5DCC   # [asm 5DCC] the idle-fidget selector's `mov ax,[0x27F0]` (the PIT-timer read point)
@@ -195,7 +195,7 @@ def _inject(state: NativeGameState, keys: bytes, idle: int | None = None) -> Non
         state.wb(o, v)
         state.data[DS_BASE + o] = v
     if idle is not None:                              # inject the VM's PIT idle-timer so the idle-fidget selector
-        state.ww(IDLE_CLOCK, idle)                        # (5DC9: [0x27F0]&0x1FF) picks the SAME pose as the VM — the
+        PlayerGlobals(state).idle_clock = idle             # (5DC9: [0x27F0]&0x1FF) picks the SAME pose as the VM — the
         state.data[DS_BASE + 0x27F0] = idle & 0xFF   # counter is not VM-less-reproducible (PIT-driven)
         state.data[DS_BASE + 0x27F1] = (idle >> 8) & 0xFF
 
