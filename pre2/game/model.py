@@ -81,7 +81,9 @@ class Actor:
     x: int = 0
     y: int = 0
     sprite: int = 0xFFFF   # packed anim-frame word; 0xFFFF = empty slot
-    def_ptr: int = 0       # -> the read-only type-definition record
+    # a REFERENCE to the source entity's type-definition record in the entity arena (cyxx monster_t.ref) — stored
+    # offset-free as an ArenaRef; the bridge swizzles ref<->offset instance-aware. Default = the null sentinel.
+    def_ptr: object = field(default_factory=lambda: RawRef(0))
     xvel: int = 0
     yvel: int = 0
     anim_ptr: int = 0      # the anim-script cursor

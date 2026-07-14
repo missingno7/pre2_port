@@ -71,6 +71,8 @@ DGROUP_BASE = 0x1A0F << 4
 # pointer_layout, so the byte image stays identical while the shipped model holds a real reference. This set is
 # the ONLY coupling that marks a field as a swizzled pointer; it grows one pointer family at a time.
 _REF_FIELDS = frozenset({"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b"})
+# fields that reference the variable-stride entity ARENA (instance-aware swizzle, not the static pool one).
+_ARENA_REF_FIELDS = frozenset({"def_ptr"})
 
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
 _RNG_LCG = 0x2CEC             # the 4-byte LCG mixer
@@ -297,13 +299,15 @@ def _obj_from_image(cls, layout, data, base=0):
     return cls(**vals)
 
 
-def _obj_to_image(obj, layout, data, base=0):
+def _obj_to_image(obj, layout, data, base=0, arena_to_offset=None):
     data = getattr(data, "data", data)
     for f, off, w, _s in layout:
         v = getattr(obj, f)
-        if f in _REF_FIELDS:                     # swizzle the reference back to its exact 16-bit offset
+        if f in _REF_FIELDS:                     # swizzle the pool reference back to its exact 16-bit offset
             from pre2.bridge.pointer_layout import to_offset
             v = to_offset(v)
+        elif f in _ARENA_REF_FIELDS and arena_to_offset is not None:   # arena ref -> offset (instance-aware)
+            v = arena_to_offset(v)
         _wr(data, base, off, w, v)
 
 
@@ -397,6 +401,17 @@ class DataclassBackend:
                 self._map[(i + 5 + k) & 0xFFFF] = (e, "body", k, 0, False)
             i += st
         self._objs["entities"] = [e for _, e in self._arena]
+        # POST-PASS: now that the arena is parsed, swizzle every _ARENA_REF_FIELDS pointer (def_ptr) parsed as a
+        # raw int by _obj_from_image into an ArenaRef against the just-built arena — a real reference to the source
+        # entity. (Done here, not in _obj_from_image, because the arena is parsed AFTER the pooled structures.)
+        for attr, cls, layout, base, count, stride in _ROUTES:
+            if not any(f in _ARENA_REF_FIELDS for f, *_ in layout):
+                continue
+            insts = self._objs[attr] if count > 1 else [self._objs[attr]]
+            for inst in insts:
+                for f, *_ in layout:
+                    if f in _ARENA_REF_FIELDS:
+                        setattr(inst, f, self.arena_from_offset(getattr(inst, f)))
         # named working-memory buffers (raw bytearrays), mapped byte-for-byte (width 0 -> index into .data)
         for attr, base, ln in _BUFFERS:
             buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + base:DGROUP_BASE + base + ln]))
@@ -433,8 +448,11 @@ class DataclassBackend:
         return RawRef(v)
 
     def arena_to_offset(self, ref) -> int:
-        """``ArenaRef``/``RawRef`` -> the exact 16-bit arena offset it referenced in this state."""
+        """``ArenaRef``/``RawRef`` -> the exact 16-bit arena offset it referenced in this state. Tolerates a bare
+        int (a not-yet-swizzled field) so the shared serialiser works whether or not the post-pass ran."""
         from pre2.game.ref import ArenaRef, RawRef
+        if isinstance(ref, int):
+            return ref & 0xFFFF
         if isinstance(ref, RawRef):
             return ref.value & 0xFFFF
         if isinstance(ref, ArenaRef):
@@ -447,9 +465,11 @@ class DataclassBackend:
         if m is None:                               # un-routed -> the read-only loaded tables
             return self._level_data[off]
         inst, f, k, w, _s = m
-        if f in _REF_FIELDS:                        # a swizzled pointer: project the ref -> its offset, byte k
+        if f in _REF_FIELDS:                        # a swizzled pool pointer: project the ref -> its offset, byte k
             from pre2.bridge.pointer_layout import to_offset
             return (to_offset(getattr(inst, f)) >> (8 * k)) & 0xFF
+        if f in _ARENA_REF_FIELDS:                  # an arena pointer: instance-aware ref -> offset, byte k
+            return (self.arena_to_offset(getattr(inst, f)) >> (8 * k)) & 0xFF
         if w == 0:                                  # a bytearray byte (record body / working buffer)
             return getattr(inst, f)[k]
         return (getattr(inst, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
@@ -465,11 +485,16 @@ class DataclassBackend:
             self._level_data[off] = val
             return
         inst, f, k, w, s = m
-        if f in _REF_FIELDS:                        # a swizzled pointer: patch byte k of the offset, re-swizzle
+        if f in _REF_FIELDS:                        # a swizzled pool pointer: patch byte k of the offset, re-swizzle
             from pre2.bridge.pointer_layout import from_offset, to_offset
             cur = to_offset(getattr(inst, f))
             cur = (cur & ~(0xFF << (8 * k))) | (val << (8 * k))
             setattr(inst, f, from_offset(cur & 0xFFFF))
+            return
+        if f in _ARENA_REF_FIELDS:                  # an arena pointer: patch byte k, re-swizzle instance-aware
+            cur = self.arena_to_offset(getattr(inst, f))
+            cur = (cur & ~(0xFF << (8 * k))) | (val << (8 * k))
+            setattr(inst, f, self.arena_from_offset(cur & 0xFFFF))
             return
         if w == 0:                                  # a bytearray byte (record body / working buffer)
             getattr(inst, f)[k] = val
@@ -494,7 +519,7 @@ class DataclassBackend:
         for attr, _cls, layout, base, count, stride in _ROUTES:
             insts = self._objs[attr] if count > 1 else [self._objs[attr]]
             for k, inst in enumerate(insts):
-                _obj_to_image(inst, layout, data, base + k * stride)
+                _obj_to_image(inst, layout, data, base + k * stride, arena_to_offset=self.arena_to_offset)
         for start, e in self._arena:
             b = DGROUP_BASE + start
             data[b] = e.stride & 0xFF

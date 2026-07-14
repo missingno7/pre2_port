@@ -192,16 +192,16 @@ def test_arena_swizzle_def_ptr_points_to_a_source_entity_and_round_trips():
             dcb = DataclassBackend(st, readonly_image=False)
             starts = {start for start, _e in dcb._arena}
             for a in dcb.actors:
-                if a.sprite == 0xFFFF or a.def_ptr in (0, 0xFFFF):
+                # def_ptr is ADOPTED: it is stored as a ref (ArenaRef/RawRef), not a raw int
+                assert isinstance(a.def_ptr, (ArenaRef, RawRef)), "def_ptr must hold a reference"
+                off = dcb.arena_to_offset(a.def_ptr)                    # the offset it references in this state
+                assert dcb.arena_from_offset(off) == a.def_ptr, "arena swizzle broke round-trip"
+                if a.sprite == 0xFFFF or off in (0, 0xFFFF):
                     continue
-                ref = dcb.arena_from_offset(a.def_ptr)
-                assert dcb.arena_to_offset(ref) == a.def_ptr, "arena swizzle broke round-trip"
-                if a.def_ptr in starts:
-                    assert isinstance(ref, ArenaRef), f"{a.def_ptr:#06x} is an arena record but not an ArenaRef"
-                    assert dcb._arena[ref.index][0] == a.def_ptr        # derefs to the source entity's record
+                if off in starts:
+                    assert isinstance(a.def_ptr, ArenaRef), f"{off:#06x} is an arena record but not an ArenaRef"
+                    assert dcb._arena[a.def_ptr.index][0] == off        # derefs to the source entity's record
                     seen_arena += 1
-                else:
-                    assert isinstance(ref, RawRef)
     assert seen_arena > 0, "no live actor def_ptr ever resolved to an arena entity — swizzle unexercised"
 
 
@@ -216,7 +216,8 @@ def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view()
     st = _a_real_state()
     dcb = DataclassBackend(st, readonly_image=False)
     pools = {"actors": dcb.actors}                      # the pool routed to live dataclasses
-    fields = ("x", "y", "sprite", "def_ptr", "xvel", "yvel", "anim_ptr", "state", "hp", "hits")
+    # def_ptr is excluded: it is an ArenaRef (a reference), not a plain int — proven separately by the arena test.
+    fields = ("x", "y", "sprite", "xvel", "yvel", "anim_ptr", "state", "hp", "hits")
     base, count = POOL_REGIONS["actors"]
     for i in range(count):
         obj = deref(ObjectRef("actors", i), pools)      # offset-free resolution
