@@ -17,14 +17,14 @@ this module recovers the STATE side:
 [0x2879]!=0 (demo playback) skips the whole scene, exactly as the ASM's 9B2C gate."""
 from __future__ import annotations
 
-from pre2.views.dgroup_view import PlayerGlobals
+from pre2.views.dgroup_view import PlayerGlobals, RngView
 from pre2.views.memory_adapter import apply_ds, readers
+from pre2.views.tables import ByteTable
 from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input
-from pre2.recovered.prng import rng_lcg
 from pre2.native.dgroup_offsets import (
-    BIRD_PAIR_SLOTS, CRY_CAVEMAN_SPRITE, FIRE_PRIMARY, GAMEOVER_PALETTE, IDLE_CLOCK, PLAYER_SLOT, RENDER_SLOTS_BASE)
+    BIRD_PAIR_SLOTS, CRY_CAVEMAN_SPRITE, GAMEOVER_PALETTE, PLAYER_SLOT, RENDER_SLOTS_BASE)
 
 _DS = DATA_SEG << 4
 
@@ -32,7 +32,6 @@ _LETTER_TABLE = 0xB018      # [asm 9BA3] 8 bytes: sprite id - 0xB0 per GAME/OVER
 _BIRD_BASE = 0x5138         # [asm 9C35] the 3 bird records
 _BIRD_SIN = 0x6F90          # [asm 9D15] DS: signed sine table (X orbit)
 _BIRD_COS = 0x7090          # [asm 9D3F] DS: signed cosine table (Y orbit)
-_RNG = 0x2CEC               # [asm 39DF] the 4-byte RNG state a/b/c/d
 _TIMEOUT = 0x276            # [asm 9C74] idle frames (70Hz) before the scene auto-exits
 
 
@@ -54,16 +53,6 @@ def _ww(state, off, val):
     state.ww(off & 0xFFFF, val)
 
 
-def _rand(state) -> int:
-    """[asm 39DF] one RNG step over the DGROUP state [0x2CEC..0x2CEF]; returns AL (the new b)."""
-    a, b, c, dd, ret = rng_lcg(state.rb(_RNG), state.rb(_RNG + 1), state.rb(_RNG + 2), state.rw(_RNG + 3))
-    state.wb(_RNG, a)
-    state.wb(_RNG + 1, b)
-    state.wb(_RNG + 2, c)
-    state.ww(_RNG + 3, dd)
-    return ret
-
-
 def native_gameover_setup(state) -> None:
     """[asm 9B35..9C5F] Build the scene state (camera, slots, letters, tableau, birds). The GAMEOVER.SQZ
     image + palette are the render/runner side (bridge gameover_background + the 0xAFE8 DAC load)."""
@@ -74,14 +63,15 @@ def native_gameover_setup(state) -> None:
         _ww(state, RENDER_SLOTS_BASE + i * 0x12 + 4, 0xFFFF)
     # --- the 8 GAME/OVER letters [9B9D-9BF1]: ids [0xB018+i]+0xB0, X staggered 0x18 (+0x30 gap after 4),
     #     Y=0xE0, bounce seed [di+0xE] = rand&7 (forced nonzero for the first 4) ---
+    letters = ByteTable(state.rb, _LETTER_TABLE)
     di, x = PLAYER_SLOT, 0x2C
     for i in range(8):
         if i == 4:
             x = (x + 0x30) & 0xFFFF                                # [9BD1] the GAME|OVER word gap
-        _ww(state, di + 4, (state.rb(_LETTER_TABLE + i) + 0xB0) & 0xFFFF)
+        _ww(state, di + 4, (letters[i] + 0xB0) & 0xFFFF)
         _ww(state, di, x)
         _ww(state, di + 2, 0xE0)
-        r = _rand(state) & 7                                           # [9BBA/9BE2] 39DF & 7
+        r = RngView(state).roll() & 7                                  # [9BBA/9BE2] 39DF & 7
         if i < 4 and r == 0:                                       # [9BC0-9BC2] first word: nonzero seed
             r = 1
         _ww(state, di + 0xE, r)
@@ -195,12 +185,12 @@ def native_gameover_scene(state, dos, game_root: str):
     for frame in range(_TIMEOUT // 3):                            # [9C74] 0x276/3 presents (timer +3 per iteration)
         native_gameover_tick(state)                                # [9C62] 9CC0
         g.frame_stamp = (g.frame_stamp + 1) & 0xFFFF              # the frame counter the cry cycle reads
-        _ww(state, IDLE_CLOCK, (_rd(state, IDLE_CLOCK) + 3) & 0xFFFF)             # [timer] the idle counter the ASM times out on
+        g.idle_clock = (g.idle_clock + 3) & 0xFFFF                # the idle counter the ASM times out on
         planes, _status = build_gameover_scene(state, dos, game_root=game_root, page=0)  # [9C65/9C68] 9C87+26FA
         last = planes
         yield planes, 0                                            # [9C6B] 44FB present
         apply_ds(state, decode_input(rb, rw))                      # [9C6E] DC1
-        if rb(FIRE_PRIMARY):                                        # [9C7C-9C81] fire exits early
+        if g.in_fire:                                               # [9C7C-9C81] fire exits early
             break
     # [9C83] 9286: the 16-colour DAC fade-out over the frozen frame
     pal6 = bytes(b & 0x3F for b in d[_DS + GAMEOVER_PALETTE:_DS + GAMEOVER_PALETTE + 0x10 * 3])
