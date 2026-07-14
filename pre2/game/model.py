@@ -189,6 +189,38 @@ class ArenaEntity:
         return self.sprite_ref == 0xFFFF
 
     @property
+    def mode(self) -> int:                 # [+4] alias of ``skip`` under its more general name: the second-pass
+        return self.skip                   # walker (dispatch_handler) writes many values here, not just a flag
+
+    @mode.setter
+    def mode(self, v: int) -> None:
+        self.skip = v & 0xFF
+
+    @property
+    def unk_f(self) -> int:                # [+0xF] cleared by a couple of handlers; role not yet evidenced
+        return self.body[10]
+
+    @unk_f.setter
+    def unk_f(self, v: int) -> None:
+        self.body[10] = v & 0xFF
+
+    @property
+    def unk_10(self) -> int:               # [+0x10] cleared by a couple of handlers; role not yet evidenced
+        return self.body[11]
+
+    @unk_10.setter
+    def unk_10(self, v: int) -> None:
+        self.body[11] = v & 0xFF
+
+    @property
+    def unk_11(self) -> int:               # [+0x11] cleared unconditionally by handler_7e97; role not evidenced
+        return self.body[12]
+
+    @unk_11.setter
+    def unk_11(self, v: int) -> None:
+        self.body[12] = v & 0xFF
+
+    @property
     def aux5(self) -> int:                 # [+5] the flip/aux byte copied into a projected object slot
         return self.body[0]
 
