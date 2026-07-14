@@ -41,6 +41,12 @@ SPAWN_OFFSET_TABLE = 0x5CBD   # spawn ring -> signed X offset (word), indexed by
 ANIM_FRAME_TABLE = 0xA86F     # per-entity anim-frame descriptor table (section-marked scan)
 ANIM_SECTION_MARKER = 0x7D01
 SPEED_CURVE = 0x78C6          # distance-from-target -> vertical scroll speed [camera_scroll _v_speed]
+# tile id -> a THREE-WAY union byte the player collision reads under three different masks depending on
+# which pass is running: & 0xF = the ceiling-handler index (cs:[0x7DA9], player_collision collision_ceiling
+# [5C26]); & 0x20 = the bridge/sag-frame flag (collision_bridge_dip [5BCE/5BEB]); & 0x10 = the side-solid
+# (wall) flag (collision_side_handler [6531]).
+CEIL_HANDLER = 0x805E
+DIRTY_KIND = 0x4DF8            # tile id -> 0 direct-redraw / >=1 whole-grid-dirty [player_collision _bridge_dirty 5C7B]
 
 
 class Tables:
@@ -48,7 +54,7 @@ class Tables:
     ``t.floor_props[tile]`` / ``t.cos[angle]`` / ``t.sprite_half_w(id)``."""
 
     __slots__ = ("_rb", "_read_word", "floor_props", "ceil_props", "tile_props", "cos", "sin", "sprite_geom",
-                 "player_anim_height", "speed_curve")
+                 "player_anim_height", "speed_curve", "ceil_handler", "dirty_kind")
 
     def __init__(self, read_byte, read_word=None):
         self._rb = read_byte
@@ -59,6 +65,8 @@ class Tables:
         self.tile_props = ByteTable(read_byte, TILE_PROPS)
         self.cos = ByteTable(read_byte, COS)
         self.sin = ByteTable(read_byte, SIN)
+        self.ceil_handler = ByteTable(read_byte, CEIL_HANDLER)
+        self.dirty_kind = ByteTable(read_byte, DIRTY_KIND)
         self.sprite_geom = ByteTable(read_byte, SPRITE_GEOM)  # index by (id & 0x1FFF)<<1 (+1 = height)
         self.player_anim_height = ByteTable(read_byte, PLAYER_ANIM_HEIGHT)
 

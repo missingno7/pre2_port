@@ -289,10 +289,11 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
     same routine the ground idx6 dispatches to). Then, if the player's tile is ceiling-solid and Y>0, a sideways
     corner-slip nudge. idx 3-15 are unwitnessed and fail loud. Returns the dict of writes. Pure."""
     p, g, be = _views(rb, rw)
+    tbl = Tables(rb)
     tile_above = read_es(di & 0xFFFF)                            # [5C18]
     player_tile = read_es((di + 0x100) & 0xFFFF)                 # [5C1B]
-    solid = rb((TILE_CEIL_SOLID_TABLE + player_tile) & 0xFFFF) & 1   # [5C20-5C24] ah = 0x7E5E[player_tile]
-    idx = rb((TILE_CEIL_HANDLER_TABLE + tile_above) & 0xFFFF) & 0x0F  # [5C26-5C2A] cs:[0x7DA9] index
+    solid = tbl.ceil_props[player_tile] & 1                      # [5C20-5C24] ah = 0x7E5E[player_tile]
+    idx = tbl.ceil_handler[tile_above] & 0x0F                    # [5C26-5C2A] cs:[0x7DA9] index
 
     if idx == 1:                                                # [6673] head-bump
         if p.yvel != 0:                                         # [6678] rising -> zero Yvel + snap below ceiling
@@ -383,7 +384,7 @@ def _bridge_dirty(new_tile: int, off: int, g: PlayerGlobals, redraws: list, rb) 
     ``[cam_row, cam_row+0x0C)``) queue an on-page re-blit of `off` — the same shared 3B77 tile blit the
     bonus-collect redraw uses, reading the tile's new frame from the live map — and set the page-dirty flag;
     an off-screen cell does nothing (the 653D `stc` early-out)."""
-    if rb((DIRTY_KIND_TABLE + new_tile) & 0xFFFF) >= 1:            # [5C7B-5C80] jb 5c8e
+    if Tables(rb).dirty_kind[new_tile] >= 1:                        # [5C7B-5C80] jb 5c8e
         g.grid_dirty = 1                                            # [5C82]
         g.grid_dirty_token = 0x55AA                                 # [5C87]
         return
@@ -405,6 +406,7 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
     ``dipping_tile = 0x55AA``. Then, if the new foot tile is a bridge frame (`0x805E[id] & 0x20`), dip it
     **down** (graphic id+1), mark it as the dipping tile, and dirty it."""
     _p, g, be = _views(rb, rw)
+    tbl = Tables(rb)
     map_w: dict = {}
     redraws: list = []
     bab = g.dipping_tile
@@ -413,13 +415,13 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
         cur = read_es(sdi)                                         # [5BC8]
         while True:
             cur = (cur - 1) & 0xFF                                 # [5BCD] dec to the previous sag frame
-            if not (rb((BRIDGE_FLAG_TABLE + cur) & 0xFFFF) & 0x20):  # [5BCE-5BD3]
+            if not (tbl.ceil_handler[cur] & 0x20):                 # [5BCE-5BD3]
                 g.dipping_tile = 0x55AA                             # [5BD5] sprung fully back -> none dipping
                 break
             map_w[sdi] = cur                                       # [5BDE-5BE0] es:[di] = id-1
             _bridge_dirty(cur, sdi, g, redraws, rb)               # [5BE3]
     cur = read_es(di & 0xFFFF)                                     # [5BE8] the new foot tile
-    if rb((BRIDGE_FLAG_TABLE + cur) & 0xFFFF) & 0x20:             # [5BEB-5BF2] is it a bridge frame?
+    if tbl.ceil_handler[cur] & 0x20:                                # [5BEB-5BF2] is it a bridge frame?
         g.dipping_tile = di & 0xFFFF                               # [5BF4] now dipping
         nw = (cur + 1) & 0xFF                                      # [5BF8] inc -> next sag frame
         map_w[di & 0xFFFF] = nw                                    # [5BFB] es:[di] = id+1
@@ -456,7 +458,7 @@ def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:
     fail loud). idx 3-8 reuse the ground handlers `65EF/6641/6657/6660/6669/6645` (unwitnessed in the side scan)."""
     if idx == 0:                                                   # [652C]
         tile = read_es(di & 0xFFFF)
-        if rb((SIDE_FLAG_TABLE + tile) & 0xFFFF) & 0x10:           # [6531] side-solid -> wall marker
+        if Tables(rb).ceil_handler[tile] & 0x10:                    # [6531] side-solid -> wall marker
             return _wall_marker_push(rw)                           # [6536 -> 64FA]
         return {}                                                  # [6538] not solid
     if idx == 1:                                                   # [6539] wall block
