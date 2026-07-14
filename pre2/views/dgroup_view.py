@@ -807,6 +807,30 @@ class PopupSlot(StructView):
     anim  = _U16(4)   # [+4] anim id (low 0x1FFF); 0x3A -> free (0xFFFF)
 
 
+class ObjectDef(StructView):
+    """The object TYPE-DEFINITION record (pointed to by ``ObjectSlot.def_ptr``) the object walker reads each
+    frame. It is a per-type UNION read as raw bytes (the AI handlers reconstruct words where needed), so the
+    fields keep offset-placeholder names (``d2``/``d4``/...) until each type's interpretation is reversed —
+    naming the record STRUCTURALLY (offset-free access) without over-claiming per-type meaning."""
+
+    __slots__ = ()
+
+    d2  = _U16(2)
+    d4  = _U8(4)
+    d6  = _U8(6)
+    d7  = _U8(7)
+    d9  = _U16(9)
+    dB  = _U16(0xB)
+    dD  = _U8(0xD)
+    dE  = _U8(0xE)
+    dF  = _U8(0xF)
+    d10 = _U8(0x10)
+    d11 = _U8(0x11)
+    d12 = _U8(0x12)
+    d13 = _U8(0x13)
+    d14 = _U8(0x14)
+
+
 class EffectSource(StructView):
     """One entry of the on-screen effect/particle SOURCE list (0x8F1D, stride 7) — the record
     ``project_particles`` (8922) animates and projects into a render slot. Names its 4 fields so the projection

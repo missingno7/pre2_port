@@ -18,7 +18,7 @@ record, so per-slot behaviour stays byte-exact; a full cross-slot whole-memory r
 those emitters (the next recovery target)."""
 from __future__ import annotations
 
-from pre2.views.dgroup_view import ObjectSlot
+from pre2.views.dgroup_view import ObjectDef, ObjectSlot
 from pre2.recovered.object_update import (ObjectScaleUnsupported, advance_animation, apply_velocity,
                                           handle_object_75c4, handle_object_760f, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7898,
@@ -67,16 +67,18 @@ _DEF_WORDS = (("d2", 2), ("d9", 9), ("dB", 0xB))
 
 
 def _def_view(mem, d):
-    o = {k: mem.rb(d + off) for k, off in _DEF_BYTES}
-    o.update({k: mem.rw(d + off) for k, off in _DEF_WORDS})
+    s = ObjectDef(mem, d)                                    # the type-def record, by name (offset-free access)
+    o = {k: getattr(s, k) for k, _off in _DEF_BYTES}
+    o.update({k: getattr(s, k) for k, _off in _DEF_WORDS})
     return o
 
 
 def _write_def(mem, d, df):
-    for k, off in _DEF_BYTES:
-        mem.wb(d + off, df[k])
-    for k, off in _DEF_WORDS:
-        mem.ww(d + off, df[k])
+    s = ObjectDef(mem, d)
+    for k, _off in _DEF_BYTES:
+        setattr(s, k, df[k])
+    for k, _off in _DEF_WORDS:
+        setattr(s, k, df[k])
 
 
 def _dispatch(tgt, fn, o, df, glb, mem):
