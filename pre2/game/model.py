@@ -30,7 +30,7 @@ class Player:
     motion_mode: int = 0  # kinematics mode/shift (friction = 0xC >> mode)
     facing: int = 0       # +1 / -1 heading the FSM integrates with (signed)
     anim_b: int = 0       # anim B-state (anim-id memory; camera-shake gate input)
-    anim_ptr: int = 0     # current anim-script cursor
+    anim_ptr: object = field(default_factory=lambda: RawRef(0))  # cursor into the player anim-script (AssetCursor)
     yvel: int = 0         # Y velocity, 12.4 fixed (signed)
     run_flag: int = 0     # run state (reset on an anim change)
     death_state: int = 0  # death/hurt state byte (0 = alive)
@@ -452,8 +452,9 @@ class CameraScript:
     dist_dir: int = 0          # 1 if the cursor is left of the player
     dist_x: int = 0            # |player_X - cursor_X|
     hit_debounce: int = 0      # frame stamp of the last camera-target hit (debounce window)
-    script_cursor: int = 0     # the live camera-script cursor (into the bytecode)
-    script_ptr: int = 0        # the active camera-script pointer (script_last detects changes)
+    # cursors into the camera-script bytecode — offset-free AssetCursors (the bridge swizzles ref<->offset)
+    script_cursor: object = field(default_factory=lambda: RawRef(0))  # the live camera-script cursor
+    script_ptr: object = field(default_factory=lambda: RawRef(0))     # the active camera-script pointer
     cursor_latch_x: int = 0    # cursor pos latched per script command
     cursor_latch_y: int = 0
     cam_param_e: int = 0       # the 5th camera-target param word (no position pair)
@@ -512,10 +513,12 @@ class BossScript:
     """The mode-9 boss glyph-script interpreter state (a separate boss subsystem from ``Boss``/``boss_phase``
     — these bytes are addressed by object_spawn.py's own local constants, not a PlayerGlobals view name)."""
 
-    script_ptr: int = 0xFFFF   # the live boss-script cursor (== the mode-9 init flag; -1 = not yet seeded)
+    # the live boss-script cursor (also doubles as the mode-9 init flag: 0xFFFF = not yet seeded). AssetCursor
+    # into the script bytecode when seeded, else RawRef(0xFFFF) — round-trips either way.
+    script_ptr: object = field(default_factory=lambda: RawRef(0xFFFF))
     dwell: int = 0             # the dwell counter (decremented by jump opcodes; the advance fires at 0)
     cycle: int = 0             # hit cadence counter (&3); every 4th hit switches scripts
-    m9_ptr: int = 0            # the relative-wrap script-table pointer
+    m9_ptr: object = field(default_factory=lambda: RawRef(0))  # the relative-wrap script-table pointer (AssetCursor)
     m9_count: int = 0          # spawn-count seed / boss health (saturating; 0 = boss dead)
 
 

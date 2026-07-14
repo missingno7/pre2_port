@@ -76,7 +76,12 @@ _ARENA_REF_FIELDS = frozenset({"def_ptr"})
 # (class, field) pairs that are CURSORS into a read-only loaded asset (AssetCursor via the static pool/asset
 # swizzle). Class-scoped because the field name collides across structures (anim_ptr is a real anim cursor on
 # Actor, but a non-pointer scratch byte on the effect-slot pools).
-_ASSET_REF_FIELDS = frozenset({(Actor, "anim_ptr")})
+_ASSET_REF_FIELDS = frozenset({
+    (Actor, "anim_ptr"),               # -> anim_script region
+    (Player, "anim_ptr"),              # -> player_anim region
+    (CameraScript, "script_cursor"), (CameraScript, "script_ptr"),   # -> script region
+    (BossScript, "m9_ptr"), (BossScript, "script_ptr"),              # -> script region
+})
 
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
 _RNG_LCG = 0x2CEC             # the 4-byte LCG mixer

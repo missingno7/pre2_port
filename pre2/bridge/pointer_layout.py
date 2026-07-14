@@ -36,7 +36,9 @@ POOL_REGIONS = {
 #: The anim-script descriptor region [0xA86F, 0xB197): base is static across levels; a generous end below the
 #: next fixed structure (0xB197 = the difficulty mode bytes). Values outside fall back to RawRef (byte-exact).
 ASSET_REGIONS = {
-    "anim_script": (0xA86F, 0xB197),
+    "anim_script": (0xA86F, 0xB197),    # the per-entity anim-frame descriptors (actor anim_ptr)
+    "script": (0xA427, 0xA86F),         # the camera- + boss-script bytecode (cam/boss script cursors)
+    "player_anim": (0x7B1B, 0x7CE0),    # the player anim/attack-script bytecode (player anim_ptr)
 }
 
 

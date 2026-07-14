@@ -225,6 +225,26 @@ def test_anim_ptr_is_adopted_as_an_asset_cursor():
     assert not isinstance(dcb._objs["bursts"][0].anim_ptr, (AssetCursor,))
 
 
+def test_every_asset_ref_field_holds_a_reference():
+    """All class-scoped asset-cursor fields (actor/player anim_ptr, camera + boss script cursors) resolve to a
+    dataclass field genuinely holding a reference (AssetCursor/RawRef), not a raw int."""
+    from pre2.bridge.game_layout import _ASSET_REF_FIELDS, DataclassBackend
+    from pre2.game.ref import AssetCursor, RawRef
+    from pre2.native.state import NativeGameState
+
+    st = NativeGameState(bytearray(0x10000 + (0x1A0F << 4)))
+    dcb = DataclassBackend(st, readonly_image=False)
+    attr_of = {cls: attr for attr, cls, *_ in __import__("pre2.bridge.game_layout", fromlist=["_ROUTES"])._ROUTES}
+    checked = 0
+    for cls, field_name in _ASSET_REF_FIELDS:
+        objs = dcb._objs[attr_of[cls]]
+        objs = objs if isinstance(objs, list) else [objs]
+        for o in objs:
+            assert isinstance(getattr(o, field_name), (AssetCursor, RawRef)), f"{cls.__name__}.{field_name}"
+            checked += 1
+    assert checked >= len(_ASSET_REF_FIELDS)
+
+
 def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view():
     """A swizzled ObjectRef, dereferenced offset-free against the live pools, is the SAME record the offset-keyed
     ObjectSlot reads at the DOS offset — so pointer following can move to references with zero behaviour change."""

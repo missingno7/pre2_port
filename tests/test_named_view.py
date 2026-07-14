@@ -91,10 +91,11 @@ def test_globals_megaview_is_name_capable_byte_exact():
     by OFFSET in the bridge so cluster-local name collisions can't mis-route, lets the whole mega-view resolve
     name-first. Proven: every routed globals field reads identically over the image (offset path) and over the
     live cluster dataclasses (name path), across real post-tick states."""
-    from pre2.bridge.game_layout import _REF_FIELDS, globals_field_routing
+    from pre2.bridge.game_layout import _ASSET_REF_FIELDS, _REF_FIELDS, globals_field_routing
     from pre2.views.dgroup_view import PlayerGlobals
     from pre2.views.named_view import NamedObjectBackend
 
+    ref_names = _REF_FIELDS | {f for _cls, f in _ASSET_REF_FIELDS}
     states = _real_player_states()
     total_checked = 0
     for img in states:
@@ -103,8 +104,8 @@ def test_globals_megaview_is_name_capable_byte_exact():
         off_view = PlayerGlobals(ByteBackend_wrap(img))
         name_view = PlayerGlobals(NamedObjectBackend().register_fields(routing))
         for name in routing:
-            if name in _REF_FIELDS:
-                continue  # a swizzled pointer holds an offset-free ObjectRef, not a plain int — its byte value
+            if name in ref_names:
+                continue  # a swizzled pointer holds an offset-free reference, not a plain int — its byte value
                 #           needs the bridge swizzle (proven byte-exact by the corpus + test_pointer_swizzle)
             assert getattr(off_view, name) == getattr(name_view, name), f"globals mega-view .{name} diverged"
             total_checked += 1
