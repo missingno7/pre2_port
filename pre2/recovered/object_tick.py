@@ -18,7 +18,7 @@ record, so per-slot behaviour stays byte-exact; a full cross-slot whole-memory r
 those emitters (the next recovery target)."""
 from __future__ import annotations
 
-from pre2.views.dgroup_view import ObjectDef, ObjectSlot
+from pre2.views.dgroup_view import ObjectDef, ObjectSlot, PlayerGlobals
 from pre2.recovered.object_update import (ObjectScaleUnsupported, advance_animation, apply_velocity,
                                           handle_object_75c4, handle_object_760f, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7898,
@@ -30,8 +30,6 @@ __all__ = ["object_tick", "HANDLERS", "Pre2ObjectGap", "OBJ_BASE", "OBJ_STRIDE",
 
 OBJ_BASE = 0x4FD0      # [asm 684E] base of the 12-slot object record list
 OBJ_STRIDE = 0x12      # [asm 690A] 18-byte records
-ANIM_READY = 0xA340    # object_update's per-step anim-ready scratch byte
-SHAKE_MAG = 0x6BEA     # the camera screen-shake magnitude [asm 68B1]
 OBJ_COUNT = 12         # [asm 6851 bp=0xC]
 
 # handler-address (cs:[idx*2 + 0x6AA9]) -> recovered AI handler. All witnessed types (0-12).
@@ -45,6 +43,29 @@ HANDLERS = {0x7C90: handle_object_7c90, 0x7C8C: handle_object_7c8c, 0x7C2D: hand
 class Pre2ObjectGap(Exception):
     """The walker reached unrecovered object behaviour (an unrecovered AI handler, or the non-zero-scale
     boss-zoom anim remap). Fail loud rather than silently running the original ASM."""
+
+
+class _MemBackend:
+    """Marks a WalkerMem-style ``mem`` (rb/rw/wb/ww by single DS-relative offset, unlike the VM's (seg, off)
+    ``rb``) as a dgroup-view backend, so :class:`PlayerGlobals` binds straight onto it."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("_mem",)
+
+    def __init__(self, mem):
+        self._mem = mem
+
+    def rb(self, o: int) -> int:
+        return self._mem.rb(o)
+
+    def rw(self, o: int) -> int:
+        return self._mem.rw(o)
+
+    def wb(self, o: int, v: int) -> None:
+        self._mem.wb(o, v)
+
+    def ww(self, o: int, v: int) -> None:
+        self._mem.ww(o, v)
 
 
 def _obj_view(mem, si):
@@ -105,6 +126,7 @@ def object_tick(mem) -> None:
     wb`), the map terrain lookup `tile_prop(tx,ty)` + raw `read_map`/`prop_a`/`prop_b`/`slope`, the cos/sin
     tables, the global-scale `scale`, the handler-address lookup `handler_addr(idx)`, and a `glb` dict factory.
     """
+    g = PlayerGlobals(_MemBackend(mem))
     for slot in range(OBJ_COUNT):                                # [asm 6851/690D loop over 12 slots]
         si = OBJ_BASE + slot * OBJ_STRIDE
         s = ObjectSlot(mem, si)
@@ -121,14 +143,14 @@ def object_tick(mem) -> None:
             s.x = o["x"]; s.y = o["y"]; s.xvel = o["xvel"]
             s.yvel = o["yvel"]; s.anim_ptr = o["anim_ptr"]; dv.d4 = df["d4"]
         try:                                                     # [6881-68E6] animation advance
-            anim = advance_animation(s.anim_ptr, mem.rw, s.sprite, mem.rb(si + 9), mem.scale())
+            anim = advance_animation(s.anim_ptr, mem.rw, s.sprite, s.flip_byte, mem.scale())
         except ObjectScaleUnsupported as e:
             raise Pre2ObjectGap(f"slot {slot}: {e}") from e
-        s.sprite = anim.sprite_id; s.anim_ptr = anim.script_ptr; mem.wb(ANIM_READY, anim.attr_a340)
+        s.sprite = anim.sprite_id; s.anim_ptr = anim.script_ptr; g.anim_ready = anim.attr_a340
         if anim.shake:                                           # [asm 68B1] zoom level 7 ([0x6BE2]==7) arms the
-            mem.wb(SHAKE_MAG, 9)                                    #   screen shake (recovered apply_camera_shake reads it)
+            g.camera_shake = 9                                      #   screen shake (recovered apply_camera_shake reads it)
 
-        idx = mem.rb(d + 1)                                      # [68EC] mov bl,[bx+1]
+        idx = dv.d1                                               # [68EC] mov bl,[bx+1]
         tbl = (idx << 1) & 0xFF                                  # [68EF-68F1] xor bh,bh ; shl bl,1 (8-BIT: the
         tgt = mem.handler_addr(tbl)                              # 0x80 bit shifts out — it is a flag, not idx)
         fn = HANDLERS.get(tgt)                                   # [68FC] cs:[bx + 0x6AA9]

@@ -830,6 +830,7 @@ class ObjectDef(StructView):
 
     __slots__ = ()
 
+    d1  = _U8(1)
     d2  = _U16(2)
     d4  = _U8(4)
     d6  = _U8(6)
@@ -998,6 +999,7 @@ class ObjectSlot(RenderSlot):
 
     def_ptr  = _U16(0x06)    # -> the type-definition record (the read-only def table) [asm: [di+6]]
     xvel     = _U16(0x08)    # X velocity, 12.4 fixed [object_tick _obj_view]
+    flip_byte = _U8(0x09)    # xvel's high byte -- the animation flip/facing flag [object_update advance_animation]
     yvel     = _U16(0x0A)    # Y velocity, 12.4 fixed
     anim_ptr = _U16(0x0C)    # the anim-script cursor
     state    = _U8(0x0E)     # the behavior state byte (0xFF = dead; handlers dispatch on it) [asm 8310/8CB7]

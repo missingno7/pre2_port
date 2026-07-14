@@ -113,6 +113,11 @@ class Actor:
         """The render-slot ``source`` word (bytes +9/+10) — for an object slot it overlaps xvel-hi / yvel-lo."""
         return ((self.xvel >> 8) & 0xFF) | ((self.yvel & 0xFF) << 8)
 
+    @property
+    def flip_byte(self) -> int:
+        """``xvel``'s high byte — the animation flip/facing flag [object_update advance_animation]."""
+        return (self.xvel >> 8) & 0xFF
+
 
 @dataclass
 class EffectSlot:
