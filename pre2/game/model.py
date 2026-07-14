@@ -168,7 +168,11 @@ class WallMarker:
 @dataclass
 class ArenaEntity:
     """One record of the variable-stride 2nd-pass entity list (0x8489). The header is named; ``body`` holds the
-    handler-specific bytes past it. Entry 0 is the player. ``sprite_ref == 0xFFFF`` means empty."""
+    handler-specific bytes past it — a per-handler-type UNION (cyxx's per-type ``object_t``/``level_monster_t``
+    pattern): the SAME storage means different things to different handlers. Entry 0 is the player.
+    ``sprite_ref == 0xFFFF`` means empty. Named properties below expose each interpretation directly — this is
+    the record-layout knowledge staying an IMPLEMENTATION DETAIL of the shipped model class (like
+    ``Player.flags``/``facing_lo``), not something gameplay logic computes byte offsets for."""
 
     stride: int            # record length in bytes
     flags1: int            # bit7 = off-screen cull, bits0-6 = handler index
@@ -183,6 +187,84 @@ class ArenaEntity:
     @property
     def empty(self) -> bool:
         return self.sprite_ref == 0xFFFF
+
+    @property
+    def aux5(self) -> int:                 # [+5] the flip/aux byte copied into a projected object slot
+        return self.body[0]
+
+    @aux5.setter
+    def aux5(self, v: int) -> None:
+        self.body[0] = v & 0xFF
+
+    @property
+    def throttle(self) -> int:             # [+6] the per-entity draw-throttle compare threshold
+        return self.body[1]
+
+    @throttle.setter
+    def throttle(self, v: int) -> None:
+        self.body[1] = v & 0xFF
+
+    @property
+    def counter(self) -> int:              # [+7] the saturating per-entity draw-throttle counter
+        return self.body[2]
+
+    @counter.setter
+    def counter(self, v: int) -> None:
+        self.body[2] = v & 0xFF
+
+    # [+9]/[+0xA] (one word, body[4:6]) is a UNION: "x" (world X, project-style handlers) OR the packed
+    # "origin_x_cell"(low byte)/"origin_y_cell"(high byte) window origin (proximity-gate handlers).
+    @property
+    def x(self) -> int:
+        return self.body[4] | (self.body[5] << 8)
+
+    @x.setter
+    def x(self, v: int) -> None:
+        self.body[4] = v & 0xFF
+        self.body[5] = (v >> 8) & 0xFF
+
+    @property
+    def origin_x_cell(self) -> int:
+        return self.body[4]
+
+    @origin_x_cell.setter
+    def origin_x_cell(self, v: int) -> None:
+        self.body[4] = v & 0xFF
+
+    @property
+    def origin_y_cell(self) -> int:
+        return self.body[5]
+
+    @origin_y_cell.setter
+    def origin_y_cell(self, v: int) -> None:
+        self.body[5] = v & 0xFF
+
+    # [+0xB]/[+0xC] (one word, body[6:8]) is the same union: "y" (world Y) OR the packed
+    # "extent_x_cells"(low byte)/"extent_y_cells"(high byte) window extent.
+    @property
+    def y(self) -> int:
+        return self.body[6] | (self.body[7] << 8)
+
+    @y.setter
+    def y(self, v: int) -> None:
+        self.body[6] = v & 0xFF
+        self.body[7] = (v >> 8) & 0xFF
+
+    @property
+    def extent_x_cells(self) -> int:
+        return self.body[6]
+
+    @extent_x_cells.setter
+    def extent_x_cells(self, v: int) -> None:
+        self.body[6] = v & 0xFF
+
+    @property
+    def extent_y_cells(self) -> int:
+        return self.body[7]
+
+    @extent_y_cells.setter
+    def extent_y_cells(self, v: int) -> None:
+        self.body[7] = v & 0xFF
 
 
 @dataclass
