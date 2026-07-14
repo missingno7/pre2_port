@@ -29,6 +29,16 @@ class ArenaRef:
 
 
 @dataclass(frozen=True)
+class AssetCursor:
+    """A cursor INTO a named read-only loaded asset (e.g. the anim-script bytecode), by its position WITHIN the
+    asset — not an absolute DGROUP address. ``anim_cursor into anim_script @ 0x5A``, the way a real game holds
+    ``&anim_data[frame]``. The bridge adds the asset base back when serialising."""
+
+    asset: str
+    offset: int
+
+
+@dataclass(frozen=True)
 class RawRef:
     """The OPAQUE fallback: a stored pointer we have not reverse-engineered yet, or a stale (freed-slot) pointer
     that is serialised but never dereferenced. Holds the raw 16-bit value verbatim with NO semantic claim, so it

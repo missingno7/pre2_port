@@ -86,7 +86,9 @@ class Actor:
     def_ptr: object = field(default_factory=lambda: RawRef(0))
     xvel: int = 0
     yvel: int = 0
-    anim_ptr: int = 0      # the anim-script cursor
+    # a CURSOR into the loaded anim-script bytecode (cyxx monster_t.anim) — stored offset-free as an AssetCursor
+    # (a position within the named asset); the bridge adds the asset base back when serialising.
+    anim_ptr: object = field(default_factory=lambda: RawRef(0))
     state: int = 0         # behaviour state byte (0xFF = dead)
     hp: int = 0
     hits: int = 0          # hit accumulator

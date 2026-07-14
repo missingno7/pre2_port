@@ -73,6 +73,10 @@ DGROUP_BASE = 0x1A0F << 4
 _REF_FIELDS = frozenset({"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b"})
 # fields that reference the variable-stride entity ARENA (instance-aware swizzle, not the static pool one).
 _ARENA_REF_FIELDS = frozenset({"def_ptr"})
+# (class, field) pairs that are CURSORS into a read-only loaded asset (AssetCursor via the static pool/asset
+# swizzle). Class-scoped because the field name collides across structures (anim_ptr is a real anim cursor on
+# Actor, but a non-pointer scratch byte on the effect-slot pools).
+_ASSET_REF_FIELDS = frozenset({(Actor, "anim_ptr")})
 
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
 _RNG_LCG = 0x2CEC             # the 4-byte LCG mixer
@@ -303,7 +307,7 @@ def _obj_to_image(obj, layout, data, base=0, arena_to_offset=None):
     data = getattr(data, "data", data)
     for f, off, w, _s in layout:
         v = getattr(obj, f)
-        if f in _REF_FIELDS:                     # swizzle the pool reference back to its exact 16-bit offset
+        if f in _REF_FIELDS or (type(obj), f) in _ASSET_REF_FIELDS:   # pool/asset ref -> offset (int-tolerant)
             from pre2.bridge.pointer_layout import to_offset
             v = to_offset(v)
         elif f in _ARENA_REF_FIELDS and arena_to_offset is not None:   # arena ref -> offset (instance-aware)
@@ -405,13 +409,17 @@ class DataclassBackend:
         # raw int by _obj_from_image into an ArenaRef against the just-built arena — a real reference to the source
         # entity. (Done here, not in _obj_from_image, because the arena is parsed AFTER the pooled structures.)
         for attr, cls, layout, base, count, stride in _ROUTES:
-            if not any(f in _ARENA_REF_FIELDS for f, *_ in layout):
+            arena_fs = [f for f, *_ in layout if f in _ARENA_REF_FIELDS]
+            asset_fs = [f for f, *_ in layout if (cls, f) in _ASSET_REF_FIELDS]
+            if not arena_fs and not asset_fs:
                 continue
             insts = self._objs[attr] if count > 1 else [self._objs[attr]]
             for inst in insts:
-                for f, *_ in layout:
-                    if f in _ARENA_REF_FIELDS:
-                        setattr(inst, f, self.arena_from_offset(getattr(inst, f)))
+                for f in arena_fs:                   # arena ref: instance-aware
+                    setattr(inst, f, self.arena_from_offset(getattr(inst, f)))
+                for f in asset_fs:                   # asset cursor: static pool/asset swizzle
+                    from pre2.bridge.pointer_layout import from_offset
+                    setattr(inst, f, from_offset(getattr(inst, f)))
         # named working-memory buffers (raw bytearrays), mapped byte-for-byte (width 0 -> index into .data)
         for attr, base, ln in _BUFFERS:
             buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + base:DGROUP_BASE + base + ln]))
@@ -465,7 +473,7 @@ class DataclassBackend:
         if m is None:                               # un-routed -> the read-only loaded tables
             return self._level_data[off]
         inst, f, k, w, _s = m
-        if f in _REF_FIELDS:                        # a swizzled pool pointer: project the ref -> its offset, byte k
+        if f in _REF_FIELDS or (type(inst), f) in _ASSET_REF_FIELDS:   # pool/asset ref: project -> offset, byte k
             from pre2.bridge.pointer_layout import to_offset
             return (to_offset(getattr(inst, f)) >> (8 * k)) & 0xFF
         if f in _ARENA_REF_FIELDS:                  # an arena pointer: instance-aware ref -> offset, byte k
@@ -485,7 +493,7 @@ class DataclassBackend:
             self._level_data[off] = val
             return
         inst, f, k, w, s = m
-        if f in _REF_FIELDS:                        # a swizzled pool pointer: patch byte k of the offset, re-swizzle
+        if f in _REF_FIELDS or (type(inst), f) in _ASSET_REF_FIELDS:   # pool/asset ref: patch byte k, re-swizzle
             from pre2.bridge.pointer_layout import from_offset, to_offset
             cur = to_offset(getattr(inst, f))
             cur = (cur & ~(0xFF << (8 * k))) | (val << (8 * k))

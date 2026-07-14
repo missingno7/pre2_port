@@ -205,6 +205,26 @@ def test_arena_swizzle_def_ptr_points_to_a_source_entity_and_round_trips():
     assert seen_arena > 0, "no live actor def_ptr ever resolved to an arena entity — swizzle unexercised"
 
 
+def test_anim_ptr_is_adopted_as_an_asset_cursor():
+    """def_ptr's sibling: an object's anim_ptr (the anim-script cursor) is stored offset-free as an AssetCursor —
+    a position WITHIN the loaded anim-script asset, not an absolute DGROUP address. Scoped to Actor (the effect
+    pools reuse +0xC as a non-pointer byte, so it stays an int there). Byte round-trips exactly."""
+    from pre2.bridge.game_layout import DataclassBackend
+    from pre2.game.ref import AssetCursor, RawRef
+    from pre2.native.state import NativeGameState
+
+    st = NativeGameState(bytearray(0x10000 + (0x1A0F << 4)))
+    dcb = DataclassBackend(st, readonly_image=False)
+    a = dcb.actors[0]
+    assert isinstance(a.anim_ptr, (AssetCursor, RawRef)), "actor.anim_ptr must hold a reference"
+    st.backend = dcb
+    dcb.ww(0x4FD0 + 0x0C, 0xA8C9)                             # a cursor into the anim-script asset (0xA86F..)
+    assert a.anim_ptr == AssetCursor("anim_script", 0xA8C9 - 0xA86F)
+    assert dcb.rw(0x4FD0 + 0x0C) == 0xA8C9                    # reads back the exact offset
+    # an effect-slot's +0xC stays a plain int (asset-ref is Actor-scoped, not name-global)
+    assert not isinstance(dcb._objs["bursts"][0].anim_ptr, (AssetCursor,))
+
+
 def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view():
     """A swizzled ObjectRef, dereferenced offset-free against the live pools, is the SAME record the offset-keyed
     ObjectSlot reads at the DOS offset — so pointer following can move to references with zero behaviour change."""
@@ -216,8 +236,9 @@ def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view()
     st = _a_real_state()
     dcb = DataclassBackend(st, readonly_image=False)
     pools = {"actors": dcb.actors}                      # the pool routed to live dataclasses
-    # def_ptr is excluded: it is an ArenaRef (a reference), not a plain int — proven separately by the arena test.
-    fields = ("x", "y", "sprite", "xvel", "yvel", "anim_ptr", "state", "hp", "hits")
+    # def_ptr (ArenaRef) + anim_ptr (AssetCursor) are excluded: they are references, not plain ints — proven
+    # separately by the arena/asset tests.
+    fields = ("x", "y", "sprite", "xvel", "yvel", "state", "hp", "hits")
     base, count = POOL_REGIONS["actors"]
     for i in range(count):
         obj = deref(ObjectRef("actors", i), pools)      # offset-free resolution
