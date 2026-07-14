@@ -62,6 +62,18 @@ class NamedView:
         self._backend = backend
 
 
+class NamedArrayView(NamedView):
+    """A NAME-keyed view of one element of a record ARRAY/pool, addressed by INDEX — a real game says
+    ``actors[i]``, not ``base + i*stride``. Bind to a backend where ``register_array(cls, instances)`` routes
+    the view class to the instance list; the element is ``instances[index]``. No offset anywhere in this path."""
+
+    __slots__ = ("_index",)
+
+    def __init__(self, backend, index: int):
+        super().__init__(backend)
+        self._index = index
+
+
 class NamedObjectBackend:
     """The shipped, OFFSET-FREE gameplay backend: resolves ``(view, field-name)`` to a ``pre2/game`` dataclass
     field by NAME. Register one dataclass instance per view class; reads/writes are a plain ``getattr``/
@@ -69,11 +81,12 @@ class NamedObjectBackend:
     detachable bridge. (Contrast the bridge's ``DataclassBackend``, which maps by OFFSET and is verification-
     only.) Writes are masked to the field width so the stored value matches the byte-image representation."""
 
-    __slots__ = ("_objs", "_fields")
+    __slots__ = ("_objs", "_fields", "_arrays")
 
     def __init__(self):
         self._objs = {}      # view_cls -> dataclass instance (a whole view maps to one object)
         self._fields = {}    # field-name -> dataclass instance (a mega-view's fields span many objects)
+        self._arrays = {}    # view_cls -> list of (first_base, stride, instances) — array/pool views by base
 
     def register(self, view_cls, obj) -> "NamedObjectBackend":
         """Route every ``view_cls`` field access to ``obj`` (its matching ``pre2/game`` dataclass)."""
@@ -86,6 +99,12 @@ class NamedObjectBackend:
         self._fields[name] = obj
         return self
 
+    def register_array(self, view_cls, instances) -> "NamedObjectBackend":
+        """Route an ARRAY/pool view class to a list of dataclass instances, addressed by the view's ``_index``
+        (a real game says ``actors[i]`` — an index, not a ``base + i*stride`` offset)."""
+        self._arrays[view_cls] = instances
+        return self
+
     def register_fields(self, mapping) -> "NamedObjectBackend":
         """Bulk :meth:`register_field` from a ``{name: obj}`` mapping."""
         self._fields.update(mapping)
@@ -95,6 +114,9 @@ class NamedObjectBackend:
         return self._objs[view_cls]
 
     def _obj(self, view, name: str):
+        arr = self._arrays.get(type(view))
+        if arr is not None:
+            return arr[view._index]
         obj = self._objs.get(type(view))
         return obj if obj is not None else self._fields[name]
 
@@ -156,3 +178,26 @@ class PlayerNamedView(NamedView):
     yvel = _s16()
     run_flag = _u8()
     death_state = _u8()
+
+
+class ObjectSlotNamedView(NamedArrayView):
+    """One active object/enemy record as a NAME-keyed, INDEX-addressed array element — the offset-free analog of
+    ``dgroup_view.ObjectSlot`` (the 0x12-stride pool). Same canonical field names, resolved against a
+    ``pre2/game.Actor`` dataclass in the registered ``actors`` list. The width-alias fields (``flags``/
+    ``source``) are DERIVED properties on Actor, not stored, so they are omitted here (as with PlayerNamedView)."""
+
+    __slots__ = ()
+
+    # inherited RenderSlot canonical fields
+    x = _u16()
+    y = _u16()
+    sprite = _u16()
+    life = _u8()
+    # ObjectSlot's own fields (xvel/yvel are _U16 in ObjectSlot — unsigned words, unlike PlayerView's signed)
+    def_ptr = _u16()
+    xvel = _u16()
+    yvel = _u16()
+    anim_ptr = _u16()
+    state = _u8()
+    hp = _u8()
+    hits = _u8()

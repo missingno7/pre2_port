@@ -188,3 +188,85 @@ def test_one_named_player_view_is_byte_exact_over_both_backends():
                 a = folded[DS + PLAYER_BASE + off + k]
                 b = img_w[DS + PLAYER_BASE + off + k]
                 assert a == b, f"write {_f} byte {off + k:#06x} diverged: object {a:#04x} vs image {b:#04x}"
+
+
+_OBJECTSLOT_FIELDS = ["x", "y", "sprite", "life", "def_ptr", "xvel", "yvel", "anim_ptr", "state", "hp", "hits"]
+
+
+def _states_with_live_actors(want=6):
+    """Snapshot DGROUP images at ticks where the 0x4FD0 object pool actually holds live records (sprite !=
+    0xFFFF) — the gorilla boss demo keeps that pool empty, so use a normal level with enemies on screen."""
+    from pre2.native.game_tick_demo import GameTickDemo, _inject
+    from pre2.native.loop import native_gameplay_frame
+    from pre2.native.state import NativeGameState
+    from pre2.gaps import Pre2HybridGap
+    demo = ROOT / "artifacts" / "demo_pre2_20260704_235611" / "game_tick_demo.bin"
+    if not demo.exists():
+        import pytest
+        pytest.skip("level demo corpus not present")
+    gtd = GameTickDemo.load(demo)
+    st = NativeGameState(bytearray(gtd.seed))
+    DS = 0x1A0F << 4
+    out = []
+    for i in range(min(gtd.n_ticks, 700)):
+        _inject(st, gtd.keys[i], gtd.idle[i] if i < len(gtd.idle) else None)
+        try:
+            native_gameplay_frame(st)
+        except Pre2HybridGap:
+            break
+        live = sum(1 for k in range(12)
+                   if (st.data[DS + 0x4FD0 + k * 0x12 + 4] | (st.data[DS + 0x4FD0 + k * 0x12 + 5] << 8)) != 0xFFFF)
+        if live >= 2:
+            out.append(bytearray(st.data))
+        if len(out) >= want:
+            break
+    return out
+
+
+def test_one_named_array_view_is_byte_exact_over_both_backends():
+    """The array analog of the linchpin: a SINGLE name-keyed ARRAY view (ObjectSlotNamedView), addressed by
+    INDEX (``actors[i]`` — no ``base + i*stride`` offset), resolves BYTE-IDENTICALLY whether backed by the
+    shipped offset-free NamedObjectBackend (over a list of pre2/game.Actor dataclasses) or the bridge's
+    NamedImageBackend (one per slot base, over the byte image via ACTOR_LAYOUT). Proven on real post-tick object
+    pools across the corpus, reads AND writes. This lifts the mechanism from scalars/mega-views to record
+    ARRAYS — the pools (actors/projectiles/bursts) that are the bulk of per-frame object mutation."""
+    from pre2.bridge.game_layout import (ACTOR_BASE, ACTOR_COUNT, ACTOR_LAYOUT, ACTOR_STRIDE, NamedImageBackend,
+                                         _obj_from_image, _obj_to_image)
+    from pre2.game.model import Actor
+    from pre2.views.named_view import NamedObjectBackend, ObjectSlotNamedView
+
+    DS = 0x1A0F << 4
+    states = _states_with_live_actors()
+    saw_live = 0
+    for img in states:
+        actors = [_obj_from_image(Actor, ACTOR_LAYOUT, img, ACTOR_BASE + i * ACTOR_STRIDE)
+                  for i in range(ACTOR_COUNT)]
+        nb = NamedObjectBackend().register_array(ObjectSlotNamedView, actors)
+        for i in range(ACTOR_COUNT):
+            obj = ObjectSlotNamedView(nb, i)                                             # index-keyed, offset-free
+            via_img = ObjectSlotNamedView(NamedImageBackend(img, ACTOR_BASE + i * ACTOR_STRIDE, ACTOR_LAYOUT), i)
+            for f in _OBJECTSLOT_FIELDS:
+                assert getattr(obj, f) == getattr(via_img, f), f"slot {i} read {f} diverged"
+            if via_img.sprite != 0xFFFF:
+                saw_live += 1
+
+        # writeback parity: same deltas via each path -> identical resulting slot bytes
+        actors_w = [_obj_from_image(Actor, ACTOR_LAYOUT, img, ACTOR_BASE + i * ACTOR_STRIDE)
+                    for i in range(ACTOR_COUNT)]
+        nb_w = NamedObjectBackend().register_array(ObjectSlotNamedView, actors_w)
+        img_w = bytearray(img)
+        for i in range(ACTOR_COUNT):
+            ow = ObjectSlotNamedView(nb_w, i)
+            iw = ObjectSlotNamedView(NamedImageBackend(img_w, ACTOR_BASE + i * ACTOR_STRIDE, ACTOR_LAYOUT), i)
+            for f in _OBJECTSLOT_FIELDS:
+                v = (getattr(ow, f) + 3) & 0x7FFF
+                setattr(ow, f, v)
+                setattr(iw, f, v)
+        # fold the mutated object list back and compare the whole actor-pool region byte-for-byte
+        folded = bytearray(img)
+        for i in range(ACTOR_COUNT):
+            _obj_to_image(actors_w[i], ACTOR_LAYOUT, folded, ACTOR_BASE + i * ACTOR_STRIDE)
+        lo = DS + ACTOR_BASE
+        hi = DS + ACTOR_BASE + ACTOR_COUNT * ACTOR_STRIDE
+        assert folded[lo:hi] == img_w[lo:hi], "array writeback diverged between object and image backends"
+    assert saw_live > 0, "no live actor slots in the corpus sample — the proof never exercised a real object"
