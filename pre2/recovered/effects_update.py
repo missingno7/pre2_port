@@ -87,7 +87,7 @@ def tick_popup_ring(rw):
     """[asm 581E] ``rw(off)`` reads a DGROUP word. Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
     be = WidthContractBackend(rw, rw, writes)   # word-only ring: reads via rw, writes accumulate the contract
-    si = rw(POPUP_RING_PTR) & 0xFFFF
+    si = PlayerGlobals(be).trail_ring & 0xFFFF   # [0x6BBE] the ring head pointer (named global)
     for _ in range(POPUP_RING_N):
         slot = PopupSlot(be, si)
         ax = slot.anim & 0x1FFF                                # [asm 5825-5828] mov ax,[si+4]; and ah,0x1F
@@ -229,6 +229,7 @@ PROJ_HANDLER_DYV = {0: 0x20, 1: -0x10}   # idx -> delta added to Yvel [+0xE]
 def tick_projectiles(rw, rb):
     """[asm 6210] ``rw``/``rb`` read DGROUP word/byte. Returns the ``{offset: (value, width)}`` write contract."""
     writes: dict[int, tuple[int, int]] = {}
+    tables = Tables(rb, rw)   # rw for the word-granular anim-script asset reads (byte-exact vs the ASM's word read)
     b = PROJECTILE_LO
     for _ in range(PROJECTILE_N):
         proj = ProjectileSlot(WidthContractBackend(rb, rw, writes), b)
@@ -243,16 +244,16 @@ def tick_projectiles(rw, rb):
         proj.y = (proj.y + _sar16(proj.yvel, 4)) & 0xFFFF     # [asm 6236] Y += Yvel>>4
 
         ptr = proj.anim_ptr                                   # [asm 6244] anim-script pointer
-        word = rw(ptr)
+        word = tables.anim_script_word(ptr)
         if word & 0x8000:                                    # [asm 6249] negative -> loop back
             ptr = (ptr + _s16(word)) & 0xFFFF
-            word = rw(ptr)
+            word = tables.anim_script_word(ptr)
         proj.anim_ptr = (ptr + 2) & 0xFFFF                    # [asm 6251] advance
 
         facing = proj.facing & 0x80                           # [asm 6256] [+4] = script word | facing bit
         proj.sprite = (word | (facing << 8)) & 0xFFFF
 
-        idx = rb((b + 8) & 0xFFFF)                            # [asm 6261] handler dispatch [+8]
+        idx = proj.kind                                       # [asm 6261] handler dispatch [+8]
         if idx not in PROJ_HANDLER_DYV:
             raise Pre2EffectsGap(f"6210 projectile handler idx {idx} unrecovered (DS:0x79EC)")
         proj.yvel = (proj.yvel + PROJ_HANDLER_DYV[idx]) & 0xFFFF
