@@ -330,6 +330,37 @@ class _U16ArrayView:
         return self.length
 
 
+class _U8Array:
+    """A contiguous array of bytes; ``view.field[i]`` reads/writes element ``i``."""
+
+    def __init__(self, off: int, length: int):
+        self.off = off
+        self.length = length
+
+    def __get__(self, o, owner=None):
+        if o is None:
+            return self
+        return _U8ArrayView(o._backend, o._base + self.off, self.length)
+
+
+class _U8ArrayView:
+    __slots__ = ("_backend", "_base", "length")
+
+    def __init__(self, backend, base: int, length: int):
+        self._backend = backend
+        self._base = base
+        self.length = length
+
+    def __getitem__(self, i: int) -> int:
+        return self._backend.rb(self._base + i)
+
+    def __setitem__(self, i: int, v: int) -> None:
+        self._backend.wb(self._base + i, v)
+
+    def __len__(self) -> int:
+        return self.length
+
+
 class StructArray:
     """A descriptor for a fixed-stride array of structs; ``view.field[i]`` returns ``struct_cls`` bound to
     ``base + i*stride`` (negative ``i`` wraps). Iterable and ``len()``-able."""
@@ -511,8 +542,11 @@ class PlayerGlobals(DgroupView):
     collected_linked = _U16(0x2A7A)  # the LINKED-item collected count (tally percent = [0x2A76]+this) [85CC/5139]
 
     # --- score + the camera/scroll engine scalars (the 0x6BC0..0x6C11 band) ---
+    score_mid     = _U16(0x6C0C)  # a third score word, zeroed alongside score_lo/hi on game-over; role beyond
+    #                               that not yet evidenced [asm 5083-508f]
     score_lo      = _U16(0x6C0E)  # the 32-bit score, low word [asm 5139/85B6]
     score_hi      = _U16(0x6C10)  # ... high word
+    item_total    = _U16(0x6C9E)  # the collected-item total word [asm 51e9]
     scale_level   = _U16(0x6BE2)  # object_update's sprite scale level; doubles as player_interaction's
     #                               instadeath gate; timer-decremented (TIMER_WORD) [asm 5A82]
     hurt_cooldown = _U8(0x6BC9)   # the crush-damage cooldown (reload 5; a life on underflow) [asm 8254]
@@ -875,6 +909,16 @@ class EffectSource(StructView):
     bounce = _U8(6)    # bounce-phase counter (read signed, ping-pongs at +/-4). cyxx level_item_t.y_delta
 
 
+class BonusCellSlot(StructView):
+    """One record of the 80-cell bonus/collectible list (0x8C8D, stride 5) — cyxx ``level_bonus_t``. Only
+    ``cell`` (the packed x/y map position) is read by the respawn snapshot; the leading bytes are level-init
+    payload it doesn't interpret."""
+
+    __slots__ = ()
+
+    cell = _U16(3)   # packed (y_cell << 8) | x_cell; 0xFFFF = empty/collected. cyxx level_bonus_t.pos
+
+
 # ---- the player (the 58A7 FSM's struct at 0x4F1C — literally render slot #1 with kinematics appended) -------
 
 RENDER_SLOTS_BASE = 0x4F0A     # slot 0; the player is slot 1 (base + 0x12 = 0x4F1C)
@@ -1077,6 +1121,10 @@ class Particle(StructView):
 PlayerGlobals.render_slots = StructArray(0x4F0A, 0x12, 116, RenderSlot)     # the on-screen records
 #     (0x4F0A..0x5732, slot 1 = the player); 116 = the span the forward oracle masks
 PlayerGlobals.projectiles = StructArray(0x4F2E, 0x12, 4, ProjectileSlot)    # the 4 thrown-weapon slots [627D]
+PlayerGlobals.effect_sources = StructArray(0x8F1D, 7, 0x46, EffectSource)   # the 70-entry effect-source list
+PlayerGlobals.bonus_cells = StructArray(0x8C8D, 5, 0x50, BonusCellSlot)     # the 80-cell bonus/collectible list
+PlayerGlobals.item_snapshot = _U16Array(0x6C12, 0x47)    # native_4f6c's effect-source snapshot (0x46 + end marker)
+PlayerGlobals.active_flag_snapshot = _U8Array(0xA2A8, 0x50)   # native_4f6c's respawn active-flag snapshot
 PlayerGlobals.trail_ring_slots = StructArray(0x4F76, 0x12, 5, RenderSlot)   # the trail/dust ring (the cursor
 #     g.trail_ring walks DOWN with wrap 0x4F76 -> 0x4FBE) [5E2E-5E37]
 PlayerGlobals.effect_row = StructArray(0x56A2, 0x12, 8, RenderSlot)         # the 7585 effect/boss-health row

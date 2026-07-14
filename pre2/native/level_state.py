@@ -12,8 +12,8 @@ from pre2.native.level_init import native_3af2, native_5237, native_level_start
 from pre2.native.loop import native_death_bounce_509d
 from pre2.native.state import DATA_SEG
 from pre2.views.dgroup_view import PlayerGlobals, PlayerView
-from pre2.native.dgroup_offsets import (
-    ACTIVE_FLAG_SNAPSHOT, BONUS_CELL_LIST, EFFECT_SPRITE_SRC, ITEM_QUEUE, ITEM_TOTAL, SCORE_MID_WORD, WARP_TABLE)
+from pre2.views.tables import ByteTable
+from pre2.native.dgroup_offsets import ITEM_QUEUE, WARP_TABLE
 
 _DS = DATA_SEG << 4
 # [asm 4fe1-4fff] effect-sprite types (relative to 0x35) the checkpoint restore must NOT overwrite — the
@@ -24,7 +24,7 @@ _TRANSIENT_TYPES = {0xD, 0x2C, 0x41, 0xA9, 0xAA, 0xB6, 0xE0}
 def native_51df(state) -> None:
     """[asm 51DF] Respawn cleanup: zero the object-backup scratch ``[0x6c12..+0x71]`` + ``[0x6c9e]``."""
     state.data[_DS + ITEM_QUEUE:_DS + ITEM_QUEUE + 0x71] = b"\x00" * 0x71   # [asm 51e2-51e7] the item-count table
-    state.ww(ITEM_TOTAL, 0)                                            # [asm 51e9] item-total (unnamed word)
+    PlayerGlobals(state).item_total = 0                                # [asm 51e9]
 
 
 def native_5063(state):
@@ -50,7 +50,7 @@ def _game_over_reset(state) -> None:
     g.cam_col_word = 0; g.cam_row_word = 0; g.row_factor = 0; g.fine_scroll = 0   # [asm 9b35-9b3e] camera reset (9b23)
     pv.sprite = 0x0D                                                # [asm 5078] the death pose
     g.level = 0                                                    # [asm 507e] restart at level 1
-    g.score_lo = 0; g.score_hi = 0; state.ww(SCORE_MID_WORD, 0)            # [asm 5083-508f] score = 0
+    g.score_lo = 0; g.score_hi = 0; g.score_mid = 0                # [asm 5083-508f] score = 0
     native_51df(state)                                             # [asm 5095] cleanup
 
 
@@ -81,32 +81,27 @@ def native_4f6c(state):
         raise Pre2GameOverTransition()
 
     # [asm 4f91-4fa6] snapshot the 0x46 effect-sprite source values [0x8f1d]+4 (stride 7) -> [0x6c12] (stride 2)
-    si, di = EFFECT_SPRITE_SRC, ITEM_QUEUE
-    for _ in range(0x46):
-        state.ww(di, state.rw(si + 4)); si += 7; di += 2
-    state.ww(di, 0x55AA)                                           # [asm 4fa3] end marker
+    for i in range(0x46):
+        g.item_snapshot[i] = g.effect_sources[i].sprite
+    g.item_snapshot[0x46] = 0x55AA                                 # [asm 4fa3] end marker
     # [asm 4fa7-4fbd] snapshot the 0x50 active flags [0x8c8d]+3 (stride 5) -> [0xa2a8] (1 = live, 0 = free)
-    si, di = BONUS_CELL_LIST, ACTIVE_FLAG_SNAPSHOT
-    for _ in range(0x50):
-        state.wb(di, 0 if state.rw(si + 3) == 0xFFFF else 1); si += 5; di += 1
+    for i in range(0x50):
+        g.active_flag_snapshot[i] = 0 if g.bonus_cells[i].cell == 0xFFFF else 1
 
     native_5237(state)                                            # [asm 4fbf] 5237 level re-init
     pv.x = g.checkpoint_x; pv.y = g.checkpoint_y                  # [asm 4fc2-4fcb] player -> the checkpoint
     native_3af2(state)                                           # [asm 4fce] 3af2 camera-init
 
     # [asm 4fd1-500a] restore the effect-sprite sources, skipping slots whose re-init type is transient
-    di, si = 0x8F1D, 0x6C12
-    for _ in range(0x46):
-        ax = state.rw(si); si += 2
-        if ((state.rw(di + 4) - 0x35) & 0xFF) not in _TRANSIENT_TYPES:
-            state.ww(di + 4, ax)
-        di += 7
+    for i in range(0x46):
+        ax = g.item_snapshot[i]
+        src = g.effect_sources[i]
+        if ((src.sprite - 0x35) & 0xFF) not in _TRANSIENT_TYPES:
+            src.sprite = ax
     # [asm 500c-5022] re-free any slot the snapshot recorded as dead -> [0x8c8d]+3 = 0xffff
-    di, si = 0x8C8D, 0xA2A8
-    for _ in range(0x50):
-        if state.rb(si) == 0:
-            state.ww(di + 3, 0xFFFF)
-        si += 1; di += 5
+    for i in range(0x50):
+        if g.active_flag_snapshot[i] == 0:
+            g.bonus_cells[i].cell = 0xFFFF
 
     native_51df(state)                                           # [asm 5024] cleanup
     # [asm 5030-5033] ax=0; clc; ret — no level change, the gameplay loop continues
@@ -137,10 +132,11 @@ def native_level_end(state, *, game_root: str) -> None:
     (<0xA) jumps to its BONUS level ``[0x2cf6+level]`` (no +1, the ASM jmp 4f65 skips 4cba), and a bonus level
     (>=0xA) reverse-looks-up its source main level in ``[0x2cf6]`` then advances ``+1`` (jmp 4cba -> 4cc4)."""
     g, pv = PlayerGlobals(state), PlayerView(state)
+    warp_table = ByteTable(state.rb, WARP_TABLE)
     level = g.level
     if g.level_end_mode > 1:                                      # [asm 4C74] a WARP (not the normal +1 end)
         if level < 0xA:                                          # a main level -> its bonus level [0x2cf6+level]
-            g.level = state.rb(WARP_TABLE + level)                  # [asm 4c8f-4c90] (jmp 4f65: NO +1) — warp table
+            g.level = warp_table[level]                             # [asm 4c8f-4c90] (jmp 4f65: NO +1) — warp table
         else:                                                    # a bonus level -> the source main level, then +1
             # [asm 4c7e-4c85] reverse-lookup: scan [0x2cf6] for the entry whose value == this bonus level. The
             # table only maps the FIVE table-warp bonuses (0x00/0x0A/0x0B/0x0C/0x0E, reached by a `[0x6be6]=0xff`
@@ -151,7 +147,7 @@ def native_level_end(state, *, game_root: str) -> None:
             # If one ever did land here the ORIGINAL scans off the end of the 10-entry table into garbage and jumps
             # to a non-existent level (0x0F -> level 0x94) — i.e. the real game crashes too. Fail loud rather than
             # reproduce that crash.
-            src = next((i for i in range(0xA) if state.rb(WARP_TABLE + i) == level), None)   # [asm 4c7e-4c85]
+            src = next((i for i in range(0xA) if warp_table[i] == level), None)   # [asm 4c7e-4c85]
             if src is None:
                 raise Pre2HybridGap(f"native level-warp: bonus level {level:#x} not a [0x2cf6] table-warp bonus "
                                     f"(the original scans past the table into garbage here — an unreachable state; "
@@ -175,8 +171,7 @@ def native_level_end(state, *, game_root: str) -> None:
         # player's own sprite record [0x4F0A..0x4F1B] to 0xFFFF (the 3ED6 loader clears from 0x4F1C, NOT this
         # slot). It's render-only garbage while the sprite is suppressed ([0x4F0E]==0xFFFF at level entry), so
         # native collapses that erase to its end state here — matching the VM's LEVELG entry.
-        for o in range(0x4F0A, 0x4F1C):
-            state.wb(o, 0xFF)
+        state.data[_DS + 0x4F0A:_DS + 0x4F1C] = b"\xFF" * (0x4F1C - 0x4F0A)
     # [asm 0163] the EXPERT-EATER gate — main checks it AFTER 4F65 advanced [0x2d8a] (above) but BEFORE the loader
     # (447d, below): a BEGINNER ([0xB197]==0) who advanced into level 8/9 (the penguin is expert-only) is shown
     # CASTLE.SQZ and sent back to the menu, so the next level is NEVER loaded. Raise here (post-advance, pre-load) so

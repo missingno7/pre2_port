@@ -352,11 +352,14 @@ class Progress:
 
     score_lo: int = 0
     score_hi: int = 0     # score is the 32-bit (score_hi << 16 | score_lo)
+    score_mid: int = 0    # a third score word, zeroed alongside score_lo/hi on game-over; role beyond that
+    #                        not yet evidenced
     lives: int = 0
     energy: int = 0       # hearts (0..3)
     level: int = 0        # current level number
     bonus_letters: int = 0  # the collected BONUS-letters bitmask
     utensils_mask: int = 0  # the collected utensils/tools bitmask
+    item_total: int = 0     # the collected-item total word
 
     @property
     def score(self) -> int:

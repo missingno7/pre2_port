@@ -43,7 +43,8 @@ _BUFFERS = [
     # the demo-recording buffer (input_decode.decode_input writes at a runtime DEMO_PTR-relative offset that
     # can land anywhere in this low-memory region, up to just before attract_mode at 0x083D) + adjacent scratch
     ("low_scratch_727", 0x0727, 0x083D - 0x0727),
-    ("item_collect_state", 0x6C12, 0x6CA0 - 0x6C12),     # per-item collected counts + totals
+    ("item_collect_state", 0x6C12, 0x6C9E - 0x6C12),     # per-item collected counts (item_total, 0x6C9E-9F,
+    #                                                       now named -- Progress)
     ("prop_scratch_7e0a", 0x7E0A, 0x7E1C - 0x7E0A),
     ("prop_scratch_846b", 0x846B, 0x847E - 0x846B),
     ("bonus_cell_dedup", 0xA2A8, 0x50),   # the flood-fill dedup buffer, one byte per bonus-cell index
@@ -103,9 +104,10 @@ CAMERA_LAYOUT = [
     ("scroll_target_row", 0x6BF1, 2, False), ("scroll_speed_curve_ptr", 0x78C4, 2, False),
 ]
 PROGRESS_LAYOUT = [
-    ("score_lo", 0x6C0E, 2, False), ("score_hi", 0x6C10, 2, False),
+    ("score_lo", 0x6C0E, 2, False), ("score_hi", 0x6C10, 2, False), ("score_mid", 0x6C0C, 2, False),
     ("lives", 0x27D8, 1, False), ("energy", 0x27D6, 1, False), ("level", 0x2D8A, 1, False),
     ("bonus_letters", 0x6CA7, 1, False), ("utensils_mask", 0x6CA8, 1, False),
+    ("item_total", 0x6C9E, 2, False),
 ]
 INPUT_LAYOUT = [
     ("up", 0x27EA, 1, False), ("down", 0x27EB, 1, False), ("left", 0x27ED, 1, False),
