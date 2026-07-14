@@ -5,13 +5,25 @@ recovered logic over the byte image via the offset-keyed `dgroup_view`. This pla
 RELEASED `pre2native` runs on the object graph — no byte image, no offsets — with the byte-image serializer, VM,
 replay and snapshot as an OPTIONAL attach-on-demand package.
 
-## The wall
+## The requirement (architectural, from the user)
 
-The recovered logic still does raw pointer arithmetic (`rb(si + 9)`, `for i: si = base + i*stride`). That needs an
-offset→field map to resolve, so *something* with offsets must ship to run it. To detach the offset layout, that
-arithmetic must become name/reference access (`slot.field`, `for slot in actors`). This is the **dissolve**; the
-runtime flip is all-or-nothing (an offset-free backend can't resolve a single raw offset), so the dissolve must
-reach **0 raw-logic** before the flip works.
+The released game must NOT execute against the DGROUP memory model. Gameplay code operates on named native state
+and object references. All original addresses, byte-image layout, `rb`/`rw` access, serialization and VM
+compatibility live ONLY behind a detachable verification bridge that is not shipped. Record-relative layout is
+fine INSIDE the bridge, not as the gameplay abstraction. Target = the whole release dependency closure.
+
+## The wall = the execution model, not just literals
+
+The recovered engine is built on `rb`/`rw` reads returning offset-keyed `{offset:(value,width)}` write-contracts —
+that IS the DGROUP memory model, threaded through every handler's whole call tree. Converting gameplay to "named
+state + object mutation" is an EXECUTION-MODEL rewrite of the recovered layer, corpus-gated per function.
+
+Honest execution surface (2026-07-14): **855 `rb`/`rw`/`wb`/`ww` call sites across 53 recovered files + native.**
+That is the real ratchet to drive to 0 (the 192k figure was runtime accesses, inflated by loops; 855 is the source
+surface). Approach: the object graph (DataclassBackend) already IS the state of record and provides `rb`/`rw` via
+the swizzle, so functions can be converted to direct object access ONE at a time (function + its callers), each
+byte-exact vs the corpus, while unconverted functions keep working through the swizzle. When the count hits 0, the
+engine runs on named state; then `rb`/`rw`/layout/serializer/VM detach and the deploy DENY-lists them.
 
 ## Honest scoreboard (measured in the ACTUAL release closure — not just pre2/game)
 
