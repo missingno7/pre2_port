@@ -32,13 +32,14 @@ _BUFFERS = [
     ("effect_source_camera", 0x8F1D, 0x91FC - 0x8F1D),
     ("effect_pool_5570", 0x5570, 0x5648 - 0x5570),       # the 0x5570 effect/particle pool region
     ("boot_scratch_1004", 0x1004, 0x04),
-    # keyboard_demo_state split around pending_key (0x2874) and the combo_ready_*/f1_key/f2_key scancode
-    # flags (0x2805/0x2811/0x282C/0x282F-30), now named (Input)
+    # keyboard_demo_state split around pending_key (0x2874) and the combo_ready_*/f1_key/f2_key/fire_*/
+    # key_*_latch scancode flags (0x2805/0x2810/0x2811/0x282C/0x282D/0x282F-30/0x2832), now named (Input)
     ("keyboard_demo_state_a1", 0x2804, 0x2805 - 0x2804),
-    ("keyboard_demo_state_a2", 0x2806, 0x2811 - 0x2806),
+    ("keyboard_demo_state_a2", 0x2806, 0x2810 - 0x2806),
     ("keyboard_demo_state_a3", 0x2812, 0x282C - 0x2812),
-    ("keyboard_demo_state_a4", 0x282D, 0x282F - 0x282D),
-    ("keyboard_demo_state_a5", 0x2831, 0x2874 - 0x2831),
+    ("keyboard_demo_state_a4", 0x282E, 0x282F - 0x282E),
+    ("keyboard_demo_state_a5", 0x2831, 0x2832 - 0x2831),
+    ("keyboard_demo_state_a6", 0x2833, 0x2874 - 0x2833),
     ("keyboard_demo_state_b", 0x2875, 0x2879 - 0x2875),
     ("demo_input_buffer", 0x00D6, 0x0125 - 0x00D6),      # the demo/idle input record buffer
     # decode_input's demo-recording write lands at a runtime DEMO_PTR-relative offset that ranges over this
@@ -124,6 +125,8 @@ INPUT_LAYOUT = [
     ("joystick_disable", 0x27D9, 1, False),
     ("combo_ready_a", 0x2805, 1, False), ("combo_ready_b", 0x2811, 1, False),
     ("combo_ready_c", 0x282C, 1, False), ("f1_key", 0x282F, 1, False), ("f2_key", 0x2830, 1, False),
+    ("fire_alt", 0x2832, 1, False), ("fire_space", 0x2810, 1, False), ("fire_latch", 0x282D, 1, False),
+    ("key_1_latch", 0x27F6, 1, False), ("key_2_latch", 0x27F7, 1, False),
 ]
 LEVEL_STATE_LAYOUT = [
     ("flags", 0x8166, 1, False), ("end_mode", 0x6BE6, 1, False), ("respawn_state", 0x6BE4, 1, False),

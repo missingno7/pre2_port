@@ -351,10 +351,16 @@ class _U8ArrayView:
         self._base = base
         self.length = length
 
-    def __getitem__(self, i: int) -> int:
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return bytes(self._backend.rb(self._base + k) for k in range(*i.indices(self.length)))
         return self._backend.rb(self._base + i)
 
-    def __setitem__(self, i: int, v: int) -> None:
+    def __setitem__(self, i, v) -> None:
+        if isinstance(i, slice):
+            for k, b in zip(range(*i.indices(self.length)), v):
+                self._backend.wb(self._base + k, b)
+            return
         self._backend.wb(self._base + i, v)
 
     def __len__(self) -> int:
@@ -641,6 +647,13 @@ class PlayerGlobals(DgroupView):
     f1_key        = _U8(0x282F)   # scancode 0x3B (F1) held -- the debug kill-self key [asm 586B]
     f2_key        = _U8(0x2830)   # scancode 0x3C (F2) held -- the debug abort/game-over key [asm 587C]
 
+    # --- front-end scene-wait / menu-dispatch raw scancode-held flags ---
+    fire_alt      = _U8(0x2832)   # the secondary fire key (the [0x27e8] | [0x2832] confirm) [native_scene_wait]
+    fire_space    = _U8(0x2810)   # the space/enter fire latch [native_menu_flow 8e7b]
+    fire_latch    = _U8(0x282D)   # the fire/confirm make-code latch (paired with fire_space)
+    key_1_latch   = _U8(0x27F6)   # the '1' make-code latch (level select 1) [asm 9A64]
+    key_2_latch   = _U8(0x27F7)   # the '2' make-code latch (level select 2)
+
 
 #: Back-compat alias — the class began as the collision island's globals and grew into the player's.
 CollisionGlobals = PlayerGlobals
@@ -702,6 +715,23 @@ class AudioGlobals(DgroupView):
     sfx_sample_seg = _U16(0x0B59)   # the SFX PCM sample-bank segment [asm 07C9]
     song_length = _U8(0xDC2)        # the loaded song's order-table length [asm 22FE]
     sfx_entries = StructArray(0x1009, 4, 11, SfxTableEntry)   # the 11-effect {src,len} table [asm 02a9]
+
+
+class PasswordScreenView(DgroupView):
+    """The ENTER-CODE front-end screen's state (1030:9985/99AA..9ADF) — front_end.py's ``_password_init``/
+    ``_password_step``."""
+
+    __slots__ = ()
+
+    code        = _U16(0xB1B9)   # the accumulated 16-bit code (the current 4-hex group)
+    hist0       = _U16(0xB1B3)   # [asm 9A2E-9A36] the rolling history of the 3 prior groups (cheat buffer)
+    hist1       = _U16(0xB1B5)
+    hist2       = _U16(0xB1B7)
+    echo        = _U8Array(0xB170, 4)   # the 4-char on-screen code buffer ("[[[[" when empty)
+    cursor      = _U16(0xB1A8)   # echo cursor / entered-char count (0..4)
+    status      = _U8(0xB1AA)    # [asm 9AAA/9A94] 0 = accepting input, 1 = wrong-code feedback pause
+    wrong_timer = _U16(0xB1B0)   # [asm 9AB4] frames elapsed in the wrong-code pause
+    bios_seed   = _U16(0xA333)   # the machine-fingerprint seed word (0x20 on the zeroed-BIOS GOG build) [932F]
 
 
 class RngView(DgroupView):

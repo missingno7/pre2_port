@@ -33,12 +33,14 @@ from pre2.views.image_scene import image_palette, render_image_scene
 from pre2.views.memory_adapter import apply_ds, readers
 from pre2.views.oldies_scene import build_oldies_scene
 from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
-from pre2.views.dgroup_view import LoaderGlobals, PlayerGlobals
+from pre2.views.dgroup_view import LoaderGlobals, PasswordScreenView, PlayerGlobals
+from pre2.views.tables import ByteTable
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
 from pre2.native.dgroup_offsets import (
-    BIOS_SEED, CARTE_MARKER_DIMS, CARTE_MARKER_TABLE, CARTE_MASK_OFF, CARTE_MASK_SEG, DEMO_CURSOR, DEMO_LEVEL, DEMO_MODE, FIRE_ALT, FIRE_LATCH, FIRE_SPACE, FONT_SEG, KEY_1_LATCH, KEY_2_LATCH, KEY_TABLE, LOAD_TOP, MENU_MORPH_SRC, PENDING_KEY, ROW_SINE_TABLE)
+    CARTE_MARKER_DIMS, CARTE_MARKER_TABLE, CARTE_MASK_OFF, CARTE_MASK_SEG, FONT_SEG, KEY_TABLE, MENU_MORPH_SRC,
+    ROW_SINE_TABLE)
 from pre2.recovered.scene import (
     MODE_LINEAR, MODE_PLANAR,
     SCENE_INTRO, SCENE_MAP, SCENE_MENU, SCENE_TITLE,
@@ -144,7 +146,7 @@ def native_scene_wait(state, phase: str) -> tuple[str, bool]:
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     apply_ds(state, decode_input(rb, rw))                  # [asm 0bc3 / 0bcf] DC1 input decode
-    fire = (g.in_fire | rb(FIRE_ALT)) & 0xFF                # [asm 0bc6-0bc9 / 0bd2-0bd5] fire = [0x27e8] | [0x2832]
+    fire = (g.in_fire | g.fire_alt) & 0xFF                  # [asm 0bc6-0bc9 / 0bd2-0bd5] fire = [0x27e8] | [0x2832]
     if phase == WAIT_PRESS:
         return (WAIT_RELEASE if fire else WAIT_PRESS), False   # [asm 0bcd] je: loop until pressed
     return phase, fire == 0                                    # [asm 0bd9] jne: loop until released -> RET 0bdb
@@ -167,7 +169,7 @@ def _skippable_intro(scenes, state, *, enabled: bool):
     for scene in scenes:
         yield scene
         apply_ds(state, decode_input(rb, rw))                 # DC1 input decode (same read as native_scene_wait)
-        fire = (g.in_fire | rb(FIRE_ALT)) & 0xFF               # fire = [0x27e8] | [0x2832] (space/enter)
+        fire = (g.in_fire | g.fire_alt) & 0xFF                 # fire = [0x27e8] | [0x2832] (space/enter)
         if not fire:
             armed = True
         elif armed:
@@ -191,8 +193,8 @@ def _native_attract(state, dos, game_root: str):
     from pre2.native.runtime import native_frame_step
     d = state.data
     g = PlayerGlobals(state)
-    g.level = state.rb(DEMO_LEVEL)                                 # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
-    g.mode_copy = state.rb(DEMO_MODE)                             # [asm 8ec4]
+    g.level = g.attract_level                                     # [asm 8ebb] the demo's level ([0x83E], normally 0 = L1)
+    g.mode_copy = g.attract_mode                                  # [asm 8ec4]
     # --- [asm 8F2D] the animated MENU2 title (caveman runs across the PREHISTORIK-2 jungle chased by a dino),
     #     then the carte, exactly as a normal level start shows them. Pixel-exact vs the VM (attract_title;
     #     119 frames, 0 diff). Replaces the earlier static-title stand-in (user: "should be a game-like screen
@@ -201,9 +203,8 @@ def _native_attract(state, dos, game_root: str):
     yield from _native_carte(state, dos, game_root)          # [asm 9520] the world-map scroll-in (auto-advances)
     # --- now the gameplay demo ---
     g.input_source = 1                                       # [asm 8eb6] demo-playback input mode
-    state.wb(DEMO_CURSOR, 0); state.wb(DEMO_CURSOR + 1, 0)        # reset the demo cursor + current byte/count
-    state.wb(DEMO_CURSOR + 2, 0); state.wb(DEMO_CURSOR + 3, 0)
-    state.wb(PENDING_KEY, 0)                                      # no pending key yet
+    g.demo_ptr = 0; g.demo_byte = 0; g.demo_cnt = 0               # reset the demo cursor + current byte/count
+    g.pending_key = 0                                             # no pending key yet
     g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0   # clear the death/end selectors
     d[_DS + KEY_TABLE:_DS + KEY_TABLE + 0x80] = bytes(0x80)         # clear the residual key table
     native_load_song(state, native_level_song_name(state), game_root)
@@ -232,7 +233,7 @@ def _native_attract(state, dos, game_root: str):
         for pal in _dac_fade_palettes(dos.vga_palette, into=False):
             yield FrontEndScene(MODE_PLANAR, palette=pal, planes=last[0], page=last[1], game_paced=True)
     g.input_source = 0                                       # back to live keyboard input
-    state.wb(DEMO_CURSOR, 0); state.wb(DEMO_CURSOR + 1, 0)
+    g.demo_ptr = 0
     g.respawn_state = 0; g.end_signal = 0; g.level_end_mode = 0
     d[_DS + KEY_TABLE:_DS + KEY_TABLE + 0x80] = bytes(0x80)
 
@@ -351,7 +352,6 @@ def native_menu_flow(state, dos, game_root: str):
     from pre2.recovered.world_map import LS_AUTO_ADVANCE, LS_PASSWORD, LS_WAIT, level_select_dispatch
     menu_img = render_image_scene("MENU.SQZ", game_root)
     menu_fade = fade_in_frames(image_palette("MENU.SQZ", game_root), 0xA0)   # [asm 919f] black -> the menu palette
-    rb, _ = readers(state)
     while True:                                                             # the MENU <-> ATTRACT <-> CODE loop [asm 8e45]
         for p6 in menu_fade:                                                # fade the menu in (first entry + after each return)
             yield FrontEndScene(MODE_LINEAR, palette=_expand_palette6(p6), linear=menu_img, screen="menu")
@@ -359,7 +359,7 @@ def native_menu_flow(state, dos, game_root: str):
         wait = 0
         choice = LS_WAIT
         while choice == LS_WAIT:                                            # [asm 8e7b] the dispatch wait loop
-            choice = level_select_dispatch(rb(KEY_1_LATCH), rb(KEY_2_LATCH), rb(FIRE_LATCH) | rb(FIRE_SPACE), wait)  # 1/2/fire/timeout
+            choice = level_select_dispatch(g.key_1_latch, g.key_2_latch, g.fire_latch | g.fire_space, wait)  # 1/2/fire/timeout
             if choice != LS_WAIT:
                 break
             # screen="menu": the touch host maps a TAP here to '1' (beginner mode-select), not fire — matches the
@@ -418,25 +418,18 @@ def native_carte_and_load(state, dos, game_root: str):
 _ZERO_SINE = bytes(0x100)          # the password/mode-select map does not bounce (row stays 0), so the sine is unused
 
 _PW_CHAR_TABLE = 0xB068     # DS:[0xB068 + scancode] = the ASCII char for a make code [asm 99DD]
-_PW_SCAN_LATCH = 0x2874     # the last-typed scancode the runner writes from a hex keydown [asm 99BE]
-_PW_CODE = 0xB1B9           # the accumulated 16-bit code (the current 4-hex group)
-_PW_HIST = (0xB1B3, 0xB1B5, 0xB1B7)   # [asm 9A2E-9A36] the rolling history of the 3 PRIOR groups (cheat buffer)
-_PW_ECHO = 0xB170           # the 4-char on-screen code buffer ("[[[[" when empty)
-_PW_CURSOR = 0xB1A8         # echo cursor / entered-char count (0..4)
-_PW_STATE = 0xB1AA          # [asm 9AAA/9A94] 0 = accepting input, 1 = wrong-code feedback pause
-_PW_WRONG_TIMER = 0xB1B0    # [asm 9AB4] frames elapsed in the wrong-code pause
 _PW_WRONG_FRAMES = 0x8C     # [asm 9AB8] the pause length before the buffer clears + input resumes
 
 
 def _password_init(state) -> None:
     """Reset the ENTER-CODE screen on entry: empty '[[[[' buffer, no chars/scancode, AND clear the rolling
     cheat-group history + the wrong-code state so a fresh session starts clean."""
-    d = state.data                                           # `d` for the 4-byte echo-buffer fill (slice)
-    state.wb(_PW_SCAN_LATCH, 0)
-    d[_DS + _PW_ECHO:_DS + _PW_ECHO + 4] = b"[[[["            # [asm 9ACB] the empty-slot placeholders (0x5B)
-    for off in (_PW_CURSOR, _PW_CODE, _PW_WRONG_TIMER, *_PW_HIST):
-        state.ww(off, 0)
-    state.wb(_PW_STATE, 0)
+    pw = PasswordScreenView(state)
+    PlayerGlobals(state).pending_key = 0                     # the last-typed scancode latch (shared with DC1)
+    pw.echo[0:4] = b"[[[["                                   # [asm 9ACB] the empty-slot placeholders (0x5B)
+    pw.cursor = 0; pw.code = 0; pw.wrong_timer = 0
+    pw.hist0 = 0; pw.hist1 = 0; pw.hist2 = 0
+    pw.status = 0
 
 
 def _password_step(state):
@@ -453,43 +446,38 @@ def _password_step(state):
     history (``[0xB1B5]->[0xB1B3]`` etc. — so the cheat sequence can accumulate) and enters a ``0x8C``-frame
     wrong-code pause (``[0xB1AA]``=1) before the echo clears and input resumes. Returns ``None`` otherwise."""
     from pre2.recovered.password import DEFAULT_SEED, is_cheat_sequence, validate_code, warp_index_to_level
-    rb, rw = readers(state)
+    pw = PasswordScreenView(state)
+    g = PlayerGlobals(state)
+    char_table = ByteTable(state.rb, _PW_CHAR_TABLE)
 
-    def wb(o, v):
-        state.data[_DS + (o & 0xFFFF)] = v & 0xFF
-
-    def ww(o, v):
-        state.data[_DS + (o & 0xFFFF)] = v & 0xFF
-        state.data[_DS + ((o + 1) & 0xFFFF)] = (v >> 8) & 0xFF
-
-    if rb(_PW_STATE) == 1:                                   # [asm 99AA/9AB4] the wrong-code feedback pause
-        ww(_PW_WRONG_TIMER, (rw(_PW_WRONG_TIMER) + 1) & 0xFFFF)
-        if rw(_PW_WRONG_TIMER) >= _PW_WRONG_FRAMES:          # [asm 9AC0] pause elapsed -> clear echo, accept again
-            state.data[_DS + _PW_ECHO:_DS + _PW_ECHO + 4] = b"[[[["   # [asm 9AC8]
-            wb(_PW_STATE, 0); ww(_PW_CURSOR, 0)              # [asm 9AD4/9AD9]
+    if pw.status == 1:                                       # [asm 99AA/9AB4] the wrong-code feedback pause
+        pw.wrong_timer = (pw.wrong_timer + 1) & 0xFFFF
+        if pw.wrong_timer >= _PW_WRONG_FRAMES:               # [asm 9AC0] pause elapsed -> clear echo, accept again
+            pw.echo[0:4] = b"[[[["                            # [asm 9AC8]
+            pw.status = 0; pw.cursor = 0                     # [asm 9AD4/9AD9]
         return None                                         # input ignored while the wrong code is shown
 
-    scan = rb(_PW_SCAN_LATCH)                                # [asm 99BE] the pending make code
+    scan = g.pending_key                                     # [asm 99BE] the pending make code
     if not scan or (scan & 0x80):                           # [asm 99C2] none / a break code -> nothing
         return None
-    wb(_PW_SCAN_LATCH, 0)                                    # [asm 99D6] consume it
-    al = rb((_PW_CHAR_TABLE + scan) & 0xFFFF)                # [asm 99DD] scancode -> ASCII
+    g.pending_key = 0                                        # [asm 99D6] consume it
+    al = char_table[scan]                                    # [asm 99DD] scancode -> ASCII
     if al == 0x2D:                                          # [asm 99E1] '-' (a non-code key, e.g. space) -> ignore
         return None
     ah = (al - 0x30) & 0xFF                                 # [asm 99EA] char - '0'
     if ah > 9:                                              # [asm 99ED/99F2] 'A'..'F' -> extra -7
         ah = (ah - 7) & 0xFF
-    ww(_PW_CODE, ((rw(_PW_CODE) << 4) | (ah & 0x0F)) & 0xFFFF)   # [asm 99F5-9A0D] shift the nibble in
-    cur = rw(_PW_CURSOR)                                    # [asm 9A11] echo cursor / char count
-    wb((_PW_ECHO + cur) & 0xFFFF, al)                       # [asm 9A15] echo the char (the screen re-renders it)
-    ww(_PW_CURSOR, (cur + 1) & 0xFFFF)                      # [asm 9A19]
+    pw.code = ((pw.code << 4) | (ah & 0x0F)) & 0xFFFF        # [asm 99F5-9A0D] shift the nibble in
+    cur = pw.cursor                                          # [asm 9A11] echo cursor / char count
+    pw.echo[cur] = al                                        # [asm 9A15] echo the char (the screen re-renders it)
+    pw.cursor = (cur + 1) & 0xFFFF                           # [asm 9A19]
     if (cur + 1) < 4:                                       # [asm 9A1F] need 4 chars before validating
         return None
 
-    ww(_PW_WRONG_TIMER, 0)                                  # [asm 9A28] reset the wrong-code timer for this group
-    di, si, bp = rw(_PW_HIST[0]), rw(_PW_HIST[1]), rw(_PW_HIST[2])   # [asm 9A2E-9A36] the three prior groups
-    code = rw(_PW_CODE)
-    seed = rw(BIOS_SEED) or DEFAULT_SEED                       # [asm 932F] the BIOS seed (0 on the GOG build -> 0x20)
+    pw.wrong_timer = 0                                       # [asm 9A28] reset the wrong-code timer for this group
+    di, si, bp = pw.hist0, pw.hist1, pw.hist2                # [asm 9A2E-9A36] the three prior groups
+    code = pw.code
+    seed = pw.bios_seed or DEFAULT_SEED                       # [asm 932F] the BIOS seed (0 on the GOG build -> 0x20)
     rot = state.data[(0x1030 << 4) + 5]                     # cs:[5] rotate count (== 3 on this build)
 
     m = None
@@ -502,15 +490,14 @@ def _password_step(state):
 
     if m is not None:                                      # [asm 9A9B-9AAA] a level matched -> commit + advance
         level, expert = m
-        g = PlayerGlobals(state)
         g.level = level                                    # [asm 9AA6] the selected level
         g.mode = 1 if expert else 0                        # [asm 9AAA] beginner / expert
         return m
 
-    ww(_PW_HIST[0], si)                                    # [asm 9A81-9A94] miss -> shift this group into the
-    ww(_PW_HIST[1], bp)                                    #   history ([0xB1B5]->[0xB1B3], [0xB1B7]->[0xB1B5],
-    ww(_PW_HIST[2], code)                                  #   [0xB1B9]->[0xB1B7]) so a cheat sequence can build
-    wb(_PW_STATE, 1)                                       # [asm 9A94] -> the wrong-code feedback pause
+    pw.hist0 = si                                           # [asm 9A81-9A94] miss -> shift this group into the
+    pw.hist1 = bp                                           #   history ([0xB1B5]->[0xB1B3], [0xB1B7]->[0xB1B5],
+    pw.hist2 = code                                         #   [0xB1B9]->[0xB1B7]) so a cheat sequence can build
+    pw.status = 1                                            # [asm 9A94] -> the wrong-code feedback pause
     return None
 
 
@@ -594,7 +581,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
                 g.attract_mode = g.mode
                 yield from _planar_fade_out(state, 0xB118, page.planes, ds, pel, enh=("menu", motif, cam.x, cam.row))   # [asm 9286] fade to black
                 return                                          # ...then the carte + loader for the chosen level
-        if (g.in_fire | rb(FIRE_ALT)) != 0:                      # fire = confirm / leave
+        if (g.in_fire | g.fire_alt) != 0:                        # fire = confirm / leave
             if kind == "mode_select":                          # [asm 8F12/8F18/8ED7] commit the difficulty, start L1
                 g.mode_copy = g.mode
                 g.attract_mode = g.mode
@@ -623,7 +610,7 @@ def _native_carte(state, dos, game_root: str):
                                        stamp_carte_marker, SCROLL_START)
     rb, rw = readers(state)
     g = PlayerGlobals(state)
-    saved_top = rw(LOAD_TOP)                                       # [asm 9530] MAP.SQZ loads at the top...
+    saved_top = LoaderGlobals(state).load_top                      # [asm 9530] MAP.SQZ loads at the top...
     seg = load_sqz(state, "MAP.SQZ", game_root=game_root)
     LoaderGlobals(state).load_top = saved_top                    # ...but is transient — restore the load pointer so
     #                                                                the loader stacks the level exactly where the VM does
@@ -650,7 +637,7 @@ def _native_carte(state, dos, game_root: str):
                             page=ds, pel=pel, wrap=0x1FFF, active_width=312,
                             enh=("carte", master, scroll_x))   # 640px stamped master + reveal (see FrontEndScene)
         apply_ds(state, decode_input(rb, rw))
-        fire = (g.in_fire | rb(FIRE_ALT)) != 0
+        fire = (g.in_fire | g.fire_alt) != 0
         # confirm on a fresh fire press OR when the scroll-in reaches the end (auto-advance) — either way the
         # carte fades to black before the level loads (the VM does not snap from the map straight into gameplay).
         if (fire and not prev_fire) or scroll_x >= 639:

@@ -392,6 +392,11 @@ class Input:
     combo_ready_c: int = 0
     f1_key: int = 0          # scancode 0x3B (F1) held -- the debug kill-self key
     f2_key: int = 0          # scancode 0x3C (F2) held -- the debug abort/game-over key
+    fire_alt: int = 0        # the secondary fire key (the [0x27e8] | [0x2832] confirm)
+    fire_space: int = 0      # the space/enter fire latch
+    fire_latch: int = 0      # the fire/confirm make-code latch (paired with fire_space)
+    key_1_latch: int = 0     # the '1' make-code latch (level select 1)
+    key_2_latch: int = 0     # the '2' make-code latch (level select 2)
 
     # read/write aliases of the DOS view's field names
     @property
