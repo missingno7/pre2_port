@@ -37,6 +37,9 @@ COS         = 0x6F90   # angle -> signed cos byte (particle/bird X velocity)
 SIN         = 0x7090   # angle -> signed sin byte (particle/bird Y velocity)
 SPRITE_GEOM = 0x7190   # sprite (id & 0x1FFF)<<1 -> word: low byte = width (src bytes), high byte = height (rows)
 PLAYER_ANIM_HEIGHT = 0x7191  # player anim frame -> vertical extent (byte-indexed; reuses the sprite-geom region)
+SPAWN_OFFSET_TABLE = 0x5CBD   # spawn ring -> signed X offset (word), indexed by the ring's absolute cursor value
+ANIM_FRAME_TABLE = 0xA86F     # per-entity anim-frame descriptor table (section-marked scan)
+ANIM_SECTION_MARKER = 0x7D01
 
 
 class Tables:
@@ -63,3 +66,26 @@ class Tables:
     def sprite_half_h(self, sprite_id: int) -> int:
         """The sprite's Y half-extent byte (``[0x7191 + (id&0x1FFF)<<1]``)."""
         return self._rb((SPRITE_GEOM + 1 + ((sprite_id & 0x1FFF) << 1)) & 0xFFFF)
+
+    def _rw(self, off: int) -> int:
+        return self._rb(off & 0xFFFF) | (self._rb((off + 1) & 0xFFFF) << 8)
+
+    def spawn_x_offset(self, ring: int) -> int:
+        """The spawn X-offset word at the ring's absolute cursor position (``ring`` is itself a table-relative
+        cursor value, e.g. ``SPAWN_OFFSET_TABLE + k*2`` — the 16-slot ring index into this asset)."""
+        return self._rw((ring - SPAWN_OFFSET_TABLE) & 0xFFFF)
+
+    def anim_frame_lookup(self, entry_id: int, entry_type: int) -> int:
+        """Recover ``1030:6954..6981`` — resolve a projected entity's anim-frame descriptor pointer: scan the
+        table for the ``0x7D01`` section marker whose following word matches ``entry_type``, then within that
+        section find the entry whose word equals ``entry_id - 0x138``."""
+        target = (entry_id - 0x138) & 0xFFFF
+        bx = ANIM_FRAME_TABLE
+        while True:                                          # find the 0x7D01 marker for this type
+            bx = (bx + 2) & 0xFFFF
+            if self._rw(bx) == ANIM_SECTION_MARKER and self._rw((bx + 2) & 0xFFFF) == entry_type:
+                break
+        bx = (bx + 4) & 0xFFFF                                # past the marker + type word
+        while self._rw(bx) != target:                        # find the matching id
+            bx = (bx + 2) & 0xFFFF
+        return bx

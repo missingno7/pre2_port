@@ -62,7 +62,7 @@ def _run(demo: str, max_frames: int, stats: Counter, mism: list):
         read_id = lambda slot: rw(oi.OBJ_BASE + slot * oi.OBJ_STRIDE + 4)
         find_free = lambda: oi.find_free_object_slot(read_id)
         try:
-            writes, drawn = oi.dispatch_handler(idx, rb, rw, read_es, si, rw(CAM_X), rw(CAM_Y), find_free)
+            writes, drawn = oi.dispatch_handler_bytes(idx, rb, rw, read_es, si, rw(CAM_X), rw(CAM_Y), find_free)
         except ValueError as e:
             stats[f"UNRECOVERED idx{idx}"] += 1
             interpret_current_instruction_without_hook(c); return

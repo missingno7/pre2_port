@@ -78,7 +78,7 @@ def _run(demo, max_frames, stats, mism):
         es = ov.rw(MAP_SEG_PTR); eb = (es << 4) & 0xFFFFF
         read_es = lambda o: md[(eb + (o & 0xFFFF)) & 0xFFFFF]
         try:
-            oi.second_pass_tick(ov.rb, ov.rw, ov.apply, read_es, ov.rw(CAM_X), ov.rw(CAM_Y))
+            oi.second_pass_tick_bytes(ov.rb, ov.rw, ov.apply, read_es, ov.rw(CAM_X), ov.rw(CAM_Y))
         except ValueError as e:
             stats[f"UNRECOVERED {e}"] += 1
             interpret_current_instruction_without_hook(c); return

@@ -6,7 +6,7 @@ projects an on-screen entity into a free slot of the main object list `0x4FD0` s
 this one routine makes the projection native for ALL of them while the thin wrappers stay ASM and call the
 live worker.
 
-Live hybrid: the recovered :func:`~pre2.recovered.object_inject.project_entity` OWNS the projection — on
+Live hybrid: the recovered :func:`~pre2.recovered.object_inject.project_entity_bytes` OWNS the projection — on
 success it writes the full contract (the projected object record, the entity mode `[entry+4]=0x17`, the
 `[0xA32E]` render-pointer) and returns with CF=0; off-screen / no free slot returns CF=1 with no writes. Verify
 mode keeps the ASM as oracle: shadow-predict + passthrough, diffed at the ret (`register_verify`).
@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from dos_re.bootstrap_lzexe import interpret_current_instruction_without_hook
 from dos_re.hooks import registry
-from pre2.recovered.object_inject import (OBJ_BASE, OBJ_STRIDE, ProjectResult, find_free_object_slot,
-                                          project_entity, second_pass_tick)
+from pre2.recovered.object_inject import (OBJ_BASE, OBJ_STRIDE, ProjectResultBytes, find_free_object_slot,
+                                          project_entity_bytes, second_pass_tick_bytes)
 
 from pre2.gaps import report
 
@@ -32,7 +32,7 @@ _REC_WORDS = (0x00, 0x02, 0x04, 0x06, 0x08, 0x0A)
 _REC_BYTES = (0x0E, 0x0F, 0x10)
 
 
-def _predict(cpu) -> ProjectResult:
+def _predict(cpu) -> ProjectResultBytes:
     """Run the recovered projection from the inputs at routine entry (ds:si = the 2nd-pass entry)."""
     mem, ds, si = cpu.mem, cpu.s.ds, cpu.s.si
     base = (ds << 4) & 0xFFFFF
@@ -44,7 +44,7 @@ def _predict(cpu) -> ProjectResult:
         return mem.data[(base + (o & 0xFFFF)) & 0xFFFFF] | (mem.data[(base + ((o + 1) & 0xFFFF)) & 0xFFFFF] << 8)
 
     read_id = lambda slot: rw(OBJ_BASE + slot * OBJ_STRIDE + 4)   # noqa: E731
-    return project_entity(rw(si + 9), rw(si + 0xB), rw(si + 2), rb(si + 5), si,
+    return project_entity_bytes(rw(si + 9), rw(si + 0xB), rw(si + 2), rb(si + 5), si,
                           rw(0x2DE4), rw(0x2DE6), lambda: find_free_object_slot(read_id))
 
 
@@ -81,10 +81,10 @@ def second_pass_project_entity(cpu) -> None:
     cpu.s.ip = cpu.pop()                 # near ret to the caller
 
 
-@registry.replace(*_TICK_ENTRY, "second_pass_tick")
+@registry.replace(*_TICK_ENTRY, "second_pass_tick_bytes")
 def second_pass_tick_hook(cpu) -> None:
     """Native replacement for the WHOLE second per-frame pass (1030:6913..698B) — the coastline collapse of
-    the ~25% walker. Runs the recovered :func:`~pre2.recovered.object_inject.second_pass_tick` (list walk +
+    the ~25% walker. Runs the recovered :func:`~pre2.recovered.object_inject.second_pass_tick_bytes` (list walk +
     skip predicates + per-type dispatch + anim-frame resolve + stride advance) over live VM memory, then does
     the routine's near ret (it ends in ``ret`` at 698B). Like ``object_tick`` this is NOT instruction-count
     transparent (it does the pass in one host step); the data-segment effect is byte-exact (whole-pass shadow,
@@ -114,7 +114,7 @@ def second_pass_tick_hook(cpu) -> None:
 
     es = rw(0x2DDA); eb = (es << 4) & 0xFFFFF
     read_es = lambda o: mem.data[(eb + (o & 0xFFFF)) & 0xFFFFF]   # noqa: E731 — level map (terrain, read-only)
-    final_si = second_pass_tick(rb, rw, apply_writes, read_es, rw(0x2DE4), rw(0x2DE6))
+    final_si = second_pass_tick_bytes(rb, rw, apply_writes, read_es, rw(0x2DE4), rw(0x2DE6))
     cpu.s.si = final_si          # the ASM leaves si at the terminator entry; ax/bx are scratch (caller is a
     cpu.s.ip = cpu.pop()         # flat subsystem-call list at 0x021D.. that re-derives its own registers)
 

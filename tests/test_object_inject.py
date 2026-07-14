@@ -1,14 +1,14 @@
 """Tests for the secondary-entity render-injection keystone (pre2.recovered.object_inject).
 
-Byte-exact ASM equivalence is proven live by the snapshot shadow (project_entity 480/480 on snapshot 154531);
+Byte-exact ASM equivalence is proven live by the snapshot shadow (project_entity_bytes 480/480 on snapshot 154531);
 these pin the allocator + the projection record/cull/mode contract."""
 from __future__ import annotations
 
-from pre2.recovered.object_inject import (INJECT_MODE, ProjectResult, OBJ_COUNT, OBJ_BASE,
-                                          find_free_object_slot, handler_ground_snap_spawn,
-                                          lookup_anim_frame, project_entity, dispatch_handler,
-                                          handler_project_mode, handler_7e97, handler_7d6e,
-                                          handler_7d1b, handler_7f6c, second_pass_tick)
+from pre2.recovered.object_inject import (INJECT_MODE, ProjectResultBytes, OBJ_COUNT, OBJ_BASE,
+                                          find_free_object_slot, handler_ground_snap_spawn_bytes,
+                                          lookup_anim_frame, project_entity_bytes, dispatch_handler_bytes,
+                                          handler_project_mode_bytes, handler_7e97_bytes, handler_7d6e_bytes,
+                                          handler_7d1b_bytes, handler_7f6c_bytes, second_pass_tick_bytes)
 
 
 def test_find_free_first_empty_slot():
@@ -23,14 +23,14 @@ def test_lookup_anim_frame_scans_section_then_id():
     assert lookup_anim_frame(rw, 0x200, 5) == 0xA877
 
 
-# --- handler_ground_snap_spawn (7D9B) — shadow byte-exact vs ASM (witness demo 213332: gates + 1 full draw) ---
+# --- handler_ground_snap_spawn_bytes (7D9B) — shadow byte-exact vs ASM (witness demo 213332: gates + 1 full draw) ---
 def test_player_trail_throttle_gate_updates_counter_no_draw():
     SI = 0x4000
     # not level 5; counter 0->1, throttle [si+6]=5 > (1>>2)=0 -> not drawn (but counter is written)
     kv = {0x2D8A: 8, SI + 7: 0, SI + 6: 5}
     rb = lambda o: kv.get(o, 0) & 0xFF
     rw = lambda o: kv.get(o, 0) & 0xFFFF
-    out, drawn = handler_ground_snap_spawn(rb, rw, lambda o: 0, SI, lambda: None)
+    out, drawn = handler_ground_snap_spawn_bytes(rb, rw, lambda o: 0, SI, lambda: None)
     assert drawn is False
     assert out == {SI + 7: (1, 1)}
 
@@ -50,7 +50,7 @@ def test_player_trail_full_draw_snaps_to_ground():
     # a standable surface: solid tile (1) at bp=0x1410, empty (0) one + two above
     read_es = lambda o: 1 if (o & 0xFFFF) == 0x1410 else 0
     find_free = lambda: find_free_object_slot(lambda s: rw(0x4FD0 + s * 0x12 + 4))
-    out, drawn = handler_ground_snap_spawn(rb, rw, read_es, SI, find_free)
+    out, drawn = handler_ground_snap_spawn_bytes(rb, rw, read_es, SI, find_free)
     assert drawn is True
     base = OBJ_BASE                                        # slot 0
     assert out[base + 0x00] == (0x100, 2)                 # X = playerX + offset
@@ -77,7 +77,7 @@ def test_player_trail_failed_scan_still_leaves_x_xvel_residue():
     rw = lambda o: kv.get(o, 0) & 0xFFFF                  # noqa: E731
     read_es = lambda o: 0                                 # noqa: E731 — every tile empty -> no standable surface
     find_free = lambda: find_free_object_slot(lambda s: rw(0x4FD0 + s * 0x12 + 4))   # noqa: E731
-    out, drawn = handler_ground_snap_spawn(rb, rw, read_es, SI, find_free)
+    out, drawn = handler_ground_snap_spawn_bytes(rb, rw, read_es, SI, find_free)
     assert drawn is False
     base = OBJ_BASE
     assert out[base + 0x00] == (0x120, 2)                 # [7E0A] X written unconditionally
@@ -111,7 +111,7 @@ _CAMX, _CAMY = 0x10, 0x08
 
 
 def test_project_on_screen_builds_record():
-    pr = project_entity(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0x55,
+    pr = project_entity_bytes(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0x55,
                         entry_ptr=0x8489, cam_x=_CAMX, cam_y=_CAMY, find_free=lambda: 3)
     assert pr.drawn and pr.slot == 3 and pr.mode == INJECT_MODE
     assert pr.record[0x00] == 0x100 and pr.record[0x02] == 0x80     # X, Y
@@ -121,13 +121,13 @@ def test_project_on_screen_builds_record():
 
 
 def test_project_off_screen_not_drawn():
-    pr = project_entity(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0,
+    pr = project_entity_bytes(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0,
                         entry_ptr=0x8489, cam_x=0x80, cam_y=_CAMY, find_free=lambda: 3)   # far off-screen X
-    assert pr == ProjectResult(False) and pr.record is None and pr.mode is None
+    assert pr == ProjectResultBytes(False) and pr.record is None and pr.mode is None
 
 
 def test_project_no_free_slot_not_drawn():
-    pr = project_entity(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0,
+    pr = project_entity_bytes(entry_x=0x100, entry_y=0x80, entry_sprite=0x172, entry_aux5=0,
                         entry_ptr=0x8489, cam_x=_CAMX, cam_y=_CAMY, find_free=lambda: None)
     assert not pr.drawn and pr.record is None
 
@@ -146,7 +146,7 @@ def test_handler_project_mode_overrides_mode():
     SI = 0x8500
     kv = {SI + 9: 0x100, SI + 0xB: 0x80, SI + 2: 0x172, SI + 5: 0x40, OBJ_BASE + 4: 0xFFFF}
     rb, rw = _readers(kv)
-    w, drawn = handler_project_mode(rb, rw, SI, _CAMX, _CAMY, _free0(rw), 0x37)
+    w, drawn = handler_project_mode_bytes(rb, rw, SI, _CAMX, _CAMY, _free0(rw), 0x37)
     assert drawn
     assert w[OBJ_BASE + 0] == (0x100, 2) and w[OBJ_BASE + 4] == (0x172, 2)
     assert w[SI + 4] == (0x37, 1) and w[0xA32E] == (OBJ_BASE, 2)
@@ -156,7 +156,7 @@ def test_handler_project_mode_offscreen_no_writes():
     SI = 0x8500
     kv = {SI + 9: 0x100, SI + 0xB: 0x80, OBJ_BASE + 4: 0xFFFF}
     rb, rw = _readers(kv)
-    w, drawn = handler_project_mode(rb, rw, SI, 0x80, _CAMY, _free0(rw), 5)   # cam far -> off-screen
+    w, drawn = handler_project_mode_bytes(rb, rw, SI, 0x80, _CAMY, _free0(rw), 5)   # cam far -> off-screen
     assert not drawn and w == {}
 
 
@@ -165,26 +165,26 @@ def test_handler_7e97_level6_ors_old_mode_and_bit7():
     kv = {SI + 9: 0x100, SI + 0xB: 0x80, SI + 2: 0x172, SI + 5: 0, SI + 4: 0x20,
           OBJ_BASE + 4: 0xFFFF, 0x2D8A: 6}
     rb, rw = _readers(kv)
-    w, drawn = handler_7e97(rb, rw, SI, _CAMX, _CAMY, _free0(rw))
+    w, drawn = handler_7e97_bytes(rb, rw, SI, _CAMX, _CAMY, _free0(rw))
     assert drawn and w[SI + 0x11] == (0, 1)
     assert w[SI + 4] == (((0x20 | 5) | 0x80) & 0xFF, 1)
 
 
 def test_handler_7e97_clears_si11_even_when_not_drawn():
     SI = 0x8500
-    w, drawn = handler_7e97(*_readers({}), SI, _CAMX, _CAMY, lambda: None)
+    w, drawn = handler_7e97_bytes(*_readers({}), SI, _CAMX, _CAMY, lambda: None)
     assert not drawn and w == {SI + 0x11: (0, 1)}
 
 
 def test_handler_7d6e_throttle_writes_counter_no_draw():
     SI = 0x8500                                   # counter 0->1; [si+6]=5 > (1>>2)=0 -> throttle skip
-    w, drawn = handler_7d6e(*_readers({SI + 7: 0, SI + 6: 5}), SI, _CAMX, _CAMY, lambda: 0)
+    w, drawn = handler_7d6e_bytes(*_readers({SI + 7: 0, SI + 6: 5}), SI, _CAMX, _CAMY, lambda: 0)
     assert not drawn and w == {SI + 7: (1, 1)}
 
 
 def test_handler_7d1b_gate_player_not_below_entity():
     SI = 0x8500                                   # playerY(0x50) <= entityY [si+0xB](0x80) -> skip
-    w, drawn = handler_7d1b(*_readers({0x4F1E: 0x50, SI + 0xB: 0x80}), SI, _CAMX, _CAMY, lambda: 0)
+    w, drawn = handler_7d1b_bytes(*_readers({0x4F1E: 0x50, SI + 0xB: 0x80}), SI, _CAMX, _CAMY, lambda: 0)
     assert not drawn and w == {}
 
 
@@ -193,7 +193,7 @@ def test_handler_7f6c_aura_alternates_side():
     kv = {0x4F1C: 0x100, 0x4F1E: 0x100, SI + 9: 0, SI + 0xB: 0xFF, SI + 0xC: 0xFF,
           SI + 2: 0x172, SI + 5: 0, OBJ_BASE + 4: 0xFFFF, 0x6BCC: 0}
     rb, rw = _readers(kv)
-    w, drawn = handler_7f6c(rb, rw, SI, _CAMX, _CAMY, _free0(rw))
+    w, drawn = handler_7f6c_bytes(rb, rw, SI, _CAMX, _CAMY, _free0(rw))
     assert drawn and w[0x6BCC] == (1, 1)          # toggle 0^1=1 -> -0xC0 side
     assert w[OBJ_BASE + 0] == ((0x100 - 0xC0) & 0xFFFF, 2)
     assert w[OBJ_BASE + 2] == ((0x100 - 0xB0) & 0xFFFF, 2)
@@ -203,10 +203,10 @@ def test_handler_7f6c_aura_alternates_side():
 def test_dispatch_unknown_index_fails_loud():
     import pytest
     with pytest.raises(ValueError):
-        dispatch_handler(13, lambda o: 0, lambda o: 0, lambda o: 0, 0x8500, 0, 0, lambda: 0)
+        dispatch_handler_bytes(13, lambda o: 0, lambda o: 0, lambda o: 0, 0x8500, 0, 0, lambda: 0)
 
 
-# --- second_pass_tick composition (walk + skip predicates + dispatch + stride advance) ---
+# --- second_pass_tick_bytes composition (walk + skip predicates + dispatch + stride advance) ---
 # Byte-exact-vs-ASM is proven by pre2/probes/probe_second_pass_tick.py (66 ticks); this pins the walk shape.
 def _dictmem():
     mem = {}
@@ -231,7 +231,7 @@ def test_second_pass_tick_dispatches_skips_and_advances():
     mem[E + 8] = 8; mem[E + 8 + 1] = 9; mem[E + 8 + 2] = 0x00; mem[E + 8 + 3] = 0x02
     mem[E + 8 + 4] = 0x04; mem[E + 8 + 0x11] = 0xBB
     mem[E + 16] = 0x32                                                  # terminator (stride >= 0x32)
-    second_pass_tick(rb, rw, apply, lambda o: 0, cam_x=0x80, cam_y=0x08)   # far cam -> off-screen
+    second_pass_tick_bytes(rb, rw, apply, lambda o: 0, cam_x=0x80, cam_y=0x08)   # far cam -> off-screen
     assert mem[E + 0x11] == 0          # entry 0 dispatched (idx9 cleared [E+0x11])
     assert mem[E + 8 + 0x11] == 0xBB   # entry 1 skipped ([si+4]&4) -> untouched
 
@@ -239,5 +239,5 @@ def test_second_pass_tick_dispatches_skips_and_advances():
 def test_second_pass_tick_stops_at_stride_terminator():
     mem, rb, rw, apply = _dictmem()
     mem[0x8489] = 0x32                  # immediate terminator -> no dispatch, no crash
-    second_pass_tick(rb, rw, apply, lambda o: 0, cam_x=0, cam_y=0)
+    second_pass_tick_bytes(rb, rw, apply, lambda o: 0, cam_x=0, cam_y=0)
     assert mem.get(0xA32E) is None      # nothing projected

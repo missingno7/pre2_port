@@ -43,6 +43,12 @@ class ObjectGraphStore:
     progress = property(lambda self: self._objs["progress"])
     actors = property(lambda self: self._objs["actors"])
     entities = property(lambda self: self._objs["entities"])
+    player_state = property(lambda self: self._objs["player_state"])
+    spawn_cursor = property(lambda self: self._objs["spawn_cursor"])
+    scenery_state = property(lambda self: self._objs["scenery_state"])
+    boss = property(lambda self: self._objs["boss"])
+    difficulty_mode = property(lambda self: self._objs["difficulty_mode"])
+    level_state = property(lambda self: self._objs["level_state"])
 
     # ---- byte-compatibility shim (migration aid; not the gameplay abstraction) -----------------------------
     def rb(self, off: int) -> int:

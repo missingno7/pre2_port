@@ -21,7 +21,6 @@ from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransitio
 from pre2.recovered.effects_update import (tick_debris_pool, tick_particles, tick_popup_ring,
                                            tick_projectiles)
 from pre2.views import object_render as _obj_render
-from pre2.recovered.object_inject import second_pass_tick
 from pre2.recovered.object_particles import project_particles
 from pre2.recovered.object_render import plan_record_update, plan_sprite
 from pre2.recovered.object_spawn import Pre2SpawnGap, camera_engine, tick_level6_boss, tick_mode9_boss
@@ -152,7 +151,20 @@ def native_object_system_step(state) -> None:
     es = rw(LEVEL_DATA_SEG)
     eb = (es << 4) & 0xFFFFF
     read_es = lambda o: state.data[(eb + (o & 0xFFFF)) & 0xFFFFF]   # noqa: E731 — level map (read-only)
-    second_pass_tick(rb, rw, lambda w: apply_ds(state, w), read_es, g.cam_col_word, g.cam_row_word)   # [asm 6913..698B]
+    # [asm 6913..698B] the second pass: the OBJECT-GRAPH path (named state/references — the gameplay abstraction,
+    # docs/pre2/offset_free_release_plan.md) when state.backend carries real objects (duck-typed, no bridge
+    # import — this file only calls attributes on whatever object state.backend happens to be); otherwise the
+    # byte-image/VM-oracle fallback path (second_pass_tick_bytes) for a plain ByteBackend.
+    be = state.backend
+    if hasattr(be, "entities") and hasattr(be, "actors"):
+        from pre2.recovered.object_inject import second_pass_tick
+        from pre2.views.tables import Tables
+        second_pass_tick(be.entities, be.actors, be.player, be.player_state, be.spawn_cursor, be.scenery_state,
+                         be.boss, be.difficulty_mode, be.progress.level, be.rng, read_es, Tables(rb),
+                         g.cam_col_word, g.cam_row_word)
+    else:
+        from pre2.recovered.object_inject import second_pass_tick_bytes
+        second_pass_tick_bytes(rb, rw, lambda w: apply_ds(state, w), read_es, g.cam_col_word, g.cam_row_word)
 
 
 def native_trigger_scan(state) -> None:
