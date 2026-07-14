@@ -168,7 +168,7 @@ WALL_MARKER_LAYOUT = [("token", 0, 2, False), ("map_off", 2, 2, False), ("data0"
                       ("data1", 6, 2, False)]
 _WALL_MARKER_BASE, _WALL_MARKER_COUNT = 0x6EA9, 20
 # the 80-cell bonus/collectible list (0x8C8D..0x8E1D, stride 5)
-BONUS_CELL_LAYOUT = [("reserved0", 0, 1, False), ("reserved1", 1, 1, False), ("reserved2", 2, 1, False),
+BONUS_CELL_LAYOUT = [("tile_num0", 0, 1, False), ("tile_num1", 1, 1, False), ("count", 2, 1, False),
                      ("cell", 3, 2, False)]
 _BONUS_CELL_BASE, _BONUS_CELL_COUNT = 0x8C8D, 0x50
 

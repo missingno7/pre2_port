@@ -90,6 +90,36 @@ So a record's body bytes past the header are **named per object type** — `mons
 two pointers (`ref`, `anim`). This is the naming source for `object_inject`'s arena bodies: pick the union arm by
 handler/type, apply the field names, placeholder only what cyxx leaves `unk`.
 
+## C2. Confirmed record identities (fetched `game.h` + `resource.h`, 2026-07-14)
+
+Mining the actual headers pinned two of our record views to cyxx's **level-load** structs by exact count match —
+strong, independent confirmation, and it named our placeholders:
+
+| our record | cyxx struct | count match | field mapping |
+|---|---|---|---|
+| `EffectSource` @ 0x8F1D, stride 7 | **`level_item_t`** | `SRC_COUNT 70` == `MAX_LEVEL_ITEMS 70` | x→x_pos, y→y_pos, sprite→spr_num, **bounce→y_delta** |
+| `BonusCell` @ 0x8C8D, stride 5 | **`level_bonus_t`** | `count 80` == `MAX_LEVEL_BONUSES 80` | **reserved0/1/2 → tile_num0/tile_num1/count**, cell→pos |
+
+Applied: `BonusCell` placeholders `reserved0/1/2` renamed to `tile_num0/tile_num1/count` (byte-exact — never
+referenced by logic); `EffectSource` + `BonusCell` docstrings cross-ref cyxx. Other level-load structs to leverage
+when we name the loader's tables: `level_gate_t[20]`, `level_column_t[15]`, `level_platform_t[16]`,
+`level_monster_t[150]` (the level's monster spawn table: len/type/spr_num/flags/energy/respawn_ticks/score/x/y).
+
+## C3. `object_t` index ranges (the unified objects_tbl → our separate pools)
+
+cyxx keeps ONE `objects_tbl[OBJECTS_COUNT]`; the union arm is chosen by the object's INDEX. That index map tells
+us which pool is which type:
+
+| cyxx objects_tbl index | union arm | our pool |
+|---|---|---|
+| `objects[1]` | `player_t` | the player slot (0x4F1C, render slot #1) |
+| `objects[2..5]` | `club_projectile_t` | `projectiles[4]` @ 0x4F2E |
+| `objects[11..22]` | `monster_t` | `actors[12]` @ 0x4FD0 |
+| `objects[23..74]` | `thing_t` | the effect/thing pools |
+
+So our `actors` pool IS the **monster** arm — `Actor.state/hp/hits` = `monster_t.state/energy/hit_jump_counter`,
+and `Actor.def_ptr` = `monster_t.ref` (the pointer this record follows). `thing_t` = `{ref, counter, y_velocity}`.
+
 ## D. Pools: object counts (confirms our layout)
 
 | cyxx count | our pool | base |

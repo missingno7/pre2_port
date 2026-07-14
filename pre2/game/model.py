@@ -134,13 +134,14 @@ class ByteBuffer:
 
 @dataclass
 class BonusCell:
-    """One record of the 80-cell bonus/collectible list (stride 5). Only ``cell`` (the packed x/y map-cell
-    word) is read by the scan; the leading bytes are level-init-time payload the scan doesn't interpret."""
+    """One record of the 80-cell bonus/collectible list (stride 5) — cyxx `level_bonus_t`. The scan reads only
+    ``cell`` (the packed x/y map position); the leading bytes are the level-init payload the scan doesn't
+    interpret. Field names from cyxx/blues p2 (MAX_LEVEL_BONUSES 80 == our count)."""
 
-    reserved0: int = 0
-    reserved1: int = 0
-    reserved2: int = 0
-    cell: int = 0xFFFF   # packed (y_cell << 8) | x_cell; 0xFFFF = the cell is empty/collected
+    tile_num0: int = 0   # cyxx level_bonus_t.tile_num0
+    tile_num1: int = 0   # cyxx level_bonus_t.tile_num1
+    count: int = 0       # cyxx level_bonus_t.count
+    cell: int = 0xFFFF   # packed (y_cell << 8) | x_cell; 0xFFFF = empty/collected. cyxx level_bonus_t.pos
 
 
 @dataclass

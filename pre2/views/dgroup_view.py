@@ -833,17 +833,17 @@ class ObjectDef(StructView):
 
 class EffectSource(StructView):
     """One entry of the on-screen effect/particle SOURCE list (0x8F1D, stride 7) — the record
-    ``project_particles`` (8922) animates and projects into a render slot. Names its 4 fields so the projection
-    walk speaks the source's vocabulary (``src.x`` / ``src.sprite`` / ``src.bounce``) instead of raw
-    ``rw(si)`` / ``rw(si+4)`` / ``rb(si+6)``. ``bounce`` [+6] is the signed bounce-phase byte (the caller
-    sign-extends it)."""
+    ``project_particles`` (8922) animates and projects into a render slot. This is cyxx `level_item_t`
+    (MAX_LEVEL_ITEMS 70 == our SRC_COUNT). Names its 4 fields so the projection walk speaks the source's
+    vocabulary (``src.x`` / ``src.sprite`` / ``src.bounce``) instead of raw ``rw(si)`` / ``rw(si+4)`` /
+    ``rb(si+6)``. ``bounce`` [+6] is the signed bounce-phase byte (the caller sign-extends it)."""
 
     __slots__ = ()
 
-    x      = _U16(0)   # world X (>>4 = screen column)
-    y      = _U16(2)   # world Y; the bounce animation writes the new value back here
-    sprite = _U16(4)   # sprite id; 0xFFFF = empty source entry
-    bounce = _U8(6)    # bounce-phase counter (read signed, ping-pongs at +/-4)
+    x      = _U16(0)   # world X (>>4 = screen column). cyxx level_item_t.x_pos
+    y      = _U16(2)   # world Y; the bounce animation writes the new value back here. cyxx level_item_t.y_pos
+    sprite = _U16(4)   # sprite id; 0xFFFF = empty source entry. cyxx level_item_t.spr_num
+    bounce = _U8(6)    # bounce-phase counter (read signed, ping-pongs at +/-4). cyxx level_item_t.y_delta
 
 
 # ---- the player (the 58A7 FSM's struct at 0x4F1C — literally render slot #1 with kinematics appended) -------
