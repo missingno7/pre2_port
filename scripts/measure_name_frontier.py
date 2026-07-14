@@ -28,6 +28,17 @@ from pre2.native.state import NativeGameState
 
 _PLUMBING = ("native/state.py", "views/memory_adapter.py", "measure_name_frontier.py")
 
+# Not every RAW access is a gameplay-logic dissolve target. Categorise the raw modules so the TRUE remaining
+# logic frontier is honest (a bulk region copy or a read-only table read is not "offset arithmetic to name").
+_CATEGORY = {
+    "firefly_sim.py": "bulk",       # the 160-byte swarm-slot blob is serialised as a bytearray, not per-field
+    "object_render.py": "render",   # a render concern — runs over the materialised image by design
+    "particles.py": "render",       # the render-snapshot reader (views/particles.py)
+    "tables.py": "loaded",          # read-only loaded lookup tables (props/bytecode) — loaded input, not state
+    "game_tick_demo.py": "harness",  # _inject — the demo harness, not the shipped tick
+}
+_NOT_FRONTIER = {"bulk", "render", "loaded", "harness"}
+
 
 class _Instrumented:
     """Wraps a DataclassBackend, classifying every access, delegating the actual read/write unchanged."""
@@ -114,13 +125,31 @@ def main() -> int:
         mod = site.split(":", 1)[0]
         by_module[mod] += n
         mod_offs.setdefault(mod, set()).update(raw_offs.get(site, ()))
-    print(f"\n  RAW by module ({len(by_module)}), ranked — the dissolve roadmap:")
-    for mod, n in by_module.most_common():
-        print(f"    {n:>9,}  {mod:<28} ({len(mod_offs.get(mod, ())):>3} offsets)")
 
-    print(f"\n  RAW by call site ({len(raw_sites)}):")
-    for site, n in raw_sites.most_common():
-        print(f"    {n:>9,}  {site}   ({len(raw_offs.get(site, ())):>3} offsets)")
+    # split raw into the TRUE gameplay-logic frontier vs the not-a-target categories
+    cat_totals: Counter = Counter()
+    logic_raw = 0
+    for mod, n in by_module.items():
+        cat = _CATEGORY.get(mod, "logic")
+        cat_totals[cat] += n
+        if cat == "logic":
+            logic_raw += n
+    frontier_denom = view_total + logic_raw
+    print("\n  RAW categorised (only 'logic' is a dissolve target):")
+    for cat, n in cat_totals.most_common():
+        print(f"    {n:>9,}  {cat}")
+    print(f"\n  >>> TRUE gameplay-logic frontier: {view_total:,} named / {frontier_denom:,} nameable"
+          f"  = {100*view_total/frontier_denom:.1f}% done  ({logic_raw:,} logic-raw left)")
+
+    print(f"\n  RAW-LOGIC by module ({sum(1 for m in by_module if _CATEGORY.get(m,'logic')=='logic')}), "
+          f"ranked — the real dissolve roadmap:")
+    for mod, n in by_module.most_common():
+        if _CATEGORY.get(mod, "logic") == "logic":
+            print(f"    {n:>9,}  {mod:<28} ({len(mod_offs.get(mod, ())):>3} offsets)")
+    print("\n  RAW not-a-target (excluded from the frontier):")
+    for mod, n in by_module.most_common():
+        if _CATEGORY.get(mod, "logic") != "logic":
+            print(f"    {n:>9,}  {mod:<28} [{_CATEGORY[mod]}]")
     return 0
 
 

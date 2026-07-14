@@ -10,30 +10,44 @@ same conversion the `object_tick` / `combat` / `player_interaction` grinds alrea
 
 ## Snapshot (368 ticks across 3 demos)
 
-- **VIEW-routed (name-capable): 37.7%** — these already run offset-free the moment the backend resolves by name.
-- **RAW pointer arithmetic: 62.3%** — the frontier, ranked by module below.
+Not every RAW access is a dissolve target — a bulk region copy, a read-only table read, or a render-record
+access is not "offset arithmetic to name." Categorising the raw set gives the HONEST denominator:
+
+- **TRUE gameplay-logic frontier: 61.2% done** — `463,891` named / `758,023` nameable (`294,132` logic-raw left).
+- Excluded (not a dissolve target): `firefly_sim` bulk blob (125k), `object_render`/`particles` render (47k),
+  `game_tick_demo` harness (8k), `tables` loaded (0.6k) — `~181k` of raw that is legitimately not per-field logic.
+
+The progression this session (whole-VIEW% and true-logic-frontier both climb as pools dissolve):
+
+| after | VIEW-routed | true logic frontier |
+|-------|-------------|---------------------|
+| measured start | 37.7% | ~50% |
+| object_particles | 48.3% | — |
+| debris + popup | 49.4% | **61.2%** |
 
 ```
-RAW by module (the dissolve roadmap):
-  125,460  firefly_sim.py          the firefly particle sim (bulk per-slot offset math)
-  110,283  object_inject.py        the variable-stride entity-arena walker (flags1/stride/sprite_ref/skip/...)
-  101,072  object_particles.py     particle projection pass
-   69,454  object_spawn.py         spawn + camera-script pointer walks
-   31,144  player_interaction.py   the object-list collision/pickup loops
-   29,890  object_render.py        the render-record read/write (a RENDER concern, not gameplay state)
+RAW-LOGIC by module — the REAL dissolve roadmap (only these are targets):
+  110,283  object_inject.py        the variable-stride entity ARENA walk (flags1/stride/sprite_ref/skip/...) — HARD
+   69,454  object_spawn.py         spawn + camera-script POINTER walks (partly irreducible pointer residue)
+   31,144  player_interaction.py   object-list collision/pickup loops (mixed: some read read-only type-def tables)
    19,518  player_collision.py     the vertical-extent body-collision scan
-   19,437  object_tick.py          object handler dispatch (mostly ObjectSlot already)
-   17,343  particles.py            particle pool
+   19,437  object_tick.py          object handler dispatch (mostly ObjectSlot already; some raw)
    11,336  combat_interaction.py   enemy-slot + bonus-cell scans
-   10,642  effects_update.py       debris/effect pools
     9,859  player.py               player FSM word/timer fields
     9,594  input_decode.py         demo/idle input record
-    8,118  game_tick_demo.py       _inject — the demo HARNESS (not shipped tick), writes input state
     7,372  loop.py                 the tick spine's own writes
     3,312  camera_scroll.py        scroll/camera followers
+    1,107  object_particles.py     (residual scalars — the pool walk is DONE)
       874  camera_pan.py           camera pan
-      598  tables.py               READ-ONLY loaded lookup tables (legitimately stay as loaded data, not state)
+      738  effects_update.py       (residual scalars — the debris/popup/particle/projectile pools are DONE)
       104  audio.py                sfx pan/level
+
+RAW not-a-target (excluded):
+  125,460  firefly_sim.py   [bulk]    the 160-byte swarm-slot blob (serialised as a bytearray, not per-field)
+   29,890  object_render.py [render]  runs over the materialised image by design (see verify_object_render.py)
+   17,343  particles.py     [render]  the render-snapshot reader
+    8,118  game_tick_demo.py [harness] _inject — the demo harness, not the shipped tick
+      598  tables.py        [loaded]  read-only loaded lookup tables
 ```
 
 ## Reading the roadmap
