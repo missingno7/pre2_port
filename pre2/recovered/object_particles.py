@@ -25,7 +25,7 @@ during pause/scripted pose).
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import RenderSlot, WidthContractBackend
+from pre2.views.dgroup_view import EffectSource, RenderSlot, WidthContractBackend
 from pre2.islands import oracle_link
 
 SRC_LIST = 0x8F1D
@@ -118,24 +118,25 @@ def project_particles(rb, rw):
     state = {"di": DST_SLOTS, "bx": DST_COUNT, "filled_all": False}
 
     def _project(si) -> None:
+        src = EffectSource(be, si)                   # the source entry, by name (reads raw, writes the contract)
         slot = RenderSlot(be, state["di"])
-        slot.x = rw(si)                              # [asm 8955] on-screen: copy raw X into the render slot
+        slot.x = src.x                               # [asm 8955] on-screen: copy raw X into the render slot
 
         # [asm 8959..8974] bounce animation -> ax (added to Y)
         ax = 0
         if not no_anim:
-            al = rb(si + 6)
+            al = src.bounce
             ax = (_s8(al) + 1) & 0xFFFF  # cbw ; inc ax
-            be.wb(si + 6, ax)
+            src.bounce = ax
             if _s8(ax & 0xFF) >= 4:  # cmp al,4 ; jl skips
                 ax = (-ax + 1) & 0xFFFF  # neg ax ; inc ax
-                be.wb(si + 6, ax)
+                src.bounce = ax
 
         # [asm 8974] new Y written back to the source AND into the slot
-        new_y = (ax + rw(si + 2)) & 0xFFFF
-        be.ww(si + 2, new_y)
+        new_y = (ax + src.y) & 0xFFFF
+        src.y = new_y
         slot.y = new_y
-        slot.sprite = rw(si + 4)                     # [asm 897D] sprite id ...
+        slot.sprite = src.sprite                     # [asm 897D] sprite id ...
         slot.source = si                             # ... + back-reference to the source entry
 
         state["di"] += DST_STRIDE
@@ -150,14 +151,15 @@ def project_particles(rb, rw):
             if state["filled_all"]:
                 return True
             si = SRC_LIST + k * SRC_STRIDE
+            src = EffectSource(be, si)
 
-            if rw(si + 4) == 0xFFFF:  # [asm 8930] empty source entry
+            if src.sprite == 0xFFFF:  # [asm 8930] empty source entry
                 continue
 
             # [asm 8936] screen-X cull: ax = (X >> 4) - cam_x ; jb / jg out of window (widened each side by
             # the widescreen item zone; m=0 is byte-exact with the ASM: sxt<0 == the jb 'axb<cam_x', sxt>WIN_X
             # == the jg)
-            axb = (_s16(rw(si)) >> 4) & 0xFFFF
+            axb = (_s16(src.x) >> 4) & 0xFFFF
             sxt = _s16((axb - cam_x) & 0xFFFF)
             if faithful:
                 if sxt < 0 or sxt > WIN_X:
@@ -168,7 +170,7 @@ def project_particles(rb, rw):
 
             # [asm 8945] screen-Y cull (top/bottom widened by the smooth-camera vertical item zone; [0,0] is
             # byte-exact: sy<0 == the 'jb ayb<cam_y', sy>WIN_Y == the jg)
-            ayb = (_s16(rw(si + 2)) >> 4) & 0xFFFF
+            ayb = (_s16(src.y) >> 4) & 0xFFFF
             sy = _s16((ayb - cam_y) & 0xFFFF)
             if sy < -_ITEM_ZONE_Y[0] or sy > WIN_Y + _ITEM_ZONE_Y[1]:
                 continue
