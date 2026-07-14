@@ -5,14 +5,13 @@ exercised — scratchpad shadow_8922.py). These guard the recovered logic in the
 """
 from __future__ import annotations
 
-from pre2.recovered.object_particles import (
-    CAM_X,
-    CAM_Y,
-    DST_SLOTS,
-    FREEZE_FLAG,
-    SRC_LIST,
-    project_particles,
-)
+from pre2.recovered.object_particles import DST_SLOTS, SRC_LIST, project_particles
+
+# DGROUP seed offsets for the dict-backed test memory (project_particles now reads these by NAME via
+# PlayerGlobals; the raw offsets live only here in the verification test, not in the gameplay module).
+CAM_X = 0x2DE4
+CAM_Y = 0x2DE6
+FREEZE_FLAG = 0x6BD5
 
 
 def _mem(kv):

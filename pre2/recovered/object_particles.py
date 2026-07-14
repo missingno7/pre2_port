@@ -25,7 +25,7 @@ during pause/scripted pose).
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import EffectSource, RenderSlot, WidthContractBackend
+from pre2.views.dgroup_view import EffectSource, PlayerGlobals, RenderSlot, WidthContractBackend
 from pre2.islands import oracle_link
 
 SRC_LIST = 0x8F1D
@@ -36,9 +36,6 @@ DST_SLOTS = 0x52E8
 DST_STRIDE = 0x12
 DST_COUNT = 0x14  # 20
 
-CAM_X = 0x2DE4
-CAM_Y = 0x2DE6
-FREEZE_FLAG = 0x6BD5  # bit 0 -> skip the bounce animation
 
 # screen-window culling bounds (inclusive), in >>4 (tile) units after camera subtract
 WIN_X = 0x16
@@ -110,11 +107,11 @@ def project_particles(rb, rw):
     — e.g. LEVEL1's exit semaphore (list index 69, the very last entry) losing its slot to margin-only clutter
     near the player. Prioritizing the faithful set first means an item the ORIGINAL game would show is never
     starved by one only the widescreen enhancement added."""
-    cam_x = rw(CAM_X)
-    cam_y = rw(CAM_Y)
-    no_anim = (rb(FREEZE_FLAG) & 1) != 0
-
     be = WidthContractBackend(rb, rw)   # accumulates the {offset: (value, width)} contract
+    g = PlayerGlobals(be)
+    cam_x = g.cam_col_word
+    cam_y = g.cam_row_word
+    no_anim = (g.frame_blink & 1) != 0
     state = {"di": DST_SLOTS, "bx": DST_COUNT, "filled_all": False}
 
     def _project(si) -> None:
