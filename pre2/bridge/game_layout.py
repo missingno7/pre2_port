@@ -16,6 +16,7 @@ from pre2.game.model import (Actor, ArenaEntity, AttackState, AttractState, Boss
                              ByteBuffer, Camera, CameraScript, DifficultyMode, EffectSlot, HitScratch, Input,
                              LevelState, Motion, Player, PlayerState, Progress, Rng, SceneryState, Scroll,
                              SpawnCursor, WallMarker)
+from pre2.native.object_state import ObjectGraphStore
 
 # named working-memory buffers the tick scribbles as raw bytes: (attr, base, length). Modeled as a bytearray,
 # not fields (transient scratch, not records). These finish draining the mutable state off the image.
@@ -356,40 +357,92 @@ _ROUTES = [
 ]
 
 
-class DataclassBackend:
+def _arena_to_offset(arena, ref) -> int:
+    """``ArenaRef``/``RawRef``/a bare int -> the position ``arena`` (a ``list[(pos, ArenaEntity)]``) recorded for
+    that entity. Tolerates a bare int (a not-yet-swizzled field) so the serialiser works either way."""
+    from pre2.game.ref import ArenaRef, RawRef
+    if isinstance(ref, int):
+        return ref & 0xFFFF
+    if isinstance(ref, RawRef):
+        return ref.value & 0xFFFF
+    if isinstance(ref, ArenaRef):
+        return arena[ref.index][0] & 0xFFFF
+    raise TypeError(f"not an arena reference: {ref!r}")
+
+
+def _arena_from_offset(arena, v: int):
+    """Instance-aware swizzle for a pointer INTO the variable-stride entity arena: a position that matches one of
+    THIS state's parsed record starts -> an ``ArenaRef(index)``; anything else -> an opaque ``RawRef``."""
+    from pre2.game.ref import ArenaRef, RawRef
+    v &= 0xFFFF
+    for idx, (start, _e) in enumerate(arena):
+        if start == v:
+            return ArenaRef(idx)
+    return RawRef(v)
+
+
+class _RefSwizzle:
+    """The offset-knowledge this bridge injects into the shipped :class:`ObjectGraphStore` so its rb/wb compat
+    shim can still serve legacy (not-yet-converted) callers that touch a reference-typed field. Resolves all
+    three flavors: static pool (``ObjectRef``, via ``pointer_layout``), the variable-stride arena (``ArenaRef``,
+    instance-aware against THIS state's parse), and loaded assets (``AssetCursor``, also ``pointer_layout``)."""
+
+    __slots__ = ("_arena",)
+
+    def __init__(self, arena):
+        self._arena = arena
+
+    def is_ref_field(self, inst, field) -> bool:
+        return field in _REF_FIELDS or field in _ARENA_REF_FIELDS or (type(inst), field) in _ASSET_REF_FIELDS
+
+    def to_key(self, ref) -> int:
+        from pre2.game.ref import ArenaRef
+        if isinstance(ref, ArenaRef):
+            return _arena_to_offset(self._arena, ref)
+        from pre2.bridge.pointer_layout import to_offset
+        return to_offset(ref)
+
+    def from_key(self, inst, field, key: int):
+        if field in _ARENA_REF_FIELDS:
+            return _arena_from_offset(self._arena, key)
+        from pre2.bridge.pointer_layout import from_offset
+        return from_offset(key)
+
+
+class DataclassBackend(ObjectGraphStore):
     """Run the game with named structures' live state as real offset-free dataclasses, not bytes.
 
     The north-star mechanism: ``NativeGameState.backend`` swaps to this and the gameplay tick runs UNCHANGED,
     but every read/write that lands in a routed structure's byte range is redirected — via the bridge layout —
     to/from the fields of a live dataclass (``self.player.x``, ``self.camera.col``, ``self.progress.lives``,
     ...). Everything else stays in the image. The offsets live ONLY here in the bridge mapping, not in the game
-    logic or the store. Each structure added to ``_ROUTES`` shrinks the image's live surface. ``materialize``
-    folds the objects back to bytes for the digest.
+    logic or the store: this class does the offset-AWARE construction (parsing an image into named objects +
+    the byte-compat map) and (de)serialisation; the actual object/map storage and rb/rw compat shim it hands
+    off to are the SHIPPED, offset-free :class:`~pre2.native.object_state.ObjectGraphStore`. Each structure
+    added to ``_ROUTES`` shrinks the image's live surface. ``materialize`` folds the objects back to bytes for
+    the digest.
     """
 
-    _IS_DGROUP_BACKEND = True
-    __slots__ = ("_img", "_objs", "_map", "_arena", "_sparse", "_readonly_image", "_level_data")
+    __slots__ = ("_img", "_arena", "_sparse")
 
     def __init__(self, seed, readonly_image=False):
         # readonly_image=True asserts the invariant that the gameplay tick writes NOTHING to the loaded data (all
-        # mutable state is on the object graph); any fallback write then raises. ``_level_data`` is the tick's
-        # own copy of the read-only loaded tables — so (objects + level_data) is a SELF-CONTAINED state of record
-        # and the tick needs no external byte image at all (``_img`` is only a materialize target for the render).
+        # mutable state is on the object graph); any fallback write then raises. ``level_data`` is the tick's own
+        # copy of the read-only loaded tables — so (objects + level_data) is a SELF-CONTAINED state of record and
+        # the tick needs no external byte image at all (``_img`` is only a materialize target for the render).
         data = getattr(seed, "data", seed)
         self._img = data
-        self._readonly_image = readonly_image
-        self._level_data = bytearray(data[DGROUP_BASE:DGROUP_BASE + 0x10000])
-        self._objs: dict[str, object] = {}
+        objs: dict[str, object] = {}
         # absolute dgroup offset -> (object, field, byte_index, width, signed) — mapped straight to the instance
-        self._map: dict[int, tuple] = {}
+        map_: dict[int, tuple] = {}
         for attr, cls, layout, base, count, stride in _ROUTES:
             insts = [_obj_from_image(cls, layout, data, base + k * stride) for k in range(count)]
-            self._objs[attr] = insts[0] if count == 1 else insts
+            objs[attr] = insts[0] if count == 1 else insts
             for k, inst in enumerate(insts):
                 b0 = base + k * stride
                 for f, off, w, s in layout:
                     for bk in range(w):
-                        self._map[(b0 + off + bk) & 0xFFFF] = (inst, f, bk, w, s)
+                        map_[(b0 + off + bk) & 0xFFFF] = (inst, f, bk, w, s)
         # the variable-stride entity arena (0x8489): parse once (boundaries stable during a tick) and route each
         # record's header fields + body bytes. A body byte is marked with width 0 (index into ``inst.body``).
         self._arena: list[tuple[int, ArenaEntity]] = []
@@ -405,11 +458,11 @@ class DataclassBackend:
             hdr = [("stride", 0, 1), ("flags1", 1, 1), ("sprite_ref", 2, 2), ("skip", 4, 1)]
             for f, off, w in hdr:
                 for bk in range(w):
-                    self._map[(i + off + bk) & 0xFFFF] = (e, f, bk, w, False)
+                    map_[(i + off + bk) & 0xFFFF] = (e, f, bk, w, False)
             for k in range(st - 5):
-                self._map[(i + 5 + k) & 0xFFFF] = (e, "body", k, 0, False)
+                map_[(i + 5 + k) & 0xFFFF] = (e, "body", k, 0, False)
             i += st
-        self._objs["entities"] = [e for _, e in self._arena]
+        objs["entities"] = [e for _, e in self._arena]
         # POST-PASS: now that the arena is parsed, swizzle every _ARENA_REF_FIELDS pointer (def_ptr) parsed as a
         # raw int by _obj_from_image into an ArenaRef against the just-built arena — a real reference to the source
         # entity. (Done here, not in _obj_from_image, because the arena is parsed AFTER the pooled structures.)
@@ -418,112 +471,38 @@ class DataclassBackend:
             asset_fs = [f for f, *_ in layout if (cls, f) in _ASSET_REF_FIELDS]
             if not arena_fs and not asset_fs:
                 continue
-            insts = self._objs[attr] if count > 1 else [self._objs[attr]]
+            insts = objs[attr] if count > 1 else [objs[attr]]
             for inst in insts:
                 for f in arena_fs:                   # arena ref: instance-aware
-                    setattr(inst, f, self.arena_from_offset(getattr(inst, f)))
+                    setattr(inst, f, _arena_from_offset(self._arena, getattr(inst, f)))
                 for f in asset_fs:                   # asset cursor: static pool/asset swizzle
                     from pre2.bridge.pointer_layout import from_offset
                     setattr(inst, f, from_offset(getattr(inst, f)))
         # named working-memory buffers (raw bytearrays), mapped byte-for-byte (width 0 -> index into .data)
         for attr, base, ln in _BUFFERS:
             buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + base:DGROUP_BASE + base + ln]))
-            self._objs[attr] = buf
+            objs[attr] = buf
             for k in range(ln):
-                self._map[(base + k) & 0xFFFF] = (buf, "data", k, 0, False)
+                map_[(base + k) & 0xFFFF] = (buf, "data", k, 0, False)
         # sparse working buffers (scattered offsets -> one bytearray, indexed by position)
         self._sparse = []
         for attr, offs in _SPARSE:
             offs = tuple(sorted(offs))
             buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + o] for o in offs))
-            self._objs[attr] = buf
+            objs[attr] = buf
             self._sparse.append((offs, buf))
             for i, o in enumerate(offs):
-                self._map[o & 0xFFFF] = (buf, "data", i, 0, False)
-
-    # convenience accessors
-    player = property(lambda self: self._objs["player"])
-    rng = property(lambda self: self._objs["rng"])
-    camera = property(lambda self: self._objs["camera"])
-    progress = property(lambda self: self._objs["progress"])
-    actors = property(lambda self: self._objs["actors"])
-    entities = property(lambda self: self._objs["entities"])
+                map_[o & 0xFFFF] = (buf, "data", i, 0, False)
+        level_data = bytearray(data[DGROUP_BASE:DGROUP_BASE + 0x10000])
+        super().__init__(objs, map_, level_data, readonly_image, ref_swizzle=_RefSwizzle(self._arena))
 
     def arena_from_offset(self, v: int):
-        """Instance-aware swizzle for a pointer INTO the variable-stride entity arena: a raw offset that hits a
-        record boundary of THIS state's parsed arena -> an ``ArenaRef(index)``; anything else -> an opaque
-        ``RawRef`` (round-trips exactly). Distinct from the static pool ``pointer_layout.from_offset``."""
-        from pre2.game.ref import ArenaRef, RawRef
-        v &= 0xFFFF
-        for idx, (start, _e) in enumerate(self._arena):
-            if start == v:
-                return ArenaRef(idx)
-        return RawRef(v)
+        """See :func:`_arena_from_offset` — kept as a public method for existing bridge-side callers."""
+        return _arena_from_offset(self._arena, v)
 
     def arena_to_offset(self, ref) -> int:
-        """``ArenaRef``/``RawRef`` -> the exact 16-bit arena offset it referenced in this state. Tolerates a bare
-        int (a not-yet-swizzled field) so the shared serialiser works whether or not the post-pass ran."""
-        from pre2.game.ref import ArenaRef, RawRef
-        if isinstance(ref, int):
-            return ref & 0xFFFF
-        if isinstance(ref, RawRef):
-            return ref.value & 0xFFFF
-        if isinstance(ref, ArenaRef):
-            return self._arena[ref.index][0] & 0xFFFF
-        raise TypeError(f"not an arena reference: {ref!r}")
-
-    def rb(self, off: int) -> int:
-        off &= 0xFFFF
-        m = self._map.get(off)
-        if m is None:                               # un-routed -> the read-only loaded tables
-            return self._level_data[off]
-        inst, f, k, w, _s = m
-        if f in _REF_FIELDS or (type(inst), f) in _ASSET_REF_FIELDS:   # pool/asset ref: project -> offset, byte k
-            from pre2.bridge.pointer_layout import to_offset
-            return (to_offset(getattr(inst, f)) >> (8 * k)) & 0xFF
-        if f in _ARENA_REF_FIELDS:                  # an arena pointer: instance-aware ref -> offset, byte k
-            return (self.arena_to_offset(getattr(inst, f)) >> (8 * k)) & 0xFF
-        if w == 0:                                  # a bytearray byte (record body / working buffer)
-            return getattr(inst, f)[k]
-        return (getattr(inst, f) & ((1 << (8 * w)) - 1)) >> (8 * k) & 0xFF
-
-    def wb(self, off: int, val: int) -> None:
-        off &= 0xFFFF
-        val &= 0xFF
-        m = self._map.get(off)
-        if m is None:
-            if self._readonly_image:
-                raise AssertionError(f"gameplay tick wrote to the read-only loaded data at 0x{off:04X} — an "
-                                     f"un-routed mutable byte (the object graph is not the complete store)")
-            self._level_data[off] = val
-            return
-        inst, f, k, w, s = m
-        if f in _REF_FIELDS or (type(inst), f) in _ASSET_REF_FIELDS:   # pool/asset ref: patch byte k, re-swizzle
-            from pre2.bridge.pointer_layout import from_offset, to_offset
-            cur = to_offset(getattr(inst, f))
-            cur = (cur & ~(0xFF << (8 * k))) | (val << (8 * k))
-            setattr(inst, f, from_offset(cur & 0xFFFF))
-            return
-        if f in _ARENA_REF_FIELDS:                  # an arena pointer: patch byte k, re-swizzle instance-aware
-            cur = self.arena_to_offset(getattr(inst, f))
-            cur = (cur & ~(0xFF << (8 * k))) | (val << (8 * k))
-            setattr(inst, f, self.arena_from_offset(cur & 0xFFFF))
-            return
-        if w == 0:                                  # a bytearray byte (record body / working buffer)
-            getattr(inst, f)[k] = val
-            return
-        v = getattr(inst, f) & ((1 << (8 * w)) - 1)
-        v = (v & ~(0xFF << (8 * k))) | (val << (8 * k))
-        if s and v & (1 << (8 * w - 1)):
-            v -= 1 << (8 * w)
-        setattr(inst, f, v)
-
-    def rw(self, off: int) -> int:
-        return self.rb(off) | (self.rb((off + 1) & 0xFFFF) << 8)
-
-    def ww(self, off: int, v: int) -> None:
-        self.wb(off, v & 0xFF)
-        self.wb((off + 1) & 0xFFFF, (v >> 8) & 0xFF)
+        """See :func:`_arena_to_offset` — kept as a public method for existing bridge-side callers."""
+        return _arena_to_offset(self._arena, ref)
 
     def materialize(self, data=None) -> None:
         # Self-contained: reconstruct the whole DGROUP from (loaded tables + the object graph), no external state.
