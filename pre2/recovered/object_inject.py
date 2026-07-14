@@ -249,8 +249,8 @@ def _project_writes(pr: ProjectResult, si: int):
 def _entry_project(rb, rw, si, cam_x, cam_y, find_free, cull=True) -> ProjectResult:
     """Call :func:`project_entity` for the entity record at ``si`` (X=[si+9], Y=[si+0xB], sprite=[si+2],
     aux/flip=[si+5], back-ptr=si)."""
-    return project_entity(rw((si + 9) & 0xFFFF), rw((si + 0xB) & 0xFFFF), rw((si + 2) & 0xFFFF),
-                          rb((si + 5) & 0xFFFF), si & 0xFFFF, cam_x, cam_y, find_free, cull=cull)
+    ent = LiveEntityRecord(WidthContractBackend(rb, rw), si)     # read the source record fields by name
+    return project_entity(ent.x, ent.y, ent.sprite_ref, ent.aux5, si & 0xFFFF, cam_x, cam_y, find_free, cull=cull)
 
 
 def handler_project_mode(rb, rw, si, cam_x, cam_y, find_free, mode):
@@ -431,8 +431,11 @@ class LiveEntityRecord(StructView):
 
     stride     = _U8(0)     # [+0] record length in bytes
     flags1     = _U8(1)     # [+1] bit7 = off-screen-cull, bits0-6 = handler index
-    sprite_ref = _U16(2)    # [+2] word; 0xFFFF = empty
+    sprite_ref = _U16(2)    # [+2] word; 0xFFFF = empty (also the projected sprite id)
     _mode      = _U8(4)     # [+4] the record mode byte (bit2 = skip)
+    aux5       = _U8(5)     # [+5] the flip/aux byte copied into the projected slot
+    x          = _U16(9)    # [+9] world X (projected into the object slot)
+    y          = _U16(0xB)  # [+0xB] world Y
 
     @property
     def si(self) -> int:
