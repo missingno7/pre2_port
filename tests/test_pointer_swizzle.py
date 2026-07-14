@@ -140,6 +140,25 @@ def test_current_hit_object_is_adopted_as_a_reference_in_the_shipped_model():
     assert isinstance(sc.current_hit_object, RawRef) and dcb.rw(0x6BB1) == 0
 
 
+def test_all_five_pool_pointer_globals_are_stored_as_references():
+    """Every pointer in _REF_FIELDS resolves to a dataclass field that genuinely holds an offset-free reference
+    (ObjectRef/RawRef), not a raw int — the full pointer-globals family is adopted, byte-swizzled by the bridge."""
+    from pre2.bridge.game_layout import _REF_FIELDS, DataclassBackend
+    from pre2.game.ref import ObjectRef, RawRef
+    from pre2.native.state import NativeGameState
+
+    assert _REF_FIELDS == {"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b"}
+    st = NativeGameState(bytearray(0x10000 + (0x1A0F << 4)))
+    dcb = DataclassBackend(st, readonly_image=False)
+    found = 0
+    for inst in dcb._objs.values():
+        for name in _REF_FIELDS:
+            if hasattr(inst, name) and name in getattr(inst, "__dataclass_fields__", {}):
+                assert isinstance(getattr(inst, name), (ObjectRef, RawRef)), f"{name} must hold a reference"
+                found += 1
+    assert found == len(_REF_FIELDS), f"expected all {len(_REF_FIELDS)} ref fields, found {found}"
+
+
 def test_deref_parity_objectref_resolves_to_the_same_record_as_the_offset_view():
     """A swizzled ObjectRef, dereferenced offset-free against the live pools, is the SAME record the offset-keyed
     ObjectSlot reads at the DOS offset — so pointer following can move to references with zero behaviour change."""

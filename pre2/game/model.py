@@ -433,7 +433,7 @@ class SpawnCursor:
     burst_x: int = 0           # spawn_effect_burst origin X
     burst_y: int = 0           # ... origin Y
     burst_sprite: int = 0      # ... the burst sprite id
-    spawned_ptr: int = 0       # the just-spawned burst-slot pointer
+    spawned_ptr: object = field(default_factory=lambda: RawRef(0))  # the just-spawned burst-slot pointer (ObjectRef)
     anim_ready: int = 0        # object_update's per-step anim-ready scratch byte
     spawn_offset_ring: int = 0  # 16-slot ring index into the spawn X-offset table
 
@@ -453,9 +453,11 @@ class CameraScript:
     cursor_latch_x: int = 0    # cursor pos latched per script command
     cursor_latch_y: int = 0
     cam_param_e: int = 0       # the 5th camera-target param word (no position pair)
-    cam_target_ptr: int = 0    # camera target record-ptr latch
-    target_a: int = 0          # camera target record-ptr A (free sprites that hit it)
-    target_b: int = 0          # camera target record-ptr B
+    # the 3 camera-target record pointers — offset-free ObjectRefs (they hold references to target_records slots;
+    # on the level-9 gorilla fight these same bytes are cyxx boss.obj1/obj2/obj3). The bridge swizzles ref<->offset.
+    cam_target_ptr: object = field(default_factory=lambda: RawRef(0))  # camera target record-ptr latch
+    target_a: object = field(default_factory=lambda: RawRef(0))        # target A (free sprites that hit it)
+    target_b: object = field(default_factory=lambda: RawRef(0))        # target B
 
 
 @dataclass

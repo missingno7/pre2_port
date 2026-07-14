@@ -70,7 +70,7 @@ DGROUP_BASE = 0x1A0F << 4
 # pointers. The bridge swizzles ref<->offset at the byte boundary (rb/wb + the (de)serialiser) via
 # pointer_layout, so the byte image stays identical while the shipped model holds a real reference. This set is
 # the ONLY coupling that marks a field as a swizzled pointer; it grows one pointer family at a time.
-_REF_FIELDS = frozenset({"current_hit_object"})
+_REF_FIELDS = frozenset({"current_hit_object", "spawned_ptr", "cam_target_ptr", "target_a", "target_b"})
 
 PLAYER_BASE = 0x4F1C          # the player render/physics record base [asm]
 _RNG_LCG = 0x2CEC             # the 4-byte LCG mixer
