@@ -584,6 +584,14 @@ class PlayerGlobals(DgroupView):
     in_right      = _U8(0x27EC)   # right held (drives facing +1 [58BF])
     in_left       = _U8(0x27ED)   # left held (drives facing -1 [58D9])
 
+    # --- DC1's demo-buffer / joystick-gate state (pre2/recovered/input_decode.py) ---
+    pending_key    = _U8(0x2874)   # the DC1 pending make-code / demo any-key latch [asm 0DD6]
+    demo_ptr       = _U16(0x287A)  # demo buffer cursor (entries are 2 bytes at DS:[ptr+0x3F]) [asm 0DCE]
+    demo_byte      = _U8(0x287C)   # current packed input byte (playback) [asm 0E12]
+    demo_cnt       = _U8(0x287D)   # remaining repeat count for demo_byte (playback) [asm 0E0E]
+    joystick_cfg   = _U8(0x27E4)   # bit7 set => joystick absent [asm 0D6C..0D72]
+    joystick_disable = _U8(0x27D9)  # nonzero => joystick absent [asm 0D74..0D79]
+
 
 #: Back-compat alias — the class began as the collision island's globals and grew into the player's.
 CollisionGlobals = PlayerGlobals

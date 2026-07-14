@@ -32,7 +32,9 @@ _BUFFERS = [
     ("effect_source_camera", 0x8F1D, 0x91FC - 0x8F1D),
     ("effect_pool_5570", 0x5570, 0x5648 - 0x5570),       # the 0x5570 effect/particle pool region
     ("boot_scratch_1004", 0x1004, 0x04),
-    ("keyboard_demo_state", 0x2804, 0x2879 - 0x2804),    # the keyboard scan + demo-cursor state
+    # keyboard_demo_state split around pending_key (0x2874), now named (Input)
+    ("keyboard_demo_state_a", 0x2804, 0x2874 - 0x2804),
+    ("keyboard_demo_state_b", 0x2875, 0x2879 - 0x2875),
     ("demo_input_buffer", 0x00D6, 0x0125 - 0x00D6),      # the demo/idle input record buffer
     # decode_input's demo-recording write lands at a runtime DEMO_PTR-relative offset that ranges over this
     # whole low-memory scratch region (was under-sized, causing a real gap during recording-triggering demos)
@@ -51,8 +53,9 @@ _BUFFER_BYTES = sum(ln for _, _, ln in _BUFFERS)
 # sparse working buffers: the last scattered scratch bytes, woven BETWEEN routed fields (so not contiguous).
 # Each groups a list of specific offsets into one named bytearray. Offsets live here in the bridge, as intended.
 _SPARSE = [
-    # input_scratch trimmed: in_aux (0x27E9) + idle_clock (0x27F0-1) are now named (AttractState)
-    ("input_scratch", (0x27F2, 0x27F3, 0x287A, 0x287B)),
+    # input_scratch trimmed: in_aux (0x27E9) + idle_clock (0x27F0-1) are now named (AttractState);
+    # demo_ptr (0x287A-B) is now named (Input)
+    ("input_scratch", (0x27F2, 0x27F3)),
     # render_ptr_scratch trimmed: col_ring (0x2DE8-9) is now named (SceneryState); scroll_copy_src (0x2DBA-B),
     # row_ring (0x2DEA-B) and scroll_anim_ctr (0x2DF5) are now named (Camera/SceneryState)
     ("render_ptr_scratch", (0x2DBE, 0x2DBF, 0x2DF2, 0x2DF6, 0x2DF7)),
@@ -107,6 +110,9 @@ PROGRESS_LAYOUT = [
 INPUT_LAYOUT = [
     ("up", 0x27EA, 1, False), ("down", 0x27EB, 1, False), ("left", 0x27ED, 1, False),
     ("right", 0x27EC, 1, False), ("fire", 0x27E8, 1, False), ("source", 0x2879, 1, False),
+    ("pending_key", 0x2874, 1, False), ("demo_ptr", 0x287A, 2, False), ("demo_byte", 0x287C, 1, False),
+    ("demo_cnt", 0x287D, 1, False), ("joystick_cfg", 0x27E4, 1, False),
+    ("joystick_disable", 0x27D9, 1, False),
 ]
 LEVEL_STATE_LAYOUT = [
     ("flags", 0x8166, 1, False), ("end_mode", 0x6BE6, 1, False), ("respawn_state", 0x6BE4, 1, False),

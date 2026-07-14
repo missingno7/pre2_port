@@ -373,6 +373,12 @@ class Input:
     right: int = 0
     fire: int = 0
     source: int = 0       # 0 = live keyboard, 1 = demo playback
+    pending_key: int = 0    # the DC1 pending make-code / demo any-key latch
+    demo_ptr: int = 0       # demo buffer cursor (entries are 2 bytes at DS:[ptr+0x3F])
+    demo_byte: int = 0      # current packed input byte (playback)
+    demo_cnt: int = 0       # remaining repeat count for demo_byte (playback)
+    joystick_cfg: int = 0     # bit7 set => joystick absent
+    joystick_disable: int = 0  # nonzero => joystick absent
 
     # read/write aliases of the DOS view's field names
     @property
