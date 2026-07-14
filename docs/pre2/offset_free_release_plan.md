@@ -52,3 +52,46 @@ combat_interaction 11k, player 10k, input_decode 10k, object_inject 9k, loop 7k,
    true detachment); attaching the bridge restores them for verification.
 4. **Gate**: extend `test_model_detached` to the whole shipped closure (no offsets, no bridge, no VM) and the
    deploy DENY so nothing leaks back.
+
+## THE CRUX FINDING (2026-07-14, converting object_inject) — the ratchet can't reach 0 module-by-module alone
+
+Converted `pre2/recovered/object_inject.py`'s full logic (project_entity + 8 handlers + second_pass_tick) to a
+genuine offset-free implementation operating on real objects. **It cannot become the SOLE implementation yet**:
+6+ committed tests legitimately drive the whole tick over a plain `ByteBackend` (the class-level default —
+`test_cold_boot`, `test_faithful_golden`, `test_game_model`, `test_named_view`, `test_object_backed`,
+`test_object_roundtrip`), plus the VM hybrid hook (`pre2/checkpoints/object_inject.py`) needs the byte calling
+convention to hook live VM memory. So the pre-conversion implementation is KEPT (renamed `_bytes`), and
+`native_object_system_step` dispatches on `state.backend`'s capability (duck-typed: real objects -> the new
+pure path; plain `ByteBackend` -> the `_bytes` fallback). Both paths verified byte-exact (5456-tick corpus +
+1579-tick lifecycle + 919 render frames + 986 pytest).
+
+**The important, checked-explicitly consequence: neither `scripts/play_native.py` nor
+`pre2/native/cold_boot.py` ever swaps `state.backend` away from the default `ByteBackend`.** So converting a
+module's LOGIC — even perfectly, even proven byte-exact — does NOT by itself change what the deployed product
+(`dist/pre2native`) executes. The new pure path only runs today under `DataclassBackend` (i.e., inside
+verification scripts/tests that explicitly construct it — legitimately allowed, since that's the bridge's job).
+**The literal 855-style ratchet count is therefore the WRONG single metric**: it can stay flat across genuine,
+verified per-module conversions, because the dual-path keeps the old call sites physically present (renamed,
+not deleted) until the boot-flip lands. Reducing it to 0 requires retiring the `_bytes` paths file by file,
+which requires the boot-flip FIRST (see below) — not more per-module conversions in isolation.
+
+## Stage 2.5 (NEW, now the priority): the boot-flip
+
+For a per-module dual-path conversion to matter, `NativeGameState`'s runtime state of record must become the
+object graph BY DEFAULT for the actual product loop — without `pre2.native`/`pre2.recovered` importing
+`pre2.bridge` (the layering rule). The blocker: constructing the object graph from an image needs the offset
+LAYOUT (`_ROUTES`, `ACTOR_LAYOUT`, ...), which is bridge-only.
+
+Resolution sketched, not yet built: regenerate `pre2/native/boot_data.py` (currently a raw byte blob requiring
+the layout to unpack) as a SHIPPED, generated Python module that constructs the INITIAL object graph directly —
+`pre2.game.model.Player(x=.., ...)`, the initial `Actor`/`ArenaEntity` lists, etc. — as literal constructor
+calls, with NO offset knowledge needed at import time (a one-time, bridge-side GENERATION step, analogous to how
+`boot_data.py` itself was originally produced by a probe/extraction script — the OUTPUT carries no ongoing
+offset dependency). `NativeGameState.__init__` then seeds `pre2.native.object_state.ObjectGraphStore` directly
+from that generated module (still zero bridge import — the generated module lives in `pre2.native`), making the
+object graph the ACTUAL DEFAULT for the real product. Once THIS lands, retiring each module's `_bytes` path
+(and the ratchet genuinely reaching 0) becomes real, verifiable, one module at a time — each retirement gated by
+the SAME corpus/lifecycle/render proofs, now exercised by the true default instead of a swapped-in backend.
+
+This is the NEXT priority — bigger than any single module conversion, and the actual unlock for every
+conversion done so far and still to come.
