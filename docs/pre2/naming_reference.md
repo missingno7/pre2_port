@@ -25,7 +25,7 @@ disambiguation aid**, NOT a find-replace source. Verified unions:
 | **0x6EA9** | `WALL_MARKER_LIST` (collision, asm 64FA) **and** the firefly swarm slots (asm 54AB) — same 0x55AA-dead sentinel | `fly_tbl` | UNION — keep both; region reused per level |
 | **0x6BC9** | `HURT_COOLDOWN` (combat spawn, asm 8276) **and** `BONUS_ENERGY_CTR` (pickup, asm 868E) | `bonus_energy_counter` | UNION — keep both per-context names |
 | `Motion.low_gravity` @ 0x6BC7 | glide/float gate (asm) | `player_gravity_flag` (0/1/2) | cyxx clarifies it's tri-state; note in comment, keep field |
-| cluster `CameraScript` @ 0xA3F7+ | camera-target + script cursor | overlaps `boss` (gorilla) `obj1/2/3`, `hdir`, `x_dist` | PARTIAL overlap — needs per-field check, not a wholesale rename |
+| cluster `CameraScript` @ 0xA3F7+ | camera-script engine (asm 71BF/7203/7290 script entries; TARGET_A/B camera-target ptrs) | gorilla `boss` `obj1/2/3`, `hdir`, `x_dist` | RESOLVED = UNION. Our ASM shows a GENERAL camera-script/target state machine; cyxx's `boss` reuses the same bytes on the level-9 gorilla fight. Keep our names; cyxx is the level-9 view. |
 | `Scroll.to_dark/to_light/lights_off` @ 0x6C01/2/4 | palette day/night fields | `light {palette_flag1/2,state}` | matches — safe to note; the cluster mixes light + scroll |
 
 **Rule going forward:** cyxx names are a reference in [naming_reference.md](naming_reference.md), added as

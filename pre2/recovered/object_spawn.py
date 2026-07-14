@@ -148,6 +148,8 @@ SCAN_PROJ = 0x4F2E          # the 4 thrown-weapon projectile slots
 SCAN_PROJ_N = 4
 TARGET_A = 0xA423           # camera target record-ptr A (free 0x19C/0x19D sprites that hit it)
 TARGET_B = 0xA425           # camera target record-ptr B
+                            # (UNION: on the level-9 gorilla fight these camera-target ptrs are the boss's
+                            #  obj1/obj2/obj3; cyxx names the level-9 view boss.obj1..3. Our name = general engine)
 TARGET_SPRITES = (0x19C, 0x19D)
 
 
