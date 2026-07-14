@@ -651,6 +651,30 @@ class LoaderGlobals(DgroupView):
     sprite_segment_table = _U16Array(0x62E8, 0x200)  # [asm 2F12]
 
 
+class SfxTableEntry(StructView):
+    """One entry of the per-effect ``{src, len}`` SFX descriptor table (0x1009, stride 4) — the PCM source
+    offset + length ``native_play_sfx``'s digital path copies into the active descriptor."""
+
+    __slots__ = ()
+
+    src    = _U16(0)   # PCM source offset into the sample bank [asm 02b7]
+    length = _U16(2)   # PCM length [asm 02be]
+
+
+class AudioGlobals(DgroupView):
+    """The audio-command state (``play_sfx`` dispatch + the song loader) — ``pre2/native/audio.py`` reproduces
+    these byte-exact so the enhanced player's per-frame poll can read them."""
+
+    __slots__ = ()
+
+    sfx_src = _U16(0x1004)          # the active SFX descriptor: PCM source offset [asm 02b7]
+    sfx_len = _U16(0x1006)          # ... PCM length [asm 02be]
+    sfx_pcspk_note = _U16(0x1035)   # the PC-speaker active-note pointer [asm 0292]
+    sfx_sample_seg = _U16(0x0B59)   # the SFX PCM sample-bank segment [asm 07C9]
+    song_length = _U8(0xDC2)        # the loaded song's order-table length [asm 22FE]
+    sfx_entries = StructArray(0x1009, 4, 11, SfxTableEntry)   # the 11-effect {src,len} table [asm 02a9]
+
+
 class RngView(DgroupView):
     """The game's two PRNG state blocks, NAMED — replaces the 4-line read/advance/write-back boilerplate at
     every roll site with ``rng.roll()``. The generator MATH stays in pre2/recovered/prng.py (this view is

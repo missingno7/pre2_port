@@ -47,6 +47,7 @@ SPEED_CURVE = 0x78C6          # distance-from-target -> vertical scroll speed [c
 # (wall) flag (collision_side_handler [6531]).
 CEIL_HANDLER = 0x805E
 DIRTY_KIND = 0x4DF8            # tile id -> 0 direct-redraw / >=1 whole-grid-dirty [player_collision _bridge_dirty 5C7B]
+SONG_INDEX = 0x2D20            # level -> per-level song index [asm 01ab, native_level_song_name]
 
 
 class Tables:
@@ -54,7 +55,7 @@ class Tables:
     ``t.floor_props[tile]`` / ``t.cos[angle]`` / ``t.sprite_half_w(id)``."""
 
     __slots__ = ("_rb", "_read_word", "floor_props", "ceil_props", "tile_props", "cos", "sin", "sprite_geom",
-                 "player_anim_height", "speed_curve", "ceil_handler", "dirty_kind")
+                 "player_anim_height", "speed_curve", "ceil_handler", "dirty_kind", "song_index")
 
     def __init__(self, read_byte, read_word=None):
         self._rb = read_byte
@@ -67,6 +68,7 @@ class Tables:
         self.sin = ByteTable(read_byte, SIN)
         self.ceil_handler = ByteTable(read_byte, CEIL_HANDLER)
         self.dirty_kind = ByteTable(read_byte, DIRTY_KIND)
+        self.song_index = ByteTable(read_byte, SONG_INDEX)
         self.sprite_geom = ByteTable(read_byte, SPRITE_GEOM)  # index by (id & 0x1FFF)<<1 (+1 = height)
         self.player_anim_height = ByteTable(read_byte, PLAYER_ANIM_HEIGHT)
 
