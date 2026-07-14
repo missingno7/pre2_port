@@ -646,6 +646,20 @@ class PlayerGlobals(DgroupView):
 CollisionGlobals = PlayerGlobals
 
 
+class IrisView(DgroupView):
+    """The level-end IRIS-CLOSE animation's scratch state (1030:316F/31F4..32DD) — unnamed animation scratch,
+    accessor form (native_iris_close)."""
+
+    __slots__ = ()
+
+    step       = _U16(0x2DC0)   # radius shrink step per frame (grows every 0x14 frames)
+    accel_ctr  = _U16(0x2DC2)   # the accel counter (bumps step when it reaches 0x14)
+    clamp      = _U16(0x2DC4)   # the max(2*Y, 0xF0) radius clamp
+    center_y   = _U16(0x2DC6)   # iris centre Y (player screen Y)
+    center_x   = _U16(0x2DC8)   # iris centre X (player screen X)
+    radius     = _U16(0x2DD0)   # the current radius; != 0 -> native_render composes SceneKind.IRIS
+
+
 class LoaderGlobals(DgroupView):
     """The asset-loader / boot layout fields (main's 0107..0155 block + the 107B stacking loader) — the
     load-buffer bookkeeping the VM-less cold boot and front end reproduce byte-exactly."""
@@ -1191,6 +1205,7 @@ PlayerGlobals.effect_sources = StructArray(0x8F1D, 7, 0x46, EffectSource)   # th
 PlayerGlobals.bonus_cells = StructArray(0x8C8D, 5, 0x50, BonusCellSlot)     # the 80-cell bonus/collectible list
 PlayerGlobals.item_snapshot = _U16Array(0x6C12, 0x47)    # native_4f6c's effect-source snapshot (0x46 + end marker)
 PlayerGlobals.active_flag_snapshot = _U8Array(0xA2A8, 0x50)   # native_4f6c's respawn active-flag snapshot
+PlayerGlobals.item_queue = _U8Array(0x6C12, 0x71)   # the collected-item queue / per-type count table [asm 51e2]
 PlayerGlobals.cave_triggers = StructArray(0x8367, 7, 20, CaveTriggerEntry)  # the cave/teleport trigger table
 PlayerGlobals.trail_ring_slots = StructArray(0x4F76, 0x12, 5, RenderSlot)   # the trail/dust ring (the cursor
 #     g.trail_ring walks DOWN with wrap 0x4F76 -> 0x4FBE) [5E2E-5E37]
