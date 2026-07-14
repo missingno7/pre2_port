@@ -935,6 +935,19 @@ class ObjectDef(StructView):
     d14 = _U8(0x14)
 
 
+class AttackPhaseEntry(StructView):
+    """One entry of the 0x7B04 attack-phase table (stride 5) — cyxx-unnamed. Indexed by
+    ``PlayerGlobals.attack_phase``; ``player_state_attack``/``_attack_render_sprite``/``_attack_spawn`` read it
+    for the phase's frame-table pointer, sound effect, damage/tolerance value, and dispatch flag."""
+
+    __slots__ = ()
+
+    frametbl_ptr = _U16(0)   # -> the {frame, sprite_id, x_off, y_off} render-sprite frame table [asm 6081]
+    sfx          = _U8(2)    # play_sfx dl for the sound-path branch [asm 5FD2]
+    v19          = _U8(3)    # damage/hit-tolerance value (x4 if PlayerGlobals.charge) [asm 5FB1]
+    flag         = _U8(4)    # bit6 selects render-sprite vs sound path; bit0 gates the projectile spawn [asm 5FC3/600F]
+
+
 class EffectSource(StructView):
     """One entry of the on-screen effect/particle SOURCE list (0x8F1D, stride 7) — the record
     ``project_particles`` (8922) animates and projects into a render slot. This is cyxx `level_item_t`

@@ -23,8 +23,8 @@ for genuinely dynamic data — the anim/impulse/phase TABLES, the trail ring, th
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import (DictBackend, PLAYER_BASE, PlayerGlobals, PlayerView, RENDER_SLOTS_BASE,
-                                    WidthContractBackend)
+from pre2.views.dgroup_view import (AttackPhaseEntry, DictBackend, PLAYER_BASE, PlayerGlobals, PlayerView,
+                                    RENDER_SLOTS_BASE, WidthContractBackend)
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
@@ -831,7 +831,7 @@ def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     records {frame, sprite_id, x_off, y_off}, 0x55AA terminator). Sets [0x4F0E]/[0x4F0A]/[0x4F0C] with the
     facing flip; leaves them unchanged if the frame is not in the table."""
     p, _g, _be = _views(rb, rw, out)                            # reads see the caller's pending writes (rw = overlay)
-    base = rw(rec)                                              # [6081] si = phase.frametbl_ptr
+    base = AttackPhaseEntry(DictBackend(rb, rw), rec).frametbl_ptr   # [6081] si = phase.frametbl_ptr
     dh = (frame >> 8) & 0x80                                    # [6088-60A5] facing bit of the frame
     want = frame & 0x1FFF                                       # [6085-608A] frame, high byte masked to 0x1F
     off = 0xFFF8
@@ -859,11 +859,12 @@ def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     Returns True if a slot was taken (the caller then sets [0x4F0E]=0xFFFF)."""
     be = DictBackend(rb, rw, out)
     p, g = PlayerView(be), PlayerGlobals(be)
+    phase = AttackPhaseEntry(be, rec)
     slot = next((s for s in g.projectiles if s.free), None)    # [627C-6293] the first free 0x4F2E slot
     if slot is None:
         return False
-    slot.kind = (rb((rec + 4) & 0xFFFF) >> 1) & 3              # [601C-601E] (flag>>1)&3 (al is post-shr)
-    bx = rw(rec)                                               # [6021] frame-table ptr
+    slot.kind = (phase.flag >> 1) & 3                           # [601C-601E] (flag>>1)&3 (al is post-shr)
+    bx = phase.frametbl_ptr                                     # [6021] frame-table ptr
     while rw(bx) != 0x55AA:                                    # [6025-602B] walk to the terminator
         bx = (bx + 2) & 0xFFFF
     bx = (bx + 6) & 0xFFFF                                     # [602D] past terminator -> the spawn record
@@ -906,7 +907,8 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
 
     phase = g.attack_phase                                                    # [5FA9-5FAF]
     rec = (ATTACK_PHASE_TABLE + 5 * phase) & 0xFFFF
-    v19 = rb((rec + 3) & 0xFFFF)                                              # [5FB1] phase.v19
+    pe = AttackPhaseEntry(be, rec)
+    v19 = pe.v19                                                              # [5FB1] phase.v19
     if g.charge != 0:                                                         # [5FB5-5FBE]
         v19 = (v19 << 2) & 0xFF
     g.attack_v19 = v19                                                        # [5FC0]
@@ -926,7 +928,7 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
         return out, sfx
 
     # sound path [5FD2+]
-    g.input_suppress = rb((rec + 2) & 0xFFFF)                                 # [5FD2] phase.sfx
+    g.input_suppress = pe.sfx                                                 # [5FD2] phase.sfx
     sfx.append(5 if phase == 0 else (0 if phase == 1 else 0x0A))             # [5FD9-5FEB] play_sfx dl
     a27 = out[P_ANIM_B]                                                         # [5FF0] (post set_anim)
     if a27 == 6:                                                             # [5FF3-5FF5]
@@ -941,7 +943,7 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
             g.trail_ring = trail[1]
     if g.unk_6BFE == 0:                                                       # [6004-600B]
         p.yvel = ((p.yvel & 0xFFFF) + dy) & 0xFFFF
-    if (rb((rec + 4) & 0xFFFF) & 1) and _attack_spawn(out, rec, rb_ov, rw_ov):  # [600F-6017] flag bit0 + free slot
+    if (pe.flag & 1) and _attack_spawn(out, rec, rb_ov, rw_ov):              # [600F-6017] flag bit0 + free slot
         p.slot0.sprite = 0xFFFF                                               # [6070] suppress the player draw
     elif g.fall_frames == 0:                                                  # [6075-607A]
         _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)                  # [6081]
