@@ -113,12 +113,13 @@ def object_tick(mem) -> None:
         nx, ny = apply_velocity(s.x, s.y, s.xvel, s.yvel)        # [6861-6873]
         s.x = nx; s.y = ny
         d = s.def_ptr
-        if mem.rb(d + 4) & 8:                                    # [6875-687E] terrain collision gate
+        dv = ObjectDef(mem, d)                                   # the type-def record, by name
+        if dv.d4 & 8:                                            # [6875-687E] terrain collision gate
             o = {"x": s.x, "y": s.y, "xvel": s.xvel, "yvel": s.yvel, "anim_ptr": s.anim_ptr}
-            df = {"d4": mem.rb(d + 4)}
+            df = {"d4": dv.d4}
             terrain_collision(o, df, mem.read_map, mem.prop_a, mem.prop_b, mem.slope, mem.rw)
             s.x = o["x"]; s.y = o["y"]; s.xvel = o["xvel"]
-            s.yvel = o["yvel"]; s.anim_ptr = o["anim_ptr"]; mem.wb(d + 4, df["d4"])
+            s.yvel = o["yvel"]; s.anim_ptr = o["anim_ptr"]; dv.d4 = df["d4"]
         try:                                                     # [6881-68E6] animation advance
             anim = advance_animation(s.anim_ptr, mem.rw, s.sprite, mem.rb(si + 9), mem.scale())
         except ObjectScaleUnsupported as e:
