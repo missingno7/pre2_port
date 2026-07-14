@@ -2420,6 +2420,7 @@ FIELDS = {
     'LoaderGlobals.reset_base': (0x0039, 2),
     'LoaderGlobals.fg_bank': (0x003B, 2),
     'LoaderGlobals.load_top': (0x2875, 2),
+    'LoaderGlobals.sprites_seg': (0x2DB4, 2),
     'PlayerGlobals.attract_mode': (0x083D, 1),
     'PlayerGlobals.attract_level': (0x083E, 1),
     'PlayerGlobals.energy': (0x27D6, 1),

@@ -602,6 +602,11 @@ class LoaderGlobals(DgroupView):
     #                             it; missing = no foreground) [asm 0123]
     year       = _U16(0x0037)   # the DOS clock year captured at boot (the creators-photo gate: < 0x7CA
     #                             (1994) skips it) [asm 25F6]
+    sprites_seg = _U16(0x2DB4)  # the global SPRITES.SQZ bank's load segment [asm 2E12, native_build_sprite_bank]
+    # the per-sprite far-pointer tables the global sprite bank writes, indexed by sprite id (native_build_
+    # sprite_bank/2EE2-2F2A); 0x200 covers the 0x7190 descriptor table's declared capacity (~460 entries).
+    sprite_offset_table = _U16Array(0x5F48, 0x200)   # [asm 2F0E]
+    sprite_segment_table = _U16Array(0x62E8, 0x200)  # [asm 2F12]
 
 
 class RngView(DgroupView):

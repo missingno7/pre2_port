@@ -17,18 +17,11 @@ from pre2.recovered.sprite_bank import (
     build_sprite_bank,
     build_sprite_offset_tables,
 )
+from pre2.views.dgroup_view import LoaderGlobals
 
 _DS = DATA_SEG << 4
 _TABLE = 0x7190        # the 0x7190 sprite descriptor table (static DGROUP data)
 _YOFFTAB = 0x752A      # [asm 2E1F] per-sprite (x_off, y_off) draw-offset table
-_OFFTAB = 0x5F48       # [asm 2F0E] per-sprite offset table
-_SEGTAB = 0x62E8       # [asm 2F12] per-sprite segment table
-_LOAD_TOP = 0x2875     # the bump-allocator load top
-_SPRITES_SEG = 0x2DB4  # [asm 2E12] the SPRITES.SQZ load segment
-
-
-def _ww(state, off: int, val: int) -> None:
-    state.ww(off, val)
 
 
 def native_build_sprite_bank(state, *, game_root: str, sprites_seg: int | None = None) -> int:
@@ -38,8 +31,9 @@ def native_build_sprite_bank(state, *, game_root: str, sprites_seg: int | None =
 
     The ``0x7190`` descriptor table is read from ``state.data`` (static DGROUP data present from boot)."""
     d = state.data                                            # `d` for the SPRITES bank segment write + table slices
+    g = LoaderGlobals(state)
     if sprites_seg is None:
-        sprites_seg = state.rw(_LOAD_TOP)
+        sprites_seg = g.load_top
 
     table = bytes(d[_DS + _TABLE:_DS + _TABLE + 0x400])        # enough for the 460 entries + terminator
 
@@ -59,11 +53,11 @@ def native_build_sprite_bank(state, *, game_root: str, sprites_seg: int | None =
 
     offsets, segments = build_sprite_offset_tables(table, sprites_seg)
     for i, (off, seg) in enumerate(zip(offsets, segments)):   # [asm 2F0E/2F12]
-        _ww(state, _OFFTAB + i * 2, off)
-        _ww(state, _SEGTAB + i * 2, seg)
+        g.sprite_offset_table[i] = off
+        g.sprite_segment_table[i] = seg
 
     count = (len(decoded) + 15) // 16                          # paragraphs the decoded data occupies
     new_top = sprites_seg + count + (count >> 2) + 1           # [asm 2E2C] count + count/4 + 1 (the 1.25x reserve)
-    _ww(state, _SPRITES_SEG, sprites_seg)                          # [asm 2E12]
-    _ww(state, _LOAD_TOP, new_top)                                 # [asm 2E42]
+    g.sprites_seg = sprites_seg                                     # [asm 2E12]
+    g.load_top = new_top                                            # [asm 2E42]
     return new_top
