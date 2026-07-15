@@ -377,10 +377,6 @@ OBJ_COUNT = 12
 
 
 
-ANIM_FRAME_TABLE = 0xA86F   # the per-entity anim-frame descriptor table
-ANIM_SECTION_MARKER = 0x7D01
-
-
 def lookup_anim_frame(rw, entry_id: int, entry_type: int) -> int:
     """Recover ``1030:6954..6981`` — resolve a projected entity's anim-frame descriptor pointer.
 
@@ -389,16 +385,7 @@ def lookup_anim_frame(rw, entry_id: int, entry_type: int) -> int:
     ``type`` (``[entry+1] & 0x7F``), then within that section find the entry whose word equals the entity id
     (``[entry+2] - 0x138``). Returns the descriptor pointer the walker stores into the projected object slot's
     ``[+0xC]`` (``di=[0xA32E]``). ``rw(off)`` reads a DS word."""
-    target = (entry_id - 0x138) & 0xFFFF
-    bx = ANIM_FRAME_TABLE
-    while True:                                          # [asm 6965] find the 0x7D01 marker for this type
-        bx = (bx + 2) & 0xFFFF
-        if rw(bx) == ANIM_SECTION_MARKER and rw((bx + 2) & 0xFFFF) == entry_type:
-            break
-    bx = (bx + 4) & 0xFFFF                                # [asm 6972] past the marker + type word
-    while rw(bx) != target:                              # [asm 6975] find the matching id
-        bx = (bx + 2) & 0xFFFF
-    return bx
+    return _TablesBytes(rw, rw).anim_frame_lookup(entry_id, entry_type)   # word-only scan; read_byte unused
 
 
 
