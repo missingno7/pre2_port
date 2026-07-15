@@ -23,8 +23,8 @@ for genuinely dynamic data — the anim/impulse/phase TABLES, the trail ring, th
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import (AttackPhaseEntry, DictBackend, PLAYER_BASE, PlayerGlobals, PlayerView,
-                                    RENDER_SLOTS_BASE, WidthContractBackend)
+from pre2.views.dgroup_view import (AttackPhaseEntry, DictBackend, overlay_reader, PLAYER_BASE, PlayerGlobals,
+                                    PlayerView, RENDER_SLOTS_BASE, WidthContractBackend)
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
@@ -794,11 +794,8 @@ def player_fsm_step(rb, rw) -> tuple:
     # The handler reads back fields the front-end/selector just wrote — facing [0x4F25], the [0x4F2C] reset,
     # and crucially the input-held flags [0x6BDB]/[0x6BDC] that drive player_accel. Expose every pending write
     # through a read overlay (the ASM reads them from memory mid-routine).
-    def rb2(off):
-        return (writes[off] & 0xFF) if off in writes else rb(off)
-
-    def rw2(off):
-        return (writes[off] & 0xFFFF) if off in writes else rw(off)
+    rb2 = overlay_reader(rb, writes, 0xFF)
+    rw2 = overlay_reader(rw, writes, 0xFFFF)
 
     # [5960] flying gate: when the glider is armed the FSM runs the 596A state machine instead of the
     # normal dispatch, then (if it falls through) dispatches the flying handler table cs:[0x7D6F].
@@ -917,11 +914,8 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
 
     # The render-sprite/spawn read Xvel/Yvel *after* this routine's friction (and the sound path's Yvel
     # nudge) wrote them — expose pending writes through an overlay.
-    def rb_ov(off):
-        return (out[off] & 0xFF) if off in out else rb(off)
-
-    def rw_ov(off):
-        return (out[off] & 0xFFFF) if off in out else rw(off)
+    rb_ov = overlay_reader(rb, out, 0xFF)
+    rw_ov = overlay_reader(rw, out, 0xFFFF)
 
     if bd0 != 0:                                                              # [5FCD-5FCF] -> 6081 main
         _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)
@@ -986,7 +980,7 @@ def player_f1_suicide(rb) -> dict:
 
     Pure: reads via ``rb`` (byte reader); returns the DGROUP byte writes. Byte-exact to the ASM's read-after-write
     ordering (the 5875 dec observes 65B3's just-written timer)."""
-    be = DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
+    be = DictBackend(rb, rb)          # byte-only fields (lives/end_signal/energy/respawn_state) -- rw unused
     g = PlayerGlobals(be)
     if g.lives == 0:                         # [asm 65BA/65BF -> 65D0]
         g.end_signal = 1

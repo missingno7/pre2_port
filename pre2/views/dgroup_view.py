@@ -214,6 +214,17 @@ class DictBackend:
         self.writes[off & 0xFFFF] = v & 0xFFFF
 
 
+def overlay_reader(base_read, writes: dict, mask: int):
+    """A read-through-a-plain-dict closure: checks ``writes`` (masked to width) before falling through to
+    ``base_read``. Several FSM routines need their pending ``{offset: value}`` writes visible to a SUBSEQUENT
+    read in the same pass (the ASM reads memory mid-routine, after an earlier write) without composing a full
+    overlay object -- ``overlay_reader(rb, writes, 0xFF)`` / ``overlay_reader(rw, writes, 0xFFFF)`` produce the
+    plain callables a handler's ``(rb, rw)`` signature expects."""
+    def read(off):
+        return (writes[off] & mask) if off in writes else base_read(off)
+    return read
+
+
 def apply_contract(state, writes, *, word_fields=None) -> None:
     """THE single seam every island write-contract crosses to reach live state.
 
