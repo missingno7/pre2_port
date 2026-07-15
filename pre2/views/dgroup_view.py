@@ -576,8 +576,9 @@ class PlayerGlobals(DgroupView):
     firefly_scratch_a = _U8(0x6BC0)  # the firefly pass's per-frame scratch pair [firefly_sim]
     firefly_scratch_b = _U8(0x6BC1)
     row_factor    = _U16(0x6BF8)  # the row-stride factor (0x28 * this) the shake writes [frame/camera_shake]
-    unk_6BFA      = _U16(0x6BFA)  # shake-adjacent state; role not yet evidenced
-    unk_6BFC      = _U16(0x6BFC)
+    entity_vx_scratch = _U16(0x6BFA)  # the terrain-entity system's per-slot X velocity scratch, read by the
+    #                               4B05 player-ride collision to push the player [terrain_entities]
+    entity_vy_scratch = _U16(0x6BFC)  # ... Y velocity scratch
     timer_6BE8    = _U8(0x6BE8)   # one of the 5A47 countdown timers (TIMER_BYTES); consumer not yet mapped
     cam_scroll_idle = _U8(0x6BEE)  # the vertical scroll-follow active flag (nonzero = scrolling toward
     #                               scroll_target_row) [camera_scroll _v_follow/_v_scroll_apply 56D9/5703]

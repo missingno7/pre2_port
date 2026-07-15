@@ -71,7 +71,8 @@ _SPARSE = [
     # scroll_target_row (0x6BF1-2) are now named (Camera). 0x6BD6: NOT a naming gap -- it's the natural carry
     # target of the 26FA record-mutation's `inc word [0x6bd5]` (confirmed via capstone, 1030:2708) rolling
     # over the adjacent frame_blink/tick byte; nothing reads it, so it stays unnamed scratch on purpose.
-    ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BFA, 0x6BFB, 0x6BFC, 0x6BFD, 0x6BFE, 0x6BFF)),
+    # entity_vx_scratch/entity_vy_scratch (0x6BFA-D) are now named (Motion)
+    ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BFE, 0x6BFF)),
     # camera_hud_scratch fully consumed by AttackState + HitScratch -> removed
     # misc_scratch fully consumed by AttractState/SceneryState (0x6BFF folded above) -> removed
 ]
@@ -153,6 +154,7 @@ MOTION_LAYOUT = [
     ("fall_grace", 0x6BE0, 1, False), ("low_gravity", 0x6BC7, 1, False), ("fly_timer", 0x6BC8, 1, False),
     ("idle_timer", 0x6BD3, 1, False), ("anim_gate", 0x6BD0, 1, False), ("charge", 0x6BCE, 1, False),
     ("hurt_cooldown", 0x6BC9, 1, False),
+    ("entity_vx_scratch", 0x6BFA, 2, False), ("entity_vy_scratch", 0x6BFC, 2, False),
 ]
 ATTACK_STATE_LAYOUT = [("attack_phase", 0x7B18, 1, False), ("attack_v19", 0x7B19, 1, False),
                        ("glider_tilt", 0x7B1A, 1, False)]

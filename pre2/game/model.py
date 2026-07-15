@@ -462,6 +462,9 @@ class Motion:
     anim_gate: int = 0      # hold-current-anim / FSM-route gate
     charge: int = 0
     hurt_cooldown: int = 0
+    entity_vx_scratch: int = 0  # the terrain-entity system's per-slot X velocity scratch, read by the 4B05
+    #                              player-ride collision to push the player
+    entity_vy_scratch: int = 0  # ... Y velocity scratch
 
 
 @dataclass

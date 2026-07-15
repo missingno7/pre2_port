@@ -18,7 +18,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import OverlayBackend, PlayerGlobals, PlayerView, RenderSlot
+from pre2.views.dgroup_view import OverlayBackend, PlayerGlobals, PlayerView, RenderSlot, TerrainEntity
 from pre2.views.tables import Tables
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
@@ -29,14 +29,6 @@ SRC_STRIDE = 0xF             # [asm 4AF0] add si,0xF
 RENDER_LO = 0x5570
 RENDER_STRIDE = 0x12
 RENDER_BUDGET = 7           # [asm 490D] bx
-MAP_HEIGHT = 0x2CF5
-CAM_X = 0x2DE4
-CAM_Y = 0x2DE6
-PLAYER = 0x4F1C            # player sprite record
-COLLIDED = 0x6BFE          # "player already rode something this frame" flag
-PLAT_VEL = 0x4F2A         # platform velocity the player inherits
-VX_SCRATCH = 0x6BFA       # entity X velocity (per-slot scratch, read by the collision)
-VY_SCRATCH = 0x6BFC       # entity Y velocity
 
 
 def _s16(v):
@@ -69,12 +61,14 @@ class _Ov(OverlayBackend):
 
 def _move_type8(ov, b):
     """[asm 492D..49F2] falling/settling (type-8) entity movement -> source-slot + scratch writes."""
-    ov.ww(VX_SCRATCH, 0)                                      # [asm 492D]
-    vel0 = ov.rw((b + 0xB) & 0xFFFF)
-    y_mem = (ov.rw((b + 2) & 0xFFFF) - vel0) & 0xFFFF         # [asm 4936] Y -= vel
-    ov.ww((b + 2) & 0xFFFF, y_mem)
-    state = ov.rb((b + 0xA) & 0xFFFF)
-    s7 = ov.rb((b + 7) & 0xFFFF)
+    g = PlayerGlobals(ov)
+    ent = TerrainEntity(ov, b)
+    g.entity_vx_scratch = 0                                   # [asm 492D]
+    vel0 = ent.fall_vel
+    y_mem = (ent.y - vel0) & 0xFFFF                            # [asm 4936] Y -= vel
+    ent.y = y_mem
+    state = ent.state
+    s7 = ent.speed_ramp
     vel = vel0
 
     if state == 0:                                           # [asm 4939]
@@ -82,30 +76,30 @@ def _move_type8(ov, b):
         if nv < 0:
             nv = 0
             s7 = 0
-            ov.wb((b + 7) & 0xFFFF, 0)                       # [asm 4949]
+            ent.speed_ramp = 0                                # [asm 4949]
         vel = nv & 0xFFFF
-        ov.ww((b + 0xB) & 0xFFFF, vel)
-        if ov.rb((b + 6) & 0xFFFF) & 0x40:                   # [asm 4950]
+        ent.fall_vel = vel
+        if ent.type_dir & 0x40:                               # [asm 4950]
             settle = True
             if s7 == 0:                                      # [asm 4956]
-                t = (ov.rb((b + 0xD) & 0xFFFF) - 1) & 0xFF
-                ov.wb((b + 0xD) & 0xFFFF, t)
+                t = (ent.settle_timer - 1) & 0xFF
+                ent.settle_timer = t
                 if t != 0:
                     settle = False
             if settle:
-                ov.wb((b + 0xA) & 0xFFFF, 1)                 # [asm 4961]
-                ov.wb((b + 7) & 0xFFFF, 0)
+                ent.state = 1                                 # [asm 4961]
+                ent.speed_ramp = 0
     elif state == 1:                                         # [asm 496B]
         if s7 < 0xC0:                                        # [asm 4976]
             s7 = (s7 + 8) & 0xFF
-            ov.wb((b + 7) & 0xFFFF, s7)
+            ent.speed_ramp = s7
         accel = s7 >> 4                                      # [asm 4983]
-        ov.ww(VY_SCRATCH, accel)                             # [asm 4985]
+        g.entity_vy_scratch = accel                          # [asm 4985]
         vel = (vel0 + accel) & 0xFFFF                        # [asm 4988]
-        ov.ww((b + 0xB) & 0xFFFF, vel)
-        col = _sar16(ov.rw(b & 0xFFFF), 4) & 0xFF            # [asm 498F]
+        ent.fall_vel = vel
+        col = _sar16(ent.x, 4) & 0xFF                         # [asm 498F]
         nrow = _sar16((y_mem + vel) & 0xFFFF, 4)             # [asm 4993]
-        bound = (ov.rb(MAP_HEIGHT) - 1) & 0xFFFF             # [asm 499B-49A0]
+        bound = (g.map_rows - 1) & 0xFFFF                    # [asm 499B-49A0]
         settle = False
         if bound >= nrow:                                    # [asm 49A3] jae (in bounds)
             tile = ov.tile((col | ((nrow & 0xFF) << 8)) & 0xFFFF)   # [asm 49B0]
@@ -115,39 +109,47 @@ def _move_type8(ov, b):
         elif (nrow - bound) >= 3:                            # [asm 49A5-49AC]
             settle = True
         if settle:
-            ov.wb((b + 0xA) & 0xFFFF, 2)                     # [asm 49C3]
-            ov.wb((b + 0xD) & 0xFFFF, 0x16)
+            ent.state = 2                                     # [asm 49C3]
+            ent.settle_timer = 0x16
     elif state == 2:                                         # [asm 49CF]
-        if not (ov.rb((b + 6) & 0xFFFF) & 0x40):             # [asm 49D5]
-            t = (ov.rb((b + 0xD) & 0xFFFF) - 1) & 0xFF
-            ov.wb((b + 0xD) & 0xFFFF, t)
+        if not (ent.type_dir & 0x40):                         # [asm 49D5]
+            t = (ent.settle_timer - 1) & 0xFF
+            ent.settle_timer = t
             if t == 0:
-                ov.wb((b + 0xA) & 0xFFFF, 0)                 # [asm 49E0]
-                ov.wb((b + 0xD) & 0xFFFF, ov.rb((b + 9) & 0xFFFF))
+                ent.state = 0                                 # [asm 49E0]
+                ent.settle_timer = ent.settle_reload
 
-    ov.ww((b + 2) & 0xFFFF, (y_mem + vel) & 0xFFFF)          # [asm 49EA] Y += vel
+    ent.y = (y_mem + vel) & 0xFFFF                            # [asm 49EA] Y += vel
 
 
 def _move_default(ov, b):
-    """[asm 49F3..4A72] 8-direction moving-platform movement -> source-slot + scratch writes."""
-    ov.ww(VX_SCRATCH, 0)                                      # [asm 49F5/49F8]
-    ov.ww(VY_SCRATCH, 0)
-    spd = ov.rb((b + 0xE) & 0xFFFF)
-    s7 = ov.rb((b + 7) & 0xFFFF)
-    if spd == 0 and _s8(s7) >= 0 and not (ov.rb((b + 6) & 0xFFFF) & 0xC0):
+    """[asm 49F3..4A72] 8-direction moving-platform movement -> source-slot + scratch writes.
+
+    The dwell/oscillate tail (``s7 == al``) reads/writes ``[+7]``/``[+0xA]``/``[+0xC]`` as full WORDS —
+    a THIRD interpretation of those bytes distinct from both the type-8 family's byte fields
+    (``speed_ramp``/``state``/``osc``, read earlier in THIS same function as bytes) and from
+    :class:`TerrainEntity`'s declared widths. Genuinely a per-branch union of the same storage; kept as raw
+    offsets rather than forced through the byte-typed struct fields, which would silently narrow the width."""
+    g = PlayerGlobals(ov)
+    ent = TerrainEntity(ov, b)
+    g.entity_vx_scratch = 0                                   # [asm 49F5/49F8]
+    g.entity_vy_scratch = 0
+    spd = ent.speed
+    s7 = ent.speed_ramp
+    if spd == 0 and _s8(s7) >= 0 and not (ent.type_dir & 0xC0):
         return                                               # [asm 49FB-4A0B] stationary
 
     al = spd                                                 # [asm 4A0D] ramp speed toward [+7]
     if s7 != al:
         al = (al + (1 if _s8(s7) >= _s8(al) else -1)) & 0xFF
-        ov.wb((b + 0xE) & 0xFFFF, al)
-    sx, sy = _DIR8[ov.rb((b + 6) & 0xFFFF) & 7]              # [asm 4A22-4A5F]
+        ent.speed = al
+    sx, sy = _DIR8[ent.type_dir & 7]                          # [asm 4A22-4A5F]
     vx = (_s8(al) * sx) & 0xFFFF
     vy = (_s8(al) * sy) & 0xFFFF
-    ov.ww(VX_SCRATCH, vx)                                    # [asm 4A64]
-    ov.ww(b & 0xFFFF, (ov.rw(b & 0xFFFF) + vx) & 0xFFFF)     # [asm 4A67] X += vx
-    ov.ww(VY_SCRATCH, vy)                                    # [asm 4A6C]
-    ov.ww((b + 2) & 0xFFFF, (ov.rw((b + 2) & 0xFFFF) + vy) & 0xFFFF)   # [asm 4A6F] Y += vy
+    g.entity_vx_scratch = vx                                  # [asm 4A64]
+    ent.x = (ent.x + vx) & 0xFFFF                             # [asm 4A67] X += vx
+    g.entity_vy_scratch = vy                                  # [asm 4A6C]
+    ent.y = (ent.y + vy) & 0xFFFF                             # [asm 4A6F] Y += vy
 
     if s7 == al:                                             # [asm 4A72] at target -> dwell/oscillate
         cnt = (ov.rw((b + 0xC) & 0xFFFF) + 1) & 0xFFFF
@@ -160,20 +162,21 @@ def _move_default(ov, b):
 
 def _collision_4b05(ov, di):
     """[asm 4B05] player-ride collision. Writes player state on contact; returns CF (True = the player rode)."""
-    if ov.rb(COLLIDED) != 0:                                  # [asm 4B08]
-        return False
     p, g = PlayerView(ov), PlayerGlobals(ov)
-    if _s16(ov.rw((di + 2) & 0xFFFF)) <= _s16(p.y):          # [asm 4B0F-4B15]
+    if g.unk_6BFE != 0:                                       # [asm 4B08]
+        return False
+    ride_src = RenderSlot(ov, di)
+    if _s16(ride_src.y) <= _s16(p.y):                        # [asm 4B0F-4B15]
         return False
     saved_y = p.y
-    yadj = ov.rw(VY_SCRATCH)
+    yadj = g.entity_vy_scratch
     temp_y = (saved_y + yadj) & 0xFFFF if _s16(yadj) >= 0 else saved_y   # [asm 4B1E-4B25]
 
     def trb(o):                                              # [asm 4B29] player Y=temp_y, sprite [+4]=7
         o &= 0xFFFF
-        if o == (PLAYER + 4) & 0xFFFF:
+        if o == (p.offset + 4) & 0xFFFF:
             return 7
-        if o == (PLAYER + 5) & 0xFFFF:
+        if o == (p.offset + 5) & 0xFFFF:
             return 0
         if o == 0x4F1E:
             return temp_y & 0xFF
@@ -181,15 +184,15 @@ def _collision_4b05(ov, di):
             return (temp_y >> 8) & 0xFF
         return ov.rb(o)
     trw = lambda o: trb(o) | (trb((o + 1) & 0xFFFF) << 8)    # noqa: E731
-    hit, hb = hitbox_overlap(trb, trw, PLAYER, di)           # [asm 4B31] 8D7B
+    hit, hb = hitbox_overlap(trb, trw, p.offset, di)         # [asm 4B31] 8D7B
     for off, (val, wid) in hb.items():
         ov.wb(off, val) if wid == 1 else ov.ww(off, val)
     if not hit:                                              # [asm 4B3B]
         return False
 
-    ov.wb(COLLIDED, 1)                                       # [asm 4B3D]
+    g.unk_6BFE = 1                                            # [asm 4B3D]
     p.motion_mode = 0                                        # [asm 4B42]
-    ov.ww(PLAYER, (ov.rw(PLAYER) + ov.rw(VX_SCRATCH)) & 0xFFFF)   # [asm 4B47] push player X
+    p.x = (p.x + g.entity_vx_scratch) & 0xFFFF               # [asm 4B47] push player X
     # 64DF landing reset
     g.fall_grace = max(g.fall_grace - 1, 0)                  # [asm 64DF] saturating dec
     g.fall_latch = 0
@@ -199,10 +202,10 @@ def _collision_4b05(ov, di):
     ride = RenderSlot(ov, di)                                # the entity's render record
     top = (ride.y - Tables(ov.rb).sprite_half_h(ride.sprite)) & 0xFFFF   # [asm 4B51-4B61]
     if _s16(p.y) <= _s16(top):                               # [asm 4B64] jle
-        ov.ww(PLAT_VEL, (ov.rw(VY_SCRATCH) << 4) & 0xFFFF)   # [asm 4B76]
+        p.yvel = (g.entity_vy_scratch << 4) & 0xFFFF          # [asm 4B76]
     else:
         p.y = (top + 1) & 0xFFFF                             # [asm 4B6A]
-        ov.ww(PLAT_VEL, 1)
+        p.yvel = 1
     return True
 
 
@@ -216,34 +219,36 @@ def _collision_4b05(ov, di):
 def tick_terrain_entities(rw, rb, read_tile):
     """[asm 4907] ``rw``/``rb`` read DS word/byte, ``read_tile`` the level-map. Returns ``{offset: value}``."""
     ov = _Ov(rb, read_tile)
-    ov.wb(COLLIDED, 0)                                        # [asm 4913]
+    g, p = PlayerGlobals(ov), PlayerView(ov)
+    g.unk_6BFE = 0                                            # [asm 4913]
     si = ENTITY_LO
     di = RENDER_LO
     budget = RENDER_BUDGET
     for _ in range(ENTITY_N):
-        if ov.rw((si + 4) & 0xFFFF) == 0xFFFF:               # [asm 4918] inactive -> di NOT advanced
+        ent = TerrainEntity(ov, si)
+        if ent.sprite == 0xFFFF:                              # [asm 4918] inactive -> di NOT advanced
             si = (si + SRC_STRIDE) & 0xFFFF
             continue
-        if (ov.rb((si + 6) & 0xFFFF) & 0xF) == 8:            # [asm 4921] dispatch
+        if (ent.type_dir & 0xF) == 8:                         # [asm 4921] dispatch
             _move_type8(ov, si)
         else:
             _move_default(ov, si)
 
         dst = RenderSlot(ov, di)                             # the render slot this entity projects into
-        sx = (ov.rw(si & 0xFFFF) - ((ov.rw(CAM_X) << 4) & 0xFFFF)) & 0xFFFF      # [asm 4A8B] screen X
+        sx = (ent.x - ((g.cam_col_word << 4) & 0xFFFF)) & 0xFFFF      # [asm 4A8B] screen X
         if not (_s16(sx) >= 0x160 or _s16(sx) <= -0x20):     # [asm 4A9D-4AA6] on-screen X
-            dst.x = ov.rw(si & 0xFFFF)                       # [asm 4AA8] worldX (even if Y off)
-            sy = (ov.rw((si + 2) & 0xFFFF) - ((ov.rw(CAM_Y) << 4) & 0xFFFF)) & 0xFFFF   # [asm 4AAA]
+            dst.x = ent.x                                     # [asm 4AA8] worldX (even if Y off)
+            sy = (ent.y - ((g.cam_row_word << 4) & 0xFFFF)) & 0xFFFF   # [asm 4AAA]
             if not (_s16(sy) >= 0xD0 or _s16(sy) <= -0x20):  # [asm 4ABD-4AC6] on-screen Y
-                dst.y = ov.rw((si + 2) & 0xFFFF)             # [asm 4AC8]
-                dst.sprite = ov.rw((si + 4) & 0xFFFF)        # [asm 4ACB]
+                dst.y = ent.y                                 # [asm 4AC8]
+                dst.sprite = ent.sprite                       # [asm 4ACB]
                 dst.source = si                              # [asm 4AD1] back-ref to the source slot
                 collided = False
-                if _s16(ov.rw(PLAT_VEL)) > -0x10:            # [asm 4AD4] jle skips the collision
-                    ov.wb((si + 6) & 0xFFFF, ov.rb((si + 6) & 0xFFFF) | 0x40)   # [asm 4ADB]
+                if _s16(p.yvel) > -0x10:                     # [asm 4AD4] jle skips the collision
+                    ent.type_dir = ent.type_dir | 0x40        # [asm 4ADB]
                     collided = _collision_4b05(ov, di)       # [asm 4ADF]
                 if not collided:                             # [asm 4AE2 jb skips this]
-                    ov.wb((si + 6) & 0xFFFF, ov.rb((si + 6) & 0xFFFF) & 0xBF)   # [asm 4AE4]
+                    ent.type_dir = ent.type_dir & 0xBF        # [asm 4AE4]
                     dst.y = (dst.y - 2) & 0xFFFF             # [asm 4AE8] nudge up 2px
                 di = (di + RENDER_STRIDE) & 0xFFFF           # [asm 4AEC]
                 budget = (budget - 1) & 0xFFFF
