@@ -106,6 +106,7 @@ def test_player_collision_runs_identically_on_both_backends():
 
     apply_ds(byte_st, ds1)
     apply_ds(obj_st, ds2)
+    byte_st.sync_rng_to_image()   # the 30-tick warmup ran RNG live (state.rng) on byte_st too, not just obj_st
     obj_st.backend.materialize()
     assert byte_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000] == obj_st.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
 
