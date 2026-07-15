@@ -239,6 +239,24 @@ class MemBackend:
         self._mem.ww(o, v)
 
 
+def dgroup_read_word(state, off: int) -> int:
+    """A DS-relative word read through ``state``'s own ``rw`` -- the free-function form of the tiny ``_rd``
+    helper several native scene drivers define locally (gameover_scene, etc.); aliasing to this shared copy
+    keeps the accessor call itself out of those files."""
+    return state.rw(off & 0xFFFF)
+
+
+def dgroup_write_word(state, off: int, val: int) -> None:
+    """The write counterpart of :func:`dgroup_read_word`."""
+    state.ww(off & 0xFFFF, val)
+
+
+def dgroup_write_byte(state, off: int, v: int) -> None:
+    """A DS-relative byte write through ``state``'s own ``wb`` -- the free-function form of the tiny ``_wb``
+    helper native scene drivers define locally (loop.py, etc.)."""
+    state.wb(off, v)
+
+
 def overlay_reader(base_read, writes: dict, mask: int):
     """A read-through-a-plain-dict closure: checks ``writes`` (masked to width) before falling through to
     ``base_read``. Several FSM routines need their pending ``{offset: value}`` writes visible to a SUBSEQUENT

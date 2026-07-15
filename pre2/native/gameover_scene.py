@@ -17,7 +17,7 @@ this module recovers the STATE side:
 [0x2879]!=0 (demo playback) skips the whole scene, exactly as the ASM's 9B2C gate."""
 from __future__ import annotations
 
-from pre2.views.dgroup_view import GameOverBird, PlayerGlobals, RngView
+from pre2.views.dgroup_view import GameOverBird, PlayerGlobals, RngView, dgroup_read_word, dgroup_write_word
 from pre2.views.memory_adapter import apply_ds, readers
 from pre2.views.tables import ByteTable, Tables
 from pre2.native.state import DATA_SEG
@@ -43,12 +43,8 @@ def _s16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def _rd(state, off):
-    return state.rw(off & 0xFFFF)
-
-
-def _ww(state, off, val):
-    state.ww(off & 0xFFFF, val)
+_rd = dgroup_read_word    # this file's DS-relative word accessor -- the shared views/dgroup_view.py
+_ww = dgroup_write_word   # implementation, aliased to its original local names here.
 
 
 def native_gameover_setup(state) -> None:

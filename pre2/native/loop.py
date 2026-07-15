@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from collections import Counter
 
-from pre2.views.dgroup_view import CaveTriggerEntry, PlayerGlobals, PlayerView, RenderSlot, apply_contract
+from pre2.views.dgroup_view import (CaveTriggerEntry, PlayerGlobals, PlayerView, RenderSlot, apply_contract,
+                                    dgroup_write_byte)
 from pre2.views.memory_adapter import apply_ds, readers, tile_reader
 from pre2.views.object_tick import LiveWalkerMem
 from pre2.gaps import (Pre2CaveTeleport, Pre2GameComplete, Pre2GameOverTransition, Pre2HybridGap,
@@ -304,8 +305,8 @@ def native_proximity_mapmod(state, trig) -> None:
 _DS_BASE = DATA_SEG << 4
 
 
-def _wb(state, off: int, v: int) -> None:
-    state.wb(off, v)                                     # through the backend seam (Phase 4)
+_wb = dgroup_write_byte   # this file's DS-relative byte accessor -- the shared views/dgroup_view.py
+#     implementation, aliased to its original local name here.
 
 
 def _ww(state, off: int, v: int) -> None:
