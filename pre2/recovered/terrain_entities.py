@@ -18,7 +18,7 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import OverlayBackend, PlayerGlobals, PlayerView, RenderSlot, TerrainEntity
+from pre2.views.dgroup_view import OverlayBackend, overlay_reader, PlayerGlobals, PlayerView, RenderSlot, TerrainEntity
 from pre2.views.tables import Tables
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
@@ -172,17 +172,9 @@ def _collision_4b05(ov, di):
     yadj = g.entity_vy_scratch
     temp_y = (saved_y + yadj) & 0xFFFF if _s16(yadj) >= 0 else saved_y   # [asm 4B1E-4B25]
 
-    def trb(o):                                              # [asm 4B29] player Y=temp_y, sprite [+4]=7
-        o &= 0xFFFF
-        if o == (p.offset + 4) & 0xFFFF:
-            return 7
-        if o == (p.offset + 5) & 0xFFFF:
-            return 0
-        if o == 0x4F1E:
-            return temp_y & 0xFF
-        if o == 0x4F1F:
-            return (temp_y >> 8) & 0xFF
-        return ov.rb(o)
+    overrides = {(p.offset + 4) & 0xFFFF: 7, (p.offset + 5) & 0xFFFF: 0,     # [asm 4B29] player Y=temp_y, sprite [+4]=7
+                 0x4F1E: temp_y & 0xFF, 0x4F1F: (temp_y >> 8) & 0xFF}
+    trb = overlay_reader(ov.rb, overrides, 0xFF)
     trw = lambda o: trb(o) | (trb((o + 1) & 0xFFFF) << 8)    # noqa: E731
     hit, hb = hitbox_overlap(trb, trw, p.offset, di)         # [asm 4B31] 8D7B
     ov.apply(hb)
