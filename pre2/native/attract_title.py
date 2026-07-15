@@ -22,7 +22,7 @@ from pre2.views.render_state import read_renderer_state
 from pre2.recovered.object_render import (Sprite, paint_sprite, plan_frame,
                                           plan_sprite_command)
 from pre2.recovered.player import player_advance_anim
-from pre2.views.dgroup_view import LightFadeView, PlayerGlobals, PlayerView, ScrollScriptView
+from pre2.views.dgroup_view import LightFadeView, PlayerGlobals, PlayerView, ScrollScriptView, _U8ArrayView
 from pre2.views.tables import Tables
 
 _PAGE = 0x2000         # render page (VM double-buffers 2000/0000; a single page renders identically)
@@ -141,9 +141,10 @@ def native_attract_title(state, game_root: str):
     dino.source = 0xFFFF                              # [8FC8]
     dino.yvel = 0                                     # [8FCE]
     pv.facing = 0xFFFF                                # [8FD4] caveman facing = left (H-flip)
+    arr = _U8ArrayView(state, 0, 0x10000)             # absolute-addressed byte view (base=0) over state itself
     for w in range(0x3F):                            # [8FDA] rep movsw 4F2E->4F40, OVERLAPPING -> propagates
         s = 0x4F2E + w * 2; t = 0x4F40 + w * 2       # (replicates the 18-byte dino record across the slots;
-        state.wb(t, state.rb(s)); state.wb(t + 1, state.rb(s + 1))   # kept byte-level: the self-overlapping
+        arr[t] = arr[s]; arr[t + 1] = arr[s + 1]      # kept byte-level: the self-overlapping
         #                                              forward copy is what propagates the pattern, and a
         #                                              slice assignment would not reproduce that (each
         #                                              destination byte, once written, becomes a later source)
