@@ -26,7 +26,7 @@ from pre2.islands import oracle_link
 from pre2.recovered.prng import rng_lcg
 from pre2.views.dgroup_view import (BonusCellSlot, DictBackend, ObjectDef, ObjectSlot, OverlayBackend, PlayerGlobals,
                                     PlayerView, ProjectileSlot, RenderSlot, RngView, WidthContractBackend)
-from pre2.views.tables import Tables
+from pre2.views.tables import ByteTable, Tables, WordTable
 
 # --- globals this island reads/writes -------------------------------------------------
 SPAWN_X = 0xA336      # effect-spawn world X (cell << 4)
@@ -253,7 +253,7 @@ def spawn_debris_element(rb, rw, ax, si):
     # [asm 8879] score bump for sprite ids 0x4A..0x5A
     bx = (ax - 0x4A) & 0xFFFF
     if not (bx & 0x8000) and bx <= 0x10:          # jb (negative) / ja (>0x10) skip
-        val = rw(((bx << 1) - SCORE_TABLE) & 0xFFFF)   # shl bx,1 ; mov bx,[bx-0x5CAD] (dynamic content table)
+        val = WordTable(rw, -SCORE_TABLE)[bx << 1]   # shl bx,1 ; mov bx,[bx-0x5CAD]
         total = (g.score_lo | (g.score_hi << 16)) + val   # add [6C0E] ; adc [6C10],0
         writes[SCORE_LO] = (total & 0xFFFF, 2)
         writes[SCORE_LO + 2] = ((total >> 16) & 0xFFFF, 2)
@@ -323,7 +323,7 @@ def death_handler(rb, rw, bx, di, src_si):
     edef = ObjectDef(ov, bx)
     sprite = (_s8(edef.d8) + 0x4A) & 0xFFFF                    # [asm 8C72] [def+8] signed + 0x4A
     cnt_idx = (enemy.hits >> 3) & 7                            # [asm 8C7A]
-    count = rb((cnt_idx - DEBRIS_COUNT_TABLE) & 0xFFFF)
+    count = ByteTable(rb, -DEBRIS_COUNT_TABLE)[cnt_idx]
 
     orig_x = enemy.x                                           # [asm 8C90/8C92] saved pos (restored later)
     orig_y = enemy.y
