@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.recovered.prng import rng_lcg
-from pre2.views.dgroup_view import DictBackend, ObjectDef, ObjectSlot, PlayerGlobals, PlayerView, WidthContractBackend
+from pre2.views.dgroup_view import (BonusCellSlot, DictBackend, ObjectDef, ObjectSlot, OverlayBackend, PlayerGlobals,
+                                    PlayerView, ProjectileSlot, RenderSlot, RngView, WidthContractBackend)
+from pre2.views.tables import Tables
 
 # --- globals this island reads/writes -------------------------------------------------
 SPAWN_X = 0xA336      # effect-spawn world X (cell << 4)
@@ -67,42 +69,9 @@ def _abs8(d: int) -> int:
     return (0x100 - d) if (d & 0x80) else d
 
 
-class _Overlay:
-
-    _IS_DGROUP_BACKEND = True   # a dgroup-view backend: RngView/PlayerView bind straight onto it
-    """A byte-level read-through write buffer over base DS memory, so a composed routine's later reads see
-    its own earlier writes (the 8C72 debris loop fills the pool + scatters the enemy pos in place)."""
-
-    __slots__ = ("_rb", "b")
-
-    def __init__(self, rb):
-        self._rb = rb
-        self.b: dict[int, int] = {}
-
-    def rb(self, o: int) -> int:
-        o &= 0xFFFF
-        return self.b[o] if o in self.b else self._rb(o)
-
-    def rw(self, o: int) -> int:
-        o &= 0xFFFF
-        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
-
-    def wb(self, o: int, v: int) -> None:
-        self.b[o & 0xFFFF] = v & 0xFF
-
-    def ww(self, o: int, v: int) -> None:
-        v &= 0xFFFF
-        self.b[o & 0xFFFF] = v & 0xFF
-        self.b[(o + 1) & 0xFFFF] = (v >> 8) & 0xFF
-
-    def apply(self, writes: dict) -> None:
-        for off, (val, width) in writes.items():
-            (self.ww if width == 2 else self.wb)(off, val)
-
-    def merge_bytes(self, byte_writes: dict) -> None:
-        """Merge a byte-level {offset: value} dict (e.g. another routine's overlay buffer)."""
-        for off, val in byte_writes.items():
-            self.b[off & 0xFFFF] = val & 0xFF
+_Overlay = OverlayBackend   # this file's byte-level read-through write buffer over base DS memory, so a
+#     composed routine's later reads see its own earlier writes (the 8C72 debris loop fills the pool + scatters
+#     the enemy pos in place) -- the shared views/dgroup_view.py implementation, aliased to its original name.
 
 
 @oracle_link("1030:8BF6",
@@ -156,32 +125,35 @@ def hitbox_overlap(rb, rw, si, di):
     source/target sprite-record offsets. Returns ``(hit, writes)`` — ``hit`` = the ASM's CF (True = overlap),
     ``writes`` = the ``{offset: (value, width)}`` contract (always [0xA330]; [0xA331] only when set). Pure."""
     writes: dict[int, tuple[int, int]] = {HIT_FLAG: (0, 1)}  # [asm 8D81] cleared
+    be = DictBackend(rb, rw)
+    src, tgt = RenderSlot(be, si), RenderSlot(be, di)
+    tbl = Tables(rb)
 
     # [asm 8D86/8D96] coarse box gates
-    if _abs16(rw(si) - rw(di)) >= 0x40:
+    if _abs16(src.x - tgt.x) >= 0x40:
         return False, writes
-    if _abs16(rw(si + 2) - rw(di + 2)) >= 0x46:
+    if _abs16(src.y - tgt.y) >= 0x46:
         return False, writes
 
     # [asm 8DA8] Y axis — orient so (ax, si) is the larger-Y object, (dx, di) the smaller
-    ax = rw(si + 2)
-    dx = rw(di + 2)
-    bx = rw(si + 4)
+    ax = src.y
+    dx = tgt.y
+    bx = src.sprite
     if _s16(ax) < _s16(dx):                       # jge keeps; else swap
-        bx = rw(di + 4)
+        bx = tgt.sprite
         ax, dx = dx, ax
         si, di = di, si
-    idx = (bx & 0x1FFF) << 1                       # and bh,0x1F ; shl bx,1 (low byte kept)
-    half_h = rb((HALF_LO + 1 + idx) & 0xFFFF)     # bl = [bx + 0x7191]
+        src, tgt = tgt, src
+    half_h = tbl.sprite_half_h(bx)                # bl = [bx + 0x7191]
     ax = (ax - half_h) & 0xFFFF
     if _s16(ax) >= _s16(dx):                       # [asm 8DCA] jge -> no overlap
         return False, writes
 
-    a312 = rb(PASS_FLAG)
+    a312 = PlayerGlobals(be).hit_pass_full
     if a312 == 0:                                  # [asm 8DD1] jne skips the vertical-detail set
         depth = (dx - ax) & 0xFFFF                 # sub dx,ax
         do_set = False
-        if _s16(rw(PLAYER_YVEL)) >= 0x80:          # [asm 8DDB] jge -> set
+        if _s16(PlayerView(be).yvel) >= 0x80:      # [asm 8DDB] jge -> set
             do_set = True
         elif not (depth > (half_h >> 1)):          # [asm 8DDF] ja -> skip (unsigned)
             if si != PLAYER_REC:                   # [asm 8DE7] je -> skip
@@ -191,15 +163,13 @@ def hitbox_overlap(rb, rw, si, di):
             writes[HIT_DETAIL] = (depth, 2)        # mov word [0xA331],dx
 
     # [asm 8DF1] X axis — left edges = pos - X half-width; overlap if min_left + hw2 > max_left
-    src_idx = (rw(si + 4) & 0x1FFF) << 1           # bp
-    src_left = (rw(si) - rb((HALF_WX + src_idx) & 0xFFFF)) & 0xFFFF
-    tgt_idx = (rw(di + 4) & 0x1FFF) << 1
-    tgt_left = (rw(di) - rb((HALF_WX + tgt_idx) & 0xFFFF)) & 0xFFFF
-    hw2 = rb((HALF_LO + tgt_idx) & 0xFFFF)         # bl = [bx + 0x7190]
+    src_left = (src.x - tbl.sprite_left_hw(src.sprite)) & 0xFFFF   # bp
+    tgt_left = (tgt.x - tbl.sprite_left_hw(tgt.sprite)) & 0xFFFF
+    hw2 = tbl.sprite_half_w(tgt.sprite)            # bl = [bx + 0x7190]
     ax, dx = tgt_left, src_left
     if not (_s16(ax) < _s16(dx)):                  # [asm 8E1C] jl keeps; else swap to src's hw2
         ax, dx = dx, ax
-        hw2 = rb((HALF_LO + src_idx) & 0xFFFF)
+        hw2 = tbl.sprite_half_w(src.sprite)
     if a312 == 0:                                  # [asm 8E2B] jne skips the halving
         hw2 >>= 1                                  # sar bx,1 (hw2 >= 0)
     ax = (ax + hw2) & 0xFFFF
@@ -223,16 +193,18 @@ BURST_SPRITE = 0xA33A   # [0xA33A] the sprite id to spawn (set by 899E before th
 def spawn_effect_burst(rb, rw, ax, dx, cx):
     """[asm 8D1B] ``ax``=initial Xvel, ``dx``=initial Yvel/state, ``cx``=count. ``rb``/``rw`` read DS.
     Returns the ``{offset: (value, width)}`` writes into the free effect slots (the spawned objects)."""
-    sprite = rw(BURST_SPRITE)
-    px = rw(SPAWN_X)
-    py = rw(SPAWN_Y)
+    be = DictBackend(rw, rw)          # word-only reads (all fields _U16) -- rb is never invoked
+    g = PlayerGlobals(be)
+    sprite = g.burst_sprite
+    px = g.burst_x
+    py = g.burst_y
     ax &= 0xFFFF
     dx &= 0xFFFF
     writes: dict[int, tuple[int, int]] = {}
     di = 0
     bx = BURST_SLOT_LO
     while bx < BURST_SLOT_HI:                       # [asm 8D6F] cmp bx,0x52E8 ; jb
-        if rw((bx + 4) & 0xFFFF) == 0xFFFF:        # [asm 8D25] free slot
+        if RenderSlot(be, bx).sprite == 0xFFFF:    # [asm 8D25] free slot
             writes[bx + 4] = (sprite, 2)
             writes[bx + 0x11] = (0, 1)
             writes[bx + 0xC] = (0xC6, 2)
@@ -274,12 +246,15 @@ def spawn_debris_element(rb, rw, ax, si):
     ax &= 0xFFFF
     si &= 0xFFFF
     writes: dict[int, tuple[int, int]] = {}
+    be = DictBackend(rw, rw)          # word-only reads -- rb is never invoked below
+    g = PlayerGlobals(be)
+    src = RenderSlot(be, si)
 
     # [asm 8879] score bump for sprite ids 0x4A..0x5A
     bx = (ax - 0x4A) & 0xFFFF
     if not (bx & 0x8000) and bx <= 0x10:          # jb (negative) / ja (>0x10) skip
-        val = rw(((bx << 1) - SCORE_TABLE) & 0xFFFF)   # shl bx,1 ; mov bx,[bx-0x5CAD]
-        total = (rw(SCORE_LO) | (rw(SCORE_LO + 2) << 16)) + val   # add [6C0E] ; adc [6C10],0
+        val = rw(((bx << 1) - SCORE_TABLE) & 0xFFFF)   # shl bx,1 ; mov bx,[bx-0x5CAD] (dynamic content table)
+        total = (g.score_lo | (g.score_hi << 16)) + val   # add [6C0E] ; adc [6C10],0
         writes[SCORE_LO] = (total & 0xFFFF, 2)
         writes[SCORE_LO + 2] = ((total >> 16) & 0xFFFF, 2)
 
@@ -287,20 +262,20 @@ def spawn_debris_element(rb, rw, ax, si):
     slot = None
     b = DEBRIS_POOL_LO
     for _ in range(DEBRIS_POOL_N):
-        if rw((b + 4) & 0xFFFF) == 0xFFFF:
+        if RenderSlot(be, b).sprite == 0xFFFF:
             slot = b
             break
         b += 0x12
 
     if slot is not None:                           # [asm 88A7] fill it
         writes[slot + 4] = (ax, 2)
-        writes[slot] = (rw(si), 2)
-        writes[slot + 2] = (rw((si + 2) & 0xFFFF), 2)
+        writes[slot] = (src.x, 2)
+        writes[slot + 2] = (src.y, 2)
         writes[slot + 0xC] = (0x2C, 2)
         writes[SPAWNED_PTR] = (slot, 2)            # [asm 88B9] [0xA33E]=di
         # [asm 88BD] if the pos source is an effect slot, free its back-referenced slot
         if si >= BURST_SLOT_LO:
-            ref = rw((si + 9) & 0xFFFF)
+            ref = src.source
             if ref != 0xFFFF:
                 writes[(ref + 4) & 0xFFFF] = (0xFFFF, 2)
 
@@ -317,7 +292,7 @@ DEATH_ANIM_MARKER = 0x7D00  # the anim-script word that marks the death sequence
              "ASM_MATCHED", merge_target="combat_interaction")
 def advance_death_anim(rw, di):
     """[asm 80CB] ``rw`` reads a DS word; ``di`` is the enemy slot. Returns the new ``[di+0xC]`` value."""
-    si = rw((di + 0xC) & 0xFFFF)
+    si = ObjectSlot(DictBackend(rw, rw), di).anim_ptr
     for _ in range(0x4000):                        # guard (the script always has a 0x7D00)
         si = (si + 2) & 0xFFFF
         if rw(si) == DEATH_ANIM_MARKER:
@@ -345,19 +320,21 @@ def death_handler(rb, rw, bx, di, src_si):
     overlay so the composed leaves (8875/8D1B/80CB) see each other's writes."""
     ov = _Overlay(rb)
     enemy = ObjectSlot(ov, di)                                 # the dying enemy slot (the debris source)
-    sprite = (_s8(rb((bx + 8) & 0xFFFF)) + 0x4A) & 0xFFFF      # [asm 8C72] [def+8] signed + 0x4A
+    edef = ObjectDef(ov, bx)
+    sprite = (_s8(edef.d8) + 0x4A) & 0xFFFF                    # [asm 8C72] [def+8] signed + 0x4A
     cnt_idx = (enemy.hits >> 3) & 7                            # [asm 8C7A]
     count = rb((cnt_idx - DEBRIS_COUNT_TABLE) & 0xFFFF)
 
     orig_x = enemy.x                                           # [asm 8C90/8C92] saved pos (restored later)
     orig_y = enemy.y
 
+    g = PlayerGlobals(ov)
     rem = count
     while rem != 0:                                            # [asm 8C96] debris loop
         w, slot = spawn_debris_element(ov.rb, ov.rw, sprite, di)
         ov.apply(w)
         if slot is not None:
-            elem = ObjectSlot(ov, ov.rw(SPAWNED_PTR))         # [asm 8C99] di = [0xA33E]
+            elem = ObjectSlot(ov, g.spawned_ptr)               # [asm 8C99] di = [0xA33E]
             elem.anim_ptr = (elem.anim_ptr - (rem << 2)) & 0xFFFF   # [asm 8CA2] [elem+0xC] -= rem*4
         enemy.y = (enemy.y + 7) & 0xFFFF                       # [asm 8CA6] scatter
         enemy.x = (enemy.x + 9) & 0xFFFF                       # [asm 8CAA]
@@ -367,27 +344,27 @@ def death_handler(rb, rw, bx, di, src_si):
     enemy.x = orig_x
     enemy.state = 0xFF                                         # [asm 8CB7] mark dead
 
-    def_flags = ov.rb((bx + DEF_FLAGS) & 0xFFFF)
+    def_flags = edef.d4
     if def_flags & 1:                                          # [asm 8CBB] jne -> launch path
         enemy.anim_ptr = advance_death_anim(ov.rw, di)         # [asm 8CE1] 80CB
         if (def_flags & 0xC8) != 0x88:                        # [asm 8CE4-8CF2] conditional bit3 clear
-            ov.wb((bx + DEF_FLAGS) & 0xFFFF, def_flags & 0xF7)
-        dmg = ov.rb(DAMAGE)                                   # [asm 8CF5]
+            edef.d4 = def_flags & 0xF7
+        dmg = g.attack_v19                                     # [asm 8CF5]
         if dmg > 0x19:
             dmg = 0x19
         yvel = ((-dmg) << 3) & 0xFFFF                          # [asm 8D02-8D08] -min(dmg,0x19)*8
         enemy.yvel = yvel
         xvel = _sar16(yvel, 1)                                 # [asm 8D0D] ax sar 1
-        if not (ov.rb((src_si + 5) & 0xFFFF) & 0x80):         # [asm 8D0F] test attacker [si+5],0x80 ; jne keep
+        if not (RenderSlot(ov, src_si).flags & 0x80):          # [asm 8D0F] test attacker [si+5],0x80 ; jne keep
             xvel = (-xvel) & 0xFFFF
         enemy.xvel = xvel
     else:                                                      # [asm 8CC1] bonus path
-        ov.ww(SPAWN_X, enemy.x)                               # [0xA336] = enemy X
-        ov.ww(SPAWN_Y, enemy.y)                               # [0xA338] = enemy Y
-        ov.ww(BURST_SPRITE, DEATH_BONUS_SPRITE)              # [0xA33A] = 0x2046
+        g.burst_x = enemy.x                                    # [0xA336] = enemy X
+        g.burst_y = enemy.y                                    # [0xA338] = enemy Y
+        g.burst_sprite = DEATH_BONUS_SPRITE                    # [0xA33A] = 0x2046
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFF80, 6))   # [asm 8CDC] 8D1B
 
-    return ov.b
+    return ov.writes
 
 
 ENEMY_SLOTS_LO = 0x4FD0   # the 12 active object/enemy slots (stride 0x12)
@@ -401,7 +378,7 @@ def projectile_vs_enemies(rb, rw, si):
     the player) overlaps; on a hit mark + damage it, kill (SFX + death_handler) or knock it back, and consume
     the source. Returns ``(writes, sfx, hit, slot)`` — ``writes`` is the byte-level ``{offset: value}``
     contract, ``sfx`` the SFX indices to emit, ``hit`` the ASM's CF, ``slot`` the enemy hit (or None)."""
-    damage = rb(DAMAGE)
+    damage = PlayerGlobals(DictBackend(rb, rb)).attack_v19   # byte-only field; rw is never invoked
     writes: dict[int, int] = {}
     sfx: list[int] = []
 
@@ -453,7 +430,7 @@ SPARKLE_SPRITE = 0x35
 def spawn_pickup_sparkle(rw, ax, dx):
     """[asm 5E41] ``rw`` reads a DS word. ``ax``/``dx`` = the effect X/Y. Returns the ``{offset: (value,
     width)}`` writes (the ring record + the advanced [0x6BBE] pointer)."""
-    bx = rw(SPARKLE_RING_PTR)
+    bx = PlayerGlobals(DictBackend(rw, rw)).trail_ring   # word-only field; rb is never invoked
     writes = {
         bx & 0xFFFF: (ax & 0xFFFF, 2),                  # [asm 5E46] [bx]   = X
         (bx + 2) & 0xFFFF: (dx & 0xFFFF, 2),            # [asm 5E48] [bx+2] = Y
@@ -485,15 +462,16 @@ def bonus_collect_tail(rb, rw, di):
     """[asm 8B6E/8B77] Returns ``(ds_writes, map_writes, onscreen)`` — ``ds_writes`` the DS ``{offset:
     (value, width)}`` contract, ``map_writes`` the ``{offset: (value, width)}`` writes into the level-map
     segment (es=[0x2DDA]), and ``onscreen`` whether the consumed tile must be re-blitted."""
-    ds = {COLLECTED_COUNTER: ((rw(COLLECTED_COUNTER) + 1) & 0xFFFF, 2)}   # [asm 8B77] inc [0x2A76]
-    old = rw((di + 3) & 0xFFFF)                          # [asm 8B7E] old [di+3] = the map offset
+    g = PlayerGlobals(DictBackend(rb, rw))
+    cell = BonusCellSlot(DictBackend(rb, rw), di)
+    ds = {COLLECTED_COUNTER: ((g.collected_counter + 1) & 0xFFFF, 2)}   # [asm 8B77] inc [0x2A76]
+    old = cell.cell                                       # [asm 8B7E] old [di+3] = the map offset
     ds[(di + 3) & 0xFFFF] = (0xFFFF, 2)                  # clear the cell
-    tile = rb((di + 1) & 0xFFFF)                         # [asm 8B81] tile id to restore
+    tile = cell.tile_id                                   # [asm 8B81] tile id to restore
     map_writes = {old & 0xFFFF: (tile, 1)}              # [asm 8B8A] level_map[old] = tile
 
     al = old & 0xFF                                      # map X cell
     ah = (old >> 8) & 0xFF                               # map Y cell
-    g = PlayerGlobals(DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8)))
     cam_x = g.cam_col
     cam_y = g.cam_row
     sx = (al - cam_x) & 0xFF                             # [asm 8B8D] sub al,[0x2DE4]
@@ -530,7 +508,7 @@ def _bonus_popup_cx(lvl):
 def _bonus_facing_xvel(ov, src_si):
     """[asm 8B46-8B5C] popup Xvel = 0x30, negated unless the source's facing value is negative."""
     if src_si >= PLAYER_STRUCT:
-        v = ov.rw((src_si + 6) & 0xFFFF)
+        v = ProjectileSlot(ov, src_si).xvel
     else:
         v = _s16(PlayerView(ov).facing)
     return 0x30 if _s16(v) < 0 else (-0x30) & 0xFFFF   # jl keeps 0x30; else neg
@@ -539,8 +517,9 @@ def _bonus_facing_xvel(ov, src_si):
 def _bonus_finish(ov, di):
     """[asm 8B66] decrement the cell counter; collect (8B77) on underflow. Returns (map_writes, onscreen,
     collected)."""
-    cnt = ov.rb((di + 2) & 0xFFFF)
-    ov.wb((di + 2) & 0xFFFF, (cnt - 1) & 0xFF)
+    cell = BonusCellSlot(ov, di)
+    cnt = cell.counter
+    cell.counter = (cnt - 1) & 0xFF
     if cnt == 0:                                          # sub borrow -> collect
         ds_c, map_c, onscreen = bonus_collect_tail(ov.rb, ov.rw, di)
         ov.apply(ds_c)
@@ -560,60 +539,62 @@ def bonus_hit_handler(rb, rw, di, src_si):
     Returns ``(ds_writes, map_writes, onscreen, collected)`` — the byte-level DS contract, the level-map
     writes (es=[0x2DDA]), whether the consumed tile needs an on-screen re-blit, and the ASM's CF."""
     ov = _Overlay(rb)
+    g = PlayerGlobals(ov)
+    cellview = BonusCellSlot(ov, di)
     # [8A64] sparkle at the cell centre (x*16+8, y*16+0xC)
-    cell = ov.rw((di + 3) & 0xFFFF)
+    cell = cellview.cell
     ov.apply(spawn_pickup_sparkle(
         ov.rw, (((cell & 0xFF) << 4) + 8) & 0xFFFF, ((((cell >> 8) & 0xFF) << 4) + 0xC) & 0xFFFF))
 
-    t = ov.rb((di + 2) & 0xFFFF)
+    t = cellview.counter
     if t & 0x80:                                          # [8A83] counter bonus
         newt = (t - 1) & 0xFF
-        ov.wb((di + 2) & 0xFFFF, newt)
+        cellview.counter = newt
         if newt & 0x80:                                  # underflow -> stc, no collect
-            return ov.b, {}, False, True
-        px, py = pack_spawn_pos(ov.rw((di + 3) & 0xFFFF))   # [8A8D] 8BF6
-        ov.ww(SPAWN_X, px)
-        ov.ww(SPAWN_Y, py)
+            return ov.writes, {}, False, True
+        px, py = pack_spawn_pos(cellview.cell)              # [8A8D] 8BF6
+        g.burst_x = px
+        g.burst_y = py
         r = _ov_rng(ov) & 7                              # [8A90] reroll until nonzero
         while r == 0:
             r = _ov_rng(ov) & 7
-        ov.ww(BURST_SPRITE, (r + 0x6E) & 0xFFFF)
-        ov.ww(SPAWN_Y, (ov.rw(SPAWN_Y) - 0x70) & 0xFFFF)
+        g.burst_sprite = (r + 0x6E) & 0xFFFF
+        g.burst_y = (g.burst_y - 0x70) & 0xFFFF
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0, 0, 1))   # [8AA9] 8D1B
         ds_c, map_c, onscreen = bonus_collect_tail(ov.rb, ov.rw, di)   # [8AAE] collect
         ov.apply(ds_c)
-        return ov.b, map_c, onscreen, True
+        return ov.writes, map_c, onscreen, True
 
     # [8AB1] normal bonus: frame debounce
-    frame = PlayerGlobals(ov).frame_stamp
-    if _abs16(frame - ov.rw(BONUS_DEBOUNCE)) < 6:
-        return ov.b, {}, False, False                    # recently collected -> ignore
-    ov.ww(BONUS_DEBOUNCE, frame)
-    px, py = pack_spawn_pos(ov.rw((di + 3) & 0xFFFF))   # [8ACC] 8BF6
-    ov.ww(SPAWN_X, px)
-    ov.ww(SPAWN_Y, py)
-    lvl = ov.rb(LEVEL_ID)
-    t2 = ov.rb((di + 2) & 0xFFFF)
+    frame = g.frame_stamp
+    if _abs16(frame - g.bonus_debounce) < 6:
+        return ov.writes, {}, False, False                    # recently collected -> ignore
+    g.bonus_debounce = frame
+    px, py = pack_spawn_pos(cellview.cell)              # [8ACC] 8BF6
+    g.burst_x = px
+    g.burst_y = py
+    lvl = g.level
+    t2 = cellview.counter
 
     if not (t2 & 0x40):                                  # [8B40] regular bonus: random sprite (8C13)
         r = _ov_rng(ov) & 0x7F
         while r >= 0x5F:
             r = _ov_rng(ov) & 0x7F
-        ov.ww(BURST_SPRITE, (0x2080 + r) & 0xFFFF)
+        g.burst_sprite = (0x2080 + r) & 0xFFFF
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, _bonus_facing_xvel(ov, src_si), 0xFF90, 1))
     elif t2 == 0x40:                                     # [8AD5] two-burst bonus
-        ov.wb((di + 2) & 0xFFFF, 0)
-        ov.ww(BURST_SPRITE, _bonus_popup_cx(lvl))
+        cellview.counter = 0
+        g.burst_sprite = _bonus_popup_cx(lvl)
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x20, 0xFFD0, 2))   # [8B04]
-        ov.ww(BURST_SPRITE, 0x136 if lvl == 8 else 0xE5)             # [8B07]
+        g.burst_sprite = 0x136 if lvl == 8 else 0xE5                  # [8B07]
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, _bonus_facing_xvel(ov, src_si),
                                     0xFF90, 2 if lvl == 8 else 4))    # [8B61]
     else:                                                # [8B19] bit6 set, single burst, no facing
-        ov.ww(BURST_SPRITE, _bonus_popup_cx(lvl))
+        g.burst_sprite = _bonus_popup_cx(lvl)
         ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFFA0, 4))
 
     map_writes, onscreen, collected = _bonus_finish(ov, di)
-    return ov.b, map_writes, onscreen, collected
+    return ov.writes, map_writes, onscreen, collected
 
 
 BONUS_CELL_LIST = 0x8C8D  # 80 bonus cells, stride 5 ([+3] = packed x/y map offset)
@@ -628,18 +609,19 @@ def bonus_pickup_scan(rb, rw, si):
     the byte-level DS contract, the level-map ``{offset: (value, width)}`` writes, the list of on-screen
     map offsets whose tile must be re-blitted (render side-effect for the live hook), and the ASM's CF."""
     ov = _Overlay(rb)
-    src_x_lo = (_s16(ov.rw(si)) >> 4) & 0xFF              # [asm 89A4] (ax = [si]>>4); only the low byte used
-    bp_y = (ov.rw((si + 2) & 0xFFFF) - 0x10) & 0xFFFF     # [asm 89A8] bp = [si+2] - 0x10
+    src = RenderSlot(ov, si)
+    src_x_lo = (_s16(src.x) >> 4) & 0xFF                  # [asm 89A4] (ax = [si]>>4); only the low byte used
+    bp_y = (src.y - 0x10) & 0xFFFF                        # [asm 89A8] bp = [si+2] - 0x10
     map_all: dict[int, tuple[int, int]] = {}
     redraws: list[int] = []
 
     di = BONUS_CELL_LIST
     for _ in range(BONUS_CELL_N):
-        cell = ov.rw((di + 3) & 0xFFFF)
+        cell = BonusCellSlot(ov, di).cell
         if cell != 0xFFFF \
                 and _abs8((cell & 0xFF) - src_x_lo) <= 1 \
                 and _abs16(((cell >> 8) & 0xFF) * 16 - bp_y) < 0x10:   # [asm 89BC/89CC] in range
-            ov.ww((si + 4) & 0xFFFF, 0xFFFF)             # [asm 89E3] consume the source
+            src.sprite = 0xFFFF                          # [asm 89E3] consume the source
             ds_h, map_h, onscr_h, collected = bonus_hit_handler(ov.rb, ov.rw, di, si)   # [asm 89EB] 8A5A
             ov.merge_bytes(ds_h)
             map_all.update(map_h)
@@ -649,17 +631,19 @@ def bonus_pickup_scan(rb, rw, si):
                 self_map, self_redraws = _flood_collect(ov, cell)
                 map_all.update(self_map)
                 redraws.extend(self_redraws)
-                return ov.b, map_all, redraws, True
+                return ov.writes, map_all, redraws, True
         di = (di + 5) & 0xFFFF
 
-    return ov.b, map_all, redraws, False                  # [asm 8A57] clc
+    return ov.writes, map_all, redraws, False                  # [asm 8A57] clc
 
 
 def _flood_collect(ov, center):
     """[asm 89F0-8A4B] Flood-fill collect of cells connected (8-adjacency in cell coords) to ``center``,
     deduped by cell index in the 0xA2A8 buffer. Returns (map_writes, redraws)."""
+    g = PlayerGlobals(ov)
+    dedup = g.active_flag_snapshot            # UNION: the SAME 0xA2A8 scratch the respawn snapshot also uses
     for k in range(BONUS_CELL_N):                         # [asm 89F4] clear dedup buffer
-        ov.wb((DEDUP_BUF + k) & 0xFFFF, 0)
+        dedup[k] = 0
     map_all: dict[int, tuple[int, int]] = {}
     redraws: list[int] = []
     stack = [center]
@@ -667,12 +651,12 @@ def _flood_collect(ov, center):
         cur = stack.pop()
         si = BONUS_CELL_LIST
         for idx in range(BONUS_CELL_N):                   # [asm 8A06] scan all cells
-            ax = ov.rw((si + 3) & 0xFFFF)
+            ax = BonusCellSlot(ov, si).cell
             if ax != 0xFFFF and ax != cur \
                     and _abs8((ax & 0xFF) - (cur & 0xFF)) <= 1 \
                     and _abs8(((ax >> 8) & 0xFF) - ((cur >> 8) & 0xFF)) <= 1 \
-                    and ov.rb((DEDUP_BUF + idx) & 0xFFFF) == 0:   # [asm 8A27] dedup
-                ov.wb((DEDUP_BUF + idx) & 0xFFFF, 1)
+                    and dedup[idx] == 0:                  # [asm 8A27] dedup
+                dedup[idx] = 1
                 stack.append(ax)                          # [asm 8A37] push as a new center
                 ds_c, map_c, onscreen = bonus_collect_tail(ov.rb, ov.rw, si)   # [asm 8A3C] 8B6E
                 ov.apply(ds_c)

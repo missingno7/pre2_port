@@ -102,6 +102,17 @@ class OverlayBackend:
         self.wb(off, v)
         self.wb((off + 1) & 0xFFFF, v >> 8)
 
+    def apply(self, writes: dict) -> None:
+        """Merge a ``{offset: (value, width)}`` width-tracking contract (e.g. another routine's return value)
+        into this byte-level overlay."""
+        for off, (val, width) in writes.items():
+            (self.ww if width == 2 else self.wb)(off, val)
+
+    def merge_bytes(self, byte_writes: dict) -> None:
+        """Merge another byte-level ``{offset: value}`` dict (e.g. a nested overlay's ``writes``) into this one."""
+        for off, val in byte_writes.items():
+            self.writes[off & 0xFFFF] = val & 0xFF
+
 
 class WidthOverlayBackend:
     """Read-through overlay emitting the ``{offset: (value, width)}`` width-tracking contract (vs
@@ -588,6 +599,8 @@ class PlayerGlobals(DgroupView):
     burst_x       = _U16(0xA336)  # the spawn_effect_burst origin X (8D1B reads it) [8264/74A8/7041]
     burst_y       = _U16(0xA338)  # ... origin Y [826A/74B1]
     burst_sprite  = _U16(0xA33A)  # ... the burst sprite id [8285/9507/74E0]
+    bonus_debounce = _U16(0xA33C)  # last-collect frame timestamp (vs frame_stamp, debounce window 6)
+    #                                [combat_interaction bonus_hit_handler 8AB1]
     hit_flag      = _U8(0xA330)   # hitbox_overlap's vertical-detail hit flag (1 = registered) [8D7B]
     hit_pass_full = _U8(0xA312)   # set across a projectile/player pass -> 8D7B uses the FULL (un-halved)
     #                               tolerance [6FCF/6FD7]
@@ -596,6 +609,7 @@ class PlayerGlobals(DgroupView):
     boss_x        = _U16(0x5648)  # the boss/camera-target record origin X [74A8/7041]
     boss_y        = _U16(0x564A)  # ... origin Y [74B1/704A]
 
+    collected_counter = _U16(0x2A76)  # bumped once per bonus collected (the tally-percent numerator) [8B77]
     collected_linked = _U16(0x2A7A)  # the LINKED-item collected count (tally percent = [0x2A76]+this) [85CC/5139]
 
     # --- score + the camera/scroll engine scalars (the 0x6BC0..0x6C11 band) ---
@@ -1036,6 +1050,7 @@ class ObjectDef(StructView):
     d4  = _U8(4)
     d6  = _U8(6)
     d7  = _U8(7)
+    d8  = _U8(8)
     d9  = _U16(9)
     dB  = _U16(0xB)
     dD  = _U8(0xD)
@@ -1077,12 +1092,13 @@ class EffectSource(StructView):
 
 
 class BonusCellSlot(StructView):
-    """One record of the 80-cell bonus/collectible list (0x8C8D, stride 5) — cyxx ``level_bonus_t``. Only
-    ``cell`` (the packed x/y map position) is read by the respawn snapshot; the leading bytes are level-init
-    payload it doesn't interpret."""
+    """One record of the 80-cell bonus/collectible list (0x8C8D, stride 5) — cyxx ``level_bonus_t``."""
 
     __slots__ = ()
 
+    tile_id = _U8(1)  # the underlying tile id restored into the level map on collect [combat_interaction 8B81]
+    counter = _U8(2)  # bit7 = counter-bonus flag; else &0x40 selects the two-burst/single-burst popup family
+    #                    [combat_interaction bonus_hit_handler 8A5A/8B66]
     cell = _U16(3)   # packed (y_cell << 8) | x_cell; 0xFFFF = empty/collected. cyxx level_bonus_t.pos
 
 

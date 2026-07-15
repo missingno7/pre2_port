@@ -24,8 +24,8 @@ _BUFFERS = [
     ("level_scratch_lo", 0x003F, 0x6D - 0x3F), ("level_scratch_mid", 0x0535, 0x1E),
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
     # proj_slot_scratch (0xA32E..0xA340) split around the now-named hit_flag/hit_detail/burst_*/spawned_ptr/
-    # anim_ready/proj_slot_ptr fields (SpawnCursor/HitScratch): the 2 residual un-named ranges.
-    ("proj_slot_scratch_b", 0xA333, 3), ("proj_slot_scratch_c", 0xA33C, 2),
+    # anim_ready/proj_slot_ptr/bonus_debounce fields (SpawnCursor/HitScratch): the 1 residual un-named range.
+    ("proj_slot_scratch_b", 0xA333, 3),
     # camera_target_scratch (0xA3F7..0xA426) trimmed to the un-named middle (CameraScript covers both ends)
     ("camera_target_scratch", 0xA407, 0xA41F - 0xA407),
     # effect_source_camera trimmed to end right before the now-named SpawnCursor fields (0x91FC..0x9202)
@@ -161,7 +161,7 @@ ATTACK_STATE_LAYOUT = [("attack_phase", 0x7B18, 1, False), ("attack_v19", 0x7B19
                        ("glider_tilt", 0x7B1A, 1, False)]
 HIT_SCRATCH_LAYOUT = [("quake_dist_lo", 0xA30E, 2, False), ("quake_dist_hi", 0xA310, 2, False),
                       ("hit_pass_full", 0xA312, 1, False), ("hit_flag", 0xA330, 1, False),
-                      ("hit_detail", 0xA331, 2, False)]
+                      ("hit_detail", 0xA331, 2, False), ("bonus_debounce", 0xA33C, 2, False)]
 SPAWN_CURSOR_LAYOUT = [
     ("spawn_count", 0x91FC, 2, False), ("cam_state", 0x91FE, 1, False), ("cursor_x", 0x91FF, 2, False),
     ("cursor_y", 0x9201, 2, False), ("burst_x", 0xA336, 2, False), ("burst_y", 0xA338, 2, False),

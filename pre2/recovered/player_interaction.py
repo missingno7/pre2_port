@@ -436,14 +436,14 @@ def loop2_handler(num, rb, rw, si, find_free):
         if link != 0xFFFF:
             RenderSlot(ov, link & 0xFFFF).sprite = 0xFFFF
         ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE4, si))   # [8679] ax=0xe4 -> 860B
-        return {o: (v, 1) for o, v in ov.b.items()}, [1]
+        return {o: (v, 1) for o, v in ov.writes.items()}, [1]
     if num == 0xA9:                                       # id 0xde [86B7] grenade: kill every on-screen enemy
         def _grenade(ov, di):                             # [86E1] each enemy dies via the recovered 8C72
             ov.merge_bytes(death_handler(ov.rb, ov.rw, ObjectSlot(ov, di).def_ptr, di, si))  # 8C72 = byte-level
         ov = _kill_all_screen(rb, rw, si, _grenade)
         PlayerGlobals(ov).camera_shake = 9                 # [86E9] screen shake
         ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE6, si))   # [8704] ax=0xe6 -> 860B
-        return {o: (v, 1) for o, v in ov.b.items()}, [0]
+        return {o: (v, 1) for o, v in ov.writes.items()}, [0]
     if num == 0xAA:                                       # id 0xdf [870A] bomb: kill all + food fountains
         def _bomb(ov, di):                                # [8734] erase the enemy + erupt a fountain at its pos
             g4 = PlayerGlobals(ov)
@@ -455,7 +455,7 @@ def loop2_handler(num, rb, rw, si, find_free):
             _food_fountain(ov)                            # [8748] 94F3
         ov = _kill_all_screen(rb, rw, si, _bomb)
         ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE7, si))   # [8766] ax=0xe7 -> 860B
-        return {o: (v, 1) for o, v in ov.b.items()}, [0]
+        return {o: (v, 1) for o, v in ov.writes.items()}, [0]
     if num == 0xB5:                                       # id 0xea [876C] light OFF
         out = {}
         lf = LightFadeView(be)
@@ -487,7 +487,7 @@ def _boss_projectile(rb, rw):
     g, p = PlayerGlobals(ov), PlayerView(ov)
     if g.energy < 1:                                       # [8618] cmp [0x27D6],1 ; jae
         ov.merge_bytes(_offcamera_trigger(ov.rb))         # [861F] 65B3 death/respawn (byte-level dict)
-        return {o: (v, 1) for o, v in ov.b.items()}, []
+        return {o: (v, 1) for o, v in ov.writes.items()}, []
     p.death_state = 0x2C                                    # [862A] hurt state
     p.run_flag = 0                                              # [862F]
     p.anim_b = 8                                            # [8634] anim 8
@@ -495,7 +495,7 @@ def _boss_projectile(rb, rw):
     g.energy = 1                                            # [8641] force ENERGY=1 so 867E scatters 6 bones
     _bone_burst(ov)                                        # [8646] 867E (also zeroes ENERGY + bonus)
     g.energy = e                                            # [864A] restore the decremented energy
-    return {o: (v, 1) for o, v in ov.b.items()}, [1]
+    return {o: (v, 1) for o, v in ov.writes.items()}, [1]
 
 
 _EARLY_SKIP = (0xE5, 0x12C, 0x132, 0x134, 0x136)          # [840A] ids that pass through (no consume, no effect)

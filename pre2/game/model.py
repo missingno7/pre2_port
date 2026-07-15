@@ -585,6 +585,7 @@ class HitScratch:
     hit_pass_full: int = 0   # set across a pass -> hitbox_overlap uses the FULL (un-halved) tolerance
     hit_flag: int = 0        # hitbox_overlap's vertical-detail hit flag
     hit_detail: int = 0      # vertical penetration depth when hit_flag is set
+    bonus_debounce: int = 0  # last-collect frame timestamp (vs Camera/CameraScript.frame_stamp, window 6)
 
 
 @dataclass

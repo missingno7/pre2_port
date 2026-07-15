@@ -36,6 +36,8 @@ TILE_PROPS  = 0x8E1D   # tile id -> collision property: solid / slope (0x30) / d
 COS         = 0x6F90   # angle -> signed cos byte (particle/bird X velocity)
 SIN         = 0x7090   # angle -> signed sin byte (particle/bird Y velocity)
 SPRITE_GEOM = 0x7190   # sprite (id & 0x1FFF)<<1 -> word: low byte = width (src bytes), high byte = height (rows)
+SPRITE_LEFT_HW = 0x752A  # sprite (id & 0x1FFF)<<1 -> X half-width for the hitbox LEFT-edge test (a second,
+#                           distinct sprite-geometry table from SPRITE_GEOM) [combat_interaction 8D7B]
 PLAYER_ANIM_HEIGHT = 0x7191  # player anim frame -> vertical extent (byte-indexed; reuses the sprite-geom region)
 SPAWN_OFFSET_TABLE = 0x5CBD   # spawn ring -> signed X offset (word), indexed by the ring's absolute cursor value
 ANIM_FRAME_TABLE = 0xA86F     # per-entity anim-frame descriptor table (section-marked scan)
@@ -84,6 +86,11 @@ class Tables:
     def sprite_half_h(self, sprite_id: int) -> int:
         """The sprite's Y half-extent byte (``[0x7191 + (id&0x1FFF)<<1]``)."""
         return self._rb((SPRITE_GEOM + 1 + ((sprite_id & 0x1FFF) << 1)) & 0xFFFF)
+
+    def sprite_left_hw(self, sprite_id: int) -> int:
+        """The sprite's X half-width byte for the hitbox LEFT-edge test (``[0x752A + (id&0x1FFF)<<1]``)
+        [combat_interaction 8D7B]."""
+        return self._rb((SPRITE_LEFT_HW + ((sprite_id & 0x1FFF) << 1)) & 0xFFFF)
 
     def _rw(self, off: int) -> int:
         if self._read_word is not None:
