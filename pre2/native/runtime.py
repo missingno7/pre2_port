@@ -22,10 +22,13 @@ from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
 from pre2.views.dgroup_view import EffectParticle, IrisView, PlayerGlobals, PlayerView, RenderSlot
+from pre2.views.tables import ByteTable, WordTable
 
 
 _VIEW_ROWS = 0xB0          # the gameplay viewport height in rows (the HUD band below stays)
 _ROW_BYTES = 0x28
+_FOOD_INDEX_TABLE = 0x5C8B  # food-type id -> the food-score table index [native_exit_anim 4E82-4E93]
+_FOOD_SCORE_TABLE = 0x5CAD  # index -> score value (== combat_interaction.SCORE_TABLE, the same table)
 _CAVE_BLACK_FRAMES = 6     # cave-teleport: how many all-black frames to show while the camera pans behind the
 #                            curtain. The pan is dozens of steps for a far cave; presenting one per step made the
 #                            black last ~2s. It carries no visual info (fully black), so cap it to a brief blink.
@@ -242,8 +245,8 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
                 if s16(slot.y) < 0x91:                              # [asm 4E7B] not at the pot line yet -> keep falling
                     continue
                 t = (slot.sprite_id - 0x6E) & 0xFFFF                # [asm 4E82-4E93] value = tables[food type]
-                vi = state.rb((t - 0x5C8B) & 0xFFFF)
-                val = state.rw((2 * vi - 0x5CAD) & 0xFFFF)
+                vi = ByteTable(state.rb, -_FOOD_INDEX_TABLE)[t]     # food-type id -> score-table index
+                val = WordTable(state.rw, -_FOOD_SCORE_TABLE)[2 * vi]  # index -> score value
                 sc = (g.score_lo | (g.score_hi << 16)) + val       # [asm 4E97-4E9B] score += value
                 g.score_lo = sc & 0xFFFF; g.score_hi = (sc >> 16) & 0xFFFF
                 slot.sprite = 0xFFFF                                # [asm 4EA0] free the slot
