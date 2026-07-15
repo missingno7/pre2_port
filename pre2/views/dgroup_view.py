@@ -607,6 +607,7 @@ class PlayerGlobals(DgroupView):
     spawned_ptr   = _U16(0xA33E)  # the just-spawned burst-slot pointer (8C72 reads it back) [asm 88B9]
     anim_ready    = _U8(0xA340)   # object_update's per-step anim-ready scratch byte
     spawn_offset_ring = _U16(0xA341)  # 16-slot ring index into the spawn X-offset table [object_inject]
+    proj_slot_ptr = _U16(0xA32E)  # the last object-list slot the 2nd-pass walker projected into [object_inject]
     spawn_count   = _U16(0x91FC)  # the level spawn param (>>3 = spawn count; boss damage decrements)
     cam_state     = _U8(0x91FE)   # the camera sequencer's 8-state machine state (0xFF = disabled)
     cursor_x      = _U16(0x91FF)  # the spawn/camera cursor position

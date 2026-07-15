@@ -366,8 +366,8 @@ def second_pass_tick(entities, actors, player, player_state, spawn_cursor, scene
 # so EVERY caller has real objects available; tracked in docs/pre2/offset_free_release_plan.md.
 # ============================================================================================================
 
-from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, RngView, StructView, WidthContractBackend,
-                                    _U8, _U16)
+from pre2.views.dgroup_view import (DictBackend, PlayerGlobals, PlayerView, RenderSlot, RngView, StructView,
+                                    WidthContractBackend, _U8, _U16)
 from pre2.views.tables import Tables as _TablesBytes
 
 OBJ_BASE = 0x4FD0      # the main object record list (shared with the walker)
@@ -403,11 +403,7 @@ def lookup_anim_frame(rw, entry_id: int, entry_type: int) -> int:
 
 
 # 7D9B (idx10) — second-pass player-proximity-gated, ground-snapped sprite projector
-PLAYER_X = 0x4F1C
-PLAYER_Y = 0x4F1E
 SPAWN_OFFSET_RING = 0xA341    # 16-slot ring index into the X-offset table
-SPAWN_OFFSET_TABLE = 0x5CBD   # the offset table, read as DS:[(ring - 0x5CBD) & 0xFFFF]
-MAP_HEIGHT = 0x2CF5          # [0x2CF5] level-map height (rows)
 PROJ_SLOT_PTR = 0xA32E       # [0xA32E] = the last projected object slot
 
 
@@ -430,31 +426,34 @@ def handler_ground_snap_spawn_bytes(rb, rw, read_es, si, find_free):
     spawn), not a confirmed in-game identity."""
     out: dict = {}
 
-    g = PlayerGlobals(DictBackend(rb, rw))                # read-only named access
+    be = DictBackend(rb, rw)
+    g = PlayerGlobals(be)                                  # read-only named access
+    pv = PlayerView(be)
+    rec = LiveEntityRecordBytes(be, si)
     if g.level == 5:                                      # [7D9B] level-5 special gates
         if g.camera_shake != 0:                          # [7DA2] earthquake/shake active -> no draw
             return out, False
         if g.boss_phase == 3:                            # [7DA9]
             return out, False
 
-    counter = rb((si + 7) & 0xFFFF) + 1                   # [7DB0] saturating ++ (add ; sbb)
+    counter = rec.counter + 1                             # [7DB0] saturating ++ (add ; sbb)
     if counter > 0xFF:
         counter = 0xFF
     out[(si + 7) & 0xFFFF] = (counter, 1)
-    if rb((si + 6) & 0xFFFF) > (counter >> 2):            # [7DBB] throttle
+    if rec.throttle > (counter >> 2):                     # [7DBB] throttle
         return out, False
 
-    px_cell = (_s16(rw(PLAYER_X)) >> 4) & 0xFF            # [7DC8] player X in tile cells
-    if px_cell < rb((si + 9) & 0xFFFF):                  # [7DD0] jb
+    px_cell = (_s16(pv.x) >> 4) & 0xFF                    # [7DC8] player X in tile cells
+    if px_cell < rec.origin_x_cell:                       # [7DD0] jb
         return out, False
-    rel_x = (px_cell - rb((si + 9) & 0xFFFF)) & 0xFF
-    if rb((si + 0xB) & 0xFFFF) < rel_x:                  # [7DD4] jb
+    rel_x = (px_cell - rec.origin_x_cell) & 0xFF
+    if rec.extent_x_cells < rel_x:                        # [7DD4] jb
         return out, False
-    py_cell = (_s16(rw(PLAYER_Y)) >> 4) & 0xFF            # [7DD9]
-    if py_cell < rb((si + 0xA) & 0xFFFF):                # [7DDE] jb (dh = [si+0xA])
+    py_cell = (_s16(pv.y) >> 4) & 0xFF                    # [7DD9]
+    if py_cell < rec.origin_y_cell:                       # [7DDE] jb (dh = [si+0xA])
         return out, False
-    rel_y = (py_cell - rb((si + 0xA) & 0xFFFF)) & 0xFF
-    if rb((si + 0xC) & 0xFFFF) < rel_y:                  # [7DE2] jb
+    rel_y = (py_cell - rec.origin_y_cell) & 0xFF
+    if rec.extent_y_cells < rel_y:                        # [7DE2] jb
         return out, False
 
     slot = find_free()                                    # [7DE7] no free slot -> no draw
@@ -463,9 +462,9 @@ def handler_ground_snap_spawn_bytes(rb, rw, read_es, si, find_free):
     base = OBJ_BASE + slot * OBJ_STRIDE
 
     # [7DF4] place at playerX + the next ring offset, advance the ring
-    ring = rw(SPAWN_OFFSET_RING)
-    player_x = rw(PLAYER_X)
-    new_x = (player_x + rw((ring - SPAWN_OFFSET_TABLE) & 0xFFFF)) & 0xFFFF
+    ring = g.spawn_offset_ring
+    player_x = pv.x
+    new_x = (player_x + _TablesBytes(rb).spawn_x_offset(ring)) & 0xFFFF
     out[SPAWN_OFFSET_RING] = ((ring + 2) & 0x0F, 2)
     xvel = 0 if _s16(player_x) >= _s16(new_x) else 0xFFFF  # [7E0C] dx=0 / not dx (sign toward the player)
 
@@ -481,7 +480,7 @@ def handler_ground_snap_spawn_bytes(rb, rw, read_es, si, find_free):
 
     # [7E18] scan the terrain map upward for a standable surface (solid here, 2 empty above)
     start = (((py_cell + 4) & 0xFF) << 8) | ((new_x >> 4) & 0xFF)   # bp = ((playerY>>4)+4):(newX>>4)
-    limit = (rb(MAP_HEIGHT) << 8)                                    # dx = mapheight*0x100
+    limit = (g.map_rows << 8)                                        # dx = mapheight*0x100
     floor_props = _TablesBytes(rb).floor_props
     bp = start
     ground_row = None
@@ -504,11 +503,11 @@ def handler_ground_snap_spawn_bytes(rb, rw, read_es, si, find_free):
 
     # [7E6C-7E90] a standable surface was found -> finish the record
     out[base + 0x02] = ((ground_row << 4) & 0xFFFF, 2)    # [7E74] Y = surface row * 16
-    out[base + 0x04] = (rw((si + 2) & 0xFFFF), 2)         # [7E77] sprite id
+    out[base + 0x04] = (rec.sprite_ref, 2)                # [7E77] sprite id
     out[base + 0x06] = (si & 0xFFFF, 2)                   # [7E7D] back-pointer
     out[base + 0x0E] = (0, 1)                             # [7E84] state byte
     out[base + 0x0A] = (0, 2)                             # [7E88] Yvel
-    out[base + 0x0F] = (rb((si + 5) & 0xFFFF), 1)         # [7E90] flip byte
+    out[base + 0x0F] = (rec.aux5, 1)                      # [7E90] flip byte
     out[(si + 4) & 0xFFFF] = (0x17, 1)                    # [7E80] entity mode
     return out, True
 
@@ -567,7 +566,6 @@ def project_entity_bytes(entry_x, entry_y, entry_sprite, entry_aux5, entry_ptr, 
 # --- the per-type walker handlers (cs:[bx+0x6AC3], bx = ([entry+1]<<1)&0xFF) --------------------------------
 # Each returns ``(writes, drawn)`` — ``writes`` the DS ``{offset: (value, width)}`` contract, ``drawn`` the ASM
 # CF==0. Most are thin wrappers around :func:`project_entity_bytes` that override the entity mode byte ``[entry+4]``.
-LEVEL = 0x2D8A               # [0x2D8A] current level byte
 AURA_TOGGLE = 0x6BCC        # [0x6BCC] idx0 alternating ±0xC0 side flag
 ENTITY_LIST = 0x8489        # the variable-stride 2nd-pass entity list (entry 0 = the player)
 _BYTE_FIELDS = (0x0E, 0x0F, 0x10)
@@ -618,32 +616,28 @@ def handler_7ebf_bytes(rb, rw, si, cam_x, cam_y, find_free):
 def handler_7e97_bytes(rb, rw, si, cam_x, cam_y, find_free):
     """idx9 (``7E97``) — clear ``[si+0x11]`` unconditionally; on a draw set the mode to ``(old [si+4] | 5)``,
     OR-ing bit7 on level 6."""
+    rec = LiveEntityRecordBytes(DictBackend(rb, rw), si)
     out = {(si + 0x11) & 0xFFFF: (0, 1)}     # [7E97] cleared unconditionally
-    old_mode = rb((si + 4) & 0xFFFF)         # [7E9B] saved before project
+    old_mode = rec._mode                      # [7E9B] saved before project
     pr = _entry_project_bytes(rb, rw, si, cam_x, cam_y, find_free)
     if not pr.drawn:
         return out, False
     w, _ = _project_writes_bytes(pr, si)
     w.update(out)
     m = old_mode | 5                          # [7EA5]
-    if rb(LEVEL) == 6:                        # [7EA7] level 6 -> bit7
+    if PlayerGlobals(DictBackend(rb, rw)).level == 6:   # [7EA7] level 6 -> bit7
         m |= 0x80
     w[(si + 4) & 0xFFFF] = (m & 0xFF, 1)
     return w, True
 
 
-def _saturating_inc_bytes(rb, off):
-    """``add [off],1 ; sbb [off],0`` — increment a byte counter saturating at 0xFF."""
-    c = rb(off & 0xFFFF) + 1
-    return 0xFF if c > 0xFF else c
-
-
 def handler_7d6e_bytes(rb, rw, si, cam_x, cam_y, find_free):
     """idx11 (``7D6E``) — saturating counter ``[si+7]`` throttle vs ``[si+6]``; on a draw set mode 0x37 and
     jitter the projected Y down by ``rng_lcg() & 0x3F`` (advancing the shared generator)."""
-    counter = _saturating_inc_bytes(rb, (si + 7) & 0xFFFF)
+    rec = LiveEntityRecordBytes(DictBackend(rb, rw), si)
+    counter = _saturating_inc(rec.counter)
     out = {(si + 7) & 0xFFFF: (counter, 1)}
-    if rb((si + 6) & 0xFFFF) > (counter >> 2):   # [7D7D]
+    if rec.throttle > (counter >> 2):            # [7D7D]
         return out, False
     pr = _entry_project_bytes(rb, rw, si, cam_x, cam_y, find_free)
     if not pr.drawn:
@@ -660,20 +654,23 @@ def handler_7d1b_bytes(rb, rw, si, cam_x, cam_y, find_free):
     """idx12 (``7D1B``) — player-proximity gate (player below the entity; |dx|<0x280; if |dx|<0x140 also a
     0xB4<dy<0x168 Y-band) + saturating-counter throttle; then a no-cull projection (``7F31``), mode 0x8F,
     and reset ``[si+7]``."""
-    if _s16(rw(PLAYER_Y)) <= _s16(rw((si + 0xB) & 0xFFFF)):   # [7D1E/7D22] player not below entity
+    be = DictBackend(rb, rw)
+    pv = PlayerView(be)
+    rec = LiveEntityRecordBytes(be, si)
+    if _s16(pv.y) <= _s16(rec.y):                             # [7D1E/7D22] player not below entity
         return {}, False
-    dxv = _s16(rw((si + 9) & 0xFFFF)) - _s16(rw(PLAYER_X))    # [7D24/7D27]
+    dxv = _s16(rec.x) - _s16(pv.x)                            # [7D24/7D27]
     if dxv < 0:
         dxv = -dxv                                           # [7D2D]
     if dxv >= 0x280:                                         # [7D2F/7D32]
         return {}, False
     if dxv < 0x140:                                         # [7D34] near -> apply the Y-band
-        dyv = _s16(rw(PLAYER_Y)) - _s16(rw((si + 0xB) & 0xFFFF))   # [7D39/7D3C]
+        dyv = _s16(pv.y) - _s16(rec.y)                        # [7D39/7D3C]
         if dyv >= 0x168 or dyv <= 0xB4:                     # [7D3F/7D44]
             return {}, False
-    counter = _saturating_inc_bytes(rb, (si + 7) & 0xFFFF)         # [7D49]
+    counter = _saturating_inc(rec.counter)                         # [7D49]
     out = {(si + 7) & 0xFFFF: (counter, 1)}
-    if rb((si + 6) & 0xFFFF) > (counter >> 2):              # [7D58]
+    if rec.throttle > (counter >> 2):                       # [7D58]
         return out, False
     pr = _entry_project_bytes(rb, rw, si, cam_x, cam_y, find_free, cull=False)   # [7D5D] 7F31 (no on-screen cull)
     if not pr.drawn:
@@ -689,37 +686,40 @@ def handler_7f6c_bytes(rb, rw, si, cam_x, cam_y, find_free):
     """idx0 (``7F6C``) — a player-relative aura: if the player tile is within the entity's window
     (origin [si+9]/[si+0xA], extent [si+0xB]/[si+0xC]), project a sprite at ``playerX ± 0xC0`` (the side
     alternating via the ``[0x6BCC]`` toggle), ``playerY - 0xB0``, mode 7. Own projection (does not call 7F26)."""
-    entry9 = rw((si + 9) & 0xFFFF)
-    al = ((_s16(rw(PLAYER_X)) >> 4) & 0xFF)                  # [7F6E/7F71] playerX tile (low byte)
-    if al < (entry9 & 0xFF):                                 # [7F76/7F78]
+    be = DictBackend(rb, rw)
+    pv = PlayerView(be)
+    g = PlayerGlobals(be)
+    rec = LiveEntityRecordBytes(be, si)
+    al = (_s16(pv.x) >> 4) & 0xFF                            # [7F6E/7F71] playerX tile (low byte)
+    if al < rec.origin_x_cell:                               # [7F76/7F78]
         return {}, False
-    al = (al - (entry9 & 0xFF)) & 0xFF
-    if rb((si + 0xB) & 0xFFFF) < al:                         # [7F7A/7F7D]
+    al = (al - rec.origin_x_cell) & 0xFF
+    if rec.extent_x_cells < al:                              # [7F7A/7F7D]
         return {}, False
-    al2 = ((_s16(rw(PLAYER_Y)) >> 4) & 0xFF)                 # [7F7F/7F82] playerY tile (low byte)
-    if al2 < ((entry9 >> 8) & 0xFF):                        # [7F84/7F86]
+    al2 = (_s16(pv.y) >> 4) & 0xFF                           # [7F7F/7F82] playerY tile (low byte)
+    if al2 < rec.origin_y_cell:                              # [7F84/7F86]
         return {}, False
-    al2 = (al2 - ((entry9 >> 8) & 0xFF)) & 0xFF
-    if rb((si + 0xC) & 0xFFFF) < al2:                       # [7F88/7F8B]
+    al2 = (al2 - rec.origin_y_cell) & 0xFF
+    if rec.extent_y_cells < al2:                             # [7F88/7F8B]
         return {}, False
     slot = find_free()                                      # [7F8D]
     if slot is None:
         return {}, False
-    toggle = rb(AURA_TOGGLE) ^ 1                            # [7F9D] xor [0x6bcc],1
+    toggle = g.aura_toggle ^ 1                              # [7F9D] xor [0x6bcc],1
     off = 0xC0 if toggle == 0 else (-0xC0 & 0xFFFF)         # [7FA2/7FA4] je keeps +0xC0 else neg
     base = (OBJ_BASE + slot * OBJ_STRIDE) & 0xFFFF
     w = {
         (base + 0x10) & 0xFFFF: (0, 1),                     # [7F92]
         AURA_TOGGLE: (toggle, 1),                           # [7F9D]
-        (base + 0x00) & 0xFFFF: ((rw(PLAYER_X) + off) & 0xFFFF, 2),   # [7FA6/7FAB] X = playerX ± 0xC0
-        (base + 0x02) & 0xFFFF: ((rw(PLAYER_Y) - 0xB0) & 0xFFFF, 2),  # [7FAD/7FB3] Y = playerY - 0xB0
-        (base + 0x04) & 0xFFFF: (rw((si + 2) & 0xFFFF), 2),          # [7FB6] sprite id
+        (base + 0x00) & 0xFFFF: ((pv.x + off) & 0xFFFF, 2),   # [7FA6/7FAB] X = playerX ± 0xC0
+        (base + 0x02) & 0xFFFF: ((pv.y - 0xB0) & 0xFFFF, 2),  # [7FAD/7FB3] Y = playerY - 0xB0
+        (base + 0x04) & 0xFFFF: (rec.sprite_ref, 2),          # [7FB6] sprite id
         (base + 0x06) & 0xFFFF: (si & 0xFFFF, 2),                    # [7FBC] back-pointer
         (si + 4) & 0xFFFF: (7, 1),                                   # [7FBF] entity mode
         (base + 0x0E) & 0xFFFF: (0, 1),                              # [7FC3]
         (base + 0x0A) & 0xFFFF: (0, 2),                              # [7FC7]
         (base + 0x08) & 0xFFFF: (0, 2),                              # [7FCC]
-        (base + 0x0F) & 0xFFFF: (rb((si + 5) & 0xFFFF), 1),          # [7FD1] flip
+        (base + 0x0F) & 0xFFFF: (rec.aux5, 1),                       # [7FD1] flip
         PROJ_SLOT_PTR: (base, 2),                                    # [7F96]
     }
     return w, True
@@ -753,7 +753,6 @@ def dispatch_handler_bytes(idx, rb, rw, read_es, si, cam_x, cam_y, find_free):
     return h(rb, rw, si, cam_x, cam_y, find_free)
 
 
-B198 = 0xB198               # [0xB198] != 1 -> entries with the [si+1]&0x80 skip flag are skipped
 ENTITY_STRIDE_END = 0x32    # [si] >= this ends the walk
 
 
@@ -772,8 +771,19 @@ class LiveEntityRecordBytes(StructView):
     sprite_ref = _U16(2)    # [+2] word; 0xFFFF = empty (also the projected sprite id)
     _mode      = _U8(4)     # [+4] the record mode byte (bit2 = skip)
     aux5       = _U8(5)     # [+5] the flip/aux byte copied into the projected slot
-    x          = _U16(9)    # [+9] world X (projected into the object slot)
-    y          = _U16(0xB)  # [+0xB] world Y
+    throttle   = _U8(6)     # [+6] the per-entity draw-throttle compare threshold
+    counter    = _U8(7)     # [+7] the saturating per-entity draw-throttle counter
+    x          = _U16(9)    # [+9] world X (projected into the object slot) -- a UNION with the packed
+    #                          origin_x_cell(lo)/origin_y_cell(hi) proximity-window origin
+    y          = _U16(0xB)  # [+0xB] world Y -- a UNION with the packed extent_x_cells(lo)/extent_y_cells(hi)
+    #                          proximity-window extent
+    origin_x_cell = _U8(9)     # width alias of x's low byte
+    origin_y_cell = _U8(0xA)   # width alias of x's high byte
+    extent_x_cells = _U8(0xB)  # width alias of y's low byte
+    extent_y_cells = _U8(0xC)  # width alias of y's high byte
+    unk_f      = _U8(0xF)   # cleared by a couple of handlers; role not yet evidenced
+    unk_10     = _U8(0x10)  # cleared by a couple of handlers; role not yet evidenced
+    unk_11     = _U8(0x11)  # cleared unconditionally by handler_7e97; role not evidenced
 
     @property
     def si(self) -> int:
@@ -811,9 +821,10 @@ def second_pass_tick_bytes(rb, rw, apply_writes, read_es, cam_x, cam_y):
     (``di=[0xA32E]``). Advance ``si`` by the stride. ``apply_writes(dict)`` commits a handler's
     ``{offset:(value,width)}`` so later entries' ``find_free`` sees the slots already taken; ``rb``/``rw`` read
     through those committed writes."""
-    b198 = rb(B198)
-    find_free = lambda: find_free_object_slot(lambda s: rw(OBJ_BASE + s * OBJ_STRIDE + 4))   # noqa: E731
-    rec = LiveEntityRecordBytes(WidthContractBackend(rb, rw), ENTITY_LIST)   # entry 0 = the player (name-keyed walk)
+    be = WidthContractBackend(rb, rw)
+    b198 = PlayerGlobals(be).mode_copy
+    find_free = lambda: find_free_object_slot(lambda s: RenderSlot(be, OBJ_BASE + s * OBJ_STRIDE).sprite)  # noqa: E731
+    rec = LiveEntityRecordBytes(be, ENTITY_LIST)   # entry 0 = the player (name-keyed walk)
     while True:
         stride = rec.stride                                      # [6916] read the record length once
         if stride >= ENTITY_STRIDE_END:
@@ -827,6 +838,6 @@ def second_pass_tick_bytes(rb, rw, apply_writes, read_es, cam_x, cam_y):
             apply_writes(writes)
             if drawn:                                            # [6952] CF==0 -> resolve the anim frame
                 desc = lookup_anim_frame(rw, rec.sprite_ref, idx)   # [6954..697B]
-                di = rw(PROJ_SLOT_PTR)                            # [697D] di = [0xA32E]
+                di = PlayerGlobals(be).proj_slot_ptr              # [697D] di = [0xA32E]
                 apply_writes({(di + 0x0C) & 0xFFFF: (desc, 2)})  # [6981] [di+0xC] = descriptor
         rec.si = (rec.si + stride) & 0xFFFF                      # [6984] advance by the (positive) stride
