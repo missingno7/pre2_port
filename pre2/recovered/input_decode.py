@@ -91,8 +91,8 @@ def decode_input(rb, rw):
             writes[DEMO_CNT] = ((g.demo_cnt - 1) & 0xFF, 1)     # [asm 0E0E dec [287D]]
             al = g.demo_byte                                    # [asm 0E12 al=[287C]]
         else:                                # read the next 2-byte entry [asm 0DF1]
-            lo = rb((ptr + 0x3F) & 0xFFFF)
-            hi = rb((ptr + 0x40) & 0xFFFF)
+            entry = rw((ptr + 0x3F) & 0xFFFF)
+            lo, hi = entry & 0xFF, (entry >> 8) & 0xFF
             ptr = (ptr + 2) & 0xFFFF
             if ((lo | (hi << 8)) & 0xFFFF) == 0x55AA:           # end-of-demo sentinel [asm 0DF7]
                 writes[DEMO_FLAG] = (1, 1)
@@ -131,8 +131,8 @@ def decode_input(rb, rw):
         writes[(ptr + 0x40) & 0xFFFF] = (0, 1)
         writes[DEMO_PTR] = ((ptr + 2) & 0xFFFF, 2)
     else:
-        prev = rb((ptr + 0x3D) & 0xFFFF)     # the previously-recorded byte ([+0x3F] of the prior entry)
-        cnt = rb((ptr + 0x3E) & 0xFFFF)
+        prev_entry = rw((ptr + 0x3D) & 0xFFFF)
+        prev, cnt = prev_entry & 0xFF, (prev_entry >> 8) & 0xFF   # [+0x3D]=the prior byte, [+0x3E]=its count
         if prev == al and cnt != 0xFF:       # same input, room to count -> bump the repeat [asm 0F5D inc]
             writes[(ptr + 0x3E) & 0xFFFF] = ((cnt + 1) & 0xFF, 1)
         else:                                # changed or count maxed -> new entry [asm 0F67]
