@@ -1341,6 +1341,16 @@ class CarteMarkerEntry(StructView):
     y = _U16(2)
 
 
+class FidgetRangeEntry(StructView):
+    """One [lo, hi) threshold range in the idle-fidget selector table (``0x79E0``, stride 4)
+    [player.py player_state_idle 5DC9-5DDB]."""
+
+    __slots__ = ()
+
+    lo = _U16(0)
+    hi = _U16(2)
+
+
 class CaveTriggerEntry(StructView):
     """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
     5316; native_cave_teleport 5326]."""

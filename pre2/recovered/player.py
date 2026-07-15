@@ -23,8 +23,8 @@ for genuinely dynamic data — the anim/impulse/phase TABLES, the trail ring, th
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import (AttackPhaseEntry, DictBackend, overlay_reader, PLAYER_BASE, PlayerGlobals,
-                                    PlayerView, RENDER_SLOTS_BASE, WidthContractBackend)
+from pre2.views.dgroup_view import (AttackPhaseEntry, DictBackend, FidgetRangeEntry, overlay_reader, PLAYER_BASE,
+                                    PlayerGlobals, PlayerView, RENDER_SLOTS_BASE, WidthContractBackend)
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
@@ -545,12 +545,14 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
     # fidget [5DC9]: find the 0x79E0 range [lo,hi) containing key=idle_clock&0x1FF -> anim 0x11; below lo -> default
     key = g.idle_clock & 0x1FF
     si = FIDGET_RANGE_TABLE
+    fbe = DictBackend(rb, rw)
     while True:
-        if key < rw(si):                                       # [5DD2] jb 5DED
+        rng = FidgetRangeEntry(fbe, si)
+        if key < rng.lo:                                       # [5DD2] jb 5DED
             _idle_default_anim(p, entry_bx, facing, rw)
             p.anim_b = 0
             return out
-        if key < rw((si + 2) & 0xFFFF):                        # [5DD6] jb 5DE0
+        if key < rng.hi:                                       # [5DD6] jb 5DE0
             _idle_set_advance(p, g, 0x11, 0x22, rb, rw, facing)  # [5DE0-5DE8] anim 0x11
             p.anim_b = 0
             return out
@@ -732,7 +734,7 @@ def player_state_anim4(rb, rw) -> dict:
         g.anim_hi = bcf
         return out
     # [5E89] jmp 5CDB — idle sees idle_timer==0 (just written) and bx==8
-    rb2 = lambda o: 0 if o == IDLE_TIMER else rb(o)                            # noqa: E731 — the just-written read shim
+    rb2 = overlay_reader(rb, {IDLE_TIMER: 0}, 0xFF)                            # the just-written read shim
     out.update(player_state_idle(rb2, rw, entry_bx=8))
     return out
 
