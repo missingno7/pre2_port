@@ -32,7 +32,7 @@ from pre2.native.camera_scroll import _v_scroll_down, _v_scroll_up, native_camer
 from pre2.views.camera_pan import apply_camera_pan
 from pre2.native.player import native_player_interaction, native_player_step
 from pre2.native.dgroup_offsets import (
-    BONUS_LETTERS_MASK, BURST_POS_X, BURST_POS_Y, BURST_SPRITE, CAM_H_FOLLOW_GATE, COMBO_COMPLETE_6BE2, FINE_SCROLL, FRAME_TIMER, IDLE_CLOCK, IDLE_CLOCK_HI, PENDING_PICKUP_6BE1, PLAYER_Y, REWARD_ARM_HI, REWARD_ARM_LO, ROW_FACTOR, SCROLL_ACCUM, SCROLL_GATE_6BD9, SHAKE_MAGNITUDE, TERRAIN_ENTITY_BASE, UTENSILS_MASK)
+    BONUS_LETTERS_MASK, BURST_POS_X, BURST_POS_Y, BURST_SPRITE, CAM_H_FOLLOW_GATE, COMBO_COMPLETE_6BE2, FINE_SCROLL, FRAME_TIMER, IDLE_CLOCK, IDLE_CLOCK_HI, PENDING_PICKUP_6BE1, REWARD_ARM_HI, REWARD_ARM_LO, ROW_FACTOR, SCROLL_ACCUM, SCROLL_GATE_6BD9, SHAKE_MAGNITUDE, TERRAIN_ENTITY_BASE, UTENSILS_MASK)
 
 
 def _apply_bytes(state, writes) -> None:
@@ -450,7 +450,7 @@ def native_camera_shake(state) -> None:
     res = apply_camera_shake(g.row_factor, g.camera_shake, g.frame_blink, pv.anim_b, pv.y)
     _ww(state, ROW_FACTOR, res.row_factor)
     _wb(state, SHAKE_MAGNITUDE, res.magnitude)
-    _ww(state, PLAYER_Y, res.h_scroll)
+    pv.y = res.h_scroll
 
 
 _PLAYER_SRC = 0x4F0A          # [asm 88FC] the player's collision sprite

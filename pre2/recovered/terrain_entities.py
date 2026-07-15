@@ -209,9 +209,19 @@ def _collision_4b05(ov, di):
              "the player-ride collision 4B05 (hitbox 8D7B; snap player onto the entity top, inherit velocity). "
              "Whole-routine transform over a read-through overlay; returns a byte-level write contract.",
              "OBSERVED", merge_target="terrain_entities")
-def tick_terrain_entities(rw, rb, read_tile):
-    """[asm 4907] ``rw``/``rb`` read DS word/byte, ``read_tile`` the level-map. Returns ``{offset: value}``."""
+def tick_terrain_entities(rw, rb, read_tile, player=None):
+    """[asm 4907] ``rw``/``rb`` read DS word/byte, ``read_tile`` the level-map. Returns ``{offset: value}``.
+
+    ``player`` (the live ``pre2.game.model.Player``, threaded the same way ``rng=`` is elsewhere) is registered
+    directly on ``ov`` -- every helper below (``_move_type8``/``_move_default``/``_collision_4b05``) binds its
+    PlayerView/PlayerGlobals straight onto the SAME ``ov`` rather than a separate backend, so one registration
+    here covers the whole pass. NOT threaded into ``_collision_4b05``'s ``trb``/``trw`` ride-probe overlay --
+    that overlay is a deliberate HYPOTHETICAL player-Y simulation for the ride hit-test (see its comment), not a
+    real state write, and routing it through the registry would make the probe see the live actual Y instead of
+    the simulated one it exists to test against."""
     ov = _Ov(rb, read_tile)
+    if player is not None:
+        ov.register(PlayerView, player)
     g, p = PlayerGlobals(ov), PlayerView(ov)
     g.unk_6BFE = 0                                            # [asm 4913]
     si = ENTITY_LO
