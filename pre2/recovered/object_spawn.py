@@ -36,8 +36,6 @@ def _sar16(v, n):
 
 # --- named DGROUP offsets this island reads/writes (the author bypassed some already-defined names below;
 #     these are the remaining ones, named once here) --------------------------------------------------------
-P_MOTION = 0x4F24            # player kinematics mode/shift byte (PLAYER_X + 8)
-P_DEATH = 0x4F2D             # player death/hurt state byte (PLAYER_X + 0x11)
 ANIM_GATE = 0x6BD0           # hold-current-anim / FSM-route gate
 LOW_GRAVITY = 0x6BC7         # low-gravity / attack-invuln flag
 HIT_VDETAIL = 0xA330         # the hitbox vertical-detail hit flag (8D7B writes it)
@@ -427,8 +425,6 @@ def hurt_effect(rb, rw):
 
 # --- 81F3: one camera-boundary target vs the player (the per-target half of the 81B4 crush) ---
 SCROLL_PUSH = 0x91FB      # al = 4 - [0x91FB] is subtracted from the scroll phase on a bounce
-PLAYER_XVEL = 0x4F22
-PLAYER_YVEL = 0x4F2A
 
 
 @oracle_link("1030:81F3",
@@ -457,12 +453,13 @@ def camera_target_bounce(rb, rw, di):
     r = (g.scroll_phase - al) & 0xFF                  # [asm 820C] sub [0x6C05],al
     writes[SCROLL_PHASE] = (0 if (r & 0x80) else r, 1)   # [asm 8210] jns -> clamp to 0
     writes.update(hurt_effect(rb, rw))               # [asm 8217] 824D
-    writes[P_DEATH] = (0x2C, 1)                        # [asm 8220]
+    p = PlayerView(WidthContractBackend(rb, rw, out=writes))   # named player-field writes into the same contract
+    p.death_state = 0x2C                               # [asm 8220]
     writes[ANIM_GATE] = (0, 1)                           # [asm 8225]
-    writes[PLAYER_YVEL] = (0xFF80, 2)                 # [asm 822A]
-    writes[P_MOTION] = (3, 1)                           # [asm 8230]
+    p.yvel = 0xFF80                                    # [asm 822A]
+    p.motion_mode = 3                                   # [asm 8230]
     bvx = 0x80 if _s16(pv.x) >= _s16(g.cursor_x) else 0xFF80   # [asm 8235-8242] toward the player
-    writes[PLAYER_XVEL] = (bvx, 2)                    # [asm 8244]
+    p.xvel = bvx                                       # [asm 8244]
     writes[LOW_GRAVITY] = (0, 1)                           # [asm 8247]
     return writes
 
@@ -500,7 +497,7 @@ def camera_boundary_collision(rb, rw):
     ov.apply(hb)
     if hit and hb[HIT_VDETAIL][0] != 0:                    # [asm 81D3 jae / 81D5 cmp [0xA330],0]
         ax = 0xFF80 if g.in_up != 0 else 0xFFC0           # [asm 81DC-81E6] (+ sfx 3 when set)
-        ov.apply({PLAYER_YVEL: (ax, 2)})              # [asm 81EF]
+        PlayerView(ov).yvel = ax                          # [asm 81EF]
     return ov.writes
 
 
