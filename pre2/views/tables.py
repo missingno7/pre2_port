@@ -48,6 +48,10 @@ SPEED_CURVE = 0x78C6          # distance-from-target -> vertical scroll speed [c
 CEIL_HANDLER = 0x805E
 DIRTY_KIND = 0x4DF8            # tile id -> 0 direct-redraw / >=1 whole-grid-dirty [player_collision _bridge_dirty 5C7B]
 SONG_INDEX = 0x2D20            # level -> per-level song index [asm 01ab, native_level_song_name]
+SCORE_TABLE = 0xA353           # collectible id (0x4a-0x5a) -> score value, word-indexed *2 [player_interaction 8887]
+SCORE_SPR_LUT = 0xA375         # collectible index (num-0x39) -> score-spawn-effect lut byte [player_interaction 85B6]
+HURT_SFX_TABLE = 0xA3E5        # escalating hurt-effect id, word-indexed by the RAW hit count (not *2 -- the ASM's
+#                                 overlapping-word read idiom) [player_interaction _hurt 8366]
 
 
 class Tables:
@@ -55,7 +59,7 @@ class Tables:
     ``t.floor_props[tile]`` / ``t.cos[angle]`` / ``t.sprite_half_w(id)``."""
 
     __slots__ = ("_rb", "_read_word", "floor_props", "ceil_props", "tile_props", "cos", "sin", "sprite_geom",
-                 "player_anim_height", "speed_curve", "ceil_handler", "dirty_kind", "song_index")
+                 "player_anim_height", "speed_curve", "ceil_handler", "dirty_kind", "song_index", "score_spr_lut")
 
     def __init__(self, read_byte, read_word=None):
         self._rb = read_byte
@@ -69,6 +73,7 @@ class Tables:
         self.ceil_handler = ByteTable(read_byte, CEIL_HANDLER)
         self.dirty_kind = ByteTable(read_byte, DIRTY_KIND)
         self.song_index = ByteTable(read_byte, SONG_INDEX)
+        self.score_spr_lut = ByteTable(read_byte, SCORE_SPR_LUT)
         self.sprite_geom = ByteTable(read_byte, SPRITE_GEOM)  # index by (id & 0x1FFF)<<1 (+1 = height)
         self.player_anim_height = ByteTable(read_byte, PLAYER_ANIM_HEIGHT)
 
@@ -89,6 +94,15 @@ class Tables:
         """The spawn X-offset word at the ring's absolute cursor position (``ring`` is itself a table-relative
         cursor value, e.g. ``SPAWN_OFFSET_TABLE + k*2`` — the 16-slot ring index into this asset)."""
         return self._rw((ring - SPAWN_OFFSET_TABLE) & 0xFFFF)
+
+    def score_value(self, bx: int) -> int:
+        """The collectible id's score word (``bx`` = ``(id - 0x4A) << 1``) [player_interaction 8887]."""
+        return self._rw((SCORE_TABLE + bx) & 0xFFFF)
+
+    def hurt_sfx_word(self, cnt: int) -> int:
+        """The escalating hurt-effect id word at the raw hit count ``cnt`` (an overlapping-word read, not
+        index*2) [player_interaction _hurt 8366]."""
+        return self._rw((HURT_SFX_TABLE + cnt) & 0xFFFF)
 
     def anim_script_word(self, cursor: int) -> int:
         """The anim-script word at ``cursor`` — a read of the loaded, read-only anim/attack-script bytecode
