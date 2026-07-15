@@ -73,10 +73,15 @@ class NativeGameState:
         #: Callers that construct an RngView register it against THIS instance so every roll lands on the same
         #: object; nothing here makes RNG live by itself.
         from pre2.game.model import Rng
-        from pre2.views.dgroup_view import RngView
+        from pre2.views.dgroup_view import RngView, ScrollScriptView
         rv = RngView(self)
         self.rng = Rng(lcg_a=rv.lcg_a, lcg_b=rv.lcg_b, lcg_c=rv.lcg_c, lcg_d=rv.lcg_d, ror=rv.ror)
         self.backend.register(RngView, self.rng)   # any RngView(state) call now resolves live, no bridge needed
+        # ScrollScriptView aliases the SAME 4 bytes under different names (rng_a../lcg_a..) for the LEVELG
+        # snow/scroll subsystem (pre2/recovered/scroll_script.py) — remap so it rolls the SAME Rng object
+        # instead of a byte image that would silently fork from RngView's copy.
+        self.backend.register(ScrollScriptView, self.rng,
+                              remap={"rng_a": "lcg_a", "rng_b": "lcg_b", "rng_c": "lcg_c", "rng_d": "lcg_d"})
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
@@ -90,6 +95,16 @@ class NativeGameState:
         silently fork the generator's sequence, so every RNG-touching call site resolves through here, not
         ``self.rng`` directly."""
         return getattr(self.backend, "rng", self.rng)
+
+    def sync_rng_to_image(self) -> None:
+        """Fold ``self.rng`` back into the raw DGROUP image through the SAME offset-based ``RngView``
+        descriptors (no bridge, no duplicated offset literal) — for anything that still needs fresh raw bytes
+        directly (a snapshot dump, a digest compare). A fresh, unregistered ``ByteBackend`` bypasses the
+        live-object registry so the write lands straight on ``.data``."""
+        from pre2.views.dgroup_view import ByteBackend, RngView
+        raw = RngView(ByteBackend(self))
+        rng = self.rng
+        raw.lcg_a, raw.lcg_b, raw.lcg_c, raw.lcg_d, raw.ror = rng.lcg_a, rng.lcg_b, rng.lcg_c, rng.lcg_d, rng.ror
 
     def rb(self, off: int) -> int:
         """Read a DGROUP byte (DS-relative), the recovered functions' ``rb`` accessor — via the backend seam."""

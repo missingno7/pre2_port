@@ -80,9 +80,12 @@ def test_snow_byte_exact_vs_asm():
     d = bytearray(0x100000)
     d[_BASE + 0x2CEC:_BASE + 0x2CF2] = bytes.fromhex(fix["seed"])
     d[_BASE + 0x6CA9:_BASE + 0x6CA9 + 0x200] = bytes.fromhex(fix["flakes"])
-    s = ScrollScriptView(NativeGameState(d))
+    state = NativeGameState(d)
+    s = ScrollScriptView(state)
     s.wind = fix["wind"]; s.camera_x = fix["cam"]; s.draw_page = fix["page"]
     plots = scroll_script_snow(s)
+    state.sync_rng_to_image()   # the shared rng now lives on state.rng (P2's live cluster); fold it back to
+    #                             compare raw bytes exactly as before
     assert bytes(d[_BASE + 0x2CEC:_BASE + 0x2CF2]).hex() == fix["exp_seed"]           # shared rng byte-exact
     assert hashlib.sha256(bytes(d[_BASE + 0x6CA9:_BASE + 0x6CA9 + 0x200])).hexdigest()[:16] == fix["exp_flakes_sha"]
     assert len(plots) == fix["exp_plot_count"]

@@ -314,10 +314,13 @@ class FieldRegistry:
         self._by_name: dict = {}
 
     def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "FieldRegistry":
-        self._by_cls[view_cls] = obj
         if remap:
+            # a partial ALIAS (e.g. ScrollScriptView.rng_a -> Rng.lcg_a): route ONLY these names; the view's
+            # OTHER fields must keep resolving via the offset path, not fall through to `obj` wholesale.
             for local_name, attr_name in remap.items():
                 self._by_name[(view_cls, local_name)] = (obj, attr_name)
+        else:
+            self._by_cls[view_cls] = obj
         return self
 
     def resolve(self, view, name: str):
