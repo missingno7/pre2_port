@@ -31,7 +31,8 @@ def native_load_dac_palette(state, dos, table_off: int, count: int = 0x10) -> No
         dos.vga_palette = list(dos.vga_palette) + [(0, 0, 0)] * (256 - len(dos.vga_palette))
     for i in range(count):
         b0 = (table_off + i * 3) & 0xFFFF                          # the 6-bit RGB triple in the DGROUP palette table
-        dos.vga_palette[i] = (_dac8(state.rb(b0)), _dac8(state.rb(b0 + 1)), _dac8(state.rb(b0 + 2)))
+        rg = state.rw(b0)                                          # r=low byte, g=high byte (adjacent)
+        dos.vga_palette[i] = (_dac8(rg & 0xFF), _dac8((rg >> 8) & 0xFF), _dac8(state.rb((b0 + 2) & 0xFFFF)))
 
 
 def native_load_level_palette(state, dos) -> None:
