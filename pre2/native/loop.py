@@ -279,23 +279,25 @@ def native_proximity_mapmod(state, trig) -> None:
     ``block_top`` up a row, reveal a fresh bottom row from the 41CA-saved pristine rows in the bank (walking
     ``reveal_cursor`` backward one ``width`` per fire), and count down — disarming at 0. The per-tile 653D
     re-blit is a render side-effect (the faithful renderer redraws the changed tiles)."""
-    from pre2.views.dgroup_view import ProximityTrigger, ProximityView, SegmentBackend
+    from pre2.views.dgroup_view import ProximityTrigger, ProximityView, SegmentBackend, _U8ArrayView
     v = ProximityView(state)
     v.shake = 7                                                   # [asm 5429] camera shake (even on gated frames)
     if v.tick & 3:                                                # [asm 542E] only acts every 4th frame
         return
     game_map = SegmentBackend(state, v.map_seg)                   # [asm 5435] es = the level map
     bank = SegmentBackend(state, v.bank_seg)                      # [asm 5471] ds = the pristine-row bank
+    map_bytes = _U8ArrayView(game_map, 0, 0x10000)                # absolute-addressed byte views (base=0)
+    bank_bytes = _U8ArrayView(bank, 0, 0x10000)                   # over the two segments, for the shift/reveal below
     width, height = trig.width, trig.height                       # [asm 5439/543B]
     row = (trig.block_top - 0x100) & 0xFFFF                       # [asm 543F/5445] block top, one row up
     for _ in range(height):                                       # [asm 5449-5463] shift the block up one row
         for col in range(width):
-            game_map.wb(row + col, game_map.rb(row + col + 0x100))   # [asm 544B-5450]
+            map_bytes[(row + col) & 0xFFFF] = map_bytes[(row + col + 0x100) & 0xFFFF]   # [asm 544B-5450]
         row = (row + 0x100) & 0xFFFF                              # [asm 545B-545D] next row
     trig.block_top = (trig.block_top - 0x100) & 0xFFFF            # [asm 5465] the block rose one row
     src = trig.reveal_cursor                                      # [asm 5469]
     for col in range(width):                                      # [asm 5471-5483] reveal a fresh bottom row
-        game_map.wb(row + col, bank.rb(src + col))
+        map_bytes[(row + col) & 0xFFFF] = bank_bytes[src + col]
     trig.reveal_cursor = (src - width) & 0xFFFF                   # [asm 5488] next pristine row (backward)
     trig.countdown = cnt = (trig.countdown - 1) & 0xFF            # [asm 548B]
     if cnt == 0:                                                  # [asm 548E]

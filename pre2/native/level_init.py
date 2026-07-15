@@ -63,7 +63,7 @@ def native_52d2(state) -> None:
     210723 (L0xD) — die on collapsed scenery, respawn, walk back: the VM restored the 74 collapsed bytes at
     the respawn (tick 653) while native kept them, and the stale tile stopped the player as a phantom wall
     at tick 788 (the reported "camera inaccuracy")."""
-    from pre2.views.dgroup_view import ProximityView, SegmentBackend, TriggerBankRecord
+    from pre2.views.dgroup_view import ProximityView, SegmentBackend, TriggerBankRecord, _U8ArrayView
     v = ProximityView(state)
     # The 41CA bank lives in VOLATILE [0x2875] scratch (the bump-allocator load top, never bumped past the
     # bank), so the original relies on nothing overwriting it for the life of the level. Its content is a pure
@@ -79,6 +79,8 @@ def native_52d2(state) -> None:
         return
     bank = SegmentBackend(state, v.bank_seg)                         # [asm 52d8] ds = [0x2875]
     game_map = SegmentBackend(state, v.map_seg)                      # [asm 52d4] es = [0x2DDA]
+    bank_bytes = _U8ArrayView(bank, 0, 0x10000)                      # absolute-addressed byte views (base=0)
+    map_bytes = _U8ArrayView(game_map, 0, 0x10000)                   # over the two segments, for the byte copy below
     si = 0                                                           # [asm 52dc]
     for _ in range(0x10):                                            # bank holds at most 15 entries (41CA cx=0xf)
         rec = TriggerBankRecord(bank, si)
@@ -89,7 +91,7 @@ def native_52d2(state) -> None:
         si += 4                                                      # [asm 52e8]
         for _r in range(rows):                                       # [asm 52eb-52f7]
             for k in range(width):                                   # rep movsb (one map row)
-                game_map.wb(dest + k, bank.rb(si + k))
+                map_bytes[(dest + k) & 0xFFFF] = bank_bytes[si + k]
             si += width
             dest = (dest + 0x100) & 0xFFFF                           # [asm 52f1] next map row
     raise Pre2HybridGap("52D2 scenery-restore: no 0xFFFF terminator within 15 entries on a level WITH live "

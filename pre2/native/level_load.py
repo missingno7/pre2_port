@@ -225,10 +225,12 @@ def _build_trigger_bank(state) -> None:
     52D2 restore (respawn / level-start un-collapse). Note the 4065 dup runs BEFORE this, so the [0x9203]
     backup keeps the pre-41CA ``[+6]`` (0xFFFF) — 5237's 5251 restore puts 0xFFFF back each respawn, exactly
     as observed in the L0xD snapshots."""
-    from pre2.views.dgroup_view import ProximityView, SegmentBackend, TriggerBankRecord
+    from pre2.views.dgroup_view import ProximityView, SegmentBackend, TriggerBankRecord, _U8ArrayView
     v = ProximityView(state)
     bank = SegmentBackend(state, v.bank_seg)                         # [asm 41ca] es = [0x2875]
     game_map = SegmentBackend(state, v.map_seg)                      # [asm 41fc] ds = [0x2DDA]
+    bank_bytes = _U8ArrayView(bank, 0, 0x10000)                      # absolute-addressed byte views (base=0)
+    map_bytes = _U8ArrayView(game_map, 0, 0x10000)                   # over the two segments, for the byte copy below
     di = 0                                                           # [asm 41ce]
     TriggerBankRecord(bank, 0).map_off = 0xFFFF                      # [asm 41d0] empty-bank terminator
     for trig in v.triggers:                                          # [asm 41d5/41d8] 15 entries
@@ -243,7 +245,7 @@ def _build_trigger_bank(state) -> None:
         di += 4                                                      # [asm 4207]
         for _r in range(rows):                                       # [asm 420a-421d] save the pristine block
             for c in range(width):                                   # movsb x width (one map row)
-                bank.wb(di, game_map.rb(src + c))
+                bank_bytes[di] = map_bytes[(src + c) & 0xFFFF]
                 di += 1
             src = (src + 0x100) & 0xFFFF                             # [asm 4215/4217] next map row
         trig.reveal_cursor = (di - width) & 0xFFFF                   # [asm 4224/4228] = the LAST saved row
