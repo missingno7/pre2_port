@@ -18,7 +18,7 @@ tile-table indexing through the named table constants)."""
 from __future__ import annotations
 
 from pre2.recovered.player import player_emit_trail
-from pre2.views.dgroup_view import DictBackend, OverlayBackend, overlay_reader, PlayerGlobals, PlayerView
+from pre2.views.dgroup_view import DictBackend, OverlayBackend, overlay_reader, PlayerGlobals, PlayerView, RenderSlot
 from pre2.views.tables import Tables
 
 __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "collision_land",
@@ -263,19 +263,21 @@ def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
     state where the bogus cell *is* ceiling-solid (then it writes ``[[ptr]] += dx`` exactly as the ASM does —
     a genuinely DYNAMIC offset, which is why the raw ``rw(ptr)`` deref stays). anim in ``{0x0A, 0x15}`` skips
     it outright. Pure."""
-    p, g, _ = _views(rb, rw)
+    p, g, be = _views(rb, rw)
     if (p.sprite & 0xFF) in (0x0A, 0x15):                        # [668E/6692] two anim states -> no push-out
         return {}
     ptr = g.current_hit_object                                   # [6698] di = current object (NULL on the player path)
-    col = (_s16(rw(ptr)) >> 4) & 0xFF                            # [66A5-66A9] sar (X word),4
-    row = (_s16(rw((ptr + 2) & 0xFFFF)) >> 4) & 0xFF            # [669E-66A3] sar (Y word),4
+    target = RenderSlot(be, ptr)                                 # [ptr]/[ptr+2] alias RenderSlot's x/y (a genuinely
+    #                                                               dynamic base, but a fixed X/Y record shape)
+    col = (_s16(target.x) >> 4) & 0xFF                           # [66A5-66A9] sar (X word),4
+    row = (_s16(target.y) >> 4) & 0xFF                           # [669E-66A3] sar (Y word),4
     cell = ((row << 8) | col) & 0xFFFF                           # [66AB] di = (row<<8)|col
     if not (Tables(rb).ceil_props[read_es(cell)] & 1):   # [66B4-66BA] this cell not solid -> nothing
         return {}
     dx = 0x10                                                   # [66BC] default: push right one tile
     if not (Tables(rb).ceil_props[read_es((cell - 1) & 0xFFFF)] & 1):  # [66BF-66C6] left tile open?
         dx = -0x10                                              # [66C8] neg -> push toward the open (left) side
-    return {ptr: (rw(ptr) + dx) & 0xFFFF}                       # [66CA-66CE] add [ [ptr] ], dx
+    return {ptr: (target.x + dx) & 0xFFFF}                      # [66CA-66CE] add [ [ptr] ], dx
 
 
 def collision_ceiling(rb, rw, read_es, di: int) -> dict:
