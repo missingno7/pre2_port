@@ -185,8 +185,7 @@ def _collision_4b05(ov, di):
         return ov.rb(o)
     trw = lambda o: trb(o) | (trb((o + 1) & 0xFFFF) << 8)    # noqa: E731
     hit, hb = hitbox_overlap(trb, trw, p.offset, di)         # [asm 4B31] 8D7B
-    for off, (val, wid) in hb.items():
-        ov.wb(off, val) if wid == 1 else ov.ww(off, val)
+    ov.apply(hb)
     if not hit:                                              # [asm 4B3B]
         return False
 

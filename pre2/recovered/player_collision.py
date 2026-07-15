@@ -18,7 +18,7 @@ tile-table indexing through the named table constants)."""
 from __future__ import annotations
 
 from pre2.recovered.player import player_emit_trail
-from pre2.views.dgroup_view import DictBackend, PlayerGlobals, PlayerView
+from pre2.views.dgroup_view import DictBackend, overlay_reader, PlayerGlobals, PlayerView
 from pre2.views.tables import Tables
 
 __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "collision_land",
@@ -337,7 +337,7 @@ def _ground_snap_or_fall(rb, rw, read_es, di: int) -> dict:
         g.airborne = collision_fall(g.airborne)
         return be.writes
     stepped_y = (p.y + 0x10) & 0xFFFF                                # [660F] drop one tile row
-    rw2 = lambda o: stepped_y if o == PLAYER_Y else rw(o)             # noqa: E731 — the stepped-Y read shim
+    rw2 = overlay_reader(rw, {PLAYER_Y: stepped_y}, 0xFFFF)           # the stepped-Y read shim
     out = collision_land(rb, rw2, read_es, (di + 0x100) & 0xFFFF)   # [660B/6614 -> 0x641F] land on the row below
     out.setdefault(PLAYER_Y, stepped_y)
     return out
@@ -435,7 +435,7 @@ def _wall_marker_push(rw) -> dict:
     full. NOTE: never reached in any current demo (the side-solid ``0x805E&0x10`` tile never occurs; walls
     block via ``collision_hblock``) — transcribed from the ASM at ASM_MATCHED confidence, not lockstep
     VERIFIED."""
-    be = DictBackend(lambda o: rw(o) & 0xFF, rw)
+    be = DictBackend(rw, rw)          # word-only reads (marker.free/p.x/p.y); rb is never invoked
     p, g = PlayerView(be), PlayerGlobals(be)
     for marker in g.wall_markers:                                  # [64FD-6529] the 64FA slot scan
         if marker.free:                                            # [64FD] leading word == 0x55AA
@@ -527,7 +527,7 @@ def _offcamera_trigger(rb) -> dict:
     """The off-camera death/respawn trigger ``1030:65B3`` (called as `65AF`). If not already triggered
     (``respawn_state == 0``): consume a life, reset the energy, arm the respawn (``respawn_state = 2``); if no
     lives remain, set the game-over flag (``end_signal = 1``). Returns the dict of writes. Pure."""
-    be = DictBackend(rb, lambda o: rb(o) | (rb((o + 1) & 0xFFFF) << 8))
+    be = DictBackend(rb, rb)          # byte-only fields (respawn_state/lives/energy/end_signal); rw unused
     g = PlayerGlobals(be)
     if g.respawn_state != 0:                                       # [65B3] already triggered
         return be.writes

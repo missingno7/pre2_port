@@ -20,7 +20,7 @@ from pre2.native.assets import load_sqz_by_dx
 from pre2.native.state import DATA_SEG
 from pre2.native.dgroup_offsets import (
     BONUS_CELL_LIST, DBL_BUFFER_BACKUP, EFFECT_SPRITE_SRC, ENTITY_LIST_2NDPASS, GFX_GROUP_TABLE,
-    LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LEVEL_PROP_HEADER, PLAYER_SLOT, SCROLL_SCRIPT_PTR2,
+    LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LEVEL_PROP_HEADER, PLAYER_SLOT,
     SCROLL_SCRIPT_TABLE, TILE_MASK_TABLE, TILE_TYPE_TABLE, WARP_TABLE)
 from pre2.views.dgroup_view import BonusCellSlot, DictBackend, EffectSource, LoaderGlobals, PlayerGlobals
 from pre2.views.tables import Tables
@@ -269,10 +269,11 @@ def _per_level_pointers(state) -> None:
     g, lg = PlayerGlobals(state), LoaderGlobals(state)
     level = g.level
     from pre2.views.dgroup_view import ScrollScriptView
-    ScrollScriptView(state).script_ptr = state.rw(SCROLL_SCRIPT_TABLE + level * 2)   # dynamic per-level table read
+    ssv = ScrollScriptView(state)
+    ssv.script_ptr = state.rw(SCROLL_SCRIPT_TABLE + level * 2)   # dynamic per-level table read
     g.checkpoint_x = lg.level_start_x
     g.checkpoint_y = lg.level_start_y
-    state.ww(SCROLL_SCRIPT_PTR2, 0)
+    ssv.frame_counter = 0
 
 
 def _count_decor(state) -> None:
