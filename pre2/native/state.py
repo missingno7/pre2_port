@@ -20,7 +20,8 @@ class NativeGameState:
     — which take a ``mem``-like object and index ``mem.data`` — read and write it with no change."""
 
     __slots__ = ("data", "backend", "sfx_queue", "particle_capture", "flash_slots", "song_request",
-                 "boss_glyph", "snow_plots", "particle_capture_last", "flash_slots_last", "_hud_frozen_predeath")
+                 "boss_glyph", "snow_plots", "particle_capture_last", "flash_slots_last", "_hud_frozen_predeath",
+                 "rng")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -65,11 +66,30 @@ class NativeGameState:
         self.particle_capture_last = None
         self.flash_slots_last: list[int] | None = None
         self._hud_frozen_predeath = None    # last HUD state drawn before a death (frozen through the death-bounce)
+        #: the shipped, offset-free RNG object — the native-dataclass lift's (docs/pre2/native_dataclass_lift.md)
+        #: first live P2 cluster. Seeded here from whatever ``.data`` currently holds (via the existing,
+        #: offset-based RngView(self) — no bridge import, the offset stays on the descriptor through the P2/P3
+        #: transition) so every construction path (cold boot / snapshot load / demo seed) re-seeds it correctly.
+        #: Callers that construct an RngView register it against THIS instance so every roll lands on the same
+        #: object; nothing here makes RNG live by itself.
+        from pre2.game.model import Rng
+        from pre2.views.dgroup_view import RngView
+        rv = RngView(self)
+        self.rng = Rng(lcg_a=rv.lcg_a, lcg_b=rv.lcg_b, lcg_c=rv.lcg_c, lcg_d=rv.lcg_d, ror=rv.ror)
+        self.backend.register(RngView, self.rng)   # any RngView(state) call now resolves live, no bridge needed
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
         """Seed from a loaded VM runtime (a snapshot's memory) — the bootstrap into native state ownership."""
         return cls(bytearray(rt.cpu.mem.data))
+
+    def active_rng(self):
+        """The tick's authoritative live RNG: ``self.backend.rng`` when the backend carries its own object-graph
+        copy (duck-typed — matching the 6913 second-pass dual-path in pre2/native/loop.py, no bridge import
+        here), else ``self.rng``. Two different Rng instances rolling independently in the same tick would
+        silently fork the generator's sequence, so every RNG-touching call site resolves through here, not
+        ``self.rng`` directly."""
+        return getattr(self.backend, "rng", self.rng)
 
     def rb(self, off: int) -> int:
         """Read a DGROUP byte (DS-relative), the recovered functions' ``rb`` accessor — via the backend seam."""

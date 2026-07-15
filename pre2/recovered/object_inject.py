@@ -618,9 +618,10 @@ def handler_7e97_bytes(rb, rw, si, cam_x, cam_y, find_free):
     return w, True
 
 
-def handler_7d6e_bytes(rb, rw, si, cam_x, cam_y, find_free):
+def handler_7d6e_bytes(rb, rw, si, cam_x, cam_y, find_free, rng=None):
     """idx11 (``7D6E``) — saturating counter ``[si+7]`` throttle vs ``[si+6]``; on a draw set mode 0x37 and
-    jitter the projected Y down by ``rng_lcg() & 0x3F`` (advancing the shared generator)."""
+    jitter the projected Y down by ``rng_lcg() & 0x3F`` (advancing the shared generator). ``rng`` (optional):
+    the live ``pre2/game.Rng`` to roll on instead of the raw offset path."""
     rec = LiveEntityRecordBytes(DictBackend(rb, rw), si)
     counter = _saturating_inc(rec.counter)
     out = {(si + 7) & 0xFFFF: (counter, 1)}
@@ -632,7 +633,10 @@ def handler_7d6e_bytes(rb, rw, si, cam_x, cam_y, find_free):
     w, base = _project_writes_bytes(pr, si)
     w.update(out)
     w[(si + 4) & 0xFFFF] = (0x37, 1)          # [7D87]
-    ret = RngView(WidthContractBackend(rb, rw, w)).roll()                        # [7D8B call 39DF]
+    be = WidthContractBackend(rb, rw, w)
+    if rng is not None:
+        be.register(RngView, rng)
+    ret = RngView(be).roll()                                                     # [7D8B call 39DF]
     w[(base + 0x02) & 0xFFFF] = ((pr.record[0x02] - (ret & 0x3F)) & 0xFFFF, 2)   # [7D8E/7D91] Y -= rng&0x3f
     return w, True
 
@@ -729,11 +733,14 @@ _HANDLERS = {
 }
 
 
-def dispatch_handler_bytes(idx, rb, rw, read_es, si, cam_x, cam_y, find_free):
+def dispatch_handler_bytes(idx, rb, rw, read_es, si, cam_x, cam_y, find_free, rng=None):
     """Dispatch the 2nd-pass per-type handler (cs:[bx+0x6AC3]). Returns ``(writes, drawn)``. Fails loud on an
-    unknown index (no silent fallback)."""
+    unknown index (no silent fallback). ``rng`` (optional): the live ``pre2/game.Rng``, forwarded only to
+    idx11 (the sole handler that rolls it)."""
     if idx == 10:
         return handler_ground_snap_spawn_bytes(rb, rw, read_es, si, find_free)
+    if idx == 11:
+        return handler_7d6e_bytes(rb, rw, si, cam_x, cam_y, find_free, rng=rng)
     h = _HANDLERS.get(idx)
     if h is None:
         raise ValueError(f"second-pass walker: unrecovered handler index {idx}")
@@ -797,7 +804,7 @@ class LiveEntityRecordBytes(StructView):
         return bool(self._mode & 4)
 
 
-def second_pass_tick_bytes(rb, rw, apply_writes, read_es, cam_x, cam_y):
+def second_pass_tick_bytes(rb, rw, apply_writes, read_es, cam_x, cam_y, rng=None):
     """Compose the SECOND per-frame pass (1030:6913..698B) — the variable-stride entity-list walk + per-type
     dispatch + anim-frame resolve + stride advance.
 
@@ -807,7 +814,8 @@ def second_pass_tick_bytes(rb, rw, apply_writes, read_es, cam_x, cam_y):
     on a draw resolve the anim-frame descriptor (``lookup_anim_frame``) into the projected slot's ``[+0xC]``
     (``di=[0xA32E]``). Advance ``si`` by the stride. ``apply_writes(dict)`` commits a handler's
     ``{offset:(value,width)}`` so later entries' ``find_free`` sees the slots already taken; ``rb``/``rw`` read
-    through those committed writes."""
+    through those committed writes. ``rng`` (optional): the live ``pre2/game.Rng`` forwarded to idx11's jitter
+    roll instead of the raw offset path."""
     be = WidthContractBackend(rb, rw)
     b198 = PlayerGlobals(be).mode_copy
     find_free = lambda: find_free_object_slot(lambda s: RenderSlot(be, OBJ_BASE + s * OBJ_STRIDE).sprite)  # noqa: E731
@@ -821,7 +829,7 @@ def second_pass_tick_bytes(rb, rw, apply_writes, read_es, cam_x, cam_y):
                 or (b198 != 1 and rec.off_screen_cull))         # [6927/692E] off-screen-cull flag
         if not skip:
             idx = rec.handler_idx                                # [6934/6939] [si+1] & 0x7f
-            writes, drawn = dispatch_handler_bytes(idx, rb, rw, read_es, rec.si, cam_x, cam_y, find_free)
+            writes, drawn = dispatch_handler_bytes(idx, rb, rw, read_es, rec.si, cam_x, cam_y, find_free, rng=rng)
             apply_writes(writes)
             if drawn:                                            # [6952] CF==0 -> resolve the anim frame
                 desc = lookup_anim_frame(rw, rec.sprite_ref, idx)   # [6954..697B]

@@ -29,10 +29,11 @@ class ByteBackend:
     """Reads/writes go straight to the 1 MB image at ``DGROUP_BASE + offset``."""
 
     _IS_DGROUP_BACKEND = True
-    __slots__ = ("data",)
+    __slots__ = ("data", "_registry")
 
     def __init__(self, source):
         self.data = source.data if hasattr(source, "data") else source
+        self._registry = None      # FieldRegistry, lazily created by register() — P2's name-keyed seam
 
     def rb(self, off: int) -> int:
         return self.data[DGROUP_BASE + (off & 0xFFFF)]
@@ -48,6 +49,21 @@ class ByteBackend:
         a = DGROUP_BASE + (off & 0xFFFF)
         self.data[a] = v & 0xFF
         self.data[a + 1] = (v >> 8) & 0xFF
+
+    def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "ByteBackend":
+        """Route ``view_cls`` (optionally just specific field NAMES via ``remap``) to a live ``pre2/game``
+        dataclass instance — the P2 seam. Unregistered views/fields keep working via the image above.
+        ``NativeGameState`` calls this once for its own ``.rng`` so any ``RngView(state)`` picks it up."""
+        if self._registry is None:
+            self._registry = FieldRegistry()
+        self._registry.register(view_cls, obj, remap)
+        return self
+
+    def read_field(self, view, name: str, width: int, signed: bool) -> int:
+        return _registry_read_field(self, self._registry, view, name, width, signed)
+
+    def write_field(self, view, name: str, width: int, v: int) -> None:
+        _registry_write_field(self, self._registry, view, name, width, v)
 
 
 class SegmentBackend:

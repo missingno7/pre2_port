@@ -126,12 +126,13 @@ def native_object_spawn_step(state) -> None:
     rb, rw = readers(state)
     g = PlayerGlobals(state)
     try:
+        rng = state.active_rng()
         if g.cam_state != 0xFF:                # [asm 6822/6827] camera active -> 70D7
-            _apply(camera_engine(rb, rw, tile_reader(state)))
+            _apply(camera_engine(rb, rw, tile_reader(state), rng=rng))
         if g.level == 5 and (g.level_flags & 0xFE) == 0 and g.boss_phase != 3:   # [asm 682C-6841] level-6 tree boss
-            _apply(tick_level6_boss(rb, rw))              # 6D34 (incl. the recovered 94F3 death-burst finale)
+            _apply(tick_level6_boss(rb, rw, rng=rng))     # 6D34 (incl. the recovered 94F3 death-burst finale)
         if g.level == 9:                   # [asm 6844/6849] mode-9 last boss -> 6ADD
-            _apply(tick_mode9_boss(rb, rw))
+            _apply(tick_mode9_boss(rb, rw, rng=rng))
     except Pre2SpawnGap as exc:
         # The boss finales (94F3 death-burst, the camera state-6 boss-reach) and the lives-depleted death
         # (824D -> player_death -> the 4C69 game-over) are all recovered. The Pre2SpawnGap raises that remain are
@@ -164,7 +165,8 @@ def native_object_system_step(state) -> None:
                          g.cam_col_word, g.cam_row_word)
     else:
         from pre2.recovered.object_inject import second_pass_tick_bytes
-        second_pass_tick_bytes(rb, rw, lambda w: apply_ds(state, w), read_es, g.cam_col_word, g.cam_row_word)
+        second_pass_tick_bytes(rb, rw, lambda w: apply_ds(state, w), read_es, g.cam_col_word, g.cam_row_word,
+                               rng=state.active_rng())
 
 
 def native_trigger_scan(state) -> None:
@@ -472,7 +474,7 @@ def _combat_source_pass(state, si, *, bounce: bool) -> None:
     native_emit_sfx(state, sfx, sx)                                   # emit the kill sound (play_sfx 2)
     did = hit                                                        # [asm 88EB/8908] jb -> skip the bonus scan
     if not hit:                                                      # CF=0 -> source-vs-BONUS pickup
-        ds, mapw, _redraws, collected = bonus_pickup_scan(rb, rw, si)   # [asm 899E]
+        ds, mapw, _redraws, collected = bonus_pickup_scan(rb, rw, si, rng=state.active_rng())   # [asm 899E]
         _apply_bytes(state, ds)
         if mapw:                                                     # the collected tiles' level-map rewrites (es=[0x2DDA])
             eb = (PlayerGlobals(state).map_seg << 4) & 0xFFFFF

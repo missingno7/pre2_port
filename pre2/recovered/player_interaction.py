@@ -282,13 +282,17 @@ def _bone_burst(ov):
     ov.apply(spawn_effect_burst(ov.rb, ov.rw, 0x30, 0xFF80, cnt))  # [86B2] 8D1B
 
 
-def _kill_all_screen(rb, rw, si, per_enemy):
+def _kill_all_screen(rb, rw, si, per_enemy, rng=None):
     """[asm 86B7/870A shared walk] walk the 12 object slots (0x4FD0); for every on-screen enemy
     (``[di+4]!=-1`` & ``![def+4]&0x10`` (def=`[di+6]`) & ``[di+5]&0x20``) run ``per_enemy(ov, di)``; finally
     consume the linked entity ``[si+9]``. Composed over a read-through :class:`_Overlay` (so the per-enemy
     bursts see each other's slot/rng/pos writes). Returns the overlay; the caller adds the spawn-effect tail.
-    The leading ``play_sfx(0)`` is returned as the handler's sfx, not a memory write."""
+    The leading ``play_sfx(0)`` is returned as the handler's sfx, not a memory write. ``rng`` (optional): the
+    live ``pre2/game.Rng`` — registered here so it's visible to every ``per_enemy(ov, di)`` call (they share
+    this overlay)."""
     ov = _Overlay(rb)
+    if rng is not None:
+        ov.register(RngView, rng)
     di = OBJ_LIST
     for _ in range(OBJ_COUNT):                            # [86C9/871C] cx=0xC
         obj = ObjectSlot(ov, di)
@@ -303,11 +307,12 @@ def _kill_all_screen(rb, rw, si, per_enemy):
     return ov
 
 
-def loop2_handler(num, rb, rw, si, find_free):
+def loop2_handler(num, rb, rw, si, find_free, rng=None):
     """Dispatch a pickup hit (ax=num=(spr_num&0x1FFF)-0x35) to its effect, in the ASM's chain order. Returns
     (writes, sfx). Every effect path is now recovered + verified (the trap 864F was the last ASM_MATCHED-only
     one, verified byte-exact on the skull witness 202721); an unmapped id is a no-op (ASM 84F3). (Names per
-    cyxx level.c.)"""
+    cyxx level.c.) ``rng`` (optional): the live ``pre2/game.Rng`` forwarded to the two RNG-touching paths
+    (the yvel-bounce popup and the bomb's food fountains)."""
     be = DictBackend(rb, rw)
     g = PlayerGlobals(be); pv = PlayerView(be)             # read-only named access
     if num == 0x91:                                        # id 0xc6 [885F] "tap": clear fly timers, then count
@@ -396,6 +401,8 @@ def loop2_handler(num, rb, rw, si, find_free):
             return _count_and_score(rb, rw, si, num), [4]
         out = {}
         wbe = WidthContractBackend(rb, rw, out)
+        if rng is not None:
+            wbe.register(RngView, rng)
         item2 = EffectParticle(wbe, si & 0xFFFF)
         item2.yvel = (-ydir) & 0xFFFF                     # bounce up
         ret = RngView(wbe).roll()                         # [asm call 39DF] advance + write back the LCG
@@ -440,7 +447,7 @@ def loop2_handler(num, rb, rw, si, find_free):
     if num == 0xA9:                                       # id 0xde [86B7] grenade: kill every on-screen enemy
         def _grenade(ov, di):                             # [86E1] each enemy dies via the recovered 8C72
             ov.merge_bytes(death_handler(ov.rb, ov.rw, ObjectSlot(ov, di).def_ptr, di, si))  # 8C72 = byte-level
-        ov = _kill_all_screen(rb, rw, si, _grenade)
+        ov = _kill_all_screen(rb, rw, si, _grenade, rng=rng)
         PlayerGlobals(ov).camera_shake = 9                 # [86E9] screen shake
         ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE6, si))   # [8704] ax=0xe6 -> 860B
         return {o: (v, 1) for o, v in ov.writes.items()}, [0]
@@ -453,7 +460,7 @@ def loop2_handler(num, rb, rw, si, find_free):
             slot.state = 0xFF                              # [873F] mark dead
             slot.sprite = 0xFFFF                           # [8743] free the slot
             _food_fountain(ov)                            # [8748] 94F3
-        ov = _kill_all_screen(rb, rw, si, _bomb)
+        ov = _kill_all_screen(rb, rw, si, _bomb, rng=rng)
         ov.apply(spawn_pickup_effect(ov.rb, ov.rw, 0xE7, si))   # [8766] ax=0xe7 -> 860B
         return {o: (v, 1) for o, v in ov.writes.items()}, [0]
     if num == 0xB5:                                       # id 0xea [876C] light OFF
@@ -501,11 +508,12 @@ def _boss_projectile(rb, rw):
 _EARLY_SKIP = (0xE5, 0x12C, 0x132, 0x134, 0x136)          # [840A] ids that pass through (no consume, no effect)
 
 
-def loop2(rb, rw, apply, emit_sfx, find_free):
+def loop2(rb, rw, apply, emit_sfx, find_free, rng=None):
     """[asm 83D7..8617] walk the 52-entry pickup list (0x50A8) vs the player; on a hitbox overlap of a
     collectible (`[si+5]&0x20`) entity, consume it and dispatch its effect. Applies writes via ``apply``;
     plays sounds via ``emit_sfx``. Every effect path (incl. the boss-projectile 8618) is now recovered +
-    verified byte-exact, so nothing fails loud."""
+    verified byte-exact, so nothing fails loud. ``rng`` (optional): the live ``pre2/game.Rng`` forwarded to
+    :func:`loop2_handler`."""
     si = ENTITY2
     be = DictBackend(rb, rw)
     for _ in range(0x34):                                  # cx=0x34 (52)
@@ -528,18 +536,19 @@ def loop2(rb, rw, apply, emit_sfx, find_free):
                     if aid in (0x1CA, 0x1CB):                        # [8432] boss projectile (8618)
                         writes, sfx = _boss_projectile(rb, rw)
                     else:
-                        writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free)
+                        writes, sfx = loop2_handler((aid - 0x35) & 0xFFFF, rb, rw, si, find_free, rng=rng)
                     apply(writes)
                     for s in sfx:
                         emit_sfx(s)
         si = (si + 0x12) & 0xFFFF                                    # [860E]
 
 
-def player_interaction_tick(rb, rw, apply, emit_sfx, find_free):
+def player_interaction_tick(rb, rw, apply, emit_sfx, find_free, rng=None):
     """[asm 8295..8617] the whole player<->world interaction subsystem: loop1 (player-vs-enemy) then, unless
     loop1 took an early return, loop2 (player-vs-pickup). Every path is recovered + verified byte-exact vs the
     ASM (the trap 864F and boss-projectile 8618 — the last ASM_MATCHED-only ones — on the skull/final-boss
-    witnesses), so the whole tick runs natively with no fail-loud paths."""
+    witnesses), so the whole tick runs natively with no fail-loud paths. ``rng`` (optional): the live
+    ``pre2/game.Rng`` forwarded to :func:`loop2`."""
     if loop1(rb, rw, apply, emit_sfx):
         return
-    loop2(rb, rw, apply, emit_sfx, find_free)
+    loop2(rb, rw, apply, emit_sfx, find_free, rng=rng)

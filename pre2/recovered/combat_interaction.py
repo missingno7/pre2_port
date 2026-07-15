@@ -534,11 +534,16 @@ def _bonus_finish(ov, di):
              "score-popup bursts (8D1B) keyed on [cell+2]&0x40, then decrement+collect (8B6E) on underflow. "
              "Returns CF = real collect.",
              "ASM_MATCHED", merge_target="combat_interaction")
-def bonus_hit_handler(rb, rw, di, src_si):
+def bonus_hit_handler(rb, rw, di, src_si, rng=None):
     """[asm 8A5A] ``di`` = the bonus-cell record, ``src_si`` = the source sprite (for the popup facing).
+    ``rng`` (optional): the live ``pre2/game.Rng`` to roll on instead of the raw offset path — the native
+    caller passes ``state.rng`` so the 8C13 draws land on the shared object; a VM-oracle caller leaves it
+    unset and gets today's offset-based behaviour unchanged.
     Returns ``(ds_writes, map_writes, onscreen, collected)`` — the byte-level DS contract, the level-map
     writes (es=[0x2DDA]), whether the consumed tile needs an on-screen re-blit, and the ASM's CF."""
     ov = _Overlay(rb)
+    if rng is not None:
+        ov.register(RngView, rng)
     g = PlayerGlobals(ov)
     cellview = BonusCellSlot(ov, di)
     # [8A64] sparkle at the cell centre (x*16+8, y*16+0xC)
@@ -602,13 +607,16 @@ BONUS_CELL_N = 0x50
 DEDUP_BUF = 0xA2A8        # flood-fill dedup buffer (one byte per cell index)
 
 
-def bonus_pickup_scan(rb, rw, si):
+def bonus_pickup_scan(rb, rw, si, rng=None):
     """[asm 899E] Scan the 80-cell bonus list (0x8C8D) for cells near the source sprite ``si``; call
     bonus_hit_handler for each in range; on the first that collects, flood-fill-collect all connected cells
-    (8-adjacency in cell coords, deduped via 0xA2A8). Returns ``(ds_writes, map_writes, redraws, hit)`` —
+    (8-adjacency in cell coords, deduped via 0xA2A8). ``rng`` (optional): the live ``pre2/game.Rng`` threaded
+    into ``bonus_hit_handler`` — see its docstring. Returns ``(ds_writes, map_writes, redraws, hit)`` —
     the byte-level DS contract, the level-map ``{offset: (value, width)}`` writes, the list of on-screen
     map offsets whose tile must be re-blitted (render side-effect for the live hook), and the ASM's CF."""
     ov = _Overlay(rb)
+    if rng is not None:
+        ov.register(RngView, rng)
     src = RenderSlot(ov, si)
     src_x_lo = (_s16(src.x) >> 4) & 0xFF                  # [asm 89A4] (ax = [si]>>4); only the low byte used
     bp_y = (src.y - 0x10) & 0xFFFF                        # [asm 89A8] bp = [si+2] - 0x10
@@ -622,7 +630,7 @@ def bonus_pickup_scan(rb, rw, si):
                 and _abs8((cell & 0xFF) - src_x_lo) <= 1 \
                 and _abs16(((cell >> 8) & 0xFF) * 16 - bp_y) < 0x10:   # [asm 89BC/89CC] in range
             src.sprite = 0xFFFF                          # [asm 89E3] consume the source
-            ds_h, map_h, onscr_h, collected = bonus_hit_handler(ov.rb, ov.rw, di, si)   # [asm 89EB] 8A5A
+            ds_h, map_h, onscr_h, collected = bonus_hit_handler(ov.rb, ov.rw, di, si, rng=rng)   # [asm 89EB] 8A5A
             ov.merge_bytes(ds_h)
             map_all.update(map_h)
             if onscr_h:

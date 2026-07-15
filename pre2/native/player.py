@@ -144,4 +144,4 @@ def native_player_interaction(state) -> None:
     # player's on-screen X — a good stand-in for the co-located enemy/item without threading each object out.
     psx = player_sfx_x(state)
     player_interaction_tick(rb, rw, lambda w: apply_ds(state, w), lambda dl: native_play_sfx(state, dl, psx),
-                            lambda: find_free_object_slot(read_id))
+                            lambda: find_free_object_slot(read_id), rng=state.active_rng())
