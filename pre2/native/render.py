@@ -18,6 +18,7 @@ from pre2.views.dgroup_view import PlayerGlobals, RenderSlot
 from pre2.views.game_visual_state import capture_game_visual_state, render_game_visual_state
 from pre2.views.gameplay_effects import capture_gameplay_effects
 from pre2.views.particles import read_particles
+from pre2.views.tables import ByteTable, WordTable
 
 _RING_COLS, _RING_ROWS = 0x14, 0x0C    # the tile-ring moduli (see bridge/frame.py)
 
@@ -29,10 +30,12 @@ def native_load_dac_palette(state, dos, table_off: int, count: int = 0x10) -> No
     green/yellow table at 0x287e). Values are 6-bit; the VGA DAC expands them (``_dac8``)."""
     if len(dos.vga_palette) < 256:                                  # ensure a full DAC (snapshots carry 256)
         dos.vga_palette = list(dos.vga_palette) + [(0, 0, 0)] * (256 - len(dos.vga_palette))
+    words = WordTable(state.rw, table_off)
+    bytes_ = ByteTable(state.rb, table_off)
     for i in range(count):
-        b0 = (table_off + i * 3) & 0xFFFF                          # the 6-bit RGB triple in the DGROUP palette table
-        rg = state.rw(b0)                                          # r=low byte, g=high byte (adjacent)
-        dos.vga_palette[i] = (_dac8(rg & 0xFF), _dac8((rg >> 8) & 0xFF), _dac8(state.rb((b0 + 2) & 0xFFFF)))
+        off = i * 3                                                 # the 6-bit RGB triple in the DGROUP palette table
+        rg = words[off]                                             # r=low byte, g=high byte (adjacent)
+        dos.vga_palette[i] = (_dac8(rg & 0xFF), _dac8((rg >> 8) & 0xFF), _dac8(bytes_[off + 2]))
 
 
 def native_load_level_palette(state, dos) -> None:

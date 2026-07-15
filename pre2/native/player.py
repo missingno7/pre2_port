@@ -28,6 +28,7 @@ from pre2.recovered.player import (CHARGE, FSM_WORD_FIELDS, INPUT_SUPPRESS, PEND
 from pre2.recovered.player_collision import collision
 from pre2.recovered.player_interaction import player_interaction_tick
 from pre2.views.dgroup_view import ObjectSlot, PlayerGlobals, PlayerView, apply_contract
+from pre2.views.tables import ByteTable
 from pre2.native.dgroup_offsets import KEY_TABLE
 
 _PX, _PY = 0x4F1C, 0x4F1E
@@ -54,12 +55,13 @@ def _combo_confirmed(g: PlayerGlobals, rb, third_sc: int) -> bool:
     1..0x7E, skipping the three combo scancodes, and abort if any other is down. ``third_sc``: 0x11 (W/Z, the 247B
     dev-credits combo) or 0x12 (E, the 25C7 game-over creators-photo combo). The third-key DGROUP flag is at
     [0x27F4 + third_sc]. Returns True only on an exact match, else the routine is a no-op."""
-    if g.combo_ready_b == 0 or g.combo_ready_c == 0 or rb(KEY_TABLE + third_sc) == 0:   # Ctrl & Alt & third key all held
+    keys = ByteTable(rb, KEY_TABLE)
+    if g.combo_ready_b == 0 or g.combo_ready_c == 0 or keys[third_sc] == 0:   # Ctrl & Alt & third key all held
         return False
     for sc in range(1, 0x7F):
         if sc in (0x1D, 0x38, third_sc):
             continue
-        if rb(KEY_TABLE + sc) != 0:
+        if keys[sc] != 0:
             return False
     return True
 
