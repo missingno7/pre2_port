@@ -775,6 +775,26 @@ class LoaderGlobals(DgroupView):
     sprite_offset_table = _U16Array(0x5F48, 0x200)   # [asm 2F0E]
     sprite_segment_table = _U16Array(0x62E8, 0x200)  # [asm 2F12]
 
+    # --- per-level loader bookkeeping (1030:3ed6, pre2/native/level_load.py) ---
+    union_bank_seg = _U16(0x2DDC)     # the shared/UNION sprite-bank base segment [level_load 4389]
+    gfx_group      = _U8(0x2DAA)      # the committed graphics-group id (BACK<group>.SQZ) [asm 3f26]
+    filename_digit = _U8(0x2D90)      # the LEVEL<n>.SQZ filename digit char [asm 3f26]
+    collect_total_main  = _U16(0x2A74)  # the level's collectible total the tally reads (secret tiles bump it)
+    #                                     [asm 3ed0]
+    collect_total_decor = _U16(0x2A78)  # the decor-derived collectible count [level_load 4073..40bb]
+    bios_seed          = _U16(0xA333)   # the machine-fingerprint seed word (0x20 on the zeroed-BIOS GOG build)
+    #                                     [password 932F]
+    seed_computed_flag = _U8(0xA335)    # the lazy-init "seed already computed" flag [asm 933c]
+    decor_ptr_list = _U16Array(0x6A88, 0x46)   # the decor-assignment pointer list (40bd bubble-sorts it)
+    level_start_x = _U16(0x8160)   # the property block's start-point X (player spawn + [0x2DBC]) [level_load]
+    level_start_y = _U16(0x8162)   # ... start-point Y
+    # the 4 tile-animation lookup tables [asm 42af] the renderer reads to animate tiles -- a pure function of
+    # the level's per-tile flags [0x805E] (Tables.ceil_handler), rebuilt once per level load.
+    anim_table_0 = _U8Array(0x6688, 0x100)
+    anim_table_1 = _U8Array(0x6788, 0x100)
+    anim_table_2 = _U8Array(0x6888, 0x100)
+    anim_table_3 = _U8Array(0x6988, 0x100)
+
 
 class SfxTableEntry(StructView):
     """One entry of the per-effect ``{src, len}`` SFX descriptor table (0x1009, stride 4) — the PCM source
@@ -1096,6 +1116,8 @@ class BonusCellSlot(StructView):
 
     __slots__ = ()
 
+    hidden_tile = _U8(0)  # the secret-tile id level_load's 3ead swaps into the map cell on load
+    #                        [level_load _self_patch_secret_tiles]
     tile_id = _U8(1)  # the underlying tile id restored into the level map on collect [combat_interaction 8B81]
     counter = _U8(2)  # bit7 = counter-bonus flag; else &0x40 selects the two-burst/single-burst popup family
     #                    [combat_interaction bonus_hit_handler 8A5A/8B66]

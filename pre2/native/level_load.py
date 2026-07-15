@@ -19,7 +19,11 @@ from pre2.codecs.sqz import unpack_sqz
 from pre2.native.assets import load_sqz_by_dx
 from pre2.native.state import DATA_SEG
 from pre2.native.dgroup_offsets import (
-    ANY_ANIMATED_FLAG, BIOS_SEED, BONUS_CELL_LIST, COLLECT_TOTAL_DECOR, COLLECT_TOTAL_MAIN, DBL_BUFFER_BACKUP, DECOR_PTR_LIST, EFFECT_SPRITE_SRC, ENTITY_LIST_2NDPASS, FILENAME_DIGIT, GFX_GROUP, GFX_GROUP_TABLE, LEVEL_BOTTOM_LIMIT, LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LEVEL_PROP_HEADER, LOAD_TOP, MODE_COPY, PLAYER_SLOT, SCROLL_SCRIPT_PTR2, SEED_COMPUTED_FLAG, SPRITE_BANK_HI, SPRITE_BANK_LO, TILE_MASK_TABLE, TILE_TYPE_TABLE, UNION_BANK_SEG, WARP_TABLE)
+    BONUS_CELL_LIST, DBL_BUFFER_BACKUP, EFFECT_SPRITE_SRC, ENTITY_LIST_2NDPASS, GFX_GROUP_TABLE,
+    LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LEVEL_PROP_HEADER, PLAYER_SLOT, SCROLL_SCRIPT_PTR2,
+    SCROLL_SCRIPT_TABLE, TILE_MASK_TABLE, TILE_TYPE_TABLE, WARP_TABLE)
+from pre2.views.dgroup_view import BonusCellSlot, DictBackend, EffectSource, LoaderGlobals, PlayerGlobals
+from pre2.views.tables import Tables
 
 _DS = DATA_SEG << 4
 
@@ -35,31 +39,35 @@ def native_level_load_dgroup(state, level: int, *, game_root: str) -> None:
     the SQZ load, the tile-index table, and the property-table memcpy. (The planar tile cache + object-table
     construction are the loader's other halves — see module docstring / ``native_level_load``.)"""
     d = state.data                                       # `d` is kept for the segment-relative loads + bulk clears
-    rb, rw, wb, ww = state.rb, state.rw, state.wb, state.ww   # DGROUP scalars route through the backend seam
+    rb = state.rb                                         # only genuinely dynamic (per-level table) reads left raw
+    g = PlayerGlobals(state)
+    lg = LoaderGlobals(state)
 
     # --- prologue [asm 3ede..3f26] ---
-    wb(LEVEL_INDEX, level)                                   # current level/mode
+    g.level = level                                          # current level/mode
     if level <= 0x0A:                                   # parallax/scroll seeds
-        for o in (0x2A78, 0x2A74, 0x2A7A, 0x2A76):
-            ww(o, 0)
+        lg.collect_total_decor = 0
+        lg.collect_total_main = 0
+        g.collected_linked = 0
+        g.collected_counter = 0
     else:
-        ww(COLLECT_TOTAL_DECOR, rw(COLLECT_TOTAL_DECOR) >> 1)
-        ww(COLLECT_TOTAL_MAIN, rw(COLLECT_TOTAL_MAIN) >> 1)
-    wb(GFX_GROUP, rb(GFX_GROUP_TABLE + level))                      # per-level graphics-group id
+        lg.collect_total_decor = lg.collect_total_decor >> 1
+        lg.collect_total_main = lg.collect_total_main >> 1
+    lg.gfx_group = rb(GFX_GROUP_TABLE + level)                      # per-level graphics-group id
     al = (level + 0x31) & 0xFF                          # filename digit: level+'1', then 'A'.. past '9'
     if al > 0x39:
         al = (al + 7) & 0xFF
-    wb(FILENAME_DIGIT, al)
+    lg.filename_digit = al
     d[_DS + PROP_DST:_DS + PROP_DST + 0x13A5] = b"\xff" * 0x13A5      # clear property region [asm 3f16]
     d[_DS + OBJ_POOL:_DS + OBJ_POOL + 0x40B * 2] = b"\xff" * (0x40B * 2)  # clear object pool [asm 3f20]
 
     # --- load LEVEL<n>.SQZ at the load pointer [0x2875] [asm 3f2b] ---
     seg = load_sqz_by_dx(state, 0x2D8B, game_root=game_root)
-    ww(LEVEL_DATA_SEG, seg)                                     # level-data base segment
+    g.map_seg = seg                                             # level-data base segment
 
     # --- 4316: header skip + tile-index table [asm 4316..433e] ---
     bh = rb(LEVEL_HEADER_TABLE + level)                             # level header size (paragraphs) / bottom limit
-    wb(LEVEL_BOTTOM_LIMIT, bh)
+    g.map_rows = bh
     base_seg = (seg + (bh << 4)) & 0xFFFF               # skip the (bh<<4)-paragraph header
     base = (base_seg << 4) & 0xFFFFF
     d[_DS + TILE_INDEX_DST:_DS + TILE_INDEX_DST + 0x200] = d[base:base + 0x200]   # 0x100-word tile index
@@ -83,27 +91,23 @@ def _s8(v: int) -> int:
 def _rebase_effect_sprites(state) -> None:
     """4159 (called as 414d): rebase the float-effect ([0x8f1d], 70x stride 7) + terrain-entity
     ([0x9107], 16x stride 0xF) sprite refs [+4] from level-bank to engine-bank (-[0x8c89]+0x35)."""
-    dx = state.rw(SPRITE_BANK_LO)
-
-    def rebase(seg_off, count, stride):
-        for k in range(count):
-            o = seg_off + k * stride + 4
-            v = state.rw(o)
-            if v != 0xFFFF:
-                state.ww(o, (v - dx + 0x35) & 0xFFFF)
-    rebase(0x8F1D, 0x46, 7)
-    rebase(0x9107, 0x10, 0xF)
+    g = PlayerGlobals(state)
+    dx = g.sprite_bank_lo
+    for src in list(g.effect_sources) + list(g.terrain_entities):
+        if src.sprite != 0xFFFF:
+            src.sprite = (src.sprite - dx + 0x35) & 0xFFFF
 
 
 def _rebase_entity_sprites(state) -> None:
     """4182: rebase the second-pass entity list [0x8489] (variable stride = [si], <=0x32) sprite ref
     [+2] across two banks (>= [0x8c8b] -> -[0x8c8b]+0x138; >= [0x8c89] -> -[0x8c89]+0x35), then reset
     [0x8c89]=0x35 / [0x8c8b]=0x138."""
-    dx = state.rw(SPRITE_BANK_LO)
-    bx = state.rw(SPRITE_BANK_HI)
+    g = PlayerGlobals(state)
+    dx = g.sprite_bank_lo
+    bx = g.sprite_bank_hi
     if dx != 0xFFFF:
         si = ENTITY_LIST_2NDPASS
-        while state.rb(si) <= 0x32:
+        while state.rb(si) <= 0x32:            # dynamic variable-stride entity walk (stride = [si])
             ax = state.rw(si + 2)
             if ax != 0xFFFF:
                 if ax >= bx:
@@ -111,8 +115,8 @@ def _rebase_entity_sprites(state) -> None:
                 elif ax >= dx:
                     state.ww(si + 2, (ax - dx + 0x35) & 0xFFFF)
             si = (si + _s8(state.rb(si))) & 0xFFFF
-    for o, v in ((0x8C89, 0x35), (0x8C8B, 0x138)):
-        state.ww(o, v)
+    g.sprite_bank_lo = 0x35
+    g.sprite_bank_hi = 0x138
 
 
 def _ensure_password_seed(state) -> None:
@@ -122,11 +126,12 @@ def _ensure_password_seed(state) -> None:
     decor assignment (which is why the VM reaches gameplay with ``[0xA333]=0x20`` on the zeroed-BIOS GOG build).
     Without it native reads ``[0xA333]=0`` -> the decor sprites diverge from the VM. Idempotent."""
     from pre2.recovered.password import bios_seed
-    if state.rb(SEED_COMPUTED_FLAG) != 0:                               # [asm 933c] cmp byte [0xa335],0 / jne (already done)
+    lg = LoaderGlobals(state)
+    if lg.seed_computed_flag != 0:                               # [asm 933c] cmp byte [0xa335],0 / jne (already done)
         return
     seed = bios_seed(state.data)                           # [asm 9343..9390] the F000/option-ROM checksum (not DGROUP)
-    state.ww(BIOS_SEED, seed)                                  # [asm 9392] mov [0xa333], dx
-    state.wb(SEED_COMPUTED_FLAG, 1)                                    # [asm 9396] mov byte [0xa335], 1
+    lg.bios_seed = seed                                        # [asm 9392] mov [0xa333], dx
+    lg.seed_computed_flag = 1                                  # [asm 9396] mov byte [0xa335], 1
 
 
 def _assign_random_decor(state) -> None:
@@ -137,16 +142,17 @@ def _assign_random_decor(state) -> None:
     Deterministic via the recovered generator [[pre2-level-passwords]] (seed = machine fingerprint [0xA333])."""
     from pre2.recovered.password import DEFAULT_ROT, level_code
     _ensure_password_seed(state)                            # [asm 40bd -> 932F] the first 932F call inits the seed
+    pg, lg = PlayerGlobals(state), LoaderGlobals(state)
 
     ptrs = []
     for k in range(0x46):
         si = EFFECT_SPRITE_SRC + k * 7
-        v = state.rw(si + 4)
+        v = EffectSource(state, si).sprite
         if ((v & 0x1FFF) - 0x11B) & 0xFFFF <= 0xF:
             ptrs.append(si)
     # mirror [0x6a88] (words) for fidelity
     for i, p in enumerate(ptrs):
-        state.ww(DECOR_PTR_LIST + i * 2, p)
+        lg.decor_ptr_list[i] = p
     bp = len(ptrs)
     if bp == 0 or bp & 3:
         return
@@ -155,24 +161,24 @@ def _assign_random_decor(state) -> None:
     while swapped:
         swapped = False
         for i in range(bp - 1):
-            a = state.rw(ptrs[i])
-            b = state.rw(ptrs[i + 1])
+            a = EffectSource(state, ptrs[i]).x
+            b = EffectSource(state, ptrs[i + 1]).x
             if b < a:
                 ptrs[i], ptrs[i + 1] = ptrs[i + 1], ptrs[i]; swapped = True
     for i, p in enumerate(ptrs):
-        state.ww(DECOR_PTR_LIST + i * 2, p)
-    level = state.rb(LEVEL_INDEX) + (0x0A if state.rb(MODE_COPY) else 0)
-    seed = state.rw(BIOS_SEED)
+        lg.decor_ptr_list[i] = p
+    level = pg.level + (0x0A if pg.mode_copy else 0)
+    seed = lg.bios_seed
     code = level_code(level, seed=seed, rot=DEFAULT_ROT)
     # groups of 4 entries, each group re-using ``code``, 4 bits per entry MSB-first
-    for g in range(0, bp, 4):
+    for gi in range(0, bp, 4):
         dx = code
         for j in range(4):
-            di = ptrs[g + j]
+            di = ptrs[gi + j]
             dx = (dx << 4) & 0xFFFF | (dx >> 12)        # rotate so the next nibble is the low 4 bits...
             nib = dx & 0xF                               # ...matching shl/rcl MSB-first extraction
             val = 0x11B + nib
-            state.ww(di + 4, val)
+            EffectSource(state, di).sprite = val
 
 
 def _self_patch_secret_tiles(state) -> None:
@@ -184,21 +190,22 @@ def _self_patch_secret_tiles(state) -> None:
     tiles render already-revealed (and [0x2a74] stays 0). Runs after 4182, before 40bd (so the count is doubled by
     ``_count_decor``)."""
     d = state.data                                              # `d` for the level-data segment cells (es=[0x2dda])
-    seg = state.rw(LEVEL_DATA_SEG)
+    g = PlayerGlobals(state)
+    lg = LoaderGlobals(state)
+    seg = g.map_seg
     base = (seg << 4) & 0xFFFFF
     dx = 0
     for k in range(0x50):                                        # [asm 3eb5 cx=0x50]
-        si = BONUS_CELL_LIST + k * 5                                      # [asm 3eb2/3ecb stride 5]
-        bx = state.rw(si + 3)                                    # [asm 3eba] cell offset
+        cellview = g.bonus_cells[k]                                       # [asm 3eb2/3ecb stride 5]
+        bx = cellview.cell                                        # [asm 3eba] cell offset
         if bx == 0xFFFF:                                         # [asm 3ebd/3ec0]
             continue
         dx += 1                                                  # [asm 3ec2]
         cell = (base + bx) & 0xFFFFF
-        al = state.rb(si)                                        # [asm 3ec3] the hidden-tile replacement
-        state.wb(si + 1, d[cell])                                # [asm 3ec8] stash the original (revealed) tile
+        al = cellview.hidden_tile                                # [asm 3ec3] the hidden-tile replacement
+        cellview.tile_id = d[cell]                                # [asm 3ec8] stash the original (revealed) tile
         d[cell] = al                                             # [asm 3ec5] xchg -> patch the cell to hidden (segment)
-    v = (state.rw(COLLECT_TOTAL_MAIN) + dx) & 0xFFFF                         # [asm 3ed0] [0x2a74] += count
-    state.ww(COLLECT_TOTAL_MAIN, v)
+    lg.collect_total_main = (lg.collect_total_main + dx) & 0xFFFF            # [asm 3ed0] [0x2a74] += count
 
 
 def _dup_double_buffer(state) -> None:
@@ -259,27 +266,31 @@ def native_level_load_objects(state) -> None:
 def _per_level_pointers(state) -> None:
     """4038..4056: per-level word [0x2d40+level*2] -> [0x2dbc] (level-advance/scroll), [0x2dbe]=0; and the
     two header words [0x8160]/[0x8162] (from the property block) -> [0x6bad]/[0x6baf]."""
-    level = state.rb(LEVEL_INDEX)
-    for dst, src in ((0x2DBC, 0x2D40 + level * 2), (0x6BAD, 0x8160), (0x6BAF, 0x8162)):
-        state.ww(dst, state.rw(src))
+    g, lg = PlayerGlobals(state), LoaderGlobals(state)
+    level = g.level
+    from pre2.views.dgroup_view import ScrollScriptView
+    ScrollScriptView(state).script_ptr = state.rw(SCROLL_SCRIPT_TABLE + level * 2)   # dynamic per-level table read
+    g.checkpoint_x = lg.level_start_x
+    g.checkpoint_y = lg.level_start_y
     state.ww(SCROLL_SCRIPT_PTR2, 0)
 
 
 def _count_decor(state) -> None:
     """4073..40bb: count float-effect entries whose (rebased) sprite [+4] is in [0x6e,0x75] or [0x80,0xdb];
     add to [0x2a78]; then if level<0xA and [0x2cf6+level]!=0xff, double [0x2a78] and [0x2a74]."""
+    g, lg = PlayerGlobals(state), LoaderGlobals(state)
     dx = 0
-    for k in range(0x46):
-        ax = state.rw(EFFECT_SPRITE_SRC + k * 7 + 4)
+    for src in g.effect_sources:
+        ax = src.sprite
         if ax == 0xFFFF or ax < 0x6E or ax > 0xDB:
             continue
         if ax >= 0x80 or ax <= 0x75:
             dx += 1
-    state.ww(COLLECT_TOTAL_DECOR, (state.rw(COLLECT_TOTAL_DECOR) + dx) & 0xFFFF)
-    level = state.rb(LEVEL_INDEX)
-    if level < 0x0A and state.rb(WARP_TABLE + level) != 0xFF:
-        for o in (0x2A78, 0x2A74):
-            state.ww(o, (state.rw(o) << 1) & 0xFFFF)
+    lg.collect_total_decor = (lg.collect_total_decor + dx) & 0xFFFF
+    level = g.level
+    if level < 0x0A and state.rb(WARP_TABLE + level) != 0xFF:      # dynamic per-level table read
+        lg.collect_total_decor = (lg.collect_total_decor << 1) & 0xFFFF
+        lg.collect_total_main = (lg.collect_total_main << 1) & 0xFFFF
 
 
 def native_level_load_planar(state) -> None:
@@ -292,9 +303,10 @@ def native_level_load_planar(state) -> None:
     — not the simple per-frame ``[0x2dd8]`` bank the live bridge path uses. Recovering ``0x492`` + that gate is a
     follow-up; until then the shared/common sprites are left empty. See [[pre2-level-init-island]]."""
     from pre2.views.sprites import compute_local_slots, write_slots
-    seg = state.rw(LEVEL_DATA_SEG)
-    level = state.rb(LEVEL_INDEX)
-    bh = state.rb(LEVEL_HEADER_TABLE + level)
+    g = PlayerGlobals(state)
+    seg = g.map_seg
+    level = g.level
+    bh = state.rb(LEVEL_HEADER_TABLE + level)          # dynamic per-level table read
     base_seg = (seg + (bh << 4)) & 0xFFFF
     write_slots(state, compute_local_slots(state, base_seg))         # 4316 (local)
 
@@ -343,23 +355,26 @@ def native_level_load_anim_tables(state) -> None:
     maps to itself in tables 0/1/2 and 0 in table 3; an ANIMATED tile (bit 0x80 set) consumes 3 consecutive
     indices and fills a rotated 3-frame cycle (tables 0/1/2 = the three frames t/t+1/t+2, each rotated) with 1 in
     table 3. [0x6bbd] = 1 iff the level has any animated tile. Deterministic; reads [0x805E] (loaded by dgroup)."""
-    T0, T1, T2, T3, FLAG = 0x6688, 0x6788, 0x6888, 0x6988, 0x805E   # the 4 remap-frame tables + the anim-flag table
+    lg = LoaderGlobals(state)
+    T0, T1, T2, T3 = lg.anim_table_0, lg.anim_table_1, lg.anim_table_2, lg.anim_table_3
+    flag = Tables(state.rb).ceil_handler   # UNION: the SAME [0x805E] per-tile byte player_collision reads
+    #        under the &0xF/&0x10/&0x20 masks -- here only bit 0x80 (the animated-tile flag) is tested.
     has_anim = 0
     bx = 0
     while bx < 0x100:                                              # [asm 430d: or bh,bh / je]
-        if (state.rb(FLAG + bx) & 0x80) == 0:                     # [asm 42bb] static tile
+        if (flag[bx] & 0x80) == 0:                                # [asm 42bb] static tile
             t = bx & 0xFF
-            state.wb(T0 + bx, t); state.wb(T1 + bx, t); state.wb(T2 + bx, t); state.wb(T3 + bx, 0)
+            T0[bx] = t; T1[bx] = t; T2[bx] = t; T3[bx] = 0
             bx += 1                                                # [asm 42d3 -> 430c]
         else:                                                      # [asm 42d5] animated: rotated 3-frame cycle
             has_anim = 1
             t = bx & 0xFF; t1 = (t + 1) & 0xFF; t2 = (t + 2) & 0xFF
-            state.wb(T0 + bx, t);  state.wb(T0 + bx + 1, t1); state.wb(T0 + bx + 2, t2)
-            state.wb(T1 + bx, t1); state.wb(T1 + bx + 1, t2); state.wb(T1 + bx + 2, t)
-            state.wb(T2 + bx, t2); state.wb(T2 + bx + 1, t);  state.wb(T2 + bx + 2, t1)
-            state.wb(T3 + bx, 1);  state.wb(T3 + bx + 1, 1);  state.wb(T3 + bx + 2, 1)
+            T0[bx] = t;  T0[bx + 1] = t1; T0[bx + 2] = t2
+            T1[bx] = t1; T1[bx + 1] = t2; T1[bx + 2] = t
+            T2[bx] = t2; T2[bx + 1] = t;  T2[bx + 2] = t1
+            T3[bx] = 1;  T3[bx + 1] = 1;  T3[bx + 2] = 1
             bx += 3                                                # [asm 430a/430b/430c: inc bx x3]
-    state.wb(ANY_ANIMATED_FLAG, has_anim)                                     # [asm 4311] any-animated flag
+    PlayerGlobals(state).page_dirty = has_anim                                # [asm 4311] any-animated flag
 
 
 def native_level_load_shared(state, *, game_root: str) -> None:
@@ -370,20 +385,21 @@ def native_level_load_shared(state, *, game_root: str) -> None:
     fills the cache half the local pass leaves empty. ``[0x2ddc]`` is the bank base the shared pass addresses."""
     from pre2.views.sprites import compute_shared_slots, write_slots
     d = state.data
+    g, lg = PlayerGlobals(state), LoaderGlobals(state)
     # [asm 3fb1-3fb8] load UNION at a SMALL base so the 4389 segment arithmetic ((code-0x100)*8 + base) does not
     # wrap (a large bump segment wraps the high codes -> garbage). The original loads it over the level-data seg
     # [0x2dda] (which it then reloads); we do the same BUT [0x2dda]:0 is the tilemap GRID the standalone renderer
     # reads each frame (read_foreground_state / render_frame), so we SAVE it, load UNION there only to demux into
     # the cache (UNION isn't read after the cache is filled), then RESTORE the grid. Otherwise the grid becomes
     # UNION bytes -> scattered tiles + garbage tile types.
-    saved_bump = state.rw(LOAD_TOP)
-    lvl_seg = state.rw(LEVEL_DATA_SEG)
+    saved_bump = lg.load_top
+    lvl_seg = g.map_seg
     lvl_base = (lvl_seg << 4) & 0xFFFFF
     grid = bytes(d[lvl_base:lvl_base + 0x12000])                    # UNION decompresses to ~0x11000; save + margin
-    state.ww(LOAD_TOP, lvl_seg)
+    lg.load_top = lvl_seg
     union_seg = load_sqz_by_dx(state, 0x0A25, game_root=game_root)  # [asm 0699->107b] decompress UNION.SQZ
-    state.ww(LOAD_TOP, saved_bump)
-    state.ww(UNION_BANK_SEG, union_seg)
+    lg.load_top = saved_bump
+    lg.union_bank_seg = union_seg
     write_slots(state, compute_shared_slots(state, union_seg))      # [asm 4389] demux code>=0x100 into the cache
     d[lvl_base:lvl_base + 0x12000] = grid                          # restore the level-data grid UNION overwrote
 
@@ -392,14 +408,17 @@ def native_player_init(state) -> None:
     """55fc: (re)initialise the object pool + the player for level start. Clears `[0x4f1c]` (0x40b words), marks
     0x74 object slots free (`[di+4]=0xFFFF`, `[di+0x11]=0`, stride 0x12 from `[0x4f0a]`), then sets the player
     position from the level's start point in the property tables: X=`[0x8160]`, Y=`[0x8162]`. [asm 55fc]"""
+    from pre2.views.dgroup_view import PlayerView, RenderSlot
     d = state.data
     d[_DS + PLAYER_SLOT:_DS + PLAYER_SLOT + 0x40B * 2] = b"\x00" * (0x40B * 2)   # a bulk object-pool clear (slice)
     for k in range(0x74):                                        # mark 0x74 object slots free (stride 0x12)
-        o = 0x4F0A + k * 0x12
-        state.ww(o + 4, 0xFFFF)                                  # [di+4] = 0xFFFF (dead)
-        state.wb(o + 0x11, 0)                                    # [di+0x11] = 0
-    for dst, src in ((0x4F1C, 0x8160), (0x4F1E, 0x8162)):        # player start pos from the property header
-        state.ww(dst, state.rw(src))
+        slot = RenderSlot(state, 0x4F0A + k * 0x12)
+        slot.sprite = 0xFFFF                                     # [di+4] = 0xFFFF (dead)
+        slot.life = 0                                            # [di+0x11] = 0
+    lg = LoaderGlobals(state)
+    pv = PlayerView(state)                                       # player start pos from the property header
+    pv.x = lg.level_start_x
+    pv.y = lg.level_start_y
 
 
 def native_level_load(state, level: int, *, game_root: str) -> None:
