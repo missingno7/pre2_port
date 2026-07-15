@@ -97,6 +97,7 @@ def main() -> int:
             print(f"  DIVERGED: tick {i} raised {type(e).__name__}: {str(e)[:100]}")
             return 1
 
+        state.sync_rng_to_image()   # RNG now runs live off the image (state.rng); fold it back for the digest
         got = gameplay_digest(state.data[DS:DS + 0x10000])
         if got != gtd.digests[i]:
             lvl = state.data[DS + 0x2D8A]

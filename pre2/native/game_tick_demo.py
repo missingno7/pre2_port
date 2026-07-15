@@ -263,6 +263,7 @@ def verify_native(demo: GameTickDemo, *, game_root: str) -> tuple[int, str | Non
             return i, f"tick {i}: native hit a gap: {str(e)[:90]}"
         except Exception as e:                                      # noqa: BLE001
             return i, f"tick {i}: native raised {type(e).__name__}: {str(e)[:80]}"
+        state.sync_rng_to_image()   # RNG now runs live off the image (state.rng); fold it back for the digest
         got = gameplay_digest(state.data[DS_BASE:DS_BASE + 0x10000])
         if got != want:
             return i, f"tick {i}: gameplay digest mismatch (native {got[:12]} != recorded {want[:12]})"

@@ -2249,6 +2249,7 @@ def main(argv=None) -> int:
                               state)
                     pygame.quit()
                     return 0
+                state.sync_rng_to_image()   # RNG now runs live off the image (state.rng); fold it back for the digest
                 if div is None and gameplay_digest(state.data[DS:DS + 0x10000]) != gtd.digests[i]:
                     div = i
                     print(f"  tick replay DIVERGENCE at tick {i} (gameplay digest mismatch) -- continuing")

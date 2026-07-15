@@ -253,6 +253,7 @@ def main(argv=None) -> int:
                     buf[b] = buf[b + 1] = buf[b + 2] = buf[b + 3] = 0
             return buf
 
+        nat_state.sync_rng_to_image()   # RNG now runs live off the image (state.rng); fold it back for comparison
         a0 = _masked(gtd.seed[_DS:_DS + 0x10000])
         b0 = _masked(nat_state.data[_DS:_DS + 0x10000])
         owned = {o for o in range(0x10000) if a0[o] != b0[o]}
@@ -295,6 +296,7 @@ def main(argv=None) -> int:
             if ta is not None:                                     # both terminal with the SAME transition — the
                 print(f"[4] both runs reached {ta} at tick {i} -- compare ends there (front-end flow)")
                 break                                              # remaining ticks belong to the next flow
+            sa.sync_rng_to_image(); sb.sync_rng_to_image()   # RNG runs live off the image; fold back for compare
             if gameplay_digest(sa.data[_DS:_DS + 0x10000]) != gtd.digests[i]:
                 print(f"[4] (sanity) the seed-run itself diverged from the recording at tick {i}")
                 inert = False

@@ -89,12 +89,23 @@ class NativeGameState:
         return cls(bytearray(rt.cpu.mem.data))
 
     def active_rng(self):
-        """The tick's authoritative live RNG: ``self.backend.rng`` when the backend carries its own object-graph
-        copy (duck-typed — matching the 6913 second-pass dual-path in pre2/native/loop.py, no bridge import
-        here), else ``self.rng``. Two different Rng instances rolling independently in the same tick would
-        silently fork the generator's sequence, so every RNG-touching call site resolves through here, not
-        ``self.rng`` directly."""
-        return getattr(self.backend, "rng", self.rng)
+        """The tick's authoritative live RNG, or ``None`` when nothing should be registered (let the caller's
+        overlay fall through to the pure offset path instead):
+
+        - the DEFAULT ``ByteBackend`` (the common case, and the only backend ``self.rng`` was ever seeded
+          from/kept in sync with) -> ``self.rng``;
+        - a backend that carries its own object-graph copy (duck-typed ``.rng``, e.g. the object-graph
+          ``DataclassBackend`` — matching the 6913 second-pass dual-path in pre2/native/loop.py, no bridge
+          import here) -> that copy;
+        - anything else (e.g. the field-backed ``HybridBackend``, which has no ``.rng`` at all and already
+          tracks RNG correctly through its own offset-keyed named-field store) -> ``None``. Falling back to
+          ``self.rng`` here would silently fork a THIRD, stale copy from whatever that backend actually
+          tracks — ``self.rng`` is only ever updated while ``self.backend`` is the original ``ByteBackend``."""
+        from pre2.views.dgroup_view import ByteBackend
+        be = self.backend
+        if isinstance(be, ByteBackend):
+            return self.rng
+        return getattr(be, "rng", None)
 
     def sync_rng_to_image(self) -> None:
         """Fold ``self.rng`` back into the raw DGROUP image through the SAME offset-based ``RngView``
