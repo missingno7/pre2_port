@@ -15,11 +15,10 @@ from pre2.native.camera_scroll import (SCROLL_DONE_FLAG, _h_follow, _sar16, _v_f
 from pre2.gaps import Pre2HybridGap
 from pre2.native.level_load import native_level_load, native_player_init
 from pre2.native.state import DATA_SEG
-from pre2.views.dgroup_view import PlayerGlobals, PlayerView, RngView, ScrollScriptView
+from pre2.views.dgroup_view import LoaderGlobals, PlayerGlobals, PlayerView, RngView, ScrollScriptView
 from pre2.recovered.prng import rng_lcg
 from pre2.native.dgroup_offsets import (
-    BOSS_STATE, DBL_BUFFER_BACKUP, DECOR_RNG_TABLE, FILL_BLOCK_7DAF, FILL_BLOCK_7DE6, LEVEL_PROP_HEADER,
-    TIMER_STATE_BLOCK, WALL_MARKER_TABLE)
+    DBL_BUFFER_BACKUP, FILL_BLOCK_7DAF, FILL_BLOCK_7DE6, LEVEL_PROP_HEADER, TIMER_STATE_BLOCK, WALL_MARKER_TABLE)
 
 _DS = DATA_SEG << 4
 
@@ -113,18 +112,19 @@ def native_5237(state) -> None:
     # [asm 5271] 0ba0 VGA palette (int 10h) — render, skipped (no DGROUP)
     rng = RngView(state)
     a, b, c, dd = rng.lcg_a, rng.lcg_b, rng.lcg_c, rng.lcg_d          # [5274] fill the decor RNG table
-    di = DECOR_RNG_TABLE
-    for _ in range(0x100):
+    lg = LoaderGlobals(state)
+    decor_table = lg.decor_rng_table
+    for i in range(0x100):
         a, b, c, dd, _r1 = rng_lcg(a, b, c, dd)                     # [asm 527a] dh (advances the RNG, discarded)
         a, b, c, dd, r2 = rng_lcg(a, b, c, dd)                      # [asm 527f] ah = al = the 2nd return byte
-        state.ww(di, (r2 << 8) | r2); di += 2                      # [asm 5284] stosw (the byte duplicated)
+        decor_table[i] = (r2 << 8) | r2                             # [asm 5284] stosw (the byte duplicated)
     rng.lcg_a, rng.lcg_b, rng.lcg_c, rng.lcg_d = a, b, c, dd          # advanced RNG state back
     d[_DS + WALL_MARKER_TABLE:_DS + WALL_MARKER_TABLE + 0x50 * 2] = b"\xAA\x55" * 0x50   # [asm 5287] = 0x55aa x 0x50
     native_52d2(state)                                               # [asm 5292] restore the pristine scenery map blocks
     d[_DS + FILL_BLOCK_7DE6:_DS + FILL_BLOCK_7DE6 + 0x78] = b"\xFF" * 0x78             # [asm 5295]
     d[_DS + FILL_BLOCK_7DAF:_DS + FILL_BLOCK_7DAF + 0x37] = b"\xFF" * 0x37             # [asm 52a0]
     g.energy = 3                                                     # [asm 52a8] energy / hearts
-    state.ww(BOSS_STATE, 0xFFFF)                                    # [asm 52ad] boss state reset
+    g.boss_script_ptr = 0xFFFF                                       # [asm 52ad] boss state reset (== [0xA517])
     scroll = ScrollScriptView(state)
     scroll.script_ptr = scroll.script_table[g.level]                # [asm 52b3] scroll-script ptr
     scroll.frame_counter = 0                                        # [asm 52c2]

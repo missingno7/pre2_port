@@ -797,6 +797,7 @@ class LoaderGlobals(DgroupView):
     #                                     [password 932F]
     seed_computed_flag = _U8(0xA335)    # the lazy-init "seed already computed" flag [asm 933c]
     decor_ptr_list = _U16Array(0x6A88, 0x46)   # the decor-assignment pointer list (40bd bubble-sorts it)
+    decor_rng_table = _U16Array(0x6CA9, 0x100)   # native_5237's decor table, filled from the carried RNG
     level_start_x = _U16(0x8160)   # the property block's start-point X (player spawn + [0x2DBC]) [level_load]
     level_start_y = _U16(0x8162)   # ... start-point Y
     # the 4 tile-animation lookup tables [asm 42af] the renderer reads to animate tiles -- a pure function of
