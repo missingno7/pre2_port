@@ -15,10 +15,9 @@ from __future__ import annotations
 
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
-from pre2.recovered.prng import rng_lcg
 from pre2.views.tables import Tables
 from pre2.views.dgroup_view import (DictBackend, EffectParticle, PlayerGlobals, PlayerView, RenderSlot,
-                                    RngView, WidthContractBackend)
+                                    RngView, WidthContractBackend, WidthOverlayBackend)
 
 
 class Pre2SpawnGap(Exception):
@@ -138,7 +137,7 @@ SCROLL_PHASE = 0x6C05
              "OBSERVED", merge_target="object_spawn")
 def inc_scroll_phase(rb):
     """[asm 757A] ``rb(off)`` reads a DGROUP byte. Returns the ``{offset: (value, width)}`` write contract."""
-    v = rb(SCROLL_PHASE)
+    v = PlayerGlobals(DictBackend(rb, rb)).scroll_phase   # byte-only field; rw is never invoked
     return {SCROLL_PHASE: ((0xFF if v == 0xFF else v + 1), 1)}
 
 
@@ -166,10 +165,11 @@ def _target_collision(rb, rw, si, writes):
       * TARGET-B [asm 81A8-81AF]: the overlap CF is returned as-is (81AF ret) — THIS is the response hit
         (the boss/target that decrements [0x91FC]; the gorilla damages through here, not target A)."""
     be = WidthContractBackend(rb, rw, writes)
+    pg = PlayerGlobals(DictBackend(rb, rw))               # read-only named access to the target ptrs
     slot = RenderSlot(be, si)                             # the probing sprite/projectile record
     if slot.sprite == 0xFFFF:                             # [asm 8182/8186 je 81B2] inactive -> clc (False)
         return False
-    di = rw(TARGET_A)                                     # [asm 8188] di = [0xA423] (the target record ptr)
+    di = pg.target_a                                      # [asm 8188] di = [0xA423] (the target record ptr)
     target_a = RenderSlot(be, di)
     if (target_a.sprite & 0x1FFF) in TARGET_SPRITES:      # [asm 818C-819A] TARGET_A's OWN id is 0x19C/0x19D
         hit, hb = hitbox_overlap(rb, rw, si, di)             # [asm 819C] 8D7B (si vs target A)
@@ -178,7 +178,7 @@ def _target_collision(rb, rw, si, writes):
         if hit:                                          # [asm 819F jae 81A8 / 81A1-81A6]
             slot.sprite = 0xFFFF                          # free the projectile, then jmp 81B2 -> clc:
             return False                                  #   consumed, but NOT a response hit
-    hit, hb = hitbox_overlap(rb, rw, si, rw(TARGET_B))   # [asm 81A8-81AC] target B -> 81AF ret (CF as-is)
+    hit, hb = hitbox_overlap(rb, rw, si, pg.target_b)    # [asm 81A8-81AC] target B -> 81AF ret (CF as-is)
     for off, (val, wid) in hb.items():
         writes[off] = (val, wid)
     return hit
@@ -267,14 +267,15 @@ def tick_scroll_cursor(rb, rw, read_tile):
     """[asm 70D7..7172] ``rb``/``rw`` read DGROUP byte/word; ``read_tile`` reads the level map (es=[0x2DDA])."""
     writes: dict[int, tuple[int, int]] = {}
     g = PlayerGlobals(DictBackend(rb, rw))                # read-only named access
-    di = rw(SPAWN_GATE_PTR)                                # [asm 70E1-70F7] spawn gate
+    di = g.boss_targets[0].sprite                         # [asm 70E1-70F7] spawn gate (UNION: boss-target
+    #                                                         record 0's sprite word doubles as the spawn gate)
     cx = (g.spawn_count >> 3) & 0xFFFF
     if di == 0xFFFF or g.cam_state == 6 or not (di & 0x2000):
         cx = 0
     writes.update(init_effect_row(cx))                    # [asm 70F9] 7585
 
     ax = (_sar16(g.scroll_vx, 4) + g.cursor_x) & 0xFFFF   # [asm 70FE-7103] advance cursor X
-    if not (ax & 0x8000) and _s16(rw(CURSOR_X_LO)) <= _s16(ax) and _s16(rw(CURSOR_X_HI)) >= _s16(ax):
+    if not (ax & 0x8000) and _s16(g.cursor_x_lo) <= _s16(ax) and _s16(g.cursor_x_hi) >= _s16(ax):
         writes[CURSOR_X] = (ax, 2)                        # [asm 7115] within bounds
         cur_x = ax
     else:
@@ -322,7 +323,7 @@ def _abs16(v):
              "OBSERVED", merge_target="object_spawn")
 def player_cursor_dist(rw):
     """[asm 7172..71AB] ``rw`` reads a DGROUP word. Returns ``(writes, cull)``."""
-    be = DictBackend(lambda o: rw(o) & 0xFF, rw)          # word-only reads; byte reader derived from rw
+    be = DictBackend(rw, rw)          # word-only reads (cursor_x/x are both _U16) -- rb is never invoked
     g = PlayerGlobals(be); pv = PlayerView(be)
     px = pv.x
     cur_x = g.cursor_x
@@ -361,6 +362,35 @@ def player_death(rb, rw):
     return {o: (v, 1) for o, v in _offcamera_trigger(rb).items()}
 
 
+class _WordOverlay:
+    """Read-through overlay for WORD writes only (some callers hand ``hurt_effect`` a word-granular ``rw``
+    independent of ``rb`` — unlike :class:`_Ov`, this never recomposes words from byte reads, it defers to the
+    caller's own ``rw`` for anything not yet written). Byte reads/writes pass straight through; used where a
+    later step (spawn_effect_burst) must see an earlier word write in the SAME pass."""
+
+    _IS_DGROUP_BACKEND = True
+
+    __slots__ = ("_rb", "_rw", "writes")
+
+    def __init__(self, rb, rw, writes):
+        self._rb = rb
+        self._rw = rw
+        self.writes = writes
+
+    def rb(self, o):
+        return self._rb(o & 0xFFFF)
+
+    def rw(self, o):
+        o &= 0xFFFF
+        return (self.writes[o][0] & 0xFFFF) if o in self.writes else self._rw(o)
+
+    def wb(self, o, v):
+        self.writes[o & 0xFFFF] = (v & 0xFF, 1)
+
+    def ww(self, o, v):
+        self.writes[o & 0xFFFF] = (v & 0xFFFF, 2)
+
+
 @oracle_link("1030:824D",
              "the player-hurt effect when the scroll boundary crushes the player (bottom of the 81B4 chain): "
              "tick the damage cooldown [0x6BC9] (reload 5 + spend energy [0x27D6] on underflow -> player death "
@@ -372,24 +402,25 @@ def hurt_effect(rb, rw):
     """[asm 824D] Returns the ``{offset: (value, width)}`` writes. On the lives-depleted death (energy underflow)
     it composes ``player_death`` (65B3) to arm the 4C69 death/respawn dispatch — which resolves to the recovered
     game-over; no fail-loud."""
-    writes = {}
-    cd = (rb(HURT_COOLDOWN) - 1) & 0xFF
+    writes: dict = {}
+    be = _WordOverlay(rb, rw, writes)
+    g = PlayerGlobals(be)
+    pv = PlayerView(DictBackend(rb, rw))                  # the ORIGINAL (un-overlaid) player position
+    cd = (g.hurt_cooldown - 1) & 0xFF
     if cd & 0x80:                                        # [asm 8254] dec underflowed -> reload + lose a life
-        writes[HURT_COOLDOWN] = (5, 1)
+        g.hurt_cooldown = 5
         cd = 5
-        energy = (rb(ENERGY) - 1) & 0xFF
-        writes[ENERGY] = (energy, 1)
+        energy = (g.energy - 1) & 0xFF
+        g.energy = energy
         if energy & 0x80:                                # [asm 825F] energy underflow -> 65B3 player death
             writes.update(player_death(rb, rw))          # [asm 8261] arm the 4C69 death/respawn dispatch
     else:
-        writes[HURT_COOLDOWN] = (cd, 1)
-    pv = PlayerView(DictBackend(rb, rw))
-    writes[HURT_FX_X] = (pv.x, 2)                        # [asm 8264]
-    writes[HURT_FX_Y] = ((pv.y - 0x30) & 0xFFFF, 2)      # [asm 826A]
+        g.hurt_cooldown = cd
+    g.burst_x = pv.x                                      # [asm 8264]
+    g.burst_y = (pv.y - 0x30) & 0xFFFF                    # [asm 826A]
     ax = (-0x30 if (cd & 1) else 0x30) & 0xFFFF          # [asm 8276-8280] sign by the final [0x6BC9] parity
-    writes[HURT_FX_SPRITE] = (0x2046, 2)                 # [asm 8285]
-    orw = lambda o: (writes[o & 0xFFFF][0] & 0xFFFF) if (o & 0xFFFF) in writes else rw(o)   # 8D1B reads the writes above
-    writes.update(spawn_effect_burst(rb, orw, ax, 0xFF80, 1))    # [asm 828B]
+    g.burst_sprite = 0x2046                               # [asm 8285]
+    writes.update(spawn_effect_burst(rb, be.rw, ax, 0xFF80, 1))   # [asm 828B] 8D1B reads the burst origin above
     return writes
 
 
@@ -411,66 +442,34 @@ def camera_target_bounce(rb, rw, di):
     """[asm 81F3] ``di`` = the camera-target record offset. Returns the ``{offset: (value, width)}`` writes
     (8D7B always contributes [0xA330]); the lives-depleted death composes 824D -> ``player_death`` (game-over)."""
     di &= 0xFFFF
-    if rw((di + 4) & 0xFFFF) == 0xFFFF:               # [asm 81F3] inactive target
+    ro = DictBackend(rb, rw)
+    tgt = RenderSlot(ro, di)
+    if tgt.sprite == 0xFFFF:                          # [asm 81F3] inactive target
         return {}
-    if (rb((di + 5) & 0xFFFF) & 0x20) == 0:           # [asm 81F9] not a boundary target
+    if (tgt.flags & 0x20) == 0:                       # [asm 81F9] not a boundary target
         return {}
     hit, writes = hitbox_overlap(rb, rw, PLAYER_X, di)   # [asm 8201] 8D7B (always writes [0xA330])
     if not hit:                                       # [asm 8204] jae
         return writes
-    al = (4 - rb(SCROLL_PUSH)) & 0xFF                 # [asm 8206]
-    r = (PlayerGlobals(DictBackend(rb, rw)).scroll_phase - al) & 0xFF   # [asm 820C] sub [0x6C05],al
+    g = PlayerGlobals(ro); pv = PlayerView(ro)
+    al = (4 - g.scroll_push) & 0xFF                   # [asm 8206]
+    r = (g.scroll_phase - al) & 0xFF                  # [asm 820C] sub [0x6C05],al
     writes[SCROLL_PHASE] = (0 if (r & 0x80) else r, 1)   # [asm 8210] jns -> clamp to 0
     writes.update(hurt_effect(rb, rw))               # [asm 8217] 824D
     writes[P_DEATH] = (0x2C, 1)                        # [asm 8220]
     writes[ANIM_GATE] = (0, 1)                           # [asm 8225]
     writes[PLAYER_YVEL] = (0xFF80, 2)                 # [asm 822A]
     writes[P_MOTION] = (3, 1)                           # [asm 8230]
-    bvx = 0x80 if _s16(rw(PLAYER_X)) >= _s16(rw(CURSOR_X)) else 0xFF80   # [asm 8235-8242] toward the player
+    bvx = 0x80 if _s16(pv.x) >= _s16(g.cursor_x) else 0xFF80   # [asm 8235-8242] toward the player
     writes[PLAYER_XVEL] = (bvx, 2)                    # [asm 8244]
     writes[LOW_GRAVITY] = (0, 1)                           # [asm 8247]
     return writes
 
 
 # --- 81B4: the whole camera-boundary crush (3 targets vs the player) ---
-class _Ov:
-    """Read-through overlay so each sub-call sees the prior ones' writes (81B4's [0xA425] hitbox reads
-    [0x4F2A], which the earlier 81F3 bounces may have just set). Byte-level shadow; ``writes`` keeps the
-    ordered ``{offset: (value, width)}`` contract (re-inserted on overwrite so last-write wins)."""
-
-    _IS_DGROUP_BACKEND = True   # a dgroup-view backend: RngView binds straight onto it
-
-    def __init__(self, rb, rw):
-        self._rb = rb
-        self._bytes = {}
-        self.writes = {}
-
-    def rb(self, o):
-        o &= 0xFFFF
-        return self._bytes.get(o, self._rb(o)) & 0xFF
-
-    def rw(self, o):
-        o &= 0xFFFF
-        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
-
-    def apply(self, writes):
-        for off, v in writes.items():
-            if isinstance(off, str):                     # sentinel (SONG_REQUEST) — pass through to the contract
-                self.writes[off] = v
-                continue
-            val, wd = v
-            off &= 0xFFFF
-            self.writes.pop(off, None)
-            self.writes[off] = (val, wd)
-            self._bytes[off] = val & 0xFF
-            if wd == 2:
-                self._bytes[(off + 1) & 0xFFFF] = (val >> 8) & 0xFF
-
-    def wb(self, o, v):
-        self.apply({o & 0xFFFF: (v & 0xFF, 1)})
-
-    def ww(self, o, v):
-        self.apply({o & 0xFFFF: (v & 0xFFFF, 2)})
+_Ov = WidthOverlayBackend   # this file's read-through overlay so each sub-call sees the prior ones' writes
+#     (81B4's [0xA425] hitbox reads [0x4F2A], which the earlier 81F3 bounces may have just set) -- the shared
+#     views/dgroup_view.py implementation (used by several islands), aliased to its original local name here.
 
 
 CAM_TARGET_A = 0xA421
@@ -490,15 +489,16 @@ CRUSH_SFX_FLAG = 0x27EA
 def camera_boundary_collision(rb, rw):
     """[asm 81B4] Returns the ``{offset: (value, width)}`` writes; the lives-depleted death composes 824D ->
     ``player_death`` (the recovered game-over)."""
-    if rb(CRUSH_GATE) != 0:                           # [asm 81B4] crush disabled this frame
+    if PlayerGlobals(DictBackend(rb, rw)).respawn_state != 0:   # [asm 81B4] crush disabled this frame
         return {}
     ov = _Ov(rb, rw)
-    ov.apply(camera_target_bounce(ov.rb, ov.rw, ov.rw(CAM_TARGET_A)))   # [asm 81BE] 81F3
-    ov.apply(camera_target_bounce(ov.rb, ov.rw, ov.rw(CAM_TARGET_B)))   # [asm 81C5] 81F3
-    hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, ov.rw(CAM_TARGET_C))   # [asm 81D0] 8D7B
+    g = PlayerGlobals(ov)
+    ov.apply(camera_target_bounce(ov.rb, ov.rw, g.cam_target_ptr))   # [asm 81BE] 81F3
+    ov.apply(camera_target_bounce(ov.rb, ov.rw, g.target_a))         # [asm 81C5] 81F3
+    hit, hb = hitbox_overlap(ov.rb, ov.rw, PLAYER_X, g.target_b)     # [asm 81D0] 8D7B
     ov.apply(hb)
     if hit and hb[HIT_VDETAIL][0] != 0:                    # [asm 81D3 jae / 81D5 cmp [0xA330],0]
-        ax = 0xFF80 if ov.rb(CRUSH_SFX_FLAG) != 0 else 0xFFC0   # [asm 81DC-81E6] (+ sfx 3 when set)
+        ax = 0xFF80 if g.in_up != 0 else 0xFFC0           # [asm 81DC-81E6] (+ sfx 3 when set)
         ov.apply({PLAYER_YVEL: (ax, 2)})              # [asm 81EF]
     return ov.writes
 
@@ -511,10 +511,11 @@ SCRIPT_PTR = 0xA401        # the active camera-script pointer (table 0xA427/0xA4
 def _cam_scroll_velocity(rb, rw):
     """[asm 7301-7346] ramp the scroll velocity [0x6C08]/[0x6C06] from the cursor-player gap, capped by
     [0x91FB]*0x50; direction is toward the player."""
-    bx = (rb(SCROLL_PUSH) * 0x50) & 0xFFFF               # [asm 7301-7308]
-    w = {SCRIPT_PTR: (CAM_SCRIPT_IDLE, 2)}                         # [asm 730A]
     _be = DictBackend(rb, rw)
-    diff = (PlayerGlobals(_be).cursor_x - PlayerView(_be).x) & 0xFFFF   # [asm 7310-7313]
+    g = PlayerGlobals(_be); pv = PlayerView(_be)
+    bx = (g.scroll_push * 0x50) & 0xFFFF                  # [asm 7301-7308]
+    w = {SCRIPT_PTR: (CAM_SCRIPT_IDLE, 2)}                         # [asm 730A]
+    diff = (g.cursor_x - pv.x) & 0xFFFF   # [asm 7310-7313]
     adist = _abs16(diff)                                  # [asm 7318-731A]
     if adist <= bx:                                       # [asm 731C] jbe 7328
         q = (adist // 0xE) & 0xFF                         # [asm 7328-732C] 8-bit div, ah cleared
@@ -787,10 +788,11 @@ def camera_target_geometry(rb, rw, si):
     """[asm 93F6] ``si`` = the script command struct offset. Returns ``(writes, new_si)`` (si advanced past the
     5 consumed param words)."""
     w = {}
-    face = rb(DIST_DIR_FLAG) != 0
+    pg = PlayerGlobals(DictBackend(rb, rw))
+    face = pg.dist_dir != 0
     flip = lambda p: ((p ^ 0x8000) & 0xFFFF) if face else (p & 0xFFFF)
-    cx = rw(CURSOR_SNAP_X)
-    cy = rw(CURSOR_SNAP_Y)
+    cx = pg.cursor_latch_x
+    cy = pg.cursor_latch_y
 
     p1 = rw(si); si = (si + 2) & 0xFFFF                   # [asm 93F9] lodsw
     p2 = rw(si); si = (si + 2) & 0xFFFF                   # [asm 93FF] lodsw
@@ -807,7 +809,7 @@ def camera_target_geometry(rb, rw, si):
         ty = (t0y + _cbw(off >> 8)) & 0xFFFF
         w[poff] = (flip(p), 2); w[txo] = (tx, 2); w[tyo] = (ty, 2)
 
-    if rb(CMD_BYTE) & 0x40:                               # [asm 949B-94AF] vertical nudge
+    if pg.cmd_byte & 0x40:                                # [asm 949B-94AF] vertical nudge
         w[CAM_T0_Y] = ((w[CAM_T0_Y][0] + 2) & 0xFFFF, 2)
         w[CAM_T1_Y] = ((w[CAM_T1_Y][0] + 1) & 0xFFFF, 2)
         w[CAM_T2_Y] = ((w[CAM_T2_Y][0] + 1) & 0xFFFF, 2)
@@ -865,11 +867,12 @@ SCRIPT_LAST = 0x6C0A       # the script pointer last seen (reset the cursor when
 def camera_script_interp(rb, rw):
     """[asm 7534..7579] Returns the ``{offset: (value, width)}`` write contract."""
     ov = _Ov(rb, rw)
-    ax = ov.rw(SCRIPT_PTR)                                # [asm 7534]
-    if ov.rw(SCRIPT_LAST) != ax:                          # [asm 7537]
+    g = PlayerGlobals(ov)
+    ax = g.script_ptr                                     # [asm 7534]
+    if g.script_last != ax:                               # [asm 7537]
         ov.apply({SCRIPT_LAST: (ax, 2), SCRIPT_CURSOR: (ax, 2)})   # [asm 753D-7540] reset the cursor
     for _ in range(4096):                                 # [asm 7543] skip JUMP opcodes
-        cursor = ov.rw(SCRIPT_CURSOR)
+        cursor = g.script_cursor
         al = ov.rb(cursor)
         if not (al & 0x80):                              # [asm 7549] jns -> a command byte
             break
@@ -878,9 +881,9 @@ def camera_script_interp(rb, rw):
         raise Pre2SpawnGap("7534 camera-script JUMP loop did not terminate")
     ov.apply({CMD_BYTE: (al, 1)})                         # [asm 7554]
     cmd = al & 0xBF                                       # [asm 7557]
-    ov.apply({SCRIPT_CURSOR: ((ov.rw(SCRIPT_CURSOR) + 1) & 0xFFFF, 2)})   # [asm 7559]
+    ov.apply({SCRIPT_CURSOR: ((g.script_cursor + 1) & 0xFFFF, 2)})   # [asm 7559]
     si = (cmd * 0x14 + CAM_CMD_TABLE) & 0xFFFF                   # [asm 755D-7563]
-    ov.apply({CURSOR_SNAP_X: (ov.rw(CURSOR_X), 2), CURSOR_SNAP_Y: (ov.rw(CURSOR_Y), 2)})   # [asm 7567-7570]
+    ov.apply({CURSOR_SNAP_X: (g.cursor_x, 2), CURSOR_SNAP_Y: (g.cursor_y, 2)})   # [asm 7567-7570]
     cmd_writes, _ = camera_script_command(ov.rb, ov.rw, si)   # [asm 7573] 93B2
     ov.apply(cmd_writes)
     ov.apply(scan_camera_targets(ov.rb, ov.rw))          # [asm 7576] 80DE
@@ -906,7 +909,8 @@ def camera_engine(rb, rw, read_tile):
     if cull:                                                # [asm 7195/71A8] too far -> jmp 7579
         return ov.writes
     # [asm 747A-748C] the state-6 boss-reach finale (state 6 & SCROLL_VY>=0) RETs at 74E9 -> skips 7534
-    finale = ov.rb(CAM_STATE) == 6 and _s16(ov.rw(SCROLL_VY)) >= 0
+    g = PlayerGlobals(ov)
+    finale = g.cam_state == 6 and _s16(g.scroll_vy) >= 0
     ov.apply(camera_state_machine(ov.rb, ov.rw))           # [asm 71AB..7534] the camera sequencer
     if not finale:
         ov.apply(camera_script_interp(ov.rb, ov.rw))       # [asm 7534..7579] its bytecode script
@@ -931,14 +935,15 @@ def tick_mode9_spawn(rb, rw):
     """[asm 6ADD..6B0C] the mode-9 boss-engine head. Returns the ``{offset: (value, width)}`` write contract
     (the seed + the spawn row); the 6B1C+ boss-script engine is a separate routine."""
     writes = {}
-    if rw(M9_INIT_FLAG) == 0xFFFF:                     # [asm 6AE7] first frame -> seed the state
+    g = PlayerGlobals(DictBackend(rb, rw))
+    if g.boss_script_ptr == 0xFFFF:                     # [asm 6AE7] first frame -> seed the state
         writes[M9_PTR] = (BOSS_SCRIPT_M9, 2)                   # [asm 6AEE]
         writes[M9_COUNT] = (0x18, 2)                   # [asm 6AF4]
         writes[BOSS_DWELL] = (0, 1)                        # [asm 6AFA]
         writes[BOSS_CYCLE] = (3, 1)                        # [asm 6AFF]
         count = 0x18
     else:
-        count = rw(M9_COUNT)
+        count = g.boss_health
     writes.update(init_effect_row(_sar16(count, 2) & 0xFFFF))   # [asm 6B04-6B0C] 7585, cx = [0xA519]>>2
     return writes
 
@@ -968,14 +973,14 @@ def boss_hit_burst(rb, rw):
 BOSS_POOL_LO = 0x50A8      # the shared 0x50A8 effect/projectile pool (0x20 slots, stride 0x12)
 BOSS_POOL_N = 0x20
 BOSS_POOL_STRIDE = 0x12
-RNG_LCG_LO = 0x2CEC        # the 4-byte rng_lcg state a/b/c (bytes) + d (word at 0x2CEF)
 
 
 def _free_boss_slot(rw):
     """[asm 6CA9-6CB8] the first free 0x50A8 slot ([+4]==0xFFFF), or None when the pool is full."""
+    be = DictBackend(rw, rw)          # word-only reads (sprite is _U16) -- rb is never invoked
     si = BOSS_POOL_LO
     for _ in range(BOSS_POOL_N):
-        if rw((si + 4) & 0xFFFF) == 0xFFFF:
+        if RenderSlot(be, si).sprite == 0xFFFF:
             return si
         si = (si + BOSS_POOL_STRIDE) & 0xFFFF
     return None
@@ -983,12 +988,7 @@ def _free_boss_slot(rw):
 
 def _rng_lcg_next(rb, rw, writes):
     """[asm 39DF via call] advance rng_lcg over [0x2CEC..0x2CEF], record the state writeback, return AL=b'."""
-    a, b, c, d, ret = rng_lcg(rb(RNG_LCG_LO), rb(RNG_LCG_LO + 1), rb(RNG_LCG_LO + 2), rw(RNG_LCG_LO + 3))
-    writes[RNG_LCG_LO] = (a, 1)
-    writes[RNG_LCG_LO + 1] = (b, 1)
-    writes[RNG_LCG_LO + 2] = (c, 1)
-    writes[RNG_LCG_LO + 3] = (d, 2)
-    return ret
+    return RngView(WidthContractBackend(rb, rw, writes)).roll()
 
 
 @oracle_link("1030:6CA7",
@@ -1055,7 +1055,8 @@ def boss_script_interp(rb, rw):
     """[asm 6B91..6BDA] Returns the ``{offset: (value, width)}`` write contract (spawns + cursor + dwell + rng).
     The 6C0D glyph blit and the sfx are seams (not in the contract)."""
     ov = _Ov(rb, rw)
-    bx = ov.rw(BOSS_SCRIPT_PTR)                            # [asm 6B91]
+    g = PlayerGlobals(ov)
+    bx = g.boss_script_ptr                                 # [asm 6B91]
     for _ in range(4096):
         al = ov.rb(bx)                                    # [asm 6B95]
         if al == 0xFF:                                    # [asm 6B97] spawn 0x1CA
@@ -1067,12 +1068,12 @@ def boss_script_interp(rb, rw):
         elif al == 0xFD:                                  # [asm 6BAB] play sfx 2 (audio seam)
             bx = (bx + 1) & 0xFFFF
         elif al & 0x80:                                   # [asm 6BB8] negative -> relative jump + dwell
-            d = ov.rb(BOSS_DWELL)                         # [asm 6BC0-6BC5] sub 1 ; adc 0 (saturate at 0)
-            ov.apply({BOSS_DWELL: (((d - 1) & 0xFF) if d else 0, 1)})
+            d = g.boss_dwell                               # [asm 6BC0-6BC5] sub 1 ; adc 0 (saturate at 0)
+            g.boss_dwell = ((d - 1) & 0xFF) if d else 0
             bx = (bx + _cbw(al)) & 0xFFFF                 # [asm 6BCB] bx += signed al
-            ov.apply({BOSS_SCRIPT_PTR: (bx, 2)})          # [asm 6BCD]
+            g.boss_script_ptr = bx                         # [asm 6BCD]
         else:                                             # [asm 6BD3] glyph -> advance, render (6C0D), return
-            ov.apply({BOSS_SCRIPT_PTR: ((ov.rw(BOSS_SCRIPT_PTR) + 1) & 0xFFFF, 2)})
+            g.boss_script_ptr = (g.boss_script_ptr + 1) & 0xFFFF
             ov.writes[GLYPH_LATCH] = al                   # [asm 6BD7] the glyph AL handed to the 6C0D render
             break
     else:
@@ -1099,30 +1100,29 @@ def boss_pre_interp(rb, rw):
     """[asm 6B1C..6B90] Returns the ``{offset: (value, width)}`` write contract. On the killing hit (boss health
     depleted to 0) it also spawns the 6BDB diamond death-burst (the verified boss_hit_burst)."""
     ov = _Ov(rb, rw)
-    if ov.rb(BOSS_DWELL) == 0:                            # [asm 6B1C] dwell expired -> next script entry
-        bx = ov.rw(M9_PTR)                                # [asm 6B23]
+    g = PlayerGlobals(ov)
+    if g.boss_dwell == 0:                                  # [asm 6B1C] dwell expired -> next script entry
+        bx = g.m9_script_table_ptr                          # [asm 6B23]
         if ov.rw(bx) == 0xFFFF:                           # [asm 6B29] wrap marker
             bx = (bx + ov.rw((bx + 2) & 0xFFFF)) & 0xFFFF  # [asm 6B2E]
         ov.apply({BOSS_SCRIPT_PTR: (ov.rw(bx), 2),        # [asm 6B33]
                   BOSS_DWELL: (ov.rb((bx + 2) & 0xFFFF), 1),    # [asm 6B36-6B39]
                   M9_PTR: ((bx + 4) & 0xFFFF, 2)})        # [asm 6B3C-6B3F]
-    si = BOSS_PROJ_LO                                     # [asm 6B43]
-    for _ in range(4):                                    # [asm 6B46] cx=4 slots
-        if (ov.rw((si + 4) & 0xFFFF) != 0xFFFF                              # [asm 6B49] active
-                and ((ov.rw(si) - BOSS_ZONE_X[0]) & 0xFFFF) < BOSS_ZONE_X[1]    # [asm 6B4F-6B57] X in zone
-                and ((ov.rw((si + 2) & 0xFFFF) - BOSS_ZONE_Y[0]) & 0xFFFF) < BOSS_ZONE_Y[1]):  # [asm 6B59-6B62]
-            ov.apply({BOSS_SCRIPT_PTR: (BOSS_SCRIPT_HIT, 2)})      # [asm 6B64] switch to the hit script
-            h = ov.rb(M9_COUNT)                           # [asm 6B6A-6B6F] boss health-- (saturating)
+    for slot in g.projectiles:                            # [asm 6B43-6B8C] the 4 projectile slots
+        if (slot.sprite != 0xFFFF                                                # [asm 6B49] active
+                and ((slot.x - BOSS_ZONE_X[0]) & 0xFFFF) < BOSS_ZONE_X[1]        # [asm 6B4F-6B57] X in zone
+                and ((slot.y - BOSS_ZONE_Y[0]) & 0xFFFF) < BOSS_ZONE_Y[1]):      # [asm 6B59-6B62]
+            g.boss_script_ptr = BOSS_SCRIPT_HIT                  # [asm 6B64] switch to the hit script
+            h = g.boss_health_lo                          # [asm 6B6A-6B6F] boss health-- (saturating)
             nh = ((h - 1) & 0xFF) if h else 0
-            ov.apply({M9_COUNT: (nh, 1)})
+            g.boss_health_lo = nh
             if nh == 0:                                   # [asm 6B74] health depleted -> 6BDB death-burst
                 ov.apply(boss_hit_burst(ov.rb, ov.rw))    # [asm 6B76] the diamond burst; then fall through to 6B79
-            c = (ov.rb(BOSS_CYCLE) + 1) & 3               # [asm 6B79-6B7D] (runs on both the hit and kill paths)
-            ov.apply({BOSS_CYCLE: (c, 1)})
+            c = (g.boss_cycle + 1) & 3                    # [asm 6B79-6B7D] (runs on both the hit and kill paths)
+            g.boss_cycle = c
             if c == 0:                                    # [asm 6B82]
-                ov.apply({BOSS_SCRIPT_PTR: (BOSS_SCRIPT_CYCLE, 2)})  # [asm 6B84]
+                g.boss_script_ptr = BOSS_SCRIPT_CYCLE       # [asm 6B84]
             break                                         # [asm 6B8A] -> the glyph interpreter
-        si = (si + 0x12) & 0xFFFF                         # [asm 6B8C]
     return ov.writes
 
 
@@ -1139,7 +1139,7 @@ def tick_mode9_boss(rb, rw):
     """[asm 6ADD..6BDA] Returns the ``{offset: (value, width)}`` write contract for the whole boss engine."""
     ov = _Ov(rb, rw)
     ov.apply(tick_mode9_spawn(ov.rb, ov.rw))             # [asm 6ADD..6B0C] head (seed + spawn row)
-    if ov.rw(M9_COUNT) == 0:                             # [asm 6B0F] boss dead -> 6C0D victory-glyph render (a
+    if PlayerGlobals(ov).boss_health == 0:               # [asm 6B0F] boss dead -> 6C0D victory-glyph render (a
         return ov.writes                                 # pure page blit, es:[di], NO DGROUP writes) then RET; the
         #                                                  glyph render is native's own renderer's job, not a
         #                                                  gameplay-state write — so the contract ends at the head.
@@ -1169,7 +1169,6 @@ L6_SUB_B = 0xA329
 L6_SUB_A = 0xA32A
 L6_TIMER = 0xA32B
 L6_RESEED = 0xA32C
-RNG_A, RNG_B, RNG_C, RNG_D = 0x2CEC, 0x2CED, 0x2CEE, 0x2CEF   # rng_lcg (39DF) state
 
 
 def _sar16(v, n):
@@ -1186,13 +1185,14 @@ def _l6_spawn_state_machine(ov):
     """[asm 6E92..6F37] the [0xA32B]-timer state machine (reached only when [0xA324]==0 and [0xA32B]==0):
     advance the sub-indices, drop a random falling projectile (unless the new [0xA32A]==1), reload [0xA32B],
     and re-seed [0xA32B]/[0xA32C] from the rng when [0xA32C] underflows."""
-    ov.wb(L6_SUB_B, (ov.rb(L6_SUB_B) + 1) % 3)              # [asm 6E92]
-    al = (ov.rb(L6_SUB_A) + 1) % 3                          # [asm 6EA0]
-    ov.wb(L6_SUB_A, al)
+    g = PlayerGlobals(ov)
+    g.l6_sub_b = (g.l6_sub_b + 1) % 3                        # [asm 6E92]
+    al = (g.l6_sub_a + 1) % 3                                # [asm 6EA0]
+    g.l6_sub_a = al
     ah = 1
     if al != 1:                                            # [asm 6EB2 je 6F0F] (skip the spawn)
         ah = 3
-        g = PlayerGlobals(ov); p = PlayerView(ov)
+        p = PlayerView(ov)
         g.camera_shake = 4                                 # [asm 6EB6]
         p.x = (p.x + 2) & 0xFFFF                           # [asm 6EBB] nudge the player X
         slot = next((s for s in g.l6_projectiles if s.free), None)   # [asm 6EC1-6ED0] a free projectile slot
@@ -1207,13 +1207,13 @@ def _l6_spawn_state_machine(ov):
             slot.fall_vel = (((ret & 3) + 1) << 4) & 0xFFFF   # [asm 6EF6-6F02] fall speed
             slot.drift_acc = 0                             # [asm 6F05]
             slot.drift_step = 4                            # [asm 6F0A]
-    ov.wb(L6_TIMER, ah)                                    # [asm 6F0F]
-    reseed = (ov.rb(L6_RESEED) - 1) & 0xFF                 # [asm 6F13] dec [0xA32C]
-    ov.wb(L6_RESEED, reseed)
+    g.l6_timer = ah                                         # [asm 6F0F]
+    reseed = (g.l6_reseed - 1) & 0xFF                       # [asm 6F13] dec [0xA32C]
+    g.l6_reseed = reseed
     if reseed == 0:                                        # [asm 6F17 jne 6F3C]
-        ov.wb(L6_RESEED, ((_l6_draw_rng(ov) & 0xF) << 3) & 0xFF)          # [asm 6F19-6F24]
-        ov.wb(L6_TIMER, (((_l6_draw_rng(ov) & 0xF) << 3) + 0x40) & 0xFF)  # [asm 6F27-6F34]
-        ov.wb(L6_SUB_B, 0)                                 # [asm 6F37]
+        g.l6_reseed = ((_l6_draw_rng(ov) & 0xF) << 3) & 0xFF           # [asm 6F19-6F24]
+        g.l6_timer = (((_l6_draw_rng(ov) & 0xF) << 3) + 0x40) & 0xFF   # [asm 6F27-6F34]
+        g.l6_sub_b = 0                                     # [asm 6F37]
 
 
 def _l6_tail_6f8f(ov):
@@ -1276,7 +1276,7 @@ def _l6_boss_hit(ov):
     target record set (0x5648 + 0x24*[0xA326]); on a hit, kill the attacker, flash the target, and (every 7 hits)
     advance the phase [0xA326]. Reaching phase 3 runs the boss-death finale (94F3 x4 + burst)."""
     p, g = PlayerView(ov), PlayerGlobals(ov)
-    tgt = g.boss_targets[2 * ov.rb(L6_PHASE)]              # [asm 6FBB-6FC7] 0x5648 + 0x24*phase (two records/phase)
+    tgt = g.boss_targets[2 * g.boss_phase]                 # [asm 6FBB-6FC7] 0x5648 + 0x24*phase (two records/phase)
     si = tgt.offset
     hit_slot = None
     if p.slot0.sprite != 0xFFFF:                           # [asm 6FC9] the player club (0x4F0A+4)
@@ -1297,28 +1297,29 @@ def _l6_boss_hit(ov):
     if hit_slot is None:                                  # [asm 6FFE jmp 70A5]
         return
     tgt.flags = tgt.flags ^ 0x40                          # [asm 7001] flash the target
-    if ov.rw(L6_PHASE) != 0:                              # [asm 7005 je 7010]
-        prev = g.boss_targets[2 * ov.rb(L6_PHASE) - 1]     # [asm 700C] (si-0xD = the previous record's flags)
+    if g.boss_phase != 0:                                 # [asm 7005 je 7010]
+        prev = g.boss_targets[2 * g.boss_phase - 1]        # [asm 700C] (si-0xD = the previous record's flags)
         prev.flags = prev.flags ^ 0x40
     RenderSlot(ov, hit_slot).sprite = 0xFFFF              # [asm 7010] kill the attacker
-    ov.wb(L6_STUN, 6)                                     # [asm 7015] hit-stun
-    if ov.rw(L6_PHASE) < 2:                               # [asm 701A jae 702B]
-        ov.wb(L6_SUB_B, 3); ov.wb(L6_SUB_A, 3)            # [asm 7021-7026]
-    hits = (ov.rb(L6_HITS) - 1) & 0xFF                    # [asm 702B] dec [0xA325]
-    ov.wb(L6_HITS, hits)
+    g.l6_stun = 6                                          # [asm 7015] hit-stun
+    if g.boss_phase < 2:                                  # [asm 701A jae 702B]
+        g.l6_sub_b = 3; g.l6_sub_a = 3                    # [asm 7021-7026]
+    hits = (g.l6_hits - 1) & 0xFF                          # [asm 702B] dec [0xA325]
+    g.l6_hits = hits
     if hits != 0:                                         # [asm 702F jne 70A5]
         return
-    ov.wb(L6_HITS, 7)                                     # [asm 7031]
-    ov.ww(L6_PHASE, (ov.rw(L6_PHASE) + 1) & 0xFFFF)       # [asm 7036] advance the phase
-    if ov.rw(L6_PHASE) != 3:                              # [asm 703A jne 70A5]
+    g.l6_hits = 7                                          # [asm 7031]
+    g.boss_phase = (g.boss_phase + 1) & 0xFFFF            # [asm 7036] advance the phase
+    if g.boss_phase != 3:                                 # [asm 703A jne 70A5]
         return
     ov.apply(_l6_tree_death_finale(ov.rb, ov.rw))         # [asm 7041-70A4] the phase-3 boss-death finale
 
 
 def _l6_finish(ov):
     """[asm 70CB..70D6] saturating decrement of the spawn timer [0xA32B] (the `sub`/`adc` idiom)."""
-    v = ov.rb(L6_TIMER)
-    ov.wb(L6_TIMER, (v - 1) & 0xFF if v != 0 else 0)
+    g = PlayerGlobals(ov)
+    v = g.l6_timer
+    g.l6_timer = (v - 1) & 0xFF if v != 0 else 0
     return ov.writes
 
 
@@ -1337,7 +1338,7 @@ def tick_level6_boss(rb, rw):
     ov = _Ov(rb, rw)
     p, g = PlayerView(ov), PlayerGlobals(ov)
 
-    ov.apply(init_effect_row(((2 - ov.rw(L6_PHASE)) << 1) & 0xFFFF))   # [asm 6D34-6D3D] 7585 effect row
+    ov.apply(init_effect_row(((2 - g.boss_phase) << 1) & 0xFFFF))   # [asm 6D34-6D3D] 7585 effect row
 
     # [asm 6D40..6DDD] the 5 falling projectiles: move + player collision, projected to the render slots
     for proj, rslot in zip(g.l6_projectiles, g.l6_render_slots):
@@ -1377,32 +1378,32 @@ def tick_level6_boss(rb, rw):
     # [asm 6DDE..6E57] bake the target geometry from the three tables into the boss target records
     t0, t1, t2, t3, t4 = g.boss_targets                   # records 0x5648/565A/566C/567E/5690
     t2.sprite = 0xFFFF; t1.sprite = 0xFFFF                # [asm 6DDE-6DE4]
-    if ov.rw(L6_PHASE) < 2:                               # [asm 6DE7 jae 6E12]
-        si = (0xC * ov.rb(L6_SUB_B) + L6_SUB_B_TABLE) & 0xFFFF     # [asm 6DEE-6DF6]
+    if g.boss_phase < 2:                                  # [asm 6DE7 jae 6E12]
+        si = (0xC * g.l6_sub_b + L6_SUB_B_TABLE) & 0xFFFF          # [asm 6DEE-6DF6]
         t2.x = ov.rw(si); t2.y = ov.rw((si + 2) & 0xFFFF); t2.sprite = ov.rw((si + 4) & 0xFFFF)   # [6DFA-6E02]
         t1.x = ov.rw((si + 6) & 0xFFFF); t1.y = ov.rw((si + 8) & 0xFFFF)                          # [6E05-6E0A]
         t1.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                    # [6E0F]
-    si = (0xC * ov.rb(L6_SUB_A) + L6_SUB_A_TABLE) & 0xFFFF         # [asm 6E12-6E18]
+    si = (0xC * g.l6_sub_a + L6_SUB_A_TABLE) & 0xFFFF              # [asm 6E12-6E18]
     t4.x = ov.rw(si); t4.y = ov.rw((si + 2) & 0xFFFF); t4.sprite = ov.rw((si + 4) & 0xFFFF)       # [6E1E-6E26]
     t3.x = ov.rw((si + 6) & 0xFFFF); t3.y = ov.rw((si + 8) & 0xFFFF)                              # [6E29-6E2E]
     t3.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                        # [6E33]
-    si = (6 * ov.rb(L6_ANIM) + L6_ANIM_TABLE) & 0xFFFF            # [asm 6E36-6E3C] the main target record
+    si = (6 * g.l6_anim + L6_ANIM_TABLE) & 0xFFFF                 # [asm 6E36-6E3C] the main target record
     t0.x = ov.rw(si); t0.y = ov.rw((si + 2) & 0xFFFF)     # [asm 6E42-6E47] (= boss_x / boss_y)
-    t0.sprite = 0xFFFF if ov.rw(L6_PHASE) != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E55]
+    t0.sprite = 0xFFFF if g.boss_phase != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E55]
 
     if (g.frame_blink & 3) == 0:                          # [asm 6E58] cycle the anim index every 4th frame
-        ov.wb(L6_ANIM, (ov.rb(L6_ANIM) + 1) % 3)          # [asm 6E5F-6E6A]
+        g.l6_anim = (g.l6_anim + 1) % 3                   # [asm 6E5F-6E6A]
 
     # [asm 6E6D..] hit-stun countdown vs the spawn state machine, then the shared collision + boss-hit tails
-    stun = ov.rb(L6_STUN)
+    stun = g.l6_stun
     run_boss_hit = True
     if stun != 0:                                         # [asm 6E6D-6E88]
         if stun == 1:                                     # [asm 6E74-6E7F]
-            ov.wb(L6_SUB_B, 2); ov.wb(L6_SUB_A, (ov.rb(L6_SUB_A) - 1) & 0xFF)
-            ov.wb(L6_TIMER, (ov.rb(L6_TIMER) + 5) & 0xFF)
-        ov.wb(L6_STUN, (stun - 1) & 0xFF)                 # [asm 6E84]
+            g.l6_sub_b = 2; g.l6_sub_a = (g.l6_sub_a - 1) & 0xFF
+            g.l6_timer = (g.l6_timer + 5) & 0xFF
+        g.l6_stun = (stun - 1) & 0xFF                     # [asm 6E84]
         run_boss_hit = not _l6_tail_6f8f(ov)              # [asm 6E88 jmp 6F8F]
-    elif ov.rb(L6_TIMER) != 0:                            # [asm 6E8B-6E90] still counting down -> wait
+    elif g.l6_timer != 0:                                 # [asm 6E8B-6E90] still counting down -> wait
         run_boss_hit = not _l6_tail_6f8f(ov)
     else:
         _l6_spawn_state_machine(ov)                       # [asm 6E92-6F37]

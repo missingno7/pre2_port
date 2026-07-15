@@ -509,6 +509,7 @@ class Scroll:
     vx: int = 0              # scroll-cursor X velocity
     vy: int = 0              # scroll-cursor Y velocity
     script_last: int = 0     # camera-script pointer last seen
+    scroll_push: int = 0     # camera-boundary bounce push (object_spawn 81F3/8206)
 
     @property
     def scroll_phase(self) -> int:
@@ -601,6 +602,8 @@ class SpawnCursor:
     anim_ready: int = 0        # object_update's per-step anim-ready scratch byte
     spawn_offset_ring: int = 0  # 16-slot ring index into the spawn X-offset table
     proj_slot_ptr: object = field(default_factory=lambda: RawRef(0))  # the last-projected object slot (ObjectRef)
+    cursor_x_lo: int = 0        # the spawn cursor's X clamp bounds (object_spawn 70D7 head)
+    cursor_x_hi: int = 0
 
 
 @dataclass
@@ -669,12 +672,19 @@ class Boss:
     they are already real fields, just reached through the camera-target array rather than this dataclass."""
 
     boss_phase: int = 0   # advances every 7 hits
+    # the level-6 (inside-a-tree) sub-boss's own state machine (object_spawn.py tick_level6_boss)
+    l6_stun: int = 0     # hit-stun countdown
+    l6_hits: int = 0     # hits-per-phase counter (reload 7)
+    l6_anim: int = 0     # main-target anim index (cycles 0..2)
+    l6_sub_b: int = 0    # sub-target-B table index
+    l6_sub_a: int = 0    # sub-target-A table index
+    l6_timer: int = 0    # spawn timer (saturating-dec each frame; drives the spawn state machine)
+    l6_reseed: int = 0   # re-seed countdown for l6_timer
 
 
 @dataclass
 class BossScript:
-    """The mode-9 boss glyph-script interpreter state (a separate boss subsystem from ``Boss``/``boss_phase``
-    — these bytes are addressed by object_spawn.py's own local constants, not a PlayerGlobals view name)."""
+    """The mode-9 boss glyph-script interpreter state (a separate boss subsystem from ``Boss``/``boss_phase``)."""
 
     # the live boss-script cursor (also doubles as the mode-9 init flag: 0xFFFF = not yet seeded). AssetCursor
     # into the script bytecode when seeded, else RawRef(0xFFFF) — round-trips either way.
@@ -683,6 +693,59 @@ class BossScript:
     cycle: int = 0             # hit cadence counter (&3); every 4th hit switches scripts
     m9_ptr: object = field(default_factory=lambda: RawRef(0))  # the relative-wrap script-table pointer (AssetCursor)
     m9_count: int = 0          # spawn-count seed / boss health (saturating; 0 = boss dead)
+
+    # PlayerGlobals uses distinctly-prefixed names (to avoid colliding with CameraScript's OWN script_ptr/etc at
+    # different offsets); these mirror them onto the SAME storage for object_spawn.py's boss_script_interp/
+    # boss_pre_interp/tick_mode9_spawn.
+    @property
+    def boss_script_ptr(self):
+        return self.script_ptr
+
+    @boss_script_ptr.setter
+    def boss_script_ptr(self, v) -> None:
+        self.script_ptr = v
+
+    @property
+    def boss_dwell(self) -> int:
+        return self.dwell
+
+    @boss_dwell.setter
+    def boss_dwell(self, v: int) -> None:
+        self.dwell = v
+
+    @property
+    def boss_cycle(self) -> int:
+        return self.cycle
+
+    @boss_cycle.setter
+    def boss_cycle(self, v: int) -> None:
+        self.cycle = v
+
+    @property
+    def m9_script_table_ptr(self):
+        return self.m9_ptr
+
+    @m9_script_table_ptr.setter
+    def m9_script_table_ptr(self, v) -> None:
+        self.m9_ptr = v
+
+    @property
+    def boss_health(self) -> int:
+        return self.m9_count
+
+    @boss_health.setter
+    def boss_health(self, v: int) -> None:
+        self.m9_count = v
+
+    @property
+    def boss_health_lo(self) -> int:
+        # UNION: object_spawn's boss_pre_interp reads/writes the SAME word narrow (byte dec vs word compares —
+        # the high byte is always 0), so this is the same storage as boss_health/m9_count, not a second field.
+        return self.m9_count
+
+    @boss_health_lo.setter
+    def boss_health_lo(self, v: int) -> None:
+        self.m9_count = v
 
 
 @dataclass

@@ -143,16 +143,16 @@ def test_globals_field_name_gap_does_not_grow():
     """Tracks PlayerGlobals fields still missing BY NAME from the routed globals-cluster dataclasses. Must
     shrink (or stay flat) over time, never grow — a regression here means a newly-added global field wasn't
     given a matching name, undermining gap #3."""
-    from pre2.game.model import (AttackState, AttractState, Boss, Camera, CameraScript, DifficultyMode,
-                                 HitScratch, Input, LevelState, Motion, PlayerState, Progress, SceneryState,
-                                 Scroll, SpawnCursor)
+    from pre2.game.model import (AttackState, AttractState, Boss, BossScript, Camera, CameraScript,
+                                 DifficultyMode, HitScratch, Input, LevelState, Motion, PlayerState, Progress,
+                                 SceneryState, Scroll, SpawnCursor)
     dv = (ROOT / "pre2" / "views" / "dgroup_view.py").read_text(encoding="utf-8")
     pg_body = dv.split("class PlayerGlobals")[1].split("\nclass ")[0]
     import re
     all_globals = set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*=\s*_[US]", pg_body, re.M))
     covered = set()
     for dc in (Camera, Input, LevelState, Motion, PlayerState, Progress, Scroll, AttackState, HitScratch,
-              SpawnCursor, CameraScript, SceneryState, AttractState, DifficultyMode, Boss):
+              SpawnCursor, CameraScript, SceneryState, AttractState, DifficultyMode, Boss, BossScript):
         covered |= _dc_names(dc)
     gap = all_globals - covered
     assert gap <= _KNOWN_GLOBALS_GAP, f"new/unexpected globals gap (needs a name): {sorted(gap - _KNOWN_GLOBALS_GAP)}"

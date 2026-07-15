@@ -148,6 +148,7 @@ SCROLL_LAYOUT = [
     ("bonus_flash", 0x6C00, 1, False), ("to_dark", 0x6C01, 1, False), ("to_light", 0x6C02, 1, False),
     ("step", 0x6C03, 1, False), ("lights_off", 0x6C04, 1, False), ("phase", 0x6C05, 1, False),
     ("vx", 0x6C06, 2, False), ("vy", 0x6C08, 2, False), ("script_last", 0x6C0A, 2, False),
+    ("scroll_push", 0x91FB, 1, False),
 ]
 MOTION_LAYOUT = [
     ("airborne", 0x6BF3, 1, False), ("fall_frames", 0x6BD2, 1, False), ("fall_latch", 0x6BD1, 1, False),
@@ -166,6 +167,7 @@ SPAWN_CURSOR_LAYOUT = [
     ("cursor_y", 0x9201, 2, False), ("burst_x", 0xA336, 2, False), ("burst_y", 0xA338, 2, False),
     ("burst_sprite", 0xA33A, 2, False), ("spawned_ptr", 0xA33E, 2, False), ("anim_ready", 0xA340, 1, False),
     ("spawn_offset_ring", 0xA341, 2, False), ("proj_slot_ptr", 0xA32E, 2, False),
+    ("cursor_x_lo", 0x91F7, 2, False), ("cursor_x_hi", 0x91F9, 2, False),
 ]
 CAMERA_SCRIPT_LAYOUT = [
     ("cam_timer", 0xA3F7, 2, False), ("cmd_byte", 0xA3F9, 1, False), ("dist_dir", 0xA3FA, 1, False),
@@ -187,7 +189,12 @@ SCENERY_STATE_LAYOUT = [
 ATTRACT_STATE_LAYOUT = [("attract_mode", 0x083D, 1, False), ("attract_level", 0x083E, 1, False),
                         ("in_aux", 0x27E9, 1, False), ("idle_clock", 0x27F0, 2, False)]
 DIFFICULTY_MODE_LAYOUT = [("mode", 0xB197, 1, False), ("mode_copy", 0xB198, 1, False)]
-BOSS_LAYOUT = [("boss_phase", 0xA326, 2, False)]
+BOSS_LAYOUT = [
+    ("boss_phase", 0xA326, 2, False),
+    ("l6_stun", 0xA324, 1, False), ("l6_hits", 0xA325, 1, False), ("l6_anim", 0xA328, 1, False),
+    ("l6_sub_b", 0xA329, 1, False), ("l6_sub_a", 0xA32A, 1, False), ("l6_timer", 0xA32B, 1, False),
+    ("l6_reseed", 0xA32C, 1, False),
+]
 BOSS_SCRIPT_LAYOUT = [
     ("script_ptr", 0xA517, 2, False), ("dwell", 0xA515, 1, False), ("cycle", 0xA516, 1, False),
     ("m9_ptr", 0xA4F7, 2, False), ("m9_count", 0xA519, 2, False),

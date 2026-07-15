@@ -103,6 +103,52 @@ class OverlayBackend:
         self.wb((off + 1) & 0xFFFF, v >> 8)
 
 
+class WidthOverlayBackend:
+    """Read-through overlay emitting the ``{offset: (value, width)}`` width-tracking contract (vs
+    :class:`OverlayBackend`'s byte-level ``{offset: value}``): reads fall through to ``base_rb(offset)`` unless
+    already written; writes accumulate into ``writes`` (re-inserted on overwrite so last-write wins) and are
+    visible to LATER reads in the same pass — the composition seam several islands need when one sub-call's
+    write must be visible to the next (e.g. object_spawn's camera-boundary crush, whose targets read the
+    previous bounce's velocity write). String keys in a write dict pass through unchanged (a sentinel, e.g.
+    object_spawn's SONG_REQUEST) rather than being byte-decomposed."""
+
+    _IS_DGROUP_BACKEND = True   # a dgroup-view backend: any StructView binds straight onto it
+
+    __slots__ = ("_rb", "_bytes", "writes")
+
+    def __init__(self, base_rb, base_rw=None):
+        self._rb = base_rb         # base_rb(offset) -> the ORIGINAL DS byte at a DGROUP offset (base_rw unused:
+        self._bytes: dict[int, int] = {}   # words are always composed from two byte reads, like real memory)
+        self.writes: dict = {}
+
+    def rb(self, o: int) -> int:
+        o &= 0xFFFF
+        return self._bytes.get(o, self._rb(o)) & 0xFF
+
+    def rw(self, o: int) -> int:
+        o &= 0xFFFF
+        return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
+
+    def apply(self, writes: dict) -> None:
+        for off, v in writes.items():
+            if isinstance(off, str):                     # sentinel — pass through to the contract untouched
+                self.writes[off] = v
+                continue
+            val, wd = v
+            off &= 0xFFFF
+            self.writes.pop(off, None)
+            self.writes[off] = (val, wd)
+            self._bytes[off] = val & 0xFF
+            if wd == 2:
+                self._bytes[(off + 1) & 0xFFFF] = (val >> 8) & 0xFF
+
+    def wb(self, o: int, v: int) -> None:
+        self.apply({o & 0xFFFF: (v & 0xFF, 1)})
+
+    def ww(self, o: int, v: int) -> None:
+        self.apply({o & 0xFFFF: (v & 0xFFFF, 2)})
+
+
 class WidthContractBackend:
     """A write-only contract accumulator emitting ``{offset: (value, width)}`` — the width-tracking contract
     convention some islands use (vs :class:`OverlayBackend`'s byte-level ``{offset: value}``). Reads delegate to
@@ -625,6 +671,27 @@ class PlayerGlobals(DgroupView):
     cam_target_ptr = _U16(0xA421)  # camera target record-ptr (93CE's di latch)
     target_a      = _U16(0xA423)  # camera target record-ptr A (free 0x19C/0x19D sprites that hit it)
     target_b      = _U16(0xA425)  # camera target record-ptr B
+    scroll_push   = _U8(0x91FB)   # camera-boundary bounce push (al = 4 - this) [object_spawn 81F3/8206]
+    cursor_x_lo   = _U16(0x91F7)  # the spawn cursor's X clamp bounds [object_spawn 70D7 head]
+    cursor_x_hi   = _U16(0x91F9)
+
+    # --- the mode-9 (last-boss) + L6 (tree-boss) script engines [object_spawn 6ADD/6D34] ---
+    boss_dwell     = _U8(0xA515)   # the glyph-script dwell/jump countdown (saturating) [6B1C/6BB8]
+    boss_cycle     = _U8(0xA516)   # hit-cadence counter (&3; every 4th hit switches script) [6B79]
+    boss_script_ptr = _U16(0xA517)  # the live boss glyph-script cursor (also the mode-9 seeded flag, ==0xFFFF
+    #                                 before the first frame) [6ADD/6B1C/6B91]
+    m9_script_table_ptr = _U16(0xA4F7)  # the mode-9 attack-script advance table cursor [6B1C]
+    boss_health    = _U16(0xA519)  # the mode-9 boss health / effect-row spawn-count seed (word views: the
+    #                                 0x18 seed, the >>2 spawn-row width, the ==0 death check) [6ADD/6B0F]
+    boss_health_lo = _U8(0xA519)   # ... the SAME byte, read/written narrow by the saturating hit-decrement
+    #                                 (UNION: byte dec vs word compares — the high byte is always 0) [6B6A-6B74]
+    l6_stun   = _U8(0xA324)   # L6 tree-boss hit-stun countdown [6E6D/7015]
+    l6_hits   = _U8(0xA325)   # ... hits-per-phase counter (reload 7) [702B/7031]
+    l6_anim   = _U8(0xA328)   # ... main-target anim index (cycles 0..2) [6E36/6E5F]
+    l6_sub_b  = _U8(0xA329)   # ... sub-target-B table index [6DEE/6E92]
+    l6_sub_a  = _U8(0xA32A)   # ... sub-target-A table index [6E12/6EA0]
+    l6_timer  = _U8(0xA32B)   # ... spawn timer (saturating-dec each frame; drives the spawn state machine)
+    l6_reseed = _U8(0xA32C)   # ... re-seed countdown for l6_timer [6F13]
 
     # --- the six decoded input flags (DC1's outputs [0x27E8..0x27ED]) ---
     in_fire       = _U8(0x27E8)   # fire/jump held (space/enter sources) [0bc6/58FC]
