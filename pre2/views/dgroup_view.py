@@ -1307,6 +1307,19 @@ class AttackSpawnDescriptor(StructView):
     sprite_id = _U16(4)   # [asm 6033]
 
 
+class M9ScriptEntry(StructView):
+    """One entry of the mode-9 boss attack-script advance table (dwell/next-script chain)
+    [object_spawn.py boss_pre_interp 6B23-6B3F]. ``word@2`` is read under TWO widths depending on branch --
+    ``wrap_delta`` (word) only when ``script_ptr==0xFFFF`` (the relative-wrap marker); ``dwell`` (byte) once
+    ``bx`` has been resolved past any wrap -- a genuine per-branch union, not two independent fields."""
+
+    __slots__ = ()
+
+    script_ptr = _U16(0)   # [asm 6B29 marker check / 6B33 the resolved script pointer]
+    wrap_delta = _U16(2)   # [asm 6B2E] the relative-wrap jump distance (valid only when script_ptr==0xFFFF)
+    dwell      = _U8(2)    # [asm 6B36-6B39] the dwell byte (valid only once bx is past any wrap)
+
+
 class CaveTriggerEntry(StructView):
     """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
     5316; native_cave_teleport 5326]."""

@@ -16,8 +16,8 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
 from pre2.views.tables import Tables
-from pre2.views.dgroup_view import (DictBackend, EffectParticle, PlayerGlobals, PlayerView, RenderSlot,
-                                    RngView, WidthContractBackend, WidthOverlayBackend)
+from pre2.views.dgroup_view import (CamTarget, DictBackend, EffectParticle, M9ScriptEntry, PlayerGlobals,
+                                    PlayerView, RenderSlot, RngView, WidthContractBackend, WidthOverlayBackend)
 
 
 class Pre2SpawnGap(Exception):
@@ -844,9 +844,11 @@ def camera_script_command(rb, rw, si):
             ov.apply({CAM_TARGET_A: (di, 2)})
         if bx == CAM_T1_X:                                  # [asm 93D8]
             ov.apply({CAM_TARGET_C: (di, 2)})
-        ov.apply({di: (ov.rw(bx), 2),                     # [asm 93E4-93EE] copy 3 words
-                  (di + 2) & 0xFFFF: (ov.rw((bx + 2) & 0xFFFF), 2),
-                  (di + 4) & 0xFFFF: (ov.rw((bx + 4) & 0xFFFF), 2)})
+        src = CamTarget(ov, bx)
+        dst = RenderSlot(ov, di)
+        dst.x = src.param                                  # [asm 93E4-93EE] copy 3 words
+        dst.y = src.x
+        dst.sprite = src.y
         di = (di + TARGET_STRIDE) & 0xFFFF                # [asm 93EF] +6 (stosw x3) +0xC
     return ov.writes, si
 
@@ -1103,10 +1105,12 @@ def boss_pre_interp(rb, rw):
     g = PlayerGlobals(ov)
     if g.boss_dwell == 0:                                  # [asm 6B1C] dwell expired -> next script entry
         bx = g.m9_script_table_ptr                          # [asm 6B23]
-        if ov.rw(bx) == 0xFFFF:                           # [asm 6B29] wrap marker
-            bx = (bx + ov.rw((bx + 2) & 0xFFFF)) & 0xFFFF  # [asm 6B2E]
-        ov.apply({BOSS_SCRIPT_PTR: (ov.rw(bx), 2),        # [asm 6B33]
-                  BOSS_DWELL: (ov.rb((bx + 2) & 0xFFFF), 1),    # [asm 6B36-6B39]
+        entry = M9ScriptEntry(ov, bx)
+        if entry.script_ptr == 0xFFFF:                    # [asm 6B29] wrap marker
+            bx = (bx + entry.wrap_delta) & 0xFFFF         # [asm 6B2E]
+            entry = M9ScriptEntry(ov, bx)
+        ov.apply({BOSS_SCRIPT_PTR: (entry.script_ptr, 2),  # [asm 6B33]
+                  BOSS_DWELL: (entry.dwell, 1),             # [asm 6B36-6B39]
                   M9_PTR: ((bx + 4) & 0xFFFF, 2)})        # [asm 6B3C-6B3F]
     for slot in g.projectiles:                            # [asm 6B43-6B8C] the 4 projectile slots
         if (slot.sprite != 0xFFFF                                                # [asm 6B49] active
