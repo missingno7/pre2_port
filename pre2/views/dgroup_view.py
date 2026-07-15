@@ -1465,6 +1465,19 @@ class TerrainEntity(StructView):
     speed        = _U8(0x0E)    # the platform's target speed [asm 49FB/4A0D]
 
 
+class TerrainEntityDwellWords(StructView):
+    """A per-branch WORD-width reinterpretation of one :class:`TerrainEntity`'s ``[+7]``/``[+0xA]``/``[+0xC]``
+    bytes: the 8-direction moving-platform's dwell/oscillate tail reads/writes these as full words -- a THIRD
+    interpretation distinct from ``TerrainEntity``'s own byte fields at the same offsets (a genuine per-branch
+    union of the same storage, not two independent fields) [terrain_entities.py _move_default 4A72-4A83]."""
+
+    __slots__ = ()
+
+    speed_word   = _U16(7)     # [asm 4A83] the reversed-direction word (widens speed_ramp's byte)
+    dwell_target = _U16(0xA)   # [asm 4A7E] the target dwell count (widens state's byte)
+    dwell_count  = _U16(0xC)   # [asm 4A76/4A7E] the current dwell counter (widens osc's byte)
+
+
 class CamTarget(StructView):
     """One camera-target geometry record (the 4-slot stride-6 block at 0xA407 the camera script fills):
     param word (bit15 flips when facing) + target X/Y [asm 93B2 block, object_spawn camera_target_geometry]."""

@@ -18,7 +18,8 @@ level-map (es=[0x2DDA]) segment. Returns a byte-level ``{offset: value}`` contra
 """
 from __future__ import annotations
 
-from pre2.views.dgroup_view import OverlayBackend, overlay_reader, PlayerGlobals, PlayerView, RenderSlot, TerrainEntity
+from pre2.views.dgroup_view import (OverlayBackend, overlay_reader, PlayerGlobals, PlayerView, RenderSlot,
+                                    TerrainEntity, TerrainEntityDwellWords)
 from pre2.views.tables import Tables
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap
@@ -152,12 +153,13 @@ def _move_default(ov, b):
     ent.y = (ent.y + vy) & 0xFFFF                             # [asm 4A6F] Y += vy
 
     if s7 == al:                                             # [asm 4A72] at target -> dwell/oscillate
-        cnt = (ov.rw((b + 0xC) & 0xFFFF) + 1) & 0xFFFF
-        if ov.rw((b + 0xA) & 0xFFFF) != cnt:                 # [asm 4A7E]
-            ov.ww((b + 0xC) & 0xFFFF, cnt)
+        dw = TerrainEntityDwellWords(ov, b)
+        cnt = (dw.dwell_count + 1) & 0xFFFF
+        if dw.dwell_target != cnt:                           # [asm 4A7E]
+            dw.dwell_count = cnt
         else:
-            ov.ww((b + 7) & 0xFFFF, (-ov.rw((b + 7) & 0xFFFF)) & 0xFFFF)   # [asm 4A83] neg WORD [si+7] (reverse dir)
-            ov.ww((b + 0xC) & 0xFFFF, 0)
+            dw.speed_word = (-dw.speed_word) & 0xFFFF        # [asm 4A83] neg WORD [si+7] (reverse dir)
+            dw.dwell_count = 0
 
 
 def _collision_4b05(ov, di):
