@@ -1272,6 +1272,41 @@ class WallMarker(StructView):
         return self.x == 0x55AA                             # [asm 64FD]
 
 
+class GliderAnimEntry(StructView):
+    """One entry of the glider wing-anim table (``0x7B29``, stride 6, ``frame_key==0`` terminated)
+    [player.py player_flying_484e 48B2-4901]."""
+
+    __slots__ = ()
+
+    frame_key = _U16(0)   # matched against the player's masked anim frame [asm 48B6]
+    wing_anim = _U16(2)   # the wing sprite id (>=0x79 indexes the tilt table instead) [asm 48C0]
+    xoff      = _S8(4)    # wing X offset from the player, signed [asm 48BA]
+    yoff      = _S8(5)    # wing Y offset, signed [asm 48F4]
+
+
+class AttackFrameEntry(StructView):
+    """One 8-byte frame->sprite mapping in an attack phase's frame table (0x55AA terminated)
+    [player.py _attack_render_sprite 6081, _attack_spawn's terminator scan 6025]."""
+
+    __slots__ = ()
+
+    frame     = _U16(0)   # matched against the current anim frame, masked to 0x1FFF [asm 6093]
+    sprite_id = _U16(2)   # the player render sprite for this frame [asm 609F]
+    x_off     = _U16(4)   # signed X offset [asm 60A2]
+    y_off     = _U16(6)   # signed Y offset [asm 60D8]
+
+
+class AttackSpawnDescriptor(StructView):
+    """The one spawn-projectile descriptor immediately after an attack phase's frame-table terminator
+    [player.py _attack_spawn 6033-6038]."""
+
+    __slots__ = ()
+
+    x_off     = _U16(0)   # [asm 6035]
+    y_off     = _U16(2)   # [asm 6038]
+    sprite_id = _U16(4)   # [asm 6033]
+
+
 class CaveTriggerEntry(StructView):
     """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
     5316; native_cave_teleport 5326]."""
@@ -1403,6 +1438,7 @@ PlayerGlobals.l6_projectiles = StructArray(0x7DAF, 0xB, 5, L6Projectile)    # th
 PlayerGlobals.l6_render_slots = StructArray(0x55EE, 0x12, 5, RenderSlot)    # ...their projected render slots
 PlayerGlobals.boss_targets = StructArray(0x5648, 0x12, 5, RenderSlot)       # the boss/camera-target records
 PlayerGlobals.enemy_slots = StructArray(0x4FD0, 0x12, 12, ObjectSlot)       # the 12 active object/enemy slots
+PlayerGlobals.glider_tilt_table = _U16Array(0x7B1B, 7)   # the glide tilt -> wing-anim table [player.py 48C8]
 PlayerGlobals.burst_slots = StructArray(0x50A8, 0x12, 32, ObjectSlot)       # the effect/score-burst pool
 PlayerGlobals.effect_particles = StructArray(0x50A8, 0x12, 32, EffectParticle)  # the SAME pool, 60FE physics view
 #     (0x50A8..0x52E8 — the free pool after the 12 main objects; same record family)

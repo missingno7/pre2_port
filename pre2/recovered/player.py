@@ -282,7 +282,6 @@ def player_advance_anim(anim_ptr: int, facing: int, read_word) -> tuple:
 ANIM_FRAME = 0x4F20          # player animation frame word
 GLIDER_GATE = 0x6BC5         # [asm 484E] nonzero => glider/flying mode active
 GLIDER_TILT = 0x7B1A         # tilt/pitch state (0..6, neutral = 3)
-GLIDER_TILT_TABLE = 0x7B1B   # 7 words: the tilt-table wing anims (indexed by tilt)
 GLIDER_ANIM_TABLE = 0x7B29   # {frame_key: word, wing_anim: word, xoff: s8, yoff: s8} stride 6, cx==0 terminated
 
 
@@ -327,16 +326,17 @@ def player_flying_484e(rb, rw):
         if tilt != 3:                                            # [48A3-48AC] step toward neutral
             tilt = (tilt + (1 if tilt < 3 else -1)) & 0xFF        # [48AE] writes the tilt IN MEMORY, so the
             g.glider_tilt = tilt                                  #   tilt-table lookup below sees this new value
+    from pre2.views.dgroup_view import GliderAnimEntry
     si = GLIDER_ANIM_TABLE                                        # [488C]
     while True:
-        cx = rw(si)                                              # [48B2]
-        if cx == 0:                                             # [48B4] end of table
+        entry = GliderAnimEntry(be, si)
+        if entry.frame_key == 0:                                # [48B4] end of table
             return out
-        if key == cx:                                           # [48B6] matched frame
-            xoff = _s8(rb(si + 4))                               # [48BA-48BE]
-            wing = rw(si + 2)                                   # [48C0]
+        if key == entry.frame_key:                              # [48B6] matched frame
+            xoff = entry.xoff                                    # [48BA-48BE]
+            wing = entry.wing_anim                               # [48C0]
             if wing >= 0x79:                                    # [48C3] -> the tilt table (indexed by the
-                wing = rw((tilt * 2 + GLIDER_TILT_TABLE) & 0xFFFF)   # [48C8-48D0] auto-returned tilt, not entry)
+                wing = g.glider_tilt_table[tilt]                # [48C8-48D0] auto-returned tilt, not entry)
             if dl & 0x80:                                        # [48D4-48DB] facing left
                 wing = (wing | 0x8000) & 0xFFFF
                 xoff = -xoff
@@ -344,7 +344,7 @@ def player_flying_484e(rb, rw):
                 wing = (wing + 1) & 0xFFFF
             p.slot0.sprite = wing                                # [48E9] the wing anim (render slot 0)
             p.slot0.x = (p.x + xoff) & 0xFFFF                    # [48EC-48F1] wing X
-            p.slot0.y = (p.y + _s8(rb(si + 5))) & 0xFFFF         # [48F4-48FC] wing Y
+            p.slot0.y = (p.y + entry.yoff) & 0xFFFF               # [48F4-48FC] wing Y
             return out
         si = (si + 6) & 0xFFFF                                   # [4901]
 
@@ -827,21 +827,24 @@ def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     """1030:6081 — map the current anim frame to the player render sprite via the phase's frame table (8-byte
     records {frame, sprite_id, x_off, y_off}, 0x55AA terminator). Sets [0x4F0E]/[0x4F0A]/[0x4F0C] with the
     facing flip; leaves them unchanged if the frame is not in the table."""
+    from pre2.views.dgroup_view import AttackFrameEntry
     p, _g, _be = _views(rb, rw, out)                            # reads see the caller's pending writes (rw = overlay)
-    base = AttackPhaseEntry(DictBackend(rb, rw), rec).frametbl_ptr   # [6081] si = phase.frametbl_ptr
+    be2 = DictBackend(rb, rw)
+    base = AttackPhaseEntry(be2, rec).frametbl_ptr              # [6081] si = phase.frametbl_ptr
     dh = (frame >> 8) & 0x80                                    # [6088-60A5] facing bit of the frame
     want = frame & 0x1FFF                                       # [6085-608A] frame, high byte masked to 0x1F
     off = 0xFFF8
     while True:
         off = (off + 8) & 0xFFFF                                # [6090]
-        cx = rw((off + base) & 0xFFFF)                          # [6093]
+        entry = AttackFrameEntry(be2, (off + base) & 0xFFFF)
+        cx = entry.frame                                        # [6093]
         if cx == 0x55AA:                                        # [6095] terminator -> not found, leave sprite
             return
         if cx == want:                                          # [609B-609D]
             break
-    sprid = rw((off + base + 2) & 0xFFFF)                       # [609F]
-    cx = rw((off + base + 4) & 0xFFFF)                          # [60A2] x offset
-    yoff = rw((off + base + 6) & 0xFFFF)                        # [60D8]
+    sprid = entry.sprite_id                                     # [609F]
+    cx = entry.x_off                                            # [60A2] x offset
+    yoff = entry.y_off                                          # [60D8]
     if dh:                                                      # [60A5-60AC] facing flip
         sprid |= dh << 8
         cx = (-_s16(cx)) & 0xFFFF
@@ -860,15 +863,17 @@ def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     slot = next((s for s in g.projectiles if s.free), None)    # [627C-6293] the first free 0x4F2E slot
     if slot is None:
         return False
+    from pre2.views.dgroup_view import AttackFrameEntry, AttackSpawnDescriptor
     slot.kind = (phase.flag >> 1) & 3                           # [601C-601E] (flag>>1)&3 (al is post-shr)
     bx = phase.frametbl_ptr                                     # [6021] frame-table ptr
-    while rw(bx) != 0x55AA:                                    # [6025-602B] walk to the terminator
+    while AttackFrameEntry(be, bx).frame != 0x55AA:            # [6025-602B] walk to the terminator
         bx = (bx + 2) & 0xFFFF
     bx = (bx + 6) & 0xFFFF                                     # [602D] past terminator -> the spawn record
     slot.spawn_ptr = bx                                        # [6030]
-    sprid = rw(bx)                                             # [6033] ax
-    cx = rw((bx - 4) & 0xFFFF)                                 # [6035] x offset
-    yoff = rw((bx - 2) & 0xFFFF)                               # [6038]
+    desc = AttackSpawnDescriptor(be, (bx - 4) & 0xFFFF)
+    sprid = desc.sprite_id                                      # [6033] ax
+    cx = desc.x_off                                             # [6035] x offset
+    yoff = desc.y_off                                           # [6038]
     slot.yoff = yoff                                           # [603B]
     if p.facing_lo & 0x80:                                     # [603E-6049] facing flip
         sprid |= 0x8000
