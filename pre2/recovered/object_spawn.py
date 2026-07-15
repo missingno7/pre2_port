@@ -1380,16 +1380,17 @@ def tick_level6_boss(rb, rw):
     t2.sprite = 0xFFFF; t1.sprite = 0xFFFF                # [asm 6DDE-6DE4]
     if g.boss_phase < 2:                                  # [asm 6DE7 jae 6E12]
         si = (0xC * g.l6_sub_b + L6_SUB_B_TABLE) & 0xFFFF          # [asm 6DEE-6DF6]
-        t2.x = ov.rw(si); t2.y = ov.rw((si + 2) & 0xFFFF); t2.sprite = ov.rw((si + 4) & 0xFFFF)   # [6DFA-6E02]
-        t1.x = ov.rw((si + 6) & 0xFFFF); t1.y = ov.rw((si + 8) & 0xFFFF)                          # [6E05-6E0A]
-        t1.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                    # [6E0F]
+        src2, src1 = RenderSlot(ov, si), RenderSlot(ov, (si + 6) & 0xFFFF)
+        t2.x = src2.x; t2.y = src2.y; t2.sprite = src2.sprite      # [6DFA-6E02]
+        t1.x = src1.x; t1.y = src1.y; t1.sprite = src1.sprite      # [6E05-6E0F]
     si = (0xC * g.l6_sub_a + L6_SUB_A_TABLE) & 0xFFFF              # [asm 6E12-6E18]
-    t4.x = ov.rw(si); t4.y = ov.rw((si + 2) & 0xFFFF); t4.sprite = ov.rw((si + 4) & 0xFFFF)       # [6E1E-6E26]
-    t3.x = ov.rw((si + 6) & 0xFFFF); t3.y = ov.rw((si + 8) & 0xFFFF)                              # [6E29-6E2E]
-    t3.sprite = ov.rw((si + 0xA) & 0xFFFF)                                                        # [6E33]
+    src4, src3 = RenderSlot(ov, si), RenderSlot(ov, (si + 6) & 0xFFFF)
+    t4.x = src4.x; t4.y = src4.y; t4.sprite = src4.sprite          # [6E1E-6E26]
+    t3.x = src3.x; t3.y = src3.y; t3.sprite = src3.sprite          # [6E29-6E33]
     si = (6 * g.l6_anim + L6_ANIM_TABLE) & 0xFFFF                 # [asm 6E36-6E3C] the main target record
-    t0.x = ov.rw(si); t0.y = ov.rw((si + 2) & 0xFFFF)     # [asm 6E42-6E47] (= boss_x / boss_y)
-    t0.sprite = 0xFFFF if g.boss_phase != 0 else ov.rw((si + 4) & 0xFFFF)   # [asm 6E4A-6E55]
+    src0 = RenderSlot(ov, si)
+    t0.x = src0.x; t0.y = src0.y                          # [asm 6E42-6E47] (= boss_x / boss_y)
+    t0.sprite = 0xFFFF if g.boss_phase != 0 else src0.sprite   # [asm 6E4A-6E55]
 
     if (g.frame_blink & 3) == 0:                          # [asm 6E58] cycle the anim index every 4th frame
         g.l6_anim = (g.l6_anim + 1) % 3                   # [asm 6E5F-6E6A]
