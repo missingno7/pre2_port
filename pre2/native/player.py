@@ -21,8 +21,10 @@ from pre2.gaps import Pre2CheatCredits, Pre2HybridGap
 from pre2.native.state import DATA_SEG
 from pre2.recovered.input_decode import Pre2InputGap, decode_input
 from pre2.recovered.object_inject import find_free_object_slot
-from pre2.recovered.player import (FSM_WORD_FIELDS, TIMER_BYTES, TIMER_WORD, player_f1_suicide, player_flying_484e,
-                                   player_fsm_step, player_tick_timers, player_x_integrate, player_y_integrate)
+from pre2.recovered.player import (CHARGE, FSM_WORD_FIELDS, INPUT_SUPPRESS, PENDING_PICKUP, RESPAWN_STATE,
+                                   REWARD_ARM_HI, SHAKE_MAGNITUDE, TIMER_6BE8, TIMER_BYTES, TIMER_WORD,
+                                   player_f1_suicide, player_flying_484e, player_fsm_step, player_tick_timers,
+                                   player_x_integrate, player_y_integrate)
 from pre2.recovered.player_collision import collision
 from pre2.recovered.player_interaction import player_interaction_tick
 from pre2.views.dgroup_view import ObjectSlot, PlayerGlobals, PlayerView, apply_contract
@@ -116,8 +118,12 @@ def native_player_step(state) -> None:
     if g.glider != 0:                        # [asm 5A44 -> 484E] the glider/flying update (0x6BC5, dormant when 0)
         apply_contract(state, player_flying_484e(rb, rw))              # anim + tilt + the wing slot (width tuples)
 
-    timers = {a: rb(a) for a in TIMER_BYTES}                           # [asm 5A47-5A8B]
-    timers[TIMER_WORD] = rw(TIMER_WORD)
+    timers = {                                                          # [asm 5A47-5A8B]
+        CHARGE: g.charge, INPUT_SUPPRESS: g.input_suppress, SHAKE_MAGNITUDE: g.camera_shake,
+        TIMER_6BE8: g.timer_6BE8, RESPAWN_STATE: g.respawn_state, PENDING_PICKUP: g.drop_gate,
+        REWARD_ARM_HI: g.bonus_flash,
+    }
+    timers[TIMER_WORD] = g.scale_level
     out = player_tick_timers(timers)
     apply_contract(state, {**{a: out[a] for a in TIMER_BYTES}, TIMER_WORD: (out[TIMER_WORD], 2)})
 
