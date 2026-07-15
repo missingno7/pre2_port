@@ -84,11 +84,15 @@ def _s16(v: int) -> int:
     return v - 0x10000 if v & 0x8000 else v
 
 
-def _views(rb, rw, out: dict | None = None):
+def _views(rb, rw, out: dict | None = None, player=None):
     """Bind the island's named views over the caller's DS readers. Named WRITES record into ``out`` (or a
     fresh dict) in the island's plain ``{offset: value}`` contract convention; reads see original memory
-    only (read-after-write keeps a local, exactly like the hand-built dicts this replaces)."""
+    only (read-after-write keeps a local, exactly like the hand-built dicts this replaces) -- unless
+    ``player`` (the live ``pre2.game.model.Player``, threaded the same way ``rng=`` is elsewhere) is given,
+    in which case a PlayerView field write lands on the object instead and never appears in ``out``."""
     be = DictBackend(rb, rw, out)
+    if player is not None:
+        be.register(PlayerView, player)
     return PlayerView(be), PlayerGlobals(be), be
 
 
@@ -123,11 +127,11 @@ def collision_hblock(x: int, xvel: int) -> tuple:
     return (x - (_s16(xvel) >> 4)) & 0xFFFF, 0           # [6408-6417]
 
 
-def _air_drift_x(rw, rb, bp: int) -> int:
+def _air_drift_x(rw, rb, bp: int, player=None) -> int:
     """Air horizontal drift + clamp ``1030:62B1`` (``bp`` = max air X speed). When ``g.input_lr`` is set,
     add a facing-direction accel (``(facing << 4) sar motion_mode``) to Xvel; clamp the result to
     ``[-bp, +bp]``. Returns the new Xvel."""
-    p, g, _ = _views(rb, rw)
+    p, g, _ = _views(rb, rw, player=player)
     ax = 0                                                          # [62B5]
     if g.input_lr != 0:                                         # [62B9]
         ax = (p.facing << 4) & 0xFFFF                              # [62C0-62C9] facing << 4
@@ -141,10 +145,10 @@ def _air_drift_x(rw, rb, bp: int) -> int:
     return dx & 0xFFFF                                             # [62E1]
 
 
-def _gravity_y(rw, rb, bp: int) -> int:
+def _gravity_y(rw, rb, bp: int, player=None) -> int:
     """Gravity + terminal-velocity clamp ``1030:6309`` (``bp`` = terminal). Add ``0x10`` to Yvel (``4`` and a
     lighter terminal ``bp>>3`` when ``g.low_gravity == 1``); clamp up to ``bp``. Returns the new Yvel."""
-    p, g, _ = _views(rb, rw)
+    p, g, _ = _views(rb, rw, player=player)
     dx = p.yvel                                                    # [630C]
     ax = 0x10                                                      # [6310]
     bp = _s16(bp)
@@ -155,13 +159,13 @@ def _gravity_y(rw, rb, bp: int) -> int:
     return (bp if dx >= bp else dx) & 0xFFFF                       # [6325-632B]
 
 
-def collision_airborne(rw, rb) -> dict:
+def collision_airborne(rw, rb, player=None) -> dict:
     """Recover the off-top / in-air physics ``1030:63B5`` (run after the worker when the player is airborne, and
     from the `5B81` off-top path). Applies air drift (`62B1`, ±0x50) + gravity (`6309`, terminal 0xC0), then sets
     the fall animation. Returns the dict of writes. Pure."""
-    p, g, be = _views(rb, rw)
-    p.xvel = _air_drift_x(rw, rb, 0x50)                           # [63B7-63BA]
-    new_yvel = _gravity_y(rw, rb, 0xC0)                            # [63BD-63C0]
+    p, g, be = _views(rb, rw, player=player)
+    p.xvel = _air_drift_x(rw, rb, 0x50, player=player)            # [63B7-63BA]
+    new_yvel = _gravity_y(rw, rb, 0xC0, player=player)             # [63BD-63C0]
     p.yvel = new_yvel
     yvel = _s16(new_yvel)
     if g.glider != 0:                                       # [63C3] (dormant in normal play)
@@ -193,7 +197,7 @@ def _coll_soft_land(p: PlayerView, g: PlayerGlobals, new_y: int) -> None:
     g.last_land_y = new_y                                 # [64F3-64F6]
 
 
-def collision_land(rb, rw, read_es, di: int) -> dict:
+def collision_land(rb, rw, read_es, di: int, player=None) -> dict:
     """Recover the player land-on-ground routine ``1030:641F``.
 
     ``rb``/``rw`` read DS; ``read_es(off)`` reads the map byte ``es:[off]`` (``es=[0x2DDA]``); ``di`` is the
@@ -201,7 +205,7 @@ def collision_land(rb, rw, read_es, di: int) -> dict:
     (capped by the descent ``sar(Yvel,4)``), then resolves the landing impact — soft (zero Yvel + grounded
     flags) vs hard (landing dust, camera shake, bounce, land anim). Returns the dict of writes (incl. the
     landing-dust trail-ring writes). Pure."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     p.motion_mode = 0                                                # [641F]
     if p.yvel < 0:                                                   # [6424] rising -> airborne
         g.airborne = collision_fall(g.airborne)                      # [6401]
@@ -251,7 +255,7 @@ def collision_land(rb, rw, read_es, di: int) -> dict:
     return be.writes
 
 
-def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
+def _ceiling_headbump_pushout(rb, rw, read_es, player=None) -> dict:
     """[asm 668B] The Yvel==0 head-bump branch — the "push out of a solid ceiling" nudge.
 
     It pushes the object pointed to by ``g.current_hit_object`` one tile toward the open side. The catch: on the
@@ -263,7 +267,7 @@ def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
     state where the bogus cell *is* ceiling-solid (then it writes ``[[ptr]] += dx`` exactly as the ASM does —
     a genuinely DYNAMIC offset, which is why the raw ``rw(ptr)`` deref stays). anim in ``{0x0A, 0x15}`` skips
     it outright. Pure."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     if (p.sprite & 0xFF) in (0x0A, 0x15):                        # [668E/6692] two anim states -> no push-out
         return {}
     ptr = g.current_hit_object                                   # [6698] di = current object (NULL on the player path)
@@ -280,7 +284,7 @@ def _ceiling_headbump_pushout(rb, rw, read_es) -> dict:
     return {ptr: (target.x + dx) & 0xFFFF}                      # [66CA-66CE] add [ [ptr] ], dx
 
 
-def collision_ceiling(rb, rw, read_es, di: int) -> dict:
+def collision_ceiling(rb, rw, read_es, di: int, player=None) -> dict:
     """Recover the player ceiling (head-bump) collision ``1030:5C16..5C76`` (part of 5B81, runs when the player
     is rising into the tile above). ``read_es(off)`` reads map byte ``es:[off]``; ``di`` is the tile-above
     pointer (the player's tile minus one row); ``rb``/``rw`` read DS.
@@ -290,25 +294,30 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
     below the ceiling); idx 2 = hazard ceiling (`0x65AF` -> `0x65B3` = the off-camera death/respawn trigger, the
     same routine the ground idx6 dispatches to). Then, if the player's tile is ceiling-solid and Y>0, a sideways
     corner-slip nudge. idx 3-15 are unwitnessed and fail loud. Returns the dict of writes. Pure."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     tbl = Tables(rb)
     tile_above = read_es(di & 0xFFFF)                            # [5C18]
     player_tile = read_es((di + 0x100) & 0xFFFF)                 # [5C1B]
     solid = tbl.ceil_props[player_tile] & 1                      # [5C20-5C24] ah = 0x7E5E[player_tile]
     idx = tbl.ceil_handler[tile_above] & 0x0F                    # [5C26-5C2A] cs:[0x7DA9] index
 
+    cur_y = p.y                                                 # tracks the player's own Y across this function --
+    #   the ONLY place below that can change it is the idx==1/yvel!=0 branch (neither _ceiling_headbump_pushout's
+    #   null-pointer deref nor _offcamera_trigger touch the player's Y), so a local mirrors PLAYER_Y exactly.
     if idx == 1:                                                # [6673] head-bump
         if p.yvel != 0:                                         # [6678] rising -> zero Yvel + snap below ceiling
             p.yvel = 0                                          # [667A]
-            p.y = ((p.y & 0xFFF0) + 0x10) & 0xFFFF               # [6680-6685]
+            cur_y = ((p.y & 0xFFF0) + 0x10) & 0xFFFF             # [6680-6685]
+            p.y = cur_y
         else:                                                   # [668B] Yvel==0: the "push out of a solid ceiling"
-            be.writes.update(_ceiling_headbump_pushout(rb, rw, read_es))  # branch (a null-pointer no-op for the player)
+            be.writes.update(_ceiling_headbump_pushout(rb, rw, read_es, player=player))  # branch (a null-pointer
+            #                                                      no-op for the player)
     elif idx == 2:                                              # [65AF -> 65B3] hazard ceiling: off-camera death trigger
         be.writes.update(_offcamera_trigger(rb))                # (the SAME routine the ground idx6 dispatches to)
     elif idx != 0:                                              # idx 3-15 still unwitnessed
         raise NotImplementedError(f"ceiling handler idx {idx} not recovered")
 
-    if solid and _s16(be.writes.get(PLAYER_Y, p.y)) > 0:           # [5C38-5C42] solid + Y>0 -> corner-slip nudge
+    if solid and _s16(cur_y) > 0:                                # [5C38-5C42] solid + Y>0 -> corner-slip nudge
         dx = -1 if p.xvel > 0 else 1                             # [5C44-5C51] step away from the facing edge
         n1 = Tables(rb).ceil_props[read_es((di + dx + 0x100) & 0xFFFF)]  # [5C54-5C5C]
         if n1 == 0:                                              # [5C5E] this side is open -> slip into it
@@ -321,11 +330,11 @@ def collision_ceiling(rb, rw, read_es, di: int) -> dict:
     return be.writes
 
 
-def _ground_snap_or_fall(rb, rw, read_es, di: int) -> dict:
+def _ground_snap_or_fall(rb, rw, read_es, di: int, player=None) -> dict:
     """Ground handler 0 ``1030:65EF`` (the most common): if at rest (Yvel==0) and a reachable solid/slope tile
     sits a row below, step the player down one row and land on it; otherwise mark airborne (`0x6401`). This is
     what keeps the caveman stuck to descending ground instead of floating off the lip of a step."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     if p.yvel != 0:                                                 # [65EF] still moving vertically -> fall
         g.airborne = collision_fall(g.airborne)
         return be.writes
@@ -339,13 +348,16 @@ def _ground_snap_or_fall(rb, rw, read_es, di: int) -> dict:
         g.airborne = collision_fall(g.airborne)
         return be.writes
     stepped_y = (p.y + 0x10) & 0xFFFF                                # [660F] drop one tile row
-    rw2 = overlay_reader(rw, {PLAYER_Y: stepped_y}, 0xFFFF)           # the stepped-Y read shim
+    rw2 = overlay_reader(rw, {PLAYER_Y: stepped_y}, 0xFFFF)           # the stepped-Y read shim -- deliberately NOT
+    # threaded live (player=None): once a live player is registered, collision_land's own p.y reads would resolve
+    # straight through the registry, bypassing rw2's override entirely and losing the stepped Y. Left as a
+    # dict-only nested call pending the Phase 2 entangled-reread conversion (docs/pre2 offset-quarantine plan).
     out = collision_land(rb, rw2, read_es, (di + 0x100) & 0xFFFF)   # [660B/6614 -> 0x641F] land on the row below
     out.setdefault(PLAYER_Y, stepped_y)
     return out
 
 
-def collision_ground_handler(idx: int, rb, rw, read_es, di: int) -> dict:
+def collision_ground_handler(idx: int, rb, rw, read_es, di: int, player=None) -> dict:
     """Recover the ground tile-handler dispatch ``cs:[0x7D9B]`` (`5C04`, ``bx = 0x7F5E[tile_below]*2``). ``di`` is
     the foot-tile pointer (player tile + one row); the handlers are thin compositions over the verified
     land/fall/slope cores. Returns the dict of writes. Pure.
@@ -354,22 +366,22 @@ def collision_ground_handler(idx: int, rb, rw, read_es, di: int) -> dict:
     5 `6645` ``motion_mode=0`` then conditional fall(``drop_gate``)/land; 6 `65AF` special level trigger
     (unwitnessed, fail loud); 7 `6672` no-op."""
     if idx == 0:                                                   # [65EF]
-        return _ground_snap_or_fall(rb, rw, read_es, di)
+        return _ground_snap_or_fall(rb, rw, read_es, di, player=player)
     if idx == 1:                                                   # [6641] plain land
-        return collision_land(rb, rw, read_es, di)
+        return collision_land(rb, rw, read_es, di, player=player)
     if idx in (2, 3, 4):                                           # [6657/6660/6669] land + slope shift
-        out = collision_land(rb, rw, read_es, di)
-        p, _g, _be = _views(rb, rw, out)
+        out = collision_land(rb, rw, read_es, di, player=player)
+        p, _g, _be = _views(rb, rw, out, player=player)
         p.motion_mode = idx - 1                                     # 2->1, 3->2, 4->3
         return out
     if idx == 5:                                                   # [6645] conditional land/fall
-        p, g, be = _views(rb, rw)
+        p, g, be = _views(rb, rw, player=player)
         if g.drop_gate != 0:                                       # [664A] blocked -> fall
             p.motion_mode = 0
             g.airborne = collision_fall(g.airborne)
             return be.writes
-        out = collision_land(rb, rw, read_es, di)                  # [6651 -> 0x641F]
-        p2, _g2, _be2 = _views(rb, rw, out)
+        out = collision_land(rb, rw, read_es, di, player=player)   # [6651 -> 0x641F]
+        p2, _g2, _be2 = _views(rb, rw, out, player=player)
         p2.motion_mode = 0                                         # [6645] (641F also zeroes it)
         return out
     if idx == 6:                                                   # [65AF] off-camera / special trigger
@@ -396,7 +408,7 @@ def _bridge_dirty(new_tile: int, off: int, g: PlayerGlobals, redraws: list, rb) 
         g.page_dirty = 1                                           # [659C]
 
 
-def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
+def collision_bridge_dip(di: int, read_es, rw, rb, player=None) -> tuple:
     """Recover the bridge/platform sag-under-weight ``1030:5BB8..5C01`` (runs when the foot tile differs from the
     one currently dipping, ``dipping_tile != di``). ``read_es(off)`` reads the live tile map; ``di`` is the
     foot-tile pointer. Returns ``(ds_writes, map_writes, redraws)`` where ``map_writes`` maps an es-relative tile
@@ -407,7 +419,7 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
     the tile is still a sag frame (`0x805E[id-1] & 0x20`), writing+dirtying each, until it clears, then reset
     ``dipping_tile = 0x55AA``. Then, if the new foot tile is a bridge frame (`0x805E[id] & 0x20`), dip it
     **down** (graphic id+1), mark it as the dipping tile, and dirty it."""
-    _p, g, be = _views(rb, rw)
+    _p, g, be = _views(rb, rw, player=player)
     tbl = Tables(rb)
     map_w: dict = {}
     redraws: list = []
@@ -431,13 +443,15 @@ def collision_bridge_dip(di: int, read_es, rw, rb) -> tuple:
     return be.writes, map_w, redraws
 
 
-def _wall_marker_push(rw) -> dict:
+def _wall_marker_push(rw, player=None) -> dict:
     """The wall-impact marker registration ``1030:64FA``: drop ``(X<<3, Y<<3)`` into the first free marker
     slot (free = leading word ``0x55AA``). Returns the slot's word/byte writes, or ``{}`` if the list is
     full. NOTE: never reached in any current demo (the side-solid ``0x805E&0x10`` tile never occurs; walls
     block via ``collision_hblock``) — transcribed from the ASM at ASM_MATCHED confidence, not lockstep
     VERIFIED."""
     be = DictBackend(rw, rw)          # word-only reads (marker.free/p.x/p.y); rb is never invoked
+    if player is not None:
+        be.register(PlayerView, player)
     p, g = PlayerView(be), PlayerGlobals(be)
     for marker in g.wall_markers:                                  # [64FD-6529] the 64FA slot scan
         if marker.free:                                            # [64FD] leading word == 0x55AA
@@ -450,7 +464,7 @@ def _wall_marker_push(rw) -> dict:
     return {}                                                      # [6522/6529] list full
 
 
-def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:
+def collision_side_handler(idx: int, read_es, rw, rb, di: int, player=None) -> dict:
     """Recover the horizontal/body side-collision dispatch ``cs:[0x7D95]`` (`5C92`/`5CAC`, ``bx = 0x7E5E[tile]*2``)
     run for each tile cell along the player's vertical extent. ``di`` is the scanned cell pointer. Returns the dict
     of writes (DS scalars and/or `0x6EA9` wall-marker slots). Pure.
@@ -461,10 +475,10 @@ def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:
     if idx == 0:                                                   # [652C]
         tile = read_es(di & 0xFFFF)
         if Tables(rb).ceil_handler[tile] & 0x10:                    # [6531] side-solid -> wall marker
-            return _wall_marker_push(rw)                           # [6536 -> 64FA]
+            return _wall_marker_push(rw, player=player)             # [6536 -> 64FA]
         return {}                                                  # [6538] not solid
     if idx == 1:                                                   # [6539] wall block
-        p, _g, be = _views(rb, rw)
+        p, _g, be = _views(rb, rw, player=player)
         new_x, new_xvel = collision_hblock(p.x, p.xvel)             # [6407]
         p.x = new_x
         p.xvel = new_xvel
@@ -526,9 +540,14 @@ def _offcamera_trigger(rb) -> dict:
     return be.writes
 
 
-def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
+def _collision_worker(ov: _Overlay, cell_bx: int, player=None) -> None:
     """The tile-interaction worker ``1030:5B81`` composed onto the overlay ``ov`` (``cell_bx`` = the tile one row
-    above the foot). Off-top (`Y<=-1`) + foot-tile remap + bridge-dip + ground dispatch + ceiling."""
+    above the foot). Off-top (`Y<=-1`) + foot-tile remap + bridge-dip + ground dispatch + ceiling.
+
+    ``ov`` is already registry-capable (an :class:`OverlayBackend`), so this function's own ``p``/``g`` field
+    accesses resolve live once ``collision`` registers ``player`` on it; ``player`` is threaded here only to
+    pass down into the nested islands below, which each bind their OWN separate backend over ``ov.rb``/``ov.rw``
+    and so need the registration repeated explicitly."""
     p, g = PlayerView(ov), PlayerGlobals(ov)
     if _s16(p.y) <= -1:                                            # [5B84 cmp Y,-1 / 5B89 jg 5B96]
         # Off-top: the player is above the level ceiling (e.g. a high bounce off a spider). There is no tile
@@ -537,33 +556,33 @@ def _collision_worker(ov: _Overlay, cell_bx: int) -> None:
         #   5B8B  call 63B5            -> collision_airborne (air drift + gravity + fall anim; already recovered)
         #   5B8E  mov byte [6BF3],FFh  -> airborne flag = 0xFF (a full byte, not the |1 used elsewhere)
         #   5B93  jmp 5C77             -> the worker epilogue (pop bp/bx/ax; ret) = skip the tile body
-        ov.apply_ds(collision_airborne(ov.rw, ov.rb))             # [5B8B -> 63B5]
+        ov.apply_ds(collision_airborne(ov.rw, ov.rb, player=player))   # [5B8B -> 63B5]
         g.airborne = 0xFF                                          # [5B8E]
         return                                                     # [5B93]
     di = (cell_bx + 0x100) & 0xFFFF                                # [5B97] foot tile
     foot_tile = ov.read_es(di) if g.map_rows > (di >> 8) else 0    # [5B9D-5BA6] map-bounds clamp
     idx = Tables(ov.rb).floor_props[foot_tile]         # [5BA8] cs:[0x7D9B] index
     if g.dipping_tile != di:                                       # [5BB2] not already dipping here -> bridge-dip
-        bds, bmp, bredraws = collision_bridge_dip(di, ov.read_es, ov.rw, ov.rb)  # [5BB8]
+        bds, bmp, bredraws = collision_bridge_dip(di, ov.read_es, ov.rw, ov.rb, player=player)  # [5BB8]
         ov.apply_ds(bds)
         ov.apply_map(bmp)
         ov.redraws.extend(bredraws)
-    ov.apply_ds(collision_ground_handler(idx, ov.rb, ov.rw, ov.read_es, di))   # [5C04]
+    ov.apply_ds(collision_ground_handler(idx, ov.rb, ov.rw, ov.read_es, di, player=player))   # [5C04]
     cbx = cell_bx - 0x100                                          # [5C09]
     if cbx >= 0 and p.yvel <= 0:                                   # [5C0D jb / 5C0F jg] in-bounds + not falling
-        ov.apply_ds(collision_ceiling(ov.rb, ov.rw, ov.read_es, cbx & 0xFFFF))  # [5C16]
+        ov.apply_ds(collision_ceiling(ov.rb, ov.rw, ov.read_es, cbx & 0xFFFF, player=player))  # [5C16]
 
 
-def _side_scan(ov: _Overlay, cell: int, conditional: bool) -> None:
+def _side_scan(ov: _Overlay, cell: int, conditional: bool, player=None) -> None:
     """One vertical scan-loop cell ``5C92`` (first, unconditional) / ``5CAC`` (rest, only tile types 2 & 4)."""
     tile = ov.read_es(cell & 0xFFFF)                              # [5C97 / 5CB1]
     idx = Tables(ov.rb).ceil_props[tile]          # [5C9A / 5CB4] remap 0x7E5E
     if conditional and idx not in (2, 4):                         # [5CB8-5CBE] 5CAC dispatch filter
         return
-    ov.apply_ds(collision_side_handler(idx, ov.read_es, ov.rw, ov.rb, cell & 0xFFFF))
+    ov.apply_ds(collision_side_handler(idx, ov.read_es, ov.rw, ov.rb, cell & 0xFFFF, player=player))
 
 
-def collision(rb, rw, read_es) -> tuple:
+def collision(rb, rw, read_es, player=None) -> tuple:
     """Recover the full player ground/tile collision ``1030:5A96`` (called from the player update at `5A41` after
     the Y integrate). ``rb``/``rw`` read DS; ``read_es(off)`` reads the live tile map (``es=[0x2DDA]``). Returns
     ``(ds_writes, map_writes, redraws)`` — the byte-keyed DS + map write-contract plus the list of tile offsets a
@@ -571,8 +590,12 @@ def collision(rb, rw, read_es) -> tuple:
 
     Computes the player's tile cell from X/Y, range-checks vs the camera, runs the tile-interaction worker
     (`5B81`: bridge-dip + ground dispatch + ceiling), resolves the post-worker fall/land state, then scans the
-    player's vertical extent for horizontal/body collisions (`cs:[0x7D95]`)."""
+    player's vertical extent for horizontal/body collisions (`cs:[0x7D95]`). ``player`` (the live
+    ``pre2.game.model.Player``, threaded the same way ``rng=`` is elsewhere) is registered directly on ``ov``
+    (already registry-capable) and threaded into every nested island that binds its own separate backend."""
     ov = _Overlay(rb, rw, read_es)
+    if player is not None:
+        ov.register(PlayerView, player)
     p, g = PlayerView(ov), PlayerGlobals(ov)
 
     # --- tile cell + scan parameters [5A99-5AC4] ---
@@ -592,12 +615,12 @@ def collision(rb, rw, read_es) -> tuple:
             ov.apply_ds(_offcamera_trigger(ov.rb))               # [5B26 -> 65B3]
 
     g.airborne = 0                                                # [5B29] clear the airborne flag
-    _collision_worker(ov, cell_bx)                               # [5B2E]
+    _collision_worker(ov, cell_bx, player=player)                # [5B2E]
 
     # --- post-worker fall / land [5B31-5B54] ---
     if g.airborne == 1:                                           # [5B31] airborne after the worker
         if g.unk_6BFE == 0:                                       # [5B38]
-            ov.apply_ds(collision_airborne(ov.rw, ov.rb))        # [5B44 -> 63B5]
+            ov.apply_ds(collision_airborne(ov.rw, ov.rb, player=player))   # [5B44 -> 63B5]
             if p.yvel > 0:                                        # [5B47] still descending
                 g.fall_frames = g.fall_frames + 1                 # [5B4E]
         else:                                                    # [5B3F -> 64DF] soft-land tail
@@ -613,7 +636,7 @@ def collision(rb, rw, read_es) -> tuple:
     if _s16(p.y) > 0:                                             # [5B5B]
         bx = ((_s16(p.x) + x_edge) >> 4) & 0xFFFF                  # [5B62-5B66]
         bx = (bx + cell_high) & 0xFFFF                            # [5B68]
-        _side_scan(ov, bx, conditional=False)                    # [5B6A] first cell
+        _side_scan(ov, bx, conditional=False, player=player)     # [5B6A] first cell
         dh_left = dh
         while True:
             if bx < 0x100:                                       # [5B72-5B76] sub bx,0x100 ; jb
@@ -622,7 +645,7 @@ def collision(rb, rw, read_es) -> tuple:
             dh_left = (dh_left - 0x10) & 0xFF                     # [5B78]
             if dh_left == 0 or dh_left > 0x80:                   # [5B7B] ja (unsigned >0 after sub means no borrow)
                 break
-            _side_scan(ov, bx, conditional=True)                 # [5B6F] subsequent cells
+            _side_scan(ov, bx, conditional=True, player=player)  # [5B6F] subsequent cells
 
     return ov.writes, ov.mp, ov.redraws
 

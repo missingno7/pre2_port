@@ -253,14 +253,20 @@ class DictBackend:
     implicit (the consumer splits words vs its byte-field set). Reads delegate to the island's ``rb``/``rw``
     closures and do NOT see the accumulated writes (functions that need read-after-write keep a local, exactly
     like the hand-built dicts they replace). A named view bound to one of these makes ``p.yvel = 0`` record
-    ``{0x4F2A: 0}`` — same contract, no offset at the call site."""
+    ``{0x4F2A: 0}`` — same contract, no offset at the call site.
 
-    __slots__ = ("_rb", "_rw", "writes")
+    Also supports the P2/P3 name-keyed registry (``register``/``read_field``/``write_field``, mirroring
+    :class:`OverlayBackend`): a named field routed to a live ``pre2/game`` dataclass writes straight to the
+    object instead of ``writes``, so it no longer appears in the returned contract at all. Unregistered
+    fields (the default — nothing calls ``register``) fall through to the offset path above unchanged."""
+
+    __slots__ = ("_rb", "_rw", "writes", "_registry")
 
     def __init__(self, base_rb, base_rw, out: dict | None = None):
         self._rb = base_rb
         self._rw = base_rw
         self.writes: dict[int, int] = {} if out is None else out
+        self._registry = None      # FieldRegistry, lazily created by register() — P2's name-keyed seam
 
     def rb(self, off: int) -> int:
         return self._rb(off & 0xFFFF)
@@ -273,6 +279,20 @@ class DictBackend:
 
     def ww(self, off: int, v: int) -> None:
         self.writes[off & 0xFFFF] = v & 0xFFFF
+
+    def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "DictBackend":
+        """Route ``view_cls`` (optionally just specific field NAMES via ``remap``) to a live ``pre2/game``
+        dataclass instance — the P2 seam. Unregistered views/fields keep working via the offset path above."""
+        if self._registry is None:
+            self._registry = FieldRegistry()
+        self._registry.register(view_cls, obj, remap)
+        return self
+
+    def read_field(self, view, name: str, width: int, signed: bool) -> int:
+        return _registry_read_field(self, self._registry, view, name, width, signed)
+
+    def write_field(self, view, name: str, width: int, v: int) -> None:
+        _registry_write_field(self, self._registry, view, name, width, v)
 
 
 class MemBackend:

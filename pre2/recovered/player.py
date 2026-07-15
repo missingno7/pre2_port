@@ -116,10 +116,14 @@ def _s8(v: int) -> int:
     return v - 0x100 if v & 0x80 else v
 
 
-def _views(rb, rw, out: dict | None = None):
+def _views(rb, rw, out: dict | None = None, player=None):
     """Bind the named views over the caller's DS readers; named writes record into ``out`` (or a fresh dict)
-    in the FSM's plain ``{offset: value}`` contract (widths implied by FSM_WORD_FIELDS at apply time)."""
+    in the FSM's plain ``{offset: value}`` contract (widths implied by FSM_WORD_FIELDS at apply time) --
+    unless ``player`` (the live ``pre2.game.model.Player``, threaded the same way ``rng=`` is elsewhere) is
+    given, in which case a PlayerView field write lands on the object instead and never appears in ``out``."""
     be = DictBackend(rb, rw, out)
+    if player is not None:
+        be.register(PlayerView, player)
     return PlayerView(be), PlayerGlobals(be), be
 
 
@@ -350,7 +354,7 @@ def player_flying_484e(rb, rw):
         si = (si + 6) & 0xFFFF                                   # [4901]
 
 
-def player_state_run(rb, rw) -> dict:
+def player_state_run(rb, rw, player=None) -> dict:
     """Recover the ``anim_id==1`` "run" FSM handler ``1030:5EC4`` (the normal-play main path).
 
     The handler is a composition of the recovered primitives (the original source structure). With entry
@@ -364,7 +368,7 @@ def player_state_run(rb, rw) -> dict:
         advance_anim(ptr)                         # 5F0F player_advance_anim ([0x4F20]/[0x4F28]/[0x6BCF])
 
     ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     out = be.writes
     # [asm 5ECE-5EF8] the FLYING-state block: while gliding at speed (|Xvel|>=0x40), count the flying
     # timer up (saturating), dropping ONE trail sprite (5E18 = the ungated 5E11 emit) when it hits 0x17.
@@ -419,7 +423,7 @@ def player_charge_6bce(v: int) -> int:
     return (v + 2) & 0xFF if v <= 0x30 else v
 
 
-def player_state_anim5(rb, rw, anim_id: int = 5) -> dict:
+def player_state_anim5(rb, rw, anim_id: int = 5, player=None) -> dict:
     """Recover the ``5E96`` FSM handler — the NORMAL ``anim_id==5`` state AND the FLYING dispatch's catch-all
     (``cs:[0x7D6F]`` sends anim_id 0/3/4/6/7 here). The dispatch enters with ``al=anim_id`` and ``bx=anim_id*2``
     (bumped by ``0x40`` under the flying gate), and both flow straight into ``set_anim_b`` — so the sequence is
@@ -432,7 +436,7 @@ def player_state_anim5(rb, rw, anim_id: int = 5) -> dict:
         [0x6BCE] = charge_6bce([0x6BCE])             # 5EB3 -> 5EB7
 
     ``rb``/``rw`` read entry memory; returns the dict of writes. Pure."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     g.fly_timer = 0                                                                       # [5EA0]
     g.drop_gate = 4                                                                       # [5EA5]
     seq = (anim_id * 2 + (0x40 if g.glider != 0 else 0)) & 0xFF                           # [dispatch bx]
@@ -469,7 +473,7 @@ def _idle_default_anim(p: PlayerView, entry_bx: int, facing: int, rw) -> None:
     p.run_flag = 0                                               # [5E03]
 
 
-def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
+def player_state_idle(rb, rw, entry_bx: int = 0, player=None) -> dict:
     """Recover the ``anim_id==0`` "idle" FSM handler ``1030:5CDB`` (main path, gate ``[0x6BD0]==0``).
 
     The grounded idle/landing/turn/fidget state. ``rb``/``rw`` read entry memory (byte/word); ``entry_bx`` is
@@ -481,7 +485,7 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
     (3435/3414 -> the scroll/render sub-island 3588/350c) — is NOT recovered and fails loud. It does fire under
     the live-collapse trajectory (idle look-around), so it gates the FSM *live-drive*; recovering it (the camera
     pan) is the next step. The verify oracle is unaffected (28/28 demos clean)."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     out = be.writes
     g.fly_timer = 0                                             # [5CE8]
     xv = player_friction_dir(p.xvel & 0xFFFF, g.friction)       # [5CED]
@@ -494,9 +498,10 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         return out                                              # [5D0B] jmp 5E0D (no anim_b reset)
 
     facing = p.facing_lo
-    ax = abs(_s16(out[P_XVEL]))                                 # [5D0E-5D15] |Xvel| (post-friction)
+    xv &= 0xFFFF                                                # [DictBackend.ww's mask -- out[P_XVEL]'s exact value]
+    ax = abs(_s16(xv))                                          # [5D0E-5D15] |Xvel| (post-friction)
     if ax >= 8:                                                 # [5D17] jb 5D42
-        if ((p.flags >> 7) & 1) == ((out[P_XVEL] >> 15) & 1):   # [5D1C-5D2C] facing == vel sign?
+        if ((p.flags >> 7) & 1) == ((xv >> 15) & 1):            # [5D1C-5D2C] facing == vel sign?
             _idle_set_advance(p, g, 0x12, 0x24, rb, rw, facing)     # [5D31-5D39] anim 0x12
             trail = player_emit_trail(p.x, p.y, g.frame_blink, g.trail_ring)  # [5D3C] call 5E11
             if trail is not None:
@@ -507,7 +512,7 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         p.anim_b = 0                                            # [5E08]
         return out
 
-    if _s16(out[P_XVEL]) != 0:                                  # [5D42-5D46] 0 < |Xvel| < 8 -> default
+    if _s16(xv) != 0:                                           # [5D42-5D46] 0 < |Xvel| < 8 -> default
         _idle_default_anim(p, entry_bx, facing, rw)
         p.anim_b = 0
         return out
@@ -560,7 +565,7 @@ def player_state_idle(rb, rw, entry_bx: int = 0) -> dict:
         si = (si + 4) & 0xFFFF                                 # [5DDB]
 
 
-def player_state_jump(rb, rw) -> dict:
+def player_state_jump(rb, rw, player=None) -> dict:
     """Recover the ``anim_id==2`` "jump/rising" FSM handler ``1030:5F30`` (main path, gate ``[0x6BD0]==0``).
 
     Falls through to the idle handler when ``[0x6BE0]!=0`` (entering with ``bx==4``). Otherwise: drive the jump
@@ -568,19 +573,19 @@ def player_state_jump(rb, rw) -> dict:
     ``[0x6BD1]``, post-incremented), then switch to gravity; apply horizontal control (accel toward 0x30 when
     Xvel is small, else symmetric friction); ``set_anim_b(2, seq=4)`` + advance; finally two directional
     frictions. ``rb``/``rw`` read entry memory; returns the dict of writes."""
-    _p, g, _be = _views(rb, rw)
+    _p, g, _be = _views(rb, rw, player=player)
     if g.fall_grace != 0:                                        # [5F37-5F3E] jmp 5CDB
-        return player_state_idle(rb, rw, entry_bx=4)
-    return _jump_body(rb, rw)
+        return player_state_idle(rb, rw, entry_bx=4, player=player)
+    return _jump_body(rb, rw, player=player)
 
 
-def _jump_body(rb, rw) -> dict:
+def _jump_body(rb, rw, player=None) -> dict:
     """The jump-arc body ``1030:5F41`` — shared by :func:`player_state_jump` (after its ``[0x6BE0]`` prologue) and
     the flying-mode jump (``5F13``). Drives the rising arc (decaying impulse table for the first 9 frames, then
     gravity), horizontal control, ``set_anim_b(2)``, and two directional frictions. Under the flying gate
     (``[0x6BC5]!=0``) the impulse is halved (``5F5B-5F62``); when ``[0x6BC5]==0`` that is a no-op, so the normal
     jump is unchanged."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     g.unk_6BFE = 0                                               # [5F41]
     counter = g.fall_latch                                       # [5F46] (the jump arc's frame counter)
     g.fall_latch = counter + 1                                   # [5F4C] inc
@@ -611,11 +616,11 @@ def _jump_body(rb, rw) -> dict:
     return be.writes
 
 
-def _flying_jump(rb, rw) -> dict:
+def _flying_jump(rb, rw, player=None) -> dict:
     """The flying-mode jump ``1030:5F13`` (``cs:[0x7D6F][2]``). Once the hold counter ``[0x6BC8]`` reaches
     0x18 the jump ends (arm the descent: ``[0x6BC7]=1``, ``[0x6BC6]=0x18``, nudge ``Y-=3``, reset ``[0x6BC8]``)
     and only the two directional frictions run; otherwise it runs the shared jump body."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     if g.fly_timer >= 0x18:                                     # [5F13-5F18]
         g.low_gravity = 1                                       # [5F1A-5F29] arm the descent
         g.fly_hold = 0x18
@@ -625,10 +630,10 @@ def _flying_jump(rb, rw) -> dict:
         xvel = player_friction_dir(xvel, g.friction)            # [5F8F]
         p.xvel = xvel
         return be.writes
-    return _jump_body(rb, rw)                                   # [5F41]
+    return _jump_body(rb, rw, player=player)                    # [5F41]
 
 
-def player_fsm_flying(rb, rw) -> tuple:
+def player_fsm_flying(rb, rw, player=None) -> tuple:
     """Recover the flying-movement state machine ``1030:596A`` (the ``[0x6BC5]!=0`` branch taken at the
     FSM gate ``5960``). Returns ``(writes, do_dispatch)``: when ``do_dispatch`` is True the caller then runs the
     **flying** handler table ``cs:[0x7D6F]`` (the normal dispatch with ``bx += 0x40``).
@@ -636,7 +641,7 @@ def player_fsm_flying(rb, rw) -> tuple:
     Only the ``[0x6BC7]&1 == 0`` branch is witnessed (the flying hold has not started): mask ``[0x6BC7]``,
     arm the descent flag when Yvel exceeds 0xA0, then dispatch. The input-driven hold bookkeeping (``5977``,
     over ``[0x6BC6]``/``[0x7B1A]`` from ``[0x27EA]``/``[0x27EB]``) is unwitnessed and fails loud."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     out = be.writes
     bc7 = g.low_gravity & 1                                    # [596D] and (descend flag),1
     g.low_gravity = bc7
@@ -680,27 +685,27 @@ def player_fsm_flying(rb, rw) -> tuple:
     return out, False
 
 
-def player_fsm_flying_dispatch(anim_id: int, rb, rw) -> tuple:
+def player_fsm_flying_dispatch(anim_id: int, rb, rw, player=None) -> tuple:
     """The flying handler table ``cs:[0x7D6F]`` (``= cs:[0x7D2F] + 0x40``). Mostly reuses recovered handlers:
     anim_id 1 -> run (5EC4), 2 -> the flying jump (5F13), 8 -> no-op (454C = ret); everything else -> anim5
     (5E96). Returns ``(writes, sfx)``."""
     if anim_id == 1:
-        return player_state_run(rb, rw), []                    # [5EC4]
+        return player_state_run(rb, rw, player=player), []     # [5EC4]
     if anim_id == 2:
-        return _flying_jump(rb, rw), []                      # [5F13]
+        return _flying_jump(rb, rw, player=player), []       # [5F13]
     if anim_id == 8:
         return {}, []                                          # [454C] ret
-    return player_state_anim5(rb, rw, anim_id), []             # [5E96] idx 0/3/4/5/6/7 (dispatched anim_id + bx+0x40)
+    return player_state_anim5(rb, rw, anim_id, player=player), []  # [5E96] idx 0/3/4/5/6/7 (dispatched anim_id + bx+0x40)
 
 
-def player_state_anim8(rb, rw) -> dict:
+def player_state_anim8(rb, rw, player=None) -> dict:
     """Recover the ``anim_id==8`` FSM handler ``1030:5CCE`` (the depth-override state; no ``[0x6BD0]`` gate).
 
     ``friction_dir; friction_sym; set_anim_b; advance_anim``. NOTE the register-flow gotcha: ``friction_sym``
     (6333) leaves ``ax`` = the new Xvel, so the following ``set_anim_b`` (6374) is called with ``al`` = that
     Xvel's low byte (NOT the anim_id) and ``bx`` == 0x10 (anim_id*2) as the sequence index. Faithful to the
     ASM. ``rb``/``rw`` read entry memory; returns the dict of writes."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     xv = player_friction_dir(p.xvel & 0xFFFF, g.friction)      # [5CCE]
     xv = player_friction_sym(xv, p.motion_mode)                # [5CD1] -> ax = xv
     p.xvel = xv
@@ -713,13 +718,13 @@ def player_state_anim8(rb, rw) -> dict:
     return be.writes
 
 
-def player_state_anim4(rb, rw) -> dict:
+def player_state_anim4(rb, rw, player=None) -> dict:
     """Recover the ``anim_id==4`` FSM handler ``1030:5E62`` (main path, gate ``[0x6BD0]==0``).
 
     Always: ``[0x6BD3]=0``, ``[0x6BE1]=4``, ``charge_6bce``. Then on ``|Xvel| <= 0x20`` accelerate (limit 0x20)
     + ``set_anim_b`` + advance (``al`` = the clobbered ``|Xvel|`` low byte, ``bx``==8); otherwise fall through
     to the idle handler (bx==8), which — because ``[0x6BD3]`` was just zeroed — sees a fresh idle timer."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     out = be.writes
     g.idle_timer = 0                                                       # [5E6C]
     g.drop_gate = 4                                                        # [5E71]
@@ -736,7 +741,7 @@ def player_state_anim4(rb, rw) -> dict:
         return out
     # [5E89] jmp 5CDB — idle sees idle_timer==0 (just written) and bx==8
     rb2 = overlay_reader(rb, {IDLE_TIMER: 0}, 0xFF)                            # the just-written read shim
-    out.update(player_state_idle(rb2, rw, entry_bx=8))
+    out.update(player_state_idle(rb2, rw, entry_bx=8, player=player))
     return out
 
 
@@ -752,14 +757,14 @@ PLAYER_HANDLERS = {
 }
 
 
-def player_fsm_frontend(rb, rw) -> tuple:
+def player_fsm_frontend(rb, rw, player=None) -> tuple:
     """Recover the FSM front-end ``1030:58A7..591F`` (after the input-decode call ``DC1``).
 
     Combine the six decoded input flags (``[0x27E8..0x27ED]``) into ``[0x6BDB]``/``[0x6BDC]``, update the
     facing word ``[0x4F25]`` (+/-1; resetting ``[0x6BEB]`` on a turn), and pack the 5-bit dispatch bitmask from
     bit0 of ``[0x27EC],[0x27ED],[0x27EA],[0x27EB],[0x27E8]``. Returns ``(bitmask, writes)`` where ``writes`` may
     include ``[0x6BDB],[0x6BDC],[0x4F25],[0x6BEB]``. Pure."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     ec, ed = g.in_right, g.in_left
     ea, eb, e8 = g.in_up, g.in_down, g.in_fire
     g.input_lr = ed | ec                                         # [58A7-58B0]
@@ -779,20 +784,27 @@ def player_fsm_frontend(rb, rw) -> tuple:
     return bitmask, be.writes
 
 
-def player_fsm_step(rb, rw) -> tuple:
+def player_fsm_step(rb, rw, player=None) -> tuple:
     """Compose the full per-frame player FSM ``1030:58A7..5A0B`` (the ``[0x6BC5]==0`` normal-play path):
     front-end -> ``select_anim_id`` -> dispatch to the recovered handler. Returns ``(writes, sfx, scroll)`` where
     ``scroll`` is ``None`` or ``"left"``/``"right"`` — the idle look-around (anim13) camera-pan request, which the
     caller executes against the VM planes via :func:`pre2.views.camera_pan.apply_camera_pan`.
 
     Threads the intermediate writes the way the ASM does: the facing/state changes from the front-end and the
-    ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``)."""
-    p0, g0, _be0 = _views(rb, rw)                               # read-only views over ENTRY memory
-    bitmask, writes = player_fsm_frontend(rb, rw)               # [58A7-591F]
+    ``[0x4F2C]`` reset from the selector are visible to the handler (it reads ``[0x4F25]``/``[0x4F2C]``).
+    ``player`` (the live ``pre2.game.model.Player``, when the caller has one registered) is threaded the same
+    way ``rng=`` is elsewhere: every nested view construction gets it, so a player-struct field write lands on
+    the object -- and is simply absent from the returned ``writes`` -- instead of accumulating as a raw offset."""
+    p0, g0, _be0 = _views(rb, rw, player=player)                               # read-only views over ENTRY memory
+    bitmask, writes = player_fsm_frontend(rb, rw, player=player)   # [58A7-591F]
     beb = writes.get(RUN_COUNT, g0.run_count)
     anim_id, sel_writes = player_select_anim_id(bitmask, g0.input_suppress, p0.death_state,  # [5921-595C]
                                                 p0.anim_b, beb, rb)
-    writes.update(sel_writes)                                   # [0x4F1B], [0x6BEB], maybe [0x4F2C]
+    run_reset = sel_writes.pop(P_RUN, None) is not None         # [594D] [0x4F2C]=0 is a player-struct field --
+    writes.update(sel_writes)                                   # [0x4F1B], [0x6BEB]; P_RUN routed below instead
+    if run_reset:
+        p1, _g1, _be1 = _views(rb, rw, writes, player=player)
+        p1.run_flag = 0
 
     # The handler reads back fields the front-end/selector just wrote — facing [0x4F25], the [0x4F2C] reset,
     # and crucially the input-held flags [0x6BDB]/[0x6BDC] that drive player_accel. Expose every pending write
@@ -803,35 +815,36 @@ def player_fsm_step(rb, rw) -> tuple:
     # [5960] flying gate: when the glider is armed the FSM runs the 596A state machine instead of the
     # normal dispatch, then (if it falls through) dispatches the flying handler table cs:[0x7D6F].
     if g0.glider != 0:
-        mwrites, do_dispatch = player_fsm_flying(rb2, rw2)   # [596A]
+        mwrites, do_dispatch = player_fsm_flying(rb2, rw2, player=player)   # [596A]
         writes.update(mwrites)
         msfx: list = []
         if do_dispatch:                                        # [-> 5A0B] dispatch via cs:[0x7D6F]
             if rb2(ANIM_GATE) != 0:                               # the flying handlers' [0x6BD0] override is unwitnessed
                 raise NotImplementedError("flying dispatch with [0x6BD0]!=0 not witnessed")
-            hw, msfx = player_fsm_flying_dispatch(anim_id, rb2, rw2)
+            hw, msfx = player_fsm_flying_dispatch(anim_id, rb2, rw2, player=player)
             writes.update(hw)
         return writes, msfx, writes.pop(SCROLL_REQUEST, None)
 
     # Handlers for anim_id 0/1/2/4/5 begin with `cmp [0x6BD0],0 ; jne 5F93` — when the override flag is set they
     # run the shared override tail 0x5F93 (== the attack body with al=[0x4F27]). The attack handler itself
     # (anim_id 3/6/7 = 5F96, the tail's own body) has no such prologue — it can't override into itself — and
-    # anim_id 8 (5CCE) has none either; both dispatch normally.
+    # anim_id 8 (5CCE) has none either; both dispatch normally. [0x4F27] hasn't been written by anything above
+    # (P_RUN/facing/etc are different fields), so p0.anim_b (ENTRY memory) == rb2(P_ANIM_B) exactly.
     if g0.anim_gate != 0 and anim_id not in (3, 6, 7, 8):       # [5F35-etc] -> 5F93 override
-        hw, sfx = player_state_attack(rb2(P_ANIM_B), anim_id * 2, rb2, rw2)
+        hw, sfx = player_state_attack(p0.anim_b, anim_id * 2, rb2, rw2, player=player)
     else:
-        hw, sfx = player_dispatch_handler(anim_id, rb2, rw2)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
+        hw, sfx = player_dispatch_handler(anim_id, rb2, rw2, player=player)    # [5A0B] call cs:[anim_id*2 + 0x7D2F]
     writes.update(hw)
     scroll = writes.pop(SCROLL_REQUEST, None)                   # idle look-around (anim13) camera-pan request
     return writes, sfx, scroll
 
 
-def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
+def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw, player=None) -> None:
     """1030:6081 — map the current anim frame to the player render sprite via the phase's frame table (8-byte
     records {frame, sprite_id, x_off, y_off}, 0x55AA terminator). Sets [0x4F0E]/[0x4F0A]/[0x4F0C] with the
     facing flip; leaves them unchanged if the frame is not in the table."""
     from pre2.views.dgroup_view import AttackFrameEntry
-    p, _g, _be = _views(rb, rw, out)                            # reads see the caller's pending writes (rw = overlay)
+    p, _g, _be = _views(rb, rw, out, player=player)             # reads see the caller's pending writes (rw = overlay)
     be2 = DictBackend(rb, rw)
     base = AttackPhaseEntry(be2, rec).frametbl_ptr              # [6081] si = phase.frametbl_ptr
     dh = (frame >> 8) & 0x80                                    # [6088-60A5] facing bit of the frame
@@ -856,11 +869,13 @@ def _attack_render_sprite(out: dict, rec: int, frame: int, rb, rw) -> None:
     p.slot0.y = (p.y + (p.yvel >> 4) - _s16(yoff)) & 0xFFFF     # [60C7-60DB]
 
 
-def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
+def _attack_spawn(out: dict, rec: int, rb, rw, player=None) -> bool:
     """1030:6017-6070 — spawn a projectile into the first free 0x4F2E slot (stride 0x12, 4 slots; free = [+4]
     ==0xFFFF). Reads the projectile's sprite/offsets from just past the phase frame-table's terminator.
     Returns True if a slot was taken (the caller then sets [0x4F0E]=0xFFFF)."""
     be = DictBackend(rb, rw, out)
+    if player is not None:
+        be.register(PlayerView, player)
     p, g = PlayerView(be), PlayerGlobals(be)
     phase = AttackPhaseEntry(be, rec)
     slot = next((s for s in g.projectiles if s.free), None)    # [627C-6293] the first free 0x4F2E slot
@@ -888,7 +903,7 @@ def _attack_spawn(out: dict, rec: int, rb, rw) -> bool:
     return True
 
 
-def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
+def player_state_attack(al: int, bx: int, rb, rw, player=None) -> tuple:
     """Recover the ``anim_id 3/6/7`` "attack" FSM handler ``1030:5F96`` AND the shared override tail ``5F93``
     (same code; ``5F93`` just sets ``al=[0x4F27]`` first). This is the caveman's club-bash action — witnessed
     driving the door-bashing (`demo …015934`) and secret-tile reveal (`…015822`); the spawned `0x4F2E`
@@ -898,7 +913,7 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
     Common: set_anim_b + advance + friction_sym + sat_inc[0x6BD3]; ``[0x7B19]`` = phase.v19 (x4 if [0x6BCE]);
     ``[0x6BD0]`` = (~[0x6BCF])&0x40 (the advance_anim high byte's bit6) — which selects the branch:
     bit6 clear -> the 6081 render-sprite path; bit6 set -> the sound path (play_sfx, trail, Yvel nudge, spawn)."""
-    p, g, be = _views(rb, rw)
+    p, g, be = _views(rb, rw, player=player)
     out = be.writes
     sfx: list = []
     state, ptr = player_set_anim(al, bx, p.anim_b, p.anim_ptr, rw)            # [5F96]
@@ -926,13 +941,14 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
     rw_ov = overlay_reader(rw, out, 0xFFFF)
 
     if bd0 != 0:                                                              # [5FCD-5FCF] -> 6081 main
-        _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)
+        _attack_render_sprite(out, rec, frame, rb_ov, rw_ov, player=player)
         return out, sfx
 
     # sound path [5FD2+]
     g.input_suppress = pe.sfx                                                 # [5FD2] phase.sfx
     sfx.append(5 if phase == 0 else (0 if phase == 1 else 0x0A))             # [5FD9-5FEB] play_sfx dl
-    a27 = out[P_ANIM_B]                                                         # [5FF0] (post set_anim)
+    a27 = state                                                              # [5FF0] (post set_anim; [0x4F27]
+    #                                                                          untouched since -- == out[P_ANIM_B])
     if a27 == 6:                                                             # [5FF3-5FF5]
         dy = 0
     elif a27 == 3:                                                           # [5FF7/5FFA-5FFC] dx=0xFFE0
@@ -945,27 +961,27 @@ def player_state_attack(al: int, bx: int, rb, rw) -> tuple:
             g.trail_ring = trail[1]
     if g.unk_6BFE == 0:                                                       # [6004-600B]
         p.yvel = ((p.yvel & 0xFFFF) + dy) & 0xFFFF
-    if (pe.flag & 1) and _attack_spawn(out, rec, rb_ov, rw_ov):              # [600F-6017] flag bit0 + free slot
+    if (pe.flag & 1) and _attack_spawn(out, rec, rb_ov, rw_ov, player=player):   # [600F-6017] flag bit0 + free slot
         p.slot0.sprite = 0xFFFF                                               # [6070] suppress the player draw
     elif g.fall_frames == 0:                                                  # [6075-607A]
-        _attack_render_sprite(out, rec, frame, rb_ov, rw_ov)                  # [6081]
+        _attack_render_sprite(out, rec, frame, rb_ov, rw_ov, player=player)   # [6081]
     else:
         p.slot0.sprite = 0xFFFF                                               # [607C]
     return out, sfx
 
 
-def player_dispatch_handler(anim_id: int, rb, rw) -> tuple:
+def player_dispatch_handler(anim_id: int, rb, rw, player=None) -> tuple:
     """Dispatch the player FSM to the recovered per-state handler (the ``cs:[anim_id*2 + 0x7D2F]`` table).
 
     Every recovered handler behind one uniform ``(rb, rw) -> (writes, sfx)`` entry point, keyed by the
     ``anim_id`` from :func:`player_select_anim_id`. anim_ids 3/6/7 share the audio-coupled "attack" (door-bash/secret-reveal) handler
     (``0x5F96``), which also emits ``play_sfx`` commands (``sfx``); the others emit no sound (``[]``)."""
     if anim_id in (3, 6, 7):
-        return player_state_attack(anim_id, anim_id * 2, rb, rw)
+        return player_state_attack(anim_id, anim_id * 2, rb, rw, player=player)
     handler = PLAYER_HANDLERS.get(anim_id)
     if handler is None:
         raise NotImplementedError(f"player FSM handler for anim_id={anim_id} not recovered")
-    return handler(rb, rw), []
+    return handler(rb, rw, player=player), []
 
 
 #: DGROUP fields the F1 debug-kill path touches.
