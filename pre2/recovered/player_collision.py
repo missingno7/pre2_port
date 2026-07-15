@@ -18,7 +18,7 @@ tile-table indexing through the named table constants)."""
 from __future__ import annotations
 
 from pre2.recovered.player import player_emit_trail
-from pre2.views.dgroup_view import DictBackend, overlay_reader, PlayerGlobals, PlayerView
+from pre2.views.dgroup_view import DictBackend, OverlayBackend, overlay_reader, PlayerGlobals, PlayerView
 from pre2.views.tables import Tables
 
 __all__ = ["collision_slope_offset", "collision_fall", "collision_hblock", "collision_land",
@@ -475,37 +475,21 @@ def collision_side_handler(idx: int, read_es, rw, rb, di: int) -> dict:
     raise NotImplementedError(f"side handler idx {idx} (0x7D95) not recovered")  # idx >= 9
 
 
-class _Overlay:
+class _Overlay(OverlayBackend):
     """Byte-level read-through overlay used by ``collision`` so a read later in the routine observes a write made
     earlier (the ASM mutates memory in place; the pure handlers return write dicts). DS writes are split into
-    bytes using ``COLLISION_BYTE_FIELDS`` for widths; map (es) writes are byte-keyed. ``ds``/``mp`` accumulate the
-    net byte writes = the routine's write-contract. Also a dgroup-view backend (``_IS_DGROUP_BACKEND``): the
-    composition binds :class:`PlayerView`/:class:`PlayerGlobals` straight onto it, so named reads see earlier
-    writes and named writes land in the same byte contract (a word field writes its two bytes, exactly like
-    ``apply_ds`` splitting a non-byte-field word)."""
-
-    _IS_DGROUP_BACKEND = True
+    bytes using ``COLLISION_BYTE_FIELDS`` for widths; map (es) writes are byte-keyed. ``writes``/``mp`` accumulate
+    the net byte writes = the routine's write-contract (``rb``/``wb`` here just alias ``self.writes`` to the
+    ``ds`` name the rest of this file's history used; ``rw``/``ww`` are inherited from :class:`OverlayBackend`
+    unchanged). Also a dgroup-view backend: the composition binds :class:`PlayerView`/:class:`PlayerGlobals`
+    straight onto it, so named reads see earlier writes and named writes land in the same byte contract (a word
+    field writes its two bytes, exactly like ``apply_ds`` splitting a non-byte-field word)."""
 
     def __init__(self, rb, rw, read_es):
-        self._rb, self._read_es = rb, read_es
-        self.ds: dict = {}
+        super().__init__(rb)
+        self._read_es = read_es
         self.mp: dict = {}
         self.redraws: list = []   # map offsets the bridge-dip queued for a direct on-page tile re-blit (653D)
-
-    def rb(self, a: int) -> int:
-        a &= 0xFFFF
-        return (self.ds[a] if a in self.ds else self._rb(a)) & 0xFF
-
-    def rw(self, a: int) -> int:
-        a &= 0xFFFF
-        return self.rb(a) | (self.rb((a + 1) & 0xFFFF) << 8)
-
-    def wb(self, a: int, v: int) -> None:
-        self.ds[a & 0xFFFF] = v & 0xFF
-
-    def ww(self, a: int, v: int) -> None:
-        self.ds[a & 0xFFFF] = v & 0xFF
-        self.ds[(a + 1) & 0xFFFF] = (v >> 8) & 0xFF
 
     def read_es(self, o: int) -> int:
         o &= 0xFFFF
@@ -514,9 +498,9 @@ class _Overlay:
     def apply_ds(self, writes: dict) -> None:
         for a, v in writes.items():
             a &= 0xFFFF
-            self.ds[a] = v & 0xFF
+            self.writes[a] = v & 0xFF
             if a not in COLLISION_BYTE_FIELDS:
-                self.ds[(a + 1) & 0xFFFF] = (v >> 8) & 0xFF
+                self.writes[(a + 1) & 0xFFFF] = (v >> 8) & 0xFF
 
     def apply_map(self, writes: dict) -> None:
         for o, v in writes.items():
@@ -638,7 +622,7 @@ def collision(rb, rw, read_es) -> tuple:
                 break
             _side_scan(ov, bx, conditional=True)                 # [5B6F] subsequent cells
 
-    return ov.ds, ov.mp, ov.redraws
+    return ov.writes, ov.mp, ov.redraws
 
 
 def _out_of_camera_range(p: PlayerView, g: PlayerGlobals) -> bool:
