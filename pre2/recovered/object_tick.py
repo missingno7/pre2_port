@@ -18,7 +18,7 @@ record, so per-slot behaviour stays byte-exact; a full cross-slot whole-memory r
 those emitters (the next recovery target)."""
 from __future__ import annotations
 
-from pre2.views.dgroup_view import ObjectDef, ObjectSlot, PlayerGlobals
+from pre2.views.dgroup_view import MemBackend, ObjectDef, ObjectSlot, PlayerGlobals
 from pre2.recovered.object_update import (ObjectScaleUnsupported, advance_animation, apply_velocity,
                                           handle_object_75c4, handle_object_760f, handle_object_7665,
                                           handle_object_773d, handle_object_77de, handle_object_7898,
@@ -45,27 +45,8 @@ class Pre2ObjectGap(Exception):
     boss-zoom anim remap). Fail loud rather than silently running the original ASM."""
 
 
-class _MemBackend:
-    """Marks a WalkerMem-style ``mem`` (rb/rw/wb/ww by single DS-relative offset, unlike the VM's (seg, off)
-    ``rb``) as a dgroup-view backend, so :class:`PlayerGlobals` binds straight onto it."""
-
-    _IS_DGROUP_BACKEND = True
-    __slots__ = ("_mem",)
-
-    def __init__(self, mem):
-        self._mem = mem
-
-    def rb(self, o: int) -> int:
-        return self._mem.rb(o)
-
-    def rw(self, o: int) -> int:
-        return self._mem.rw(o)
-
-    def wb(self, o: int, v: int) -> None:
-        self._mem.wb(o, v)
-
-    def ww(self, o: int, v: int) -> None:
-        self._mem.ww(o, v)
+_MemBackend = MemBackend   # this file's WalkerMem-style (single-offset rb/rw/wb/ww) adapter -- the shared
+#     views/dgroup_view.py implementation, aliased to its original local name here.
 
 
 def _obj_view(mem, si):

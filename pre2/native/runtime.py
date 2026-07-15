@@ -22,7 +22,6 @@ from pre2.native.level_state import native_4f6c, native_5063
 from pre2.native.loop import native_cave_teleport, native_gameplay_frame
 from pre2.native.render import native_render, native_sync_render_state
 from pre2.views.dgroup_view import EffectParticle, IrisView, PlayerGlobals, PlayerView, RenderSlot
-from pre2.native.dgroup_offsets import FRAME_TIMER
 
 
 _VIEW_ROWS = 0xB0          # the gameplay viewport height in rows (the HUD band below stays)
@@ -167,7 +166,8 @@ def native_exit_anim(state, dos, display_page: int, *, game_root: str, state_onl
         # read/write only the low byte. The word op means a low-byte carry (0xFF->0x00) also increments the
         # adjacent byte 0x6BD6 -- currently unnamed scratch (game_layout.py's player_flag_scratch) that no
         # recovered/native code reads, so the carry is harmless today but is real canonical DGROUP state.
-        state.ww(FRAME_TIMER, (state.rw(FRAME_TIMER) + 1) & 0xFFFF)          # [0x6BD5]++ (51F0/count-up timing read it)
+        g = PlayerGlobals(state)
+        g.frame_stamp = (g.frame_stamp + 1) & 0xFFFF          # [0x6BD5]++ (51F0/count-up timing read it)
 
     # [asm 316F->318B-31AA] clear the object/effect slots for the tally. The VM does this at the iris-close
     # entry (316F), which first snapshots the frozen frame to A000 (3177-3184) so the iris still shows the level;

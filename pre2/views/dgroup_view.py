@@ -214,6 +214,31 @@ class DictBackend:
         self.writes[off & 0xFFFF] = v & 0xFFFF
 
 
+class MemBackend:
+    """Marks any foreign ``mem``-like object that already exposes single-offset ``rb``/``rw``/``wb``/``ww``
+    (e.g. a WalkerMem-style DS-relative accessor, unlike the VM's ``(seg, off)`` form) as a dgroup-view backend
+    by delegating to it and carrying ``_IS_DGROUP_BACKEND`` -- so any :class:`StructView` binds straight onto
+    ``MemBackend(mem)`` without ``mem`` needing to know about this module."""
+
+    _IS_DGROUP_BACKEND = True
+    __slots__ = ("_mem",)
+
+    def __init__(self, mem):
+        self._mem = mem
+
+    def rb(self, o: int) -> int:
+        return self._mem.rb(o)
+
+    def rw(self, o: int) -> int:
+        return self._mem.rw(o)
+
+    def wb(self, o: int, v: int) -> None:
+        self._mem.wb(o, v)
+
+    def ww(self, o: int, v: int) -> None:
+        self._mem.ww(o, v)
+
+
 def overlay_reader(base_read, writes: dict, mask: int):
     """A read-through-a-plain-dict closure: checks ``writes`` (masked to width) before falling through to
     ``base_read``. Several FSM routines need their pending ``{offset: value}`` writes visible to a SUBSEQUENT
