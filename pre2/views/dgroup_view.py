@@ -1331,6 +1331,16 @@ class TriggerBankRecord(StructView):
     width   = _U8(3)    # column count [asm 4203]
 
 
+class CarteMarkerEntry(StructView):
+    """One entry of the per-level "you are here" world-map marker position table (``0xB148``, stride 4)
+    [front_end.py native_carte_scene 9562]."""
+
+    __slots__ = ()
+
+    x = _U16(0)
+    y = _U16(2)
+
+
 class CaveTriggerEntry(StructView):
     """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
     5316; native_cave_teleport 5326]."""

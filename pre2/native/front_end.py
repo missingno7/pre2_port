@@ -33,7 +33,7 @@ from pre2.views.image_scene import image_palette, render_image_scene
 from pre2.views.memory_adapter import apply_ds, readers
 from pre2.views.oldies_scene import build_oldies_scene
 from pre2.gaps import Pre2ExpertEater, Pre2HybridGap
-from pre2.views.dgroup_view import LoaderGlobals, PasswordScreenView, PlayerGlobals
+from pre2.views.dgroup_view import CarteMarkerEntry, LoaderGlobals, PasswordScreenView, PlayerGlobals
 from pre2.views.tables import ByteTable
 from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
@@ -618,7 +618,8 @@ def _native_carte(state, dos, game_root: str):
     lg = LoaderGlobals(state)
     lv = g.level                                              # the level index picks its map (x,y) + the marker
     dims = lg.carte_marker_dims; mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
-    di = carte_marker_offset(rw(CARTE_MARKER_TABLE + lv * 4), rw(CARTE_MARKER_TABLE + 2 + lv * 4))
+    marker_entry = CarteMarkerEntry(state, (CARTE_MARKER_TABLE + lv * 4) & 0xFFFF)
+    di = carte_marker_offset(marker_entry.x, marker_entry.y)
     msrc = (lg.carte_mask_seg << 4) + lg.carte_mask_off                        # [0x667a]:[0x62da] — mask + 4 colour planes
     marker = bytes(state.data[msrc:msrc + 5 * mw * mh])
     master = stamp_carte_marker(master, marker, di, mw, mh)
