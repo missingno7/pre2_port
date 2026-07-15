@@ -16,8 +16,9 @@ from __future__ import annotations
 from pre2.islands import oracle_link
 from pre2.recovered.combat_interaction import hitbox_overlap, roll_bonus_sprite, spawn_effect_burst
 from pre2.views.tables import Tables
-from pre2.views.dgroup_view import (CamTarget, DictBackend, EffectParticle, M9ScriptEntry, PlayerGlobals,
-                                    PlayerView, RenderSlot, RngView, WidthContractBackend, WidthOverlayBackend)
+from pre2.views.dgroup_view import (CamOffsetEntry, CamTarget, DictBackend, EffectParticle, M9ScriptEntry,
+                                    PlayerGlobals, PlayerView, RenderSlot, RngView, WidthContractBackend,
+                                    WidthOverlayBackend)
 
 
 class Pre2SpawnGap(Exception):
@@ -756,10 +757,12 @@ def camera_offset_lookup(rw, key_dx, key_ax):
     if the pair is absent (the ASM would scan off the end of the table)."""
     key_dx &= 0xFFFF
     key_ax &= 0xFFFF
+    be = DictBackend(rw, rw)          # word-only reads -- rb is never invoked
     bx = CAM_OFFSET_TABLE
     for _ in range(4096):                                  # [asm 94E0-94F1] scan to the matching entry
-        if rw(bx) == key_dx and rw((bx + 2) & 0xFFFF) == key_ax:
-            return rw((bx + 4) & 0xFFFF)                   # [asm 94E9]
+        entry = CamOffsetEntry(be, bx)
+        if entry.dx == key_dx and entry.ax == key_ax:
+            return entry.value                             # [asm 94E9]
         bx = (bx + 6) & 0xFFFF
     raise Pre2SpawnGap("94DC camera-offset (dx, ax) not found in the [0xA6ED] table")
 

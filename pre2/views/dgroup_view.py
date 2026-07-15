@@ -1369,6 +1369,17 @@ class FidgetRangeEntry(StructView):
     hi = _U16(2)
 
 
+class CamOffsetEntry(StructView):
+    """One entry of the precomputed camera-offset lookup table (``0xA6ED``, stride 6): a ``{dx-key, ax-key,
+    value}`` triple [object_spawn.py camera_offset_lookup 94DC]."""
+
+    __slots__ = ()
+
+    dx    = _U16(0)
+    ax    = _U16(2)
+    value = _U16(4)
+
+
 class CaveTriggerEntry(StructView):
     """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
     5316; native_cave_teleport 5326]."""
