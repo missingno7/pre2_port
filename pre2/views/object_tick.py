@@ -8,9 +8,10 @@ effect-spawn emit (``spawn_effects`` over the ``0x7DE6`` list). Pure layout/tran
 from __future__ import annotations
 
 from pre2.recovered.object_update import spawn_effects
+from pre2.views.dgroup_view import RngView
 from pre2.views.tables import Tables
 from pre2.native.dgroup_offsets import (
-    ANIM_GATE, ANIM_READY, COMBO_COMPLETE_6BE2, FIREFLY_SCRATCH_A, FIREFLY_SCRATCH_B, FRAME_TIMER, LEVEL_DATA_SEG, LEVEL_INDEX, PLAYER_SLOT, PLAYER_Y, QUAKE_DIST_HI, QUAKE_DIST_LO, RNG_ROTATE, RNG_STATE, SHAKE_MAGNITUDE)
+    ANIM_GATE, ANIM_READY, COMBO_COMPLETE_6BE2, FIREFLY_SCRATCH_A, FIREFLY_SCRATCH_B, FRAME_TIMER, LEVEL_DATA_SEG, LEVEL_INDEX, PLAYER_SLOT, PLAYER_Y, QUAKE_DIST_HI, QUAKE_DIST_LO, SHAKE_MAGNITUDE)
 
 _FX_LIST = 0x7DE6        # secondary effect list (6-byte entries) the spawning handlers emit into
 _HANDLER_TABLE = 0x6AA9  # cs:[ (def[1]*2)&0xFF + 0x6AA9 ] -> AI handler address
@@ -105,16 +106,18 @@ class LiveWalkerMem:
         return self.data[(self.cbase + off) & 0xFFFFF] | (self.data[(self.cbase + ((off + 1) & 0xFFFF)) & 0xFFFFF] << 8)
 
     def glb(self):
+        rng = RngView(self)                              # named-view access -- picks up state.rng when live
         return {"player_x": self.rw(PLAYER_SLOT), "player_y": self.rw(PLAYER_Y), "frame": self.rb(FRAME_TIMER),
                 "shake": self.rb(SHAKE_MAGNITUDE), "a340": self.rb(ANIM_READY), "mode": self.rb(LEVEL_INDEX),
                 "a30e": self.rw(QUAKE_DIST_LO), "a310": self.rw(QUAKE_DIST_HI), "bc0": self.rb(FIREFLY_SCRATCH_A), "bc1": self.rb(FIREFLY_SCRATCH_B),
-                "bd0": self.rb(ANIM_GATE), "ror": self.rw(RNG_ROTATE), "la": self.rb(RNG_STATE), "lb": self.rb(RNG_STATE + 1),
-                "lc": self.rb(RNG_STATE + 2), "ld": self.rw(RNG_STATE + 3)}
+                "bd0": self.rb(ANIM_GATE), "ror": rng.ror, "la": rng.lcg_a, "lb": rng.lcg_b,
+                "lc": rng.lcg_c, "ld": rng.lcg_d}
 
     def write_glb(self, g):
         self.ww(QUAKE_DIST_LO, g["a30e"]); self.ww(QUAKE_DIST_HI, g["a310"]); self.wb(FIREFLY_SCRATCH_A, g["bc0"])
-        self.wb(FIREFLY_SCRATCH_B, g["bc1"]); self.ww(RNG_ROTATE, g["ror"]); self.wb(RNG_STATE, g["la"])
-        self.wb(RNG_STATE + 1, g["lb"]); self.wb(RNG_STATE + 2, g["lc"]); self.ww(RNG_STATE + 3, g["ld"])
+        self.wb(FIREFLY_SCRATCH_B, g["bc1"])
+        rng = RngView(self)                              # named-view access -- picks up state.rng when live
+        rng.ror, rng.lcg_a, rng.lcg_b, rng.lcg_c, rng.lcg_d = g["ror"], g["la"], g["lb"], g["lc"], g["ld"]
 
     def spawn(self, def9, defB, arg, dl):
         def find_free():
