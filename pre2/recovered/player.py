@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pre2.views.dgroup_view import (AttackPhaseEntry, DictBackend, FidgetRangeEntry, overlay_reader, PLAYER_BASE,
                                     PlayerGlobals, PlayerView, RENDER_SLOTS_BASE, WidthContractBackend)
+from pre2.views.tables import WordTable
 
 __all__ = [
     "player_x_integrate", "player_y_integrate", "player_tick_timers",
@@ -460,7 +461,7 @@ def _idle_default_anim(p: PlayerView, entry_bx: int, facing: int, rw) -> None:
     """Idle "default" anim path ``1030:5DED`` — load the sequence for the handler's entry ``bx`` (anim_id*2;
     0 for a direct idle, but e.g. 4 when the jump handler falls through) and write frame 0 WITHOUT advancing
     and WITHOUT the 0x1F mask (only the facing bit is merged); resets ``run_flag``."""
-    ptr = rw((entry_bx + ANIM_SEQ_TABLE) & 0xFFFF)              # [5DED] bx = [entry_bx + 0x7CDF]
+    ptr = WordTable(rw, ANIM_SEQ_TABLE)[entry_bx]                # [5DED] bx = [entry_bx + 0x7CDF]
     p.anim_ptr = ptr                                             # [5DF1]
     ax = rw(ptr)                                                 # [5DF5]
     ah = ((ax >> 8) | (facing & 0x80)) & 0xFF                    # [5DF7-5DFE] no 0x1F mask here
@@ -584,7 +585,7 @@ def _jump_body(rb, rw) -> dict:
     counter = g.fall_latch                                       # [5F46] (the jump arc's frame counter)
     g.fall_latch = counter + 1                                   # [5F4C] inc
     if counter < JUMP_FRAMES:                                    # [5F50] jae
-        impulse = rw((JUMP_IMPULSE_TABLE + counter * 2) & 0xFFFF)   # [5F55-5F57]
+        impulse = WordTable(rw, JUMP_IMPULSE_TABLE)[counter * 2]   # [5F55-5F57]
         if g.glider != 0:                                       # [5F5B-5F62] flying state -> halve the impulse
             impulse = (_s16(impulse) >> 1) & 0xFFFF
         p.yvel = ((p.yvel & 0xFFFF) + impulse) & 0xFFFF         # [5F64] Yvel += impulse
