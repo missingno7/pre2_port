@@ -82,11 +82,12 @@ class OverlayBackend:
     whole-routine transform over one of these and returns ``overlay.writes`` as its write set — so the pass stays
     a pure function of its inputs (the base is untouched), exactly like the hand-written ``_Ov`` it replaces."""
 
-    __slots__ = ("_base_rb", "writes")
+    __slots__ = ("_base_rb", "writes", "_registry")
 
     def __init__(self, base_rb):
         self._base_rb = base_rb          # base_rb(offset) -> the ORIGINAL DS byte at a DGROUP offset
         self.writes: dict[int, int] = {}
+        self._registry = None            # FieldRegistry, lazily created by register() — P2's name-keyed seam
 
     def rb(self, off: int) -> int:
         o = off & 0xFFFF
@@ -101,6 +102,20 @@ class OverlayBackend:
     def ww(self, off: int, v: int) -> None:
         self.wb(off, v)
         self.wb((off + 1) & 0xFFFF, v >> 8)
+
+    def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "OverlayBackend":
+        """Route ``view_cls`` (optionally just specific field NAMES via ``remap``) to a live ``pre2/game``
+        dataclass instance — the P2 seam. Unregistered views/fields keep working via the offset path above."""
+        if self._registry is None:
+            self._registry = FieldRegistry()
+        self._registry.register(view_cls, obj, remap)
+        return self
+
+    def read_field(self, view, name: str, width: int, signed: bool) -> int:
+        return _registry_read_field(self, self._registry, view, name, width, signed)
+
+    def write_field(self, view, name: str, width: int, v: int) -> None:
+        _registry_write_field(self, self._registry, view, name, width, v)
 
     def apply(self, writes: dict) -> None:
         """Merge a ``{offset: (value, width)}`` width-tracking contract (e.g. another routine's return value)
@@ -125,12 +140,13 @@ class WidthOverlayBackend:
 
     _IS_DGROUP_BACKEND = True   # a dgroup-view backend: any StructView binds straight onto it
 
-    __slots__ = ("_rb", "_bytes", "writes")
+    __slots__ = ("_rb", "_bytes", "writes", "_registry")
 
     def __init__(self, base_rb, base_rw=None):
         self._rb = base_rb         # base_rb(offset) -> the ORIGINAL DS byte at a DGROUP offset (base_rw unused:
         self._bytes: dict[int, int] = {}   # words are always composed from two byte reads, like real memory)
         self.writes: dict = {}
+        self._registry = None      # FieldRegistry, lazily created by register() — P2's name-keyed seam
 
     def rb(self, o: int) -> int:
         o &= 0xFFFF
@@ -139,6 +155,20 @@ class WidthOverlayBackend:
     def rw(self, o: int) -> int:
         o &= 0xFFFF
         return self.rb(o) | (self.rb((o + 1) & 0xFFFF) << 8)
+
+    def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "WidthOverlayBackend":
+        """Route ``view_cls`` (optionally just specific field NAMES via ``remap``) to a live ``pre2/game``
+        dataclass instance — the P2 seam. Unregistered views/fields keep working via the offset path above."""
+        if self._registry is None:
+            self._registry = FieldRegistry()
+        self._registry.register(view_cls, obj, remap)
+        return self
+
+    def read_field(self, view, name: str, width: int, signed: bool) -> int:
+        return _registry_read_field(self, self._registry, view, name, width, signed)
+
+    def write_field(self, view, name: str, width: int, v: int) -> None:
+        _registry_write_field(self, self._registry, view, name, width, v)
 
     def apply(self, writes: dict) -> None:
         for off, v in writes.items():
@@ -166,12 +196,13 @@ class WidthContractBackend:
     the island's own ``rb``/``rw`` closures (which may be word-granular, not byte-composed) and do NOT see the
     accumulated writes — for projection passes that read only original memory and emit a fresh write set."""
 
-    __slots__ = ("_rb", "_rw", "writes")
+    __slots__ = ("_rb", "_rw", "writes", "_registry")
 
     def __init__(self, base_rb, base_rw, out: "dict[int, tuple[int, int]] | None" = None):
         self._rb = base_rb
         self._rw = base_rw
         self.writes: dict[int, tuple[int, int]] = {} if out is None else out
+        self._registry = None      # FieldRegistry, lazily created by register() — P2's name-keyed seam
 
     def rb(self, off: int) -> int:
         return self._rb(off & 0xFFFF)
@@ -184,6 +215,20 @@ class WidthContractBackend:
 
     def ww(self, off: int, v: int) -> None:
         self.writes[off & 0xFFFF] = (v & 0xFFFF, 2)
+
+    def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "WidthContractBackend":
+        """Route ``view_cls`` (optionally just specific field NAMES via ``remap``) to a live ``pre2/game``
+        dataclass instance — the P2 seam. Unregistered views/fields keep working via the offset path above."""
+        if self._registry is None:
+            self._registry = FieldRegistry()
+        self._registry.register(view_cls, obj, remap)
+        return self
+
+    def read_field(self, view, name: str, width: int, signed: bool) -> int:
+        return _registry_read_field(self, self._registry, view, name, width, signed)
+
+    def write_field(self, view, name: str, width: int, v: int) -> None:
+        _registry_write_field(self, self._registry, view, name, width, v)
 
 
 class DictBackend:
@@ -237,6 +282,61 @@ class MemBackend:
 
     def ww(self, o: int, v: int) -> None:
         self._mem.ww(o, v)
+
+
+class FieldRegistry:
+    """A name-keyed registry an overlay backend consults before falling back to its own offset-based rb/rw —
+    the P2/P3 mechanism (docs/pre2/native_dataclass_lift.md) that lets ONE cluster (e.g. RNG) run live on a
+    ``pre2/game`` dataclass while everything else keeps working through the unchanged offset path. Supports an
+    optional per-name REMAP for a view that aliases another view's bytes under different field names (e.g.
+    ``ScrollScriptView.rng_a`` addresses the same byte as ``RngView.lcg_a``)."""
+
+    __slots__ = ("_by_cls", "_by_name")
+
+    def __init__(self):
+        self._by_cls: dict = {}
+        self._by_name: dict = {}
+
+    def register(self, view_cls, obj, remap: "dict[str, str] | None" = None) -> "FieldRegistry":
+        self._by_cls[view_cls] = obj
+        if remap:
+            for local_name, attr_name in remap.items():
+                self._by_name[(view_cls, local_name)] = (obj, attr_name)
+        return self
+
+    def resolve(self, view, name: str):
+        """``(obj, attr_name)`` to read/write via ``getattr``/``setattr``, or ``None`` if unregistered."""
+        key = (type(view), name)
+        hit = self._by_name.get(key)
+        if hit is not None:
+            return hit
+        obj = self._by_cls.get(type(view))
+        return (obj, name) if obj is not None else None
+
+
+def _registry_read_field(backend, registry, view, name: str, width: int, signed: bool) -> int:
+    hit = registry.resolve(view, name) if registry is not None else None
+    if hit is not None:
+        obj, attr = hit
+        v = getattr(obj, attr) & ((1 << (8 * width)) - 1)
+        if signed and v & (1 << (8 * width - 1)):
+            v -= 1 << (8 * width)
+        return v
+    off = (view._base + getattr(type(view), name).off) & 0xFFFF   # the offset stays on the descriptor
+    v = backend.rb(off) if width == 1 else backend.rw(off)        # through the P2/P3 transition
+    if signed and v & (1 << (8 * width - 1)):
+        v -= 1 << (8 * width)
+    return v
+
+
+def _registry_write_field(backend, registry, view, name: str, width: int, v: int) -> None:
+    hit = registry.resolve(view, name) if registry is not None else None
+    if hit is not None:
+        obj, attr = hit
+        setattr(obj, attr, v & ((1 << (8 * width)) - 1))
+        return
+    off = (view._base + getattr(type(view), name).off) & 0xFFFF
+    (backend.wb if width == 1 else backend.ww)(off, v)
 
 
 def dgroup_read_word(state, off: int) -> int:
