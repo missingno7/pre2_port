@@ -17,9 +17,9 @@ this module recovers the STATE side:
 [0x2879]!=0 (demo playback) skips the whole scene, exactly as the ASM's 9B2C gate."""
 from __future__ import annotations
 
-from pre2.views.dgroup_view import PlayerGlobals, RngView
+from pre2.views.dgroup_view import GameOverBird, PlayerGlobals, RngView
 from pre2.views.memory_adapter import apply_ds, readers
-from pre2.views.tables import ByteTable
+from pre2.views.tables import ByteTable, Tables
 from pre2.native.state import DATA_SEG
 from pre2.native.vga import _dac8
 from pre2.recovered.input_decode import decode_input
@@ -30,8 +30,6 @@ _DS = DATA_SEG << 4
 
 _LETTER_TABLE = 0xB018      # [asm 9BA3] 8 bytes: sprite id - 0xB0 per GAME/OVER letter
 _BIRD_BASE = 0x5138         # [asm 9C35] the 3 bird records
-_BIRD_SIN = 0x6F90          # [asm 9D15] DS: signed sine table (X orbit)
-_BIRD_COS = 0x7090          # [asm 9D3F] DS: signed cosine table (Y orbit)
 _TIMEOUT = 0x276            # [asm 9C74] idle frames (70Hz) before the scene auto-exits
 
 
@@ -84,9 +82,9 @@ def native_gameover_setup(state) -> None:
         di += 0x12
     # --- the 3 circling birds [9C35-9C5B]: phase + anim-script ptr (X/Y/id computed per tick) ---
     for k, (phase, script) in enumerate(((0, 0xB020), (0x55, 0xB032), (0xAA, 0xB054))):
-        base = _BIRD_BASE + k * 0x12
-        state.wb(base + 8, phase)
-        _ww(state, base + 0xC, script)
+        bird = GameOverBird(state, _BIRD_BASE + k * 0x12)
+        bird.phase = phase
+        bird.script_ptr = script
     g.idle_clock = 0                                               # [9C5C] reset the idle/timeout counter
 
 
@@ -112,16 +110,18 @@ def native_gameover_tick(state) -> None:
         _ww(state, si + 2, (_rd(state, si + 2) + _s16(ax)) & 0xFFFF)       # [9CFE] Y += vel
         si += 0x12
     si = _BIRD_BASE
+    tbl = Tables(state.rb)
     for _ in range(3):                                             # [9D06-9D95] the bird orbits
         _ww(state, si - 0x164, 0xFFFF)                                 # [9D0C] free the paired render slot
-        phase = state.rb(si + 8)
-        sin = _s8(state.rb(_BIRD_SIN + phase))                     # [9D12-9D19] xlatb + cbw
+        bird = GameOverBird(state, si)
+        phase = bird.phase
+        sin = _s8(tbl.cos[phase])                                  # [9D12-9D19] xlatb + cbw (0x6F90 = Tables.cos)
         _ww(state, si, (0x96 + ((sin * 0x41) >> 6)) & 0xFFFF)          # [9D1A-9D3A] X = 0x96 + sin*0x41/64
-        cos = _s8(state.rb(_BIRD_COS + phase))                     # [9D3C-9D43]
+        cos = _s8(tbl.sin[phase])                                  # [9D3C-9D43] (0x7090 = Tables.sin)
         v = (cos * 0x0A) >> 6                                      # [9D44-9D5F] the Y orbit component
         _ww(state, si + 6, v & 0xFFFF)                                 # [9D61]
         _ww(state, si + 2, (v + 0x135) & 0xFFFF)                       # [9D64-9D67] Y = v + 0x135
-        state.wb(si + 8, (phase + 2) & 0xFF)                       # [9D6A] phase advance
+        bird.phase = (phase + 2) & 0xFF                            # [9D6A] phase advance
         bx = _rd(state, si + 0xC)                                      # [9D6E] the anim-script advance
         ax = _rd(state, bx)
         while ax & 0x8000:                                         # [9D73-9D79] loop marker: rewind

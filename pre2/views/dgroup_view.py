@@ -807,6 +807,16 @@ class LoaderGlobals(DgroupView):
     anim_table_3 = _U8Array(0x6988, 0x100)
 
 
+class GameOverBird(StructView):
+    """One of the 3 circling-bird records the GAME OVER scene drives (``0x5138``, stride 0x12) — the orbit
+    phase + anim-script cursor [level_load's counterpart: pre2/native/gameover_scene.py]."""
+
+    __slots__ = ()
+
+    phase = _U8(8)         # the sin/cos table index driving the orbit position [asm 9D0F/9D6A]
+    script_ptr = _U16(0xC)  # the anim-script advance cursor [asm 9D6E]
+
+
 class SfxTableEntry(StructView):
     """One entry of the per-effect ``{src, len}`` SFX descriptor table (0x1009, stride 4) — the PCM source
     offset + length ``native_play_sfx``'s digital path copies into the active descriptor."""
