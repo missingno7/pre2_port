@@ -23,7 +23,7 @@ from pre2.native.dgroup_offsets import (
     LEVEL_DATA_SEG, LEVEL_HEADER_TABLE, LEVEL_INDEX, LEVEL_PROP_HEADER, PLAYER_SLOT,
     SCROLL_SCRIPT_TABLE, TILE_MASK_TABLE, TILE_TYPE_TABLE, WARP_TABLE)
 from pre2.views.dgroup_view import BonusCellSlot, DictBackend, EffectSource, LoaderGlobals, PlayerGlobals
-from pre2.views.tables import Tables
+from pre2.views.tables import ByteTable, Tables, WordTable
 
 _DS = DATA_SEG << 4
 
@@ -53,7 +53,7 @@ def native_level_load_dgroup(state, level: int, *, game_root: str) -> None:
     else:
         lg.collect_total_decor = lg.collect_total_decor >> 1
         lg.collect_total_main = lg.collect_total_main >> 1
-    lg.gfx_group = rb(GFX_GROUP_TABLE + level)                      # per-level graphics-group id
+    lg.gfx_group = ByteTable(rb, GFX_GROUP_TABLE)[level]                      # per-level graphics-group id
     al = (level + 0x31) & 0xFF                          # filename digit: level+'1', then 'A'.. past '9'
     if al > 0x39:
         al = (al + 7) & 0xFF
@@ -66,7 +66,7 @@ def native_level_load_dgroup(state, level: int, *, game_root: str) -> None:
     g.map_seg = seg                                             # level-data base segment
 
     # --- 4316: header skip + tile-index table [asm 4316..433e] ---
-    bh = rb(LEVEL_HEADER_TABLE + level)                             # level header size (paragraphs) / bottom limit
+    bh = ByteTable(rb, LEVEL_HEADER_TABLE)[level]                   # level header size (paragraphs) / bottom limit
     g.map_rows = bh
     base_seg = (seg + (bh << 4)) & 0xFFFF               # skip the (bh<<4)-paragraph header
     base = (base_seg << 4) & 0xFFFFF
@@ -271,7 +271,7 @@ def _per_level_pointers(state) -> None:
     level = g.level
     from pre2.views.dgroup_view import ScrollScriptView
     ssv = ScrollScriptView(state)
-    ssv.script_ptr = state.rw(SCROLL_SCRIPT_TABLE + level * 2)   # dynamic per-level table read
+    ssv.script_ptr = WordTable(state.rw, SCROLL_SCRIPT_TABLE)[level * 2]   # dynamic per-level table read
     g.checkpoint_x = lg.level_start_x
     g.checkpoint_y = lg.level_start_y
     ssv.frame_counter = 0
@@ -290,7 +290,7 @@ def _count_decor(state) -> None:
             dx += 1
     lg.collect_total_decor = (lg.collect_total_decor + dx) & 0xFFFF
     level = g.level
-    if level < 0x0A and state.rb(WARP_TABLE + level) != 0xFF:      # dynamic per-level table read
+    if level < 0x0A and ByteTable(state.rb, WARP_TABLE)[level] != 0xFF:      # dynamic per-level table read
         lg.collect_total_decor = (lg.collect_total_decor << 1) & 0xFFFF
         lg.collect_total_main = (lg.collect_total_main << 1) & 0xFFFF
 
@@ -308,7 +308,7 @@ def native_level_load_planar(state) -> None:
     g = PlayerGlobals(state)
     seg = g.map_seg
     level = g.level
-    bh = state.rb(LEVEL_HEADER_TABLE + level)          # dynamic per-level table read
+    bh = ByteTable(state.rb, LEVEL_HEADER_TABLE)[level]          # dynamic per-level table read
     base_seg = (seg + (bh << 4)) & 0xFFFF
     write_slots(state, compute_local_slots(state, base_seg))         # 4316 (local)
 

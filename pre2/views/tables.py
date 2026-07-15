@@ -29,6 +29,21 @@ class ByteTable:
         return self._rb((self.base + i) & 0xFFFF)
 
 
+class WordTable:
+    """A read-only word table at a fixed DGROUP ``base``: ``table[i]`` = the word at ``base + i`` (the caller
+    computes any *2 stride, exactly like :class:`ByteTable`'s byte-offset convention -- so a call site reads
+    ``WordTable(rw, SOME_TABLE)[idx]`` instead of ``rw((SOME_TABLE + idx) & 0xFFFF)``)."""
+
+    __slots__ = ("_rw", "base")
+
+    def __init__(self, read_word, base: int):
+        self._rw = read_word
+        self.base = base & 0xFFFF
+
+    def __getitem__(self, i: int) -> int:
+        return self._rw((self.base + i) & 0xFFFF)
+
+
 # --- the table bases (the ONE place these layout offsets live in shipped code, pending relocation) ----------
 FLOOR_PROPS = 0x7F5E   # tile id -> ground property (solidity; also the 5C04 ground-handler index *2)
 CEIL_PROPS  = 0x7E5E   # tile id -> ceiling property (bit0 = ceiling-solid; also the 5C92 side-handler index *2)
