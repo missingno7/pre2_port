@@ -778,6 +778,10 @@ class LoaderGlobals(DgroupView):
     #                             a restart frees back to here) [asm 0129-012C]
     fg_bank    = _U16(0x003B)   # the FOREGROUND tile-gfx bank segment (the 3721 foliage-in-front pass reads
     #                             it; missing = no foreground) [asm 0123]
+    font_seg   = _U16(0x003D)   # the font segment (front_end's shifted-font build reads it) [asm 972E]
+    carte_marker_dims = _U16(0x7522)   # the map "you are here" marker's size (bytes-wide / rows) [asm 9562]
+    carte_mask_seg    = _U16(0x667A)   # the marker mask far-pointer segment [0x667a]:[0x62da]
+    carte_mask_off    = _U16(0x62DA)   # ... offset
     year       = _U16(0x0037)   # the DOS clock year captured at boot (the creators-photo gate: < 0x7CA
     #                             (1994) skips it) [asm 25F6]
     sprites_seg = _U16(0x2DB4)  # the global SPRITES.SQZ bank's load segment [asm 2E12, native_build_sprite_bank]

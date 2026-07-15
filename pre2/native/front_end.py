@@ -39,8 +39,7 @@ from pre2.native.state import DATA_SEG
 from pre2.recovered.front_end_fade import fade_in_frames, fade_out_frames, palette_morph_frames
 from pre2.recovered.input_decode import decode_input
 from pre2.native.dgroup_offsets import (
-    CARTE_MARKER_DIMS, CARTE_MARKER_TABLE, CARTE_MASK_OFF, CARTE_MASK_SEG, FONT_SEG, KEY_TABLE, MENU_MORPH_SRC,
-    ROW_SINE_TABLE)
+    CARTE_MARKER_TABLE, KEY_TABLE, MENU_MORPH_SRC, ROW_SINE_TABLE)
 from pre2.recovered.scene import (
     MODE_LINEAR, MODE_PLANAR,
     SCENE_INTRO, SCENE_MAP, SCENE_MENU, SCENE_TITLE,
@@ -521,7 +520,7 @@ def _native_menu_map(state, dos, game_root: str, kind: str):
     page = MenuScenePage()
     motif = unpack_sqz(resolve_game_path(game_root, "MOTIF.SQZ").read_bytes())[:0x3E80]
     page.seed(motif)                                              # [asm 96EC/9718] planes 0,1
-    fseg = rw(FONT_SEG)                                               # the font segment ([0x3d])
+    fseg = LoaderGlobals(state).font_seg                                 # the font segment ([0x3d])
     font = build_shifted_font(bytes(state.data[(fseg << 4):(fseg << 4) + 0x3000]))          # [asm 972E] shift copies
 
     def text_runs():
@@ -616,10 +615,11 @@ def _native_carte(state, dos, game_root: str):
     #                                                                the loader stacks the level exactly where the VM does
     master = bytes(state.data[(seg << 4):(seg << 4) + 0xFA00])   # the 4-plane map master (planes @0/3E80/7D00/BB80)
     # [asm 9543-95CD] stamp the per-level 'you are here' marker (the player's caveman on the map) into the master.
+    lg = LoaderGlobals(state)
     lv = g.level                                              # the level index picks its map (x,y) + the marker
-    dims = rw(CARTE_MARKER_DIMS); mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
+    dims = lg.carte_marker_dims; mw = (dims & 0xFF) >> 3; mh = dims >> 8   # marker size (bytes wide / rows) [asm 9562-956A]
     di = carte_marker_offset(rw(CARTE_MARKER_TABLE + lv * 4), rw(CARTE_MARKER_TABLE + 2 + lv * 4))
-    msrc = (rw(CARTE_MASK_SEG) << 4) + rw(CARTE_MASK_OFF)                        # [0x667a]:[0x62da] — mask + 4 colour planes
+    msrc = (lg.carte_mask_seg << 4) + lg.carte_mask_off                        # [0x667a]:[0x62da] — mask + 4 colour planes
     marker = bytes(state.data[msrc:msrc + 5 * mw * mh])
     master = stamp_carte_marker(master, marker, di, mw, mh)
     from pre2.native.audio import native_load_song
