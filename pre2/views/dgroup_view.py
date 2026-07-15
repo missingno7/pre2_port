@@ -1320,6 +1320,17 @@ class M9ScriptEntry(StructView):
     dwell      = _U8(2)    # [asm 6B36-6B39] the dwell byte (valid only once bx is past any wrap)
 
 
+class TriggerBankRecord(StructView):
+    """One record header in the 41CA proximity-scenery pristine-block bank (``[0x2875]``, variable-length
+    tile data follows) [level_load._build_trigger_bank 41ca, native_52d2's read-back]."""
+
+    __slots__ = ()
+
+    map_off = _U16(0)   # the saved block's level-map offset (0xFFFF = bank terminator) [asm 4200/422b]
+    rows    = _U8(2)    # row count [asm 4203]
+    width   = _U8(3)    # column count [asm 4203]
+
+
 class CaveTriggerEntry(StructView):
     """One entry of the 20-slot cave/teleport-entrance trigger table (0x8367, stride 7) [native_trigger_scan
     5316; native_cave_teleport 5326]."""

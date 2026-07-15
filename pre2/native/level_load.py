@@ -102,19 +102,20 @@ def _rebase_entity_sprites(state) -> None:
     """4182: rebase the second-pass entity list [0x8489] (variable stride = [si], <=0x32) sprite ref
     [+2] across two banks (>= [0x8c8b] -> -[0x8c8b]+0x138; >= [0x8c89] -> -[0x8c89]+0x35), then reset
     [0x8c89]=0x35 / [0x8c8b]=0x138."""
+    from pre2.recovered.object_inject import LiveEntityRecordBytes
     g = PlayerGlobals(state)
     dx = g.sprite_bank_lo
     bx = g.sprite_bank_hi
     if dx != 0xFFFF:
-        si = ENTITY_LIST_2NDPASS
-        while state.rb(si) <= 0x32:            # dynamic variable-stride entity walk (stride = [si])
-            ax = state.rw(si + 2)
+        rec = LiveEntityRecordBytes(state, ENTITY_LIST_2NDPASS)
+        while rec.stride <= 0x32:              # dynamic variable-stride entity walk (stride = [si])
+            ax = rec.sprite_ref
             if ax != 0xFFFF:
                 if ax >= bx:
-                    state.ww(si + 2, (ax - bx + 0x138) & 0xFFFF)
+                    rec.sprite_ref = (ax - bx + 0x138) & 0xFFFF
                 elif ax >= dx:
-                    state.ww(si + 2, (ax - dx + 0x35) & 0xFFFF)
-            si = (si + _s8(state.rb(si))) & 0xFFFF
+                    rec.sprite_ref = (ax - dx + 0x35) & 0xFFFF
+            rec.si = (rec.si + _s8(rec.stride)) & 0xFFFF
     g.sprite_bank_lo = 0x35
     g.sprite_bank_hi = 0x138
 
@@ -224,12 +225,12 @@ def _build_trigger_bank(state) -> None:
     52D2 restore (respawn / level-start un-collapse). Note the 4065 dup runs BEFORE this, so the [0x9203]
     backup keeps the pre-41CA ``[+6]`` (0xFFFF) — 5237's 5251 restore puts 0xFFFF back each respawn, exactly
     as observed in the L0xD snapshots."""
-    from pre2.views.dgroup_view import ProximityView, SegmentBackend
+    from pre2.views.dgroup_view import ProximityView, SegmentBackend, TriggerBankRecord
     v = ProximityView(state)
     bank = SegmentBackend(state, v.bank_seg)                         # [asm 41ca] es = [0x2875]
     game_map = SegmentBackend(state, v.map_seg)                      # [asm 41fc] ds = [0x2DDA]
     di = 0                                                           # [asm 41ce]
-    bank.ww(0, 0xFFFF)                                               # [asm 41d0] empty-bank terminator
+    TriggerBankRecord(bank, 0).map_off = 0xFFFF                      # [asm 41d0] empty-bank terminator
     for trig in v.triggers:                                          # [asm 41d5/41d8] 15 entries
         if trig.dead:                                                # [asm 41db]
             continue
@@ -237,8 +238,8 @@ def _build_trigger_bank(state) -> None:
         src = (trig.block_top - (count << 8)) & 0xFFFF               # [asm 41ed] top minus the rows it will rise
         rows = (trig.height + count) & 0xFF                          # [asm 41ef/41f2] everything the mod touches
         width = trig.width                                           # [asm 41f5]
-        bank.ww(di, src)                                             # [asm 4200] record: map offset
-        bank.wb(di + 2, rows); bank.wb(di + 3, width)                # [asm 4203] rows, width
+        rec = TriggerBankRecord(bank, di)                            # [asm 4200-4203] record: map offset, rows, width
+        rec.map_off = src; rec.rows = rows; rec.width = width
         di += 4                                                      # [asm 4207]
         for _r in range(rows):                                       # [asm 420a-421d] save the pristine block
             for c in range(width):                                   # movsb x width (one map row)
@@ -246,7 +247,7 @@ def _build_trigger_bank(state) -> None:
                 di += 1
             src = (src + 0x100) & 0xFFFF                             # [asm 4215/4217] next map row
         trig.reveal_cursor = (di - width) & 0xFFFF                   # [asm 4224/4228] = the LAST saved row
-        bank.ww(di, 0xFFFF)                                          # [asm 422b] terminator after this entry
+        TriggerBankRecord(bank, di).map_off = 0xFFFF                 # [asm 422b] terminator after this entry
 
 
 def native_level_load_objects(state) -> None:

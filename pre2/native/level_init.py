@@ -63,7 +63,7 @@ def native_52d2(state) -> None:
     210723 (L0xD) — die on collapsed scenery, respawn, walk back: the VM restored the 74 collapsed bytes at
     the respawn (tick 653) while native kept them, and the stale tile stopped the player as a phantom wall
     at tick 788 (the reported "camera inaccuracy")."""
-    from pre2.views.dgroup_view import ProximityView, SegmentBackend
+    from pre2.views.dgroup_view import ProximityView, SegmentBackend, TriggerBankRecord
     v = ProximityView(state)
     # The 41CA bank lives in VOLATILE [0x2875] scratch (the bump-allocator load top, never bumped past the
     # bank), so the original relies on nothing overwriting it for the life of the level. Its content is a pure
@@ -81,10 +81,11 @@ def native_52d2(state) -> None:
     game_map = SegmentBackend(state, v.map_seg)                      # [asm 52d4] es = [0x2DDA]
     si = 0                                                           # [asm 52dc]
     for _ in range(0x10):                                            # bank holds at most 15 entries (41CA cx=0xf)
-        dest = bank.rw(si)                                           # [asm 52de] the block's map offset
+        rec = TriggerBankRecord(bank, si)
+        dest = rec.map_off                                           # [asm 52de] the block's map offset
         if dest == 0xFFFF:                                           # [asm 52e0] terminator
             return
-        rows, width = bank.rb(si + 2), bank.rb(si + 3)               # [asm 52e5] al=rows, ah=width
+        rows, width = rec.rows, rec.width                            # [asm 52e5] al=rows, ah=width
         si += 4                                                      # [asm 52e8]
         for _r in range(rows):                                       # [asm 52eb-52f7]
             for k in range(width):                                   # rep movsb (one map row)
