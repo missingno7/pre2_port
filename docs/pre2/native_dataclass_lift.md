@@ -23,6 +23,39 @@ offset layout and therefore lives in the bridge. It can never be the shipped def
 detachable workbench into the deployed tree — `deploy_native.py` DENYs `pre2.bridge` and the smoke asserts no
 bridge module loads at runtime).
 
+## CORRECTION (2026-07-16) — read before acting on the phasing below
+
+Two things this doc's P2/P3 imply turned out to be wrong in practice. Both were learned the hard way; the
+phasing below is otherwise still sound, but **do not start P2 work without reading this.**
+
+1. **P3's "`NamedObjectBackend`" already exists, under a different name, and it is NOT the one described here.**
+   The shipped, offset-free, name-resolving store the product should default to is
+   **`pre2/native/object_state.py`'s `ObjectGraphStore`** — already shipped, already proven byte-exact for the
+   whole lifecycle (`verify_object_finish`, 1579 ticks across transitions) and for the real product loop
+   (`verify_object_playloop`, 919 ticks). It is also the only mechanism with a *completeness* proof:
+   `readonly_image=True` raises on any un-routed mutable write. `pre2/views/named_view.py`'s
+   `NamedObjectBackend` (P1's exemplar) is a proof-of-mechanism, not the destination.
+   **The real remaining gap is not "build a backend" — it is that `ObjectGraphStore`'s offset-aware
+   CONSTRUCTION lives in `pre2/bridge/game_layout.py`, which shipped code may not import.** That, and the
+   boot-flip that follows it, are specified in `offset_free_release_plan.md` §"Stage 2.5 — the boot-flip",
+   which is the actual next step.
+
+2. **`FieldRegistry` (the `dgroup_view.py` name-registry used to make `state.rng` and `state.player` live) has a
+   structural ceiling: it intercepts `read_field`/`write_field` only, never `rb`/`wb`.** So the moment ANY
+   offset access to a registered cluster's bytes remains, the live object and the image split-brain. Registering
+   `PlayerView` globally silently broke one-shot event paths (game-over reset, cave-teleport, attract-title)
+   that write a player field and read `.data` back immediately with no sync point — 14 tests caught it. Player
+   therefore ships *transactional* (re-seeded from `.data` per pass, folded back immediately; the image stays
+   authoritative). **That pattern does not scale and is not the endpoint — do not extend it to more clusters.**
+   It is superseded by the boot-flip: once `ObjectGraphStore` is the default, `ObjectGraphStore.player` IS the
+   live object and the registration becomes redundant. See the `pre2-player-p2-live-wiring` memory.
+
+Also worth carrying: **`_ROUTES` is NOT derivable from the `dgroup_view` descriptors** (they are overlapping
+siblings over one truth — the ASM — not derivations). `_ROUTES` carries the *grouping* of offsets into dataclass
+instances, the *dataclass field name* (differs from the view name in 18+ scalar and ~380 array cases), and the
+*canonical width* where views declare byte+word aliases for one address. So moving it is a MOVE, not a
+generation.
+
 ## The central tension
 
 Shipped state access goes through the **offset-keyed views** in `pre2/views/dgroup_view.py`:
