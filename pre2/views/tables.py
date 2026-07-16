@@ -12,6 +12,8 @@ docs/pre2/offset_quarantine_plan.md (Phase 2 / §3c).
 """
 from __future__ import annotations
 
+from pre2.native import asset_tables as _A   # the boot-constant tables AS native content (P5 slice 1a)
+
 
 class ByteTable:
     """A read-only byte table at a fixed DGROUP ``base``: ``table[i]`` = the byte at ``base + i``.
@@ -27,6 +29,32 @@ class ByteTable:
 
     def __getitem__(self, i: int) -> int:
         return self._rb((self.base + i) & 0xFFFF)
+
+
+class NativeByteTable:
+    """A read-only byte table that IS its content — a native immutable asset, indexed from 0, no DGROUP offset
+    anywhere (P5 slice 1a; the data lives in :mod:`pre2.native.asset_tables`).
+
+    Same ``table[i]`` interface as :class:`ByteTable`, so a caller cannot tell which one it holds — that is what
+    lets the boot-constant tables migrate off the historical image with zero call-site changes. ``start`` lets
+    two names share one asset where the DOS build interleaved them (``player_anim_height`` is the
+    ``sprite_geom`` region + 1).
+
+    Out-of-range FAILS LOUD. The image silently read whatever byte followed (the next table, or worse); a native
+    asset has a real extent, and reading past it means an index the extent analysis did not account for. Loud is
+    correct here — a silent wrong lookup is exactly the class of bug this migration exists to remove."""
+
+    __slots__ = ("_d", "_start")
+
+    def __init__(self, data: bytes, start: int = 0):
+        self._d = data
+        self._start = start
+
+    def __getitem__(self, i: int) -> int:
+        k = self._start + i
+        if not 0 <= k < len(self._d):
+            raise IndexError(f"native asset index {i} out of range (extent {len(self._d) - self._start})")
+        return self._d[k]
 
 
 class WordTable:
@@ -81,26 +109,33 @@ class Tables:
     def __init__(self, read_byte, read_word=None):
         self._rb = read_byte
         self._read_word = read_word    # optional native word reader (for word-granular asset reads); else compose
-        self.speed_curve = ByteTable(read_byte, SPEED_CURVE)
+        # BOOT-CONSTANT tables (P5 slice 1a): native immutable assets — these no longer touch the historical
+        # image at all. Bound here rather than at the call sites, so every existing ``Tables(rb)`` migrates with
+        # zero changes. Proven byte-identical to the DOS spans, and proven constant across a real cold boot +
+        # *.SQZ load on levels 0/1/4/5/8/9/11 (tests/test_asset_tables.py pins both).
+        self.speed_curve = NativeByteTable(_A.SPEED_CURVE)
+        self.cos = NativeByteTable(_A.COS)
+        self.sin = NativeByteTable(_A.SIN)
+        self.song_index = NativeByteTable(_A.SONG_INDEX)
+        self.score_spr_lut = NativeByteTable(_A.SCORE_SPR_LUT)
+        self.sprite_geom = NativeByteTable(_A.SPRITE_GEOM)          # index by (id & 0x1FFF)<<1 (+1 = height)
+        self.player_anim_height = NativeByteTable(_A.SPRITE_GEOM, 1)  # the SAME asset, +1 (the DOS build
+        #                                                               interleaved width/height per sprite)
+        # PER-LEVEL LOADED tables: still read through the image — the loader writes them from the level's
+        # *.SQZ. They migrate in slice 1b, when level_load emits asset objects instead of bytes.
         self.floor_props = ByteTable(read_byte, FLOOR_PROPS)
         self.ceil_props = ByteTable(read_byte, CEIL_PROPS)
         self.tile_props = ByteTable(read_byte, TILE_PROPS)
-        self.cos = ByteTable(read_byte, COS)
-        self.sin = ByteTable(read_byte, SIN)
         self.ceil_handler = ByteTable(read_byte, CEIL_HANDLER)
         self.dirty_kind = ByteTable(read_byte, DIRTY_KIND)
-        self.song_index = ByteTable(read_byte, SONG_INDEX)
-        self.score_spr_lut = ByteTable(read_byte, SCORE_SPR_LUT)
-        self.sprite_geom = ByteTable(read_byte, SPRITE_GEOM)  # index by (id & 0x1FFF)<<1 (+1 = height)
-        self.player_anim_height = ByteTable(read_byte, PLAYER_ANIM_HEIGHT)
 
     def sprite_half_w(self, sprite_id: int) -> int:
-        """The sprite's X half-extent byte (``[0x7190 + (id&0x1FFF)<<1]``)."""
-        return self._rb((SPRITE_GEOM + ((sprite_id & 0x1FFF) << 1)) & 0xFFFF)
+        """The sprite's X half-extent byte — a native asset lookup (was ``[0x7190 + (id&0x1FFF)<<1]``)."""
+        return self.sprite_geom[(sprite_id & 0x1FFF) << 1]
 
     def sprite_half_h(self, sprite_id: int) -> int:
-        """The sprite's Y half-extent byte (``[0x7191 + (id&0x1FFF)<<1]``)."""
-        return self._rb((SPRITE_GEOM + 1 + ((sprite_id & 0x1FFF) << 1)) & 0xFFFF)
+        """The sprite's Y half-extent byte — the same native asset, +1 (was ``[0x7191 + (id&0x1FFF)<<1]``)."""
+        return self.sprite_geom[((sprite_id & 0x1FFF) << 1) + 1]
 
     def sprite_left_hw(self, sprite_id: int) -> int:
         """The sprite's X half-width byte for the hitbox LEFT-edge test (``[0x752A + (id&0x1FFF)<<1]``)

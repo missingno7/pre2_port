@@ -97,11 +97,15 @@ def test_hitbox_far_y_culled():
 
 
 def test_hitbox_sets_vertical_detail_when_shallow():
-    # dY = 0x0A, y_half = 0x10 -> depth = 6 <= y_half>>1 (8) -> detail set (si != player)
-    rb, rw = _hb_mem((0x100, 0x100, 0), (0x100, 0x10A, 0))
+    # The sprite half-extents are now a NATIVE CONSTANT asset (P5 slice 1a, pre2/native/asset_tables.py), so
+    # this fixture's x_half/y_half stub no longer reaches sprite_half_h -- and shouldn't: the table is real,
+    # immutable content (proven unchanged across a cold boot + *.SQZ load on levels 0/1/4/5/8/9/11), so a test
+    # cannot pretend sprite 0 is 0x10 tall when it is genuinely 36. Same branch, real geometry:
+    #   sprite 0 -> y_half = 36; dY = 0x1A -> depth = 36 - 26 = 10 <= y_half>>1 (18) -> detail set (si != player)
+    rb, rw = _hb_mem((0x100, 0x100, 0), (0x100, 0x11A, 0))
     hit, writes = hitbox_overlap(rb, rw, 0x100, 0x200)
     assert writes[0xA330] == (1, 1)
-    assert writes[0xA331] == (0x06, 2)
+    assert writes[0xA331] == (0x0A, 2)
 
 
 # ---- spawn_effect_burst (8D1B) — shadow byte-exact (6-spawn burst in demo 140619) ----
