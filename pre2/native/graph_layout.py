@@ -35,7 +35,15 @@ from pre2.native.object_state import ObjectGraphStore
 # named working-memory buffers the tick scribbles as raw bytes: (attr, base, length). Modeled as a bytearray,
 # not fields (transient scratch, not records). These finish draining the mutable state off the image.
 _BUFFERS = [
-    ("level_scratch_lo", 0x003F, 0x6D - 0x3F), ("level_scratch_mid", 0x0535, 0x1E),
+    # NB: decode_input's demo RECORD tail writes at DS:[DEMO_PTR + 0x3F] with the cursor running to
+    # RECORD_LIMIT 0x7FC, so ANY byte in 0x003F..0x083C is writable at runtime. Every buffer below carves that
+    # span; a hole between them is an un-routed write, i.e. a crash under readonly_image=True. Two holes were
+    # found that way by actually playing (0x006D..0x00D5 and 0x0125..0x02E9 — 558 bytes) after the boot-flip
+    # made the object graph the product default; the corpus never recorded long enough to reach them.
+    # tests/test_object_graph_covers_demo_span.py now pins the whole span as routed.
+    ("level_scratch_lo", 0x003F, 0xD6 - 0x3F),   # was 0x6D - 0x3F: one byte short of the first real write
+    ("low_scratch_125", 0x0125, 0x02EA - 0x125),  # the second hole (see above)
+    ("level_scratch_mid", 0x0535, 0x1E),
     ("scenery_trigger_scratch", 0x065E, 0xC9), ("scratch_7de6", 0x7DE6, 0x24),
     # proj_slot_scratch (0xA32E..0xA340) split around the now-named hit_flag/hit_detail/burst_*/spawned_ptr/
     # anim_ready/proj_slot_ptr/bonus_debounce fields (SpawnCursor/HitScratch): the 1 residual un-named range.

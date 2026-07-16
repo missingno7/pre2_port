@@ -34,10 +34,25 @@ _DEFAULT_STORE_CACHE = []
 def _default_store():
     """The product's default gameplay state of record: the offset-free object graph (Stage 2.5 boot-flip).
     Cached — the controller is stateless (it re-seeds from the live image every frame), so one instance
-    serves every caller and every frame."""
+    serves every caller and every frame.
+
+    ``readonly_image=False`` **for the product, deliberately.** ``readonly_image=True`` asserts "the object
+    graph is the COMPLETE store" and raises on any un-routed mutable write — that is a VERIFICATION invariant
+    (it is how verify_object_finish proves completeness), and the verify scripts keep it by constructing
+    ``ObjectStore()`` themselves, whose default stays True. Making it the PRODUCT default was a mistake in the
+    boot-flip: a player hit it immediately (``gameplay tick wrote to the read-only loaded data at 0x006D``),
+    because decode_input's demo-record tail writes at a runtime cursor over 0x003F..0x083C and the routing had
+    two holes there (558 bytes) that no recorded demo ran long enough to reach.
+
+    The holes are now routed, but the posture is what matters: an un-routed write is a MODELLING gap, not
+    unrecovered behaviour. With ``False`` it lands in the residue image and is read back from there
+    consistently — lossless, correct, and the game keeps playing; only the byte's physical home differs. That
+    is not the "silent fallback" the project bans (secretly executing original ASM); it is ObjectGraphStore's
+    documented residue path. Crashing a player to enforce an architectural aspiration is the wrong trade —
+    verification, not the product, is where completeness gets proven."""
     if not _DEFAULT_STORE_CACHE:
         from pre2.native.object_runtime import ObjectStore
-        _DEFAULT_STORE_CACHE.append(ObjectStore())
+        _DEFAULT_STORE_CACHE.append(ObjectStore(readonly_image=False))
     return _DEFAULT_STORE_CACHE[0]
 
 
