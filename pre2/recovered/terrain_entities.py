@@ -162,7 +162,7 @@ def _move_default(ov, b):
             dw.dwell_count = 0
 
 
-def _collision_4b05(ov, di):
+def _collision_4b05(ov, di, player=None):
     """[asm 4B05] player-ride collision. Writes player state on contact; returns CF (True = the player rode)."""
     p, g = PlayerView(ov), PlayerGlobals(ov)
     if g.unk_6BFE != 0:                                       # [asm 4B08]
@@ -178,7 +178,8 @@ def _collision_4b05(ov, di):
                  0x4F1E: temp_y & 0xFF, 0x4F1F: (temp_y >> 8) & 0xFF}
     trb = overlay_reader(ov.rb, overrides, 0xFF)
     trw = lambda o: trb(o) | (trb((o + 1) & 0xFFFF) << 8)    # noqa: E731
-    hit, hb = hitbox_overlap(trb, trw, p.offset, di)         # [asm 4B31] 8D7B
+    hit, hb = hitbox_overlap(trb, trw, p.offset, di, player=player)  # [asm 4B31] 8D7B -- the simulated Y flows
+    #   through trb/trw above; player= only makes hitbox_overlap's OWN real-yvel gate live, not this override
     ov.apply(hb)
     if not hit:                                              # [asm 4B3B]
         return False
@@ -249,7 +250,7 @@ def tick_terrain_entities(rw, rb, read_tile, player=None):
                 collided = False
                 if _s16(p.yvel) > -0x10:                     # [asm 4AD4] jle skips the collision
                     ent.type_dir = ent.type_dir | 0x40        # [asm 4ADB]
-                    collided = _collision_4b05(ov, di)       # [asm 4ADF]
+                    collided = _collision_4b05(ov, di, player=player)   # [asm 4ADF]
                 if not collided:                             # [asm 4AE2 jb skips this]
                     ent.type_dir = ent.type_dir & 0xBF        # [asm 4AE4]
                     dst.y = (dst.y - 2) & 0xFFFF             # [asm 4AE8] nudge up 2px

@@ -120,12 +120,21 @@ def roll_bonus_sprite(rng) -> int:
     rng.lcg_d = d
     return sid
 
-def hitbox_overlap(rb, rw, si, di):
+def hitbox_overlap(rb, rw, si, di, player=None):
     """[asm 8D7B] Sprite-hitbox overlap test. ``rb``/``rw`` read a byte/word from DS; ``si``/``di`` are the
     source/target sprite-record offsets. Returns ``(hit, writes)`` — ``hit`` = the ASM's CF (True = overlap),
-    ``writes`` = the ``{offset: (value, width)}`` contract (always [0xA330]; [0xA331] only when set). Pure."""
+    ``writes`` = the ``{offset: (value, width)}`` contract (always [0xA330]; [0xA331] only when set). Pure.
+
+    ``player`` (the live ``pre2.game.model.Player``, threaded the same way ``rng=`` is elsewhere) is registered
+    on this call's OWN internal backend, independent of whatever ``rb``/``rw`` the caller passed in. This
+    matters because the vertical-detail gate below reads the PLAYER's real ``yvel`` UNCONDITIONALLY -- not
+    ``src``/``tgt``'s, whichever of ``si``/``di`` happens to be the player's own record -- so a caller
+    simulating a hypothetical player position via an overridden ``rb``/``rw`` (e.g. terrain_entities.py's ride
+    hit-test) still gets the REAL current yvel here even while the simulated Y flows through separately."""
     writes: dict[int, tuple[int, int]] = {HIT_FLAG: (0, 1)}  # [asm 8D81] cleared
     be = DictBackend(rb, rw)
+    if player is not None:
+        be.register(PlayerView, player)
     src, tgt = RenderSlot(be, si), RenderSlot(be, di)
     tbl = Tables(rb)
 
