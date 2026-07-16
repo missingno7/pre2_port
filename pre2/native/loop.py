@@ -536,16 +536,8 @@ def native_gameplay_frame(state) -> None:
     apply_ds(state, tick_projectiles(rw, rb))                        # [asm 0223] 6210
     apply_ds(state, tick_particles(rw, rb, tile_reader(state)))      # [asm 0226] 60FE
     apply_ds(state, tick_debris_pool(rw))                            # [asm 0229] 60DF
-    # tick_terrain_entities (the ride-collision pass) writes player fields via its OWN overlay -- fetch the
-    # live Player once, thread it in, and flush immediately, so native_player_step's own active_player() call
-    # right after re-seeds from FRESH .data instead of discarding this pass's writes (see active_player()'s
-    # docstring: re-fetching before syncing silently loses whatever the prior fetch wrote).
-    _player = state.active_player()
-    _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state), player=_player))   # [asm 022C] 4907
-    if _player is not None:
-        state.sync_player_to_image()
-    native_player_step(state)                                       # [asm 022F] 5850 (whole player update;
-    #   syncs its own live-Player writes back to .data internally before returning)
+    _apply_bytes(state, tick_terrain_entities(rw, rb, tile_reader(state)))   # [asm 022C] 4907
+    native_player_step(state)                                       # [asm 022F] 5850 (whole player update)
     native_player_interaction(state)                                # [asm 0232] 8295 (player<->world pass) --
     #   reads player bytes RAW (no player= threading; the blast-radius audit found it doesn't need live-object
     #   access for its own logic), correctly fresh since both passes above already synced

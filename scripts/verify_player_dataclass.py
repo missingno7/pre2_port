@@ -50,6 +50,11 @@ def run_demo(demo_dir: Path) -> int:
                 break               # a transition (level-end/respawn): outside this pure-gameplay proof
             raise
         obj.backend.materialize()
+        # ref runs on the DEFAULT ByteBackend, where the RNG is LIVE on ref.rng (registered in
+        # NativeGameState.__init__) -- so ref.data's RNG bytes are stale until folded back, exactly like every
+        # other raw-image digest read. obj's RNG is folded by its own materialize() above, so without this the
+        # comparison comes down to fresh-vs-stale RNG (it diverged at 0x28C1, the ror word).
+        ref.sync_rng_to_image()
         a = ref.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
         b = obj.data[DGROUP_BASE:DGROUP_BASE + 0x10000]
         if a != b:

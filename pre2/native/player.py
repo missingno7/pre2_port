@@ -100,14 +100,7 @@ def native_player_step(state) -> None:
     except Pre2InputGap as exc:
         raise Pre2HybridGap(f"native player: {exc}") from exc
 
-    # Fetch the live Player ONCE (freshly re-seeded from .data by active_player()) and thread the SAME
-    # reference through every player-touching step below (FSM, integrate, collision, flying). Re-fetching
-    # mid-pass would re-seed from .data and silently discard whatever an earlier step just wrote onto the
-    # object, since nothing flushes .data until sync_player_to_image() at the very end of this pass. None on
-    # a backend that already tracks the player its own way (object-graph/Hybrid) -- every call below is a
-    # documented no-op in that case, preserving exactly what ran before this lift.
-    player = state.active_player()
-    writes, sfx, scroll = player_fsm_step(rb, rw, player=player)       # [asm 58A7] FSM (jump/land/... sfx)
+    writes, sfx, scroll = player_fsm_step(rb, rw)                      # [asm 58A7] FSM (jump/land/... sfx)
     apply_contract(state, writes, word_fields=FSM_WORD_FIELDS)
     from pre2.native.audio import native_emit_sfx, player_sfx_x
     native_emit_sfx(state, sfx, player_sfx_x(state))                   # emit the FSM's play_sfx commands (jump/throw)
@@ -115,25 +108,17 @@ def native_player_step(state) -> None:
         from pre2.views.camera_pan import apply_camera_pan
         apply_camera_pan(state, scroll)
 
-    if player is not None:                                            # [asm 5A0F/5A36] X/Y integrate -- on the
-        player.x = player_x_integrate(player.x, player.xvel & 0xFFFF, g.cam_left)   # SAME live object, not a
-        player.y = player_y_integrate(player.y, player.yvel & 0xFFFF)              # raw re-read of stale .data
-    else:
-        pv.x = player_x_integrate(pv.x, pv.xvel & 0xFFFF, g.cam_left)
-        pv.y = player_y_integrate(pv.y, pv.yvel & 0xFFFF)
+    pv.x = player_x_integrate(pv.x, pv.xvel & 0xFFFF, g.cam_left)     # [asm 5A0F/5A36] X/Y integrate
+    pv.y = player_y_integrate(pv.y, pv.yvel & 0xFFFF)
 
     es_base = (g.map_seg << 4) & 0xFFFFF                                 # [asm 5A41] ground/tile collision
-    ds_w, map_w, _redraws = collision(rb, rw, lambda o: state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF],
-                                      player=player)
+    ds_w, map_w, _redraws = collision(rb, rw, lambda o: state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF])
     apply_contract(state, ds_w)                                         # byte-level overlay contract
     for o, v in map_w.items():
         state.data[(es_base + (o & 0xFFFF)) & 0xFFFFF] = v & 0xFF
 
     if g.glider != 0:                        # [asm 5A44 -> 484E] the glider/flying update (0x6BC5, dormant when 0)
-        apply_contract(state, player_flying_484e(rb, rw, player=player))   # anim + tilt + the wing slot (tuples)
-
-    if player is not None:
-        state.sync_player_to_image()   # flush this whole pass's accumulated writes back to .data ONCE
+        apply_contract(state, player_flying_484e(rb, rw))              # anim + tilt + the wing slot (tuples)
 
     timers = {                                                          # [asm 5A47-5A8B]
         CHARGE: g.charge, INPUT_SUPPRESS: g.input_suppress, SHAKE_MAGNITUDE: g.camera_shake,

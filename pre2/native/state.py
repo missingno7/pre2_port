@@ -21,7 +21,7 @@ class NativeGameState:
 
     __slots__ = ("data", "backend", "sfx_queue", "particle_capture", "flash_slots", "song_request",
                  "boss_glyph", "snow_plots", "particle_capture_last", "flash_slots_last", "_hud_frozen_predeath",
-                 "rng", "player")
+                 "rng")
 
     def __init__(self, data: bytearray):
         if not isinstance(data, bytearray):
@@ -82,26 +82,15 @@ class NativeGameState:
         # instead of a byte image that would silently fork from RngView's copy.
         self.backend.register(ScrollScriptView, self.rng,
                               remap={"rng_a": "lcg_a", "rng_b": "lcg_b", "rng_c": "lcg_c", "rng_d": "lcg_d"})
-        #: the shipped, offset-free PLAYER object — the native-dataclass lift's second live P2 cluster. Seeded
-        #: from whatever ``.data`` currently holds (via the existing, offset-based ``PlayerView(self)`` — no
-        #: bridge import). Deliberately NOT registered on ``self.backend`` globally (unlike ``self.rng``):
-        #: doing so once made EVERY direct ``PlayerView(state)`` construction anywhere in the codebase resolve
-        #: live -- including one-shot event paths (level_state.py's game-over/respawn reset, cave-teleport,
-        #: attract-title, cold-boot) that write a player field and expect it in ``.data`` IMMEDIATELY, with no
-        #: sync point of their own. That silently broke several (caught by the full test suite: a game-over
-        #: reset's death-pose write vanished into an object nothing later flushed). Instead ``self.player`` is
-        #: a TRANSACTIONAL handle: ``active_player()`` re-seeds it from CURRENT ``.data`` on every call, and a
-        #: caller that threads it into one or more passes MUST call ``sync_player_to_image()`` immediately
-        #: after (before anything else reads a player byte, and before calling ``active_player()`` again --
-        #: re-fetching before syncing would silently discard the unflushed writes). See native/player.py's
-        #: native_player_step and native/loop.py's native_gameplay_frame for the two call sites that follow
-        #: this discipline.
-        from pre2.game.model import Player
-        from pre2.views.dgroup_view import PlayerView
-        pv = PlayerView(self)
-        self.player = Player(x=pv.x, y=pv.y, sprite=pv.sprite, xvel=pv.xvel, motion_mode=pv.motion_mode,
-                             facing=pv.facing, anim_b=pv.anim_b, anim_ptr=pv.anim_ptr, yvel=pv.yvel,
-                             run_flag=pv.run_flag, death_state=pv.death_state)
+        # NOTE (2026-07-16): there is deliberately NO equivalent live ``self.player`` here. A transactional
+        # Player handle (re-seed from .data / thread through a pass / full-sync back) was built and reverted:
+        # its full-sync CLOBBERED player fields that an un-converted path had written through the offset
+        # contract in the same tick, because the object still held the pre-fetch value. That is the same
+        # name-path-vs-offset-path split-brain that makes FieldRegistry unsafe for any cluster with surviving
+        # raw-offset writers -- a bidirectional fetch/sync design cannot fix it, only single authority can.
+        # Player becomes live via the Stage 2.5 boot-flip instead (docs/pre2/offset_free_release_plan.md),
+        # where ObjectGraphStore.player is the SOLE authority and legacy offset paths route through its map
+        # rather than being synchronised against it. Caught by scripts/verify_player_dataclass.py (5456 ticks).
 
     @classmethod
     def from_vm(cls, rt) -> "NativeGameState":
@@ -137,51 +126,6 @@ class NativeGameState:
         rng = self.rng
         raw.lcg_a, raw.lcg_b, raw.lcg_c, raw.lcg_d, raw.ror = rng.lcg_a, rng.lcg_b, rng.lcg_c, rng.lcg_d, rng.ror
 
-    def active_player(self):
-        """The tick's authoritative live Player, freshly RE-SEEDED from ``.data`` on every call, or ``None``
-        when nothing should be used (let the caller's overlay fall through to the pure offset path instead).
-
-        Re-seeding (not just returning ``self.player`` as-is) matters because ``self.player`` is NOT kept in
-        sync automatically — nothing is registered on ``self.backend`` (see ``__init__``'s comment). A caller
-        that fetches this once and threads the SAME returned object into one or more passes accumulates their
-        writes correctly (they share the object, no re-seed in between). But calling this AGAIN before
-        ``sync_player_to_image()`` flushes those writes back to ``.data`` would silently DISCARD them (the
-        re-seed reads stale-relative-to-the-object-but-not-yet-updated ``.data``) — so every call site must
-        fetch once, thread that one reference through its whole player-touching pass, then sync immediately.
-
-        UNLIKE :meth:`active_rng`, this does NOT fall back to a non-``ByteBackend``'s own ``.player`` copy.
-        RNG's fields are all plain ints on every backend, so reusing an object-graph backend's own ``Rng`` is
-        harmless. Player's ``anim_ptr`` is NOT: the bridge (``pre2/bridge/game_layout.py``) swizzles it into an
-        ``AssetCursor``/``RawRef`` for ``DataclassBackend``/``ObjectGraphStore``, and this registry's
-        ``_registry_write_field``/``_read_field`` do ``v & mask`` assuming a plain int -- registering that
-        swizzled object onto another overlay (e.g. tick_terrain_entities' ``ov``) crashes the moment any
-        recovered function reads/writes ``p.anim_ptr`` (``TypeError: unsupported operand type(s) for &:
-        'RawRef' and 'int'``). So: only the DEFAULT ``ByteBackend`` (guaranteed a plain int) returns a live
-        object; anything else (the object-graph backend, which already tracks its OWN Player correctly through
-        its own offset map with no FieldRegistry involved, or ``HybridBackend``, which tracks it via its own
-        field store) -> ``None``."""
-        from pre2.views.dgroup_view import ByteBackend, PlayerView
-        if not isinstance(self.backend, ByteBackend):
-            return None
-        pv, p = PlayerView(self), self.player
-        p.x, p.y, p.sprite, p.xvel = pv.x, pv.y, pv.sprite, pv.xvel
-        p.motion_mode, p.facing, p.anim_b = pv.motion_mode, pv.facing, pv.anim_b
-        p.anim_ptr, p.yvel, p.run_flag, p.death_state = pv.anim_ptr, pv.yvel, pv.run_flag, pv.death_state
-        return p
-
-    def sync_player_to_image(self) -> None:
-        """Fold ``self.player`` back into the raw DGROUP image through the SAME offset-based ``PlayerView``
-        descriptors (no bridge, no duplicated offset literal) -- via a fresh, unregistered ``PlayerView(self)``
-        (``self.backend`` is never registered, so this is just the ordinary write path). MANDATORY immediately
-        after every pass fetched via :meth:`active_player`, before anything else reads a player byte or calls
-        ``active_player()`` again (see that method's docstring for why)."""
-        from pre2.views.dgroup_view import PlayerView
-        raw = PlayerView(self)
-        p = self.player
-        raw.x, raw.y, raw.sprite = p.x, p.y, p.sprite
-        raw.xvel, raw.motion_mode, raw.facing = p.xvel, p.motion_mode, p.facing
-        raw.anim_b, raw.anim_ptr, raw.yvel = p.anim_b, p.anim_ptr, p.yvel
-        raw.run_flag, raw.death_state = p.run_flag, p.death_state
 
     def rb(self, off: int) -> int:
         """Read a DGROUP byte (DS-relative), the recovered functions' ``rb`` accessor — via the backend seam."""
