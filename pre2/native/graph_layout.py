@@ -27,6 +27,7 @@ descriptors (the recovery spec); this table is the machine-readable serialisatio
 from __future__ import annotations
 
 from pre2.game.model import (Actor, ArenaEntity, AttackState, AttractState, Boss, BonusCell, BossScript,
+                             LevelTables,
                              ByteBuffer, Camera, CameraScript, DifficultyMode, EffectSlot, HitScratch, Input,
                              LevelState, Motion, Player, PlayerState, Progress, Rng, SceneryState, Scroll,
                              SpawnCursor, WallMarker)
@@ -97,6 +98,21 @@ _SPARSE = [
     ("player_flag_scratch", (0x6BD6, 0x6BE8, 0x6BFE, 0x6BFF)),
     # camera_hud_scratch fully consumed by AttackState + HitScratch -> removed
     # misc_scratch fully consumed by AttractState/SceneryState (0x6BFF folded above) -> removed
+]
+
+#: the per-level TILE tables -> LevelTables fields (P5 slice 1b). (field, base, length). These are the level's
+#: content, loaded from its *.SQZ; routing them moves them out of the undifferentiated ``_level_data`` residue
+#: and onto a typed object the graph owns. Each is exactly 256 = one entry per tile id, and that extent is
+#: rigorous rather than guessed: each base is the next table's base minus 0x100 AND the first mutable offset
+#: after each is exactly base+0x100 -- two independent derivations agreeing, matching the measured max index 255.
+#: (Deliberately NOT here: spawn_offset -- ring-cursor indexed, extent not established; sprite_left_hw -- its
+#: region is INTERLEAVED, even byte constant / odd byte loader-written. Both are slice-1b follow-ups.)
+_LEVEL_TABLES = [
+    ("ceil_props",   0x7E5E, 256),
+    ("floor_props",  0x7F5E, 256),
+    ("ceil_handler", 0x805E, 256),
+    ("tile_props",   0x8E1D, 256),
+    ("dirty_kind",   0x4DF8, 256),
 ]
 
 _ARENA_LO, _ARENA_HI, _ARENA_STRIDE_END = 0x8489, 0x8C88, 0x32   # the variable-stride 2nd-pass entity list
@@ -463,6 +479,15 @@ class DataclassBackend(ObjectGraphStore):
                 for f in asset_fs:                   # asset cursor: static pool/asset swizzle
                     from pre2.native.pointer_layout import from_offset
                     setattr(inst, f, from_offset(getattr(inst, f)))
+        # the per-level TILE tables -> one typed LevelTables (P5 slice 1b). Same width-0 byte mapping the
+        # buffers use, but onto NAMED fields: these are the level's content, not scratch. They leave the
+        # undifferentiated _level_data residue and become part of the object graph proper.
+        lt = LevelTables(**{f: bytearray(data[DGROUP_BASE + base:DGROUP_BASE + base + ln])
+                            for f, base, ln in _LEVEL_TABLES})
+        objs["level_tables"] = lt
+        for f, base, ln in _LEVEL_TABLES:
+            for k in range(ln):
+                map_[(base + k) & 0xFFFF] = (lt, f, k, 0, False)
         # named working-memory buffers (raw bytearrays), mapped byte-for-byte (width 0 -> index into .data)
         for attr, base, ln in _BUFFERS:
             buf = ByteBuffer(attr, bytearray(data[DGROUP_BASE + base:DGROUP_BASE + base + ln]))
@@ -505,6 +530,9 @@ class DataclassBackend(ObjectGraphStore):
             data[b + 3] = (e.sprite_ref >> 8) & 0xFF
             data[b + 4] = e.skip & 0xFF
             data[b + 5:b + 5 + len(e.body)] = e.body
+        lt = self._objs["level_tables"]                       # the typed per-level tile tables (slice 1b)
+        for f, base, ln in _LEVEL_TABLES:
+            data[DGROUP_BASE + base:DGROUP_BASE + base + ln] = getattr(lt, f)
         for attr, base, ln in _BUFFERS:
             buf = self._objs[attr]
             data[DGROUP_BASE + base:DGROUP_BASE + base + ln] = buf.data

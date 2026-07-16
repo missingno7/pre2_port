@@ -139,6 +139,32 @@ class EffectSlot:
 
 
 @dataclass
+class LevelTables:
+    """The per-level tile lookup tables — the level's own CONTENT, loaded from its ``*.SQZ``.
+
+    One entry per tile id, so each is exactly 256 bytes: ``tile_props[tile]`` answers "what is this tile?" for
+    the whole engine (solidity/slope for collision, which handler to dispatch, whether a change dirties the
+    grid). Named fields rather than one opaque blob, because these are the level's meaning, not scratch — cf.
+    :class:`ByteBuffer`, which is honest-as-bytes precisely because it ISN'T.
+
+    P5 slice 1b (docs/pre2/native_dataclass_lift.md): these used to live in ``ObjectGraphStore._level_data``,
+    the undifferentiated "everything un-routed" DGROUP residue. Routing them here makes them typed level assets
+    the object graph owns. Distinct from the BOOT-constant tables (trig, sprite metrics — those are static and
+    are plain literals in ``pre2/native/asset_tables.py``, slice 1a); these change with every level, so they
+    are per-state data, not module constants.
+
+    Extents are rigorous, not guessed: two independent derivations agree (each table's base is the next one's
+    base minus 0x100, and the first mutable offset after each is exactly base+0x100), matching the tile-id
+    semantics and the measured max index of 255."""
+
+    ceil_props: bytearray = field(default_factory=bytearray)    # tile id -> ceiling-solid flag (bit0)
+    floor_props: bytearray = field(default_factory=bytearray)   # tile id -> ground property / handler index
+    ceil_handler: bytearray = field(default_factory=bytearray)  # tile id -> ceiling-handler index (+ bridge/side bits)
+    tile_props: bytearray = field(default_factory=bytearray)    # tile id -> solidity / slope / height
+    dirty_kind: bytearray = field(default_factory=bytearray)    # tile id -> 0 direct-redraw / >=1 grid-dirty
+
+
+@dataclass
 class ByteBuffer:
     """A named working buffer — a contiguous region the tick scribbles as raw bytes (scenery-trigger scratch,
     level load buffers, camera-target scratch). Honest as bytes: it is transient working memory, not a record

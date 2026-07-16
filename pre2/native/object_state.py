@@ -49,6 +49,7 @@ class ObjectGraphStore:
     boss = property(lambda self: self._objs["boss"])
     difficulty_mode = property(lambda self: self._objs["difficulty_mode"])
     level_state = property(lambda self: self._objs["level_state"])
+    level_tables = property(lambda self: self._objs["level_tables"])   # the per-level tile tables (P5 slice 1b)
 
     # ---- byte-compatibility shim (migration aid; not the gameplay abstraction) -----------------------------
     def rb(self, off: int) -> int:
