@@ -56,6 +56,44 @@ def test_routed_buffers_do_not_overlap():
     assert not dupes, f"overlapping _BUFFERS entries: {dupes[:8]}"
 
 
+def test_strict_object_graph_survives_random_play_from_a_COLD_BOOT():
+    """The regression net that would actually have caught 0x006D — and the reason none of the others did.
+
+    Every recorded demo seeds mid-session with ``DEMO_PTR`` ALREADY ADVANCED (the gorilla seed starts at
+    0x0620, writing at 0x065F — past the hole). Only a COLD BOOT starts the cursor low (the crashing session
+    had ``DEMO_PTR`` = 0x002E → 0x003F + 0x2E = 0x006D). So 5456 corpus ticks, the whole verify family and a
+    random-input fuzz seeded FROM A DEMO were all green, while a real player died in seconds.
+
+    Verified to be a real net, not theatre: with the routing hole restored this catches it at tick 24; a
+    demo-seeded fuzz of 4200 ticks never does. Cold-boot seeding is the thing that matters — recorded state
+    starts too far along to exercise the beginning of any cursor.
+    """
+    import random
+    import pytest
+    from pathlib import Path
+    from pre2.gaps import Pre2HybridGap
+    from pre2.native.cold_boot import native_cold_boot
+    from pre2.native.game_tick_demo import _inject
+    from pre2.native.loop import native_gameplay_frame
+    from pre2.native.object_runtime import to_object_store
+    from pre2.native.seams import KBD
+
+    root = Path(__file__).resolve().parents[1]
+    if not (root / "assets").exists():
+        pytest.skip("game assets not present")
+    rnd = random.Random(0)
+    state = native_cold_boot(str(root / "assets"), level=0)
+    to_object_store(state)          # STRICT: any un-routed mutable write raises
+    for i in range(120):            # the 0x006D write lands at ~tick 24
+        _inject(state, bytes(rnd.choice((0, 1)) for _ in KBD), rnd.randrange(0, 0x200))
+        try:
+            native_gameplay_frame(state)
+        except Pre2HybridGap:
+            break                   # an unrecovered path — not what this test is about
+        except AssertionError as e:
+            raise AssertionError(f"un-routed mutable write during cold-boot play at tick {i}: {e}") from e
+
+
 def test_the_product_default_store_does_not_crash_on_an_unrouted_write():
     """The posture, pinned. ``readonly_image=True`` is a VERIFICATION invariant (it proves the graph is the
     complete store); the verify scripts keep it via ``ObjectStore()``'s own default. The PRODUCT must not use
