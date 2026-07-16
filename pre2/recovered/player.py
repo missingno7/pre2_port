@@ -290,7 +290,7 @@ GLIDER_TILT = 0x7B1A         # tilt/pitch state (0..6, neutral = 3)
 GLIDER_ANIM_TABLE = 0x7B29   # {frame_key: word, wing_anim: word, xoff: s8, yoff: s8} stride 6, cx==0 terminated
 
 
-def player_flying_484e(rb, rw):
+def player_flying_484e(rb, rw, player=None):
     """[asm 1030:484E] The glider / flying-mode per-frame update — active only while the flying gate ``[0x6BC5]``
     is set (the glider pickup arms it). Two parts:
 
@@ -306,6 +306,8 @@ def player_flying_484e(rb, rw):
     Returns the ``{offset: (value, width)}`` write contract. Empty (a no-op) when ``[0x6BC5]==0``. The gameplay
     writes are ``[0x4F20]`` (anim) + ``[0x7B1A]`` (tilt); the wing slot ``[0x4F0A/0C/0E]`` is a render record."""
     be = WidthContractBackend(rb, rw)
+    if player is not None:
+        be.register(PlayerView, player)
     p, g = PlayerView(be), PlayerGlobals(be)
     if g.glider == 0:                                             # [484E] not flying
         return {}
