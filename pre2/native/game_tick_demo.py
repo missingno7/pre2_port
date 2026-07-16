@@ -1,5 +1,27 @@
 """Game-tick-synced demo — PRE2-specific, mode-independent verification of the VM-less native core.
 
+**CLASSIFICATION (audited 2026-07-16): this module is HISTORICAL ORACLE machinery, end to end.** It belongs to
+the detachable verification workbench, not to the release runtime, and it must leave the release closure at P5
+(docs/pre2/native_dataclass_lift.md's acceptance wall). Every capability here speaks the DOS byte image:
+
+* ``gameplay_digest(dgroup)`` — SHA1 of the 64 KB DGROUP;
+* ``GameTickDemo.seed`` — ``bytes(mem.data)``, a raw 1 MB memory image;
+* ``GameTickDemo.digests`` — per-tick DGROUP digests;
+* ``record_from_vm`` — records FROM the VM via ``mem.data[DS_BASE+o]``;
+* ``verify_native`` — compares the native DGROUP digest against the recording;
+* ``GameTickDemo.keys`` — conceptually native input, but ENCODED as DGROUP key cells;
+* ``_inject`` — writes ``state.data[DS_BASE+o]`` explicitly, by design, so non-routed readers see it.
+
+There is therefore **no image-independent native replay here to preserve**. A native input replay (an event
+stream applied to the native ``Input`` model) and a ``NativeSaveState`` (game model + object identities/refs +
+level/runtime + scheduler + renderer-visible native state + audio) would be NEW, separate things with their own
+formats — never a disguised DGROUP dump, and never silently interchangeable with the artifacts here.
+
+Note the invariant this does NOT support: "the release has no replay/snapshot" is not a detachment test (it was
+stated too broadly and is corrected in native_dataclass_lift.md). Detachment means replay and save states no
+longer speak the language of the DOS memory image — which is exactly why THIS module has to go, while a native
+replay would be free to stay.
+
 The legacy input demo (``dos_re.input_demo``) keys input to PRESENT frames and advances the VM by a fixed
 INSTRUCTION budget per frame. That budget is mode-dependent: a recovered hook runs far fewer emulated
 instructions than the ASM it replaces, so the same demo advances the game by a different amount in

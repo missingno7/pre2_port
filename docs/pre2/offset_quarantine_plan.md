@@ -3,9 +3,16 @@
 Goal (user, 2026-07-13): the native release runs on a pure Python **object graph** (dataclasses) — **no
 `rb`/`rw`/`wb`/`ww`, no raw DGROUP offsets, no `DATA_SEG`/`<<4`, no byte image**. The *entire* original-memory
 world (layout, offsets, byte translation) moves into a **detachable bridge** used only for verification.
-Detached, the end user gets a clean native port that (by design) **cannot** play demos or load snapshots;
-attached, the bridge serializes the object graph to a bit-exact DGROUP image and proves the port matches the
-original ASM tick-for-tick. A **linter** enforces the ban so it can't regress.
+Detached, the end user gets a clean native port whose state of record is the object graph; attached, the bridge
+serializes the object graph to a bit-exact DGROUP image and proves the port matches the original ASM
+tick-for-tick. A **linter** enforces the ban so it can't regress.
+
+> **INVARIANT CORRECTION (2026-07-16).** This doc previously said the detached port "(by design) **cannot** play
+> demos or load snapshots". **That is not the test and was stated too broadly** — see the corrected invariant in
+> `native_dataclass_lift.md`. A detached native game MAY have deterministic input replay, save states and
+> debugging snapshots; what matters is that they speak *native* terms (input events / the object graph), not the
+> DOS byte image. The real invariant: **the release runtime cannot load, construct, require, or treat the
+> historical DOS memory image as authoritative game state.** Absence of a replay feature proves nothing.
 
 This doc plans what that means, why it is reachable, where the difficulty concentrates, and the phased path.
 It supersedes an earlier "quarantine the residue" framing (see §2) — the object model is cleaner.
@@ -52,8 +59,12 @@ DGROUP image and prove the port matches the original ASM tick-for-tick.
 
 Two user decisions pin the design (2026-07-13):
 
-- **Detached = no replay/snapshot at all.** Demos and snapshots are byte-level artifacts; they are a
-  bridge/verification concern only. The shipped product carries zero replay code. (Cleanest boundary.)
+- ~~**Detached = no replay/snapshot at all.**~~ **SUPERSEDED 2026-07-16 (see the correction at the top).** The
+  HISTORICAL demo/snapshot artifacts (raw DGROUP dumps, DOS-memory digests, VM-oracle comparison) are indeed a
+  bridge/verification concern only and must leave the release closure. But "the product carries zero replay
+  code" is NOT the invariant and is not evidence of detachment: a detached runtime may carry *native* input
+  replay or a *native* save state, so long as neither speaks the DOS byte image. The test is that the release
+  runtime cannot load/construct/require/treat the historical image as authoritative state.
 - **Verification stays byte-level: serialize → `memcmp`.** The bridge serializes the object graph to a
   bit-exact image and compares vs the VM every tick — the strongest guarantee, catching even bytes we did
   not model. This requires the bit-exact serializer (§4).
@@ -179,8 +190,9 @@ hybrid — the door Phase 5 walks through. Gated by `tests/test_hybrid_tick.py`.
 
 **Phase 5 — the object model + the serializer.** Wrap the name-keyed state as real dataclasses; build the
 bit-exact serializer (§4) in the bridge; migrate the remaining read-only content (§3c). Detached, the product
-is pure objects with **no replay/snapshot**; attached, the bridge serializes → `memcmp` verifies. The linter
-goes fully enforcing with an **empty** allowlist — the holy grail.
+is pure objects and carries no HISTORICAL replay/snapshot (native replay/save states are allowed — see the
+correction at the top); attached, the bridge serializes → `memcmp` verifies. The linter goes fully enforcing
+with an **empty** allowlist — the holy grail.
 
 ---
 

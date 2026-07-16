@@ -47,9 +47,14 @@ combat_interaction 11k, player 10k, input_decode 10k, object_inject 9k, loop 7k,
 1. **Dissolve to 0** — recovered logic addresses state only by name/reference. Each module byte-exact-gated by
    `verify_player_dataclass` (5456 ticks) + `verify_object_finish` (lifecycle) + `verify_object_render`.
 2. **Ship `NamedGameBackend`** (offset-free) + name-keyed views; the runtime builds+runs the object graph.
-3. **Flip the deploy default** to the object store; DENY-list `pre2/views/dgroup_view` + the layout + the
-   serializer + demos/snapshots so they drop out of the dist. The release loses replay/snapshot (the SIGN of
-   true detachment); attaching the bridge restores them for verification.
+3. **Flip the deploy default** to the object store (DONE 2026-07-16, `a25acc1`); then remove the HISTORICAL
+   image machinery from the release closure — `pre2/views/dgroup_view`, the layout, the serializer, and the
+   historical oracle demo/snapshot loaders. **NOT because "the release loses replay/snapshot" — that was the
+   wrong test** (corrected 2026-07-16; see `native_dataclass_lift.md`). A detached runtime may keep NATIVE input
+   replay / native save states; what must go is anything that loads, constructs, requires or treats the DOS
+   byte image as authoritative state. Deny-listing a feature is NOT evidence — the acceptance wall is physical
+   impossibility: the game starts and plays with all historical-image modules unavailable. Attaching the bridge
+   restores the oracle projection for verification.
 4. **Gate**: extend `test_model_detached` to the whole shipped closure (no offsets, no bridge, no VM) and the
    deploy DENY so nothing leaks back.
 

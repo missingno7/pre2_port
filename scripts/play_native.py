@@ -111,9 +111,15 @@ def main(argv=None) -> int:
     ap.add_argument("--from-level", type=int, default=None,
                     help="DEBUG: skip the front-end and boot this 0-based level directly (0 -> LEVEL1)")
     ap.add_argument("--snapshot", default=None,
-                    help="DEBUG: seed gameplay from a savestate dir (memory_1mb.bin) instead of cold-booting")
+                    help="HISTORICAL/DEV: seed gameplay from a raw DOS memory dump (memory_1mb.bin) instead of "
+                         "cold-booting. This is historical-image functionality, NOT a native save state: it "
+                         "loads the DGROUP byte image the original DOS build used. It leaves the release "
+                         "closure at P5 (see docs/pre2/native_dataclass_lift.md); a native save state, if one "
+                         "is ever added, will be a distinct format that never speaks DOS memory")
     ap.add_argument("--play-demo", default=None,
-                    help="replay a recorded demo. If DIR/game_tick_demo.bin exists (created once by "
+                    help="HISTORICAL/DEV (oracle replay, not native input replay — it is seeded from a raw DOS "
+                         "memory image and digest-compared against the VM): "
+                         "replay a recorded demo. If DIR/game_tick_demo.bin exists (created once by "
                          "scripts/verify_native_tick_demo.py DIR), the GAMEPLAY replay is DETERMINISTIC: seeded "
                          "from the oracle's first gameplay tick, per-tick keys injected, gameplay digest checked "
                          "vs the VM every tick. A COLD-START recording additionally plays the FRONT END first "

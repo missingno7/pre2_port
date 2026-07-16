@@ -2,10 +2,25 @@
 
 The north star: the **released** game runs on a completely independent memory model made of plain Python
 dataclasses (real fields — `player.x`, `rng.lcg_a`) with **no offsets and no DGROUP byte image in the live
-path**. Because there is no byte image, the release build inherently cannot replay or snapshot — that loss is
-the *sign* of true detachment, not a regression. The offset layout, the byte serialiser, replay, snapshot and
-the VM oracle all live in the **detachable bridge** (`pre2/bridge/`, DENY-listed out of the deployed tree),
-used only to verify the dataclass model against the DOS original (serialise → memcmp).
+path**. The offset layout, the byte serialiser, the historical oracle replay and the VM all live in the
+**detachable bridge** (`pre2/bridge/`, DENY-listed out of the deployed tree), used only to verify the dataclass
+model against the DOS original (serialise → memcmp).
+
+> **INVARIANT — corrected 2026-07-16.** This doc used to say the release "inherently cannot replay or snapshot,
+> and that loss is the *sign* of true detachment". **That was stated too broadly and is not the test.** A
+> genuinely detached native game may still support deterministic input replay, save states, debugging
+> snapshots and regression recordings — their existence implies nothing about dependence on the DOS memory
+> model. The meaningful distinction is what they *speak*:
+>
+> * **historical** replay/snapshot — serialises, restores, injects into, or compares a DOS byte image;
+> * **native** replay/snapshot — serialises native input events or the authoritative object graph.
+>
+> **The actual invariant: the release runtime cannot load, construct, require, or treat the historical DOS
+> memory image as authoritative game state.** Removing a replay feature is *not* evidence of detachment; do not
+> use a deny-list entry as proof. See "P5 acceptance wall" below — success is physical impossibility.
+>
+> Canonical rule: *detachment does not mean losing replay or save states; it means replay and save states no
+> longer speak the language of the original DOS memory image.*
 
 ## Where we already are (verification foundation — DONE)
 
@@ -55,6 +70,67 @@ siblings over one truth — the ASM — not derivations). `_ROUTES` carries the 
 instances, the *dataclass field name* (differs from the view name in 18+ scalar and ~380 array cases), and the
 *canonical width* where views declare byte+word aliases for one address. So moving it is a MOVE, not a
 generation.
+
+## Honest status (2026-07-16, after the Stage 2.5 boot-flip `a25acc1`)
+
+State only what is proven. **Do not describe the current shipped build as fully detached or memoryless.**
+
+| | |
+|---|---|
+| RE workbench + emulator absent from the deployed tree | **done** |
+| gameplay-tick authority transfer (the tick's state of record is the object graph) | **done** |
+| whole-runtime DOS-layout detachment | **INCOMPLETE** |
+| P5 memoryless runtime | **INCOMPLETE** |
+
+Still true of the shipped build, and all of it disqualifies any "memoryless" claim:
+
+- cold boot still **constructs a DGROUP byte image** (`boot_data.build_boot_memory()`);
+- transitions and level loading still **enter image mode** (`enter_image_mode` — they mix view + raw `.data`);
+- rendering still **consumes a materialised historical image** every frame;
+- `NativeGameState` still owns a large `bytearray` (`.data`, 1 MB);
+- `play_native --snapshot` still **loads a raw historical memory dump** (`memory_1mb.bin`).
+
+Accurate claim today: *the RE workbench and emulator are gone from the shipped tree, and the gameplay tick runs
+on the object graph.* NOT: *the product no longer speaks byte image* — it very much does.
+
+### Replay/snapshot classification (audited 2026-07-16)
+
+Classify by responsibility, not filename. `pre2/native/game_tick_demo.py` audits as **historical end-to-end** —
+there is currently **no image-independent native replay to preserve**:
+
+| capability | evidence | class |
+|---|---|---|
+| `gameplay_digest(dgroup)` | SHA1 of the 64K DGROUP | historical oracle |
+| `GameTickDemo.seed` | `bytes(mem.data)` — a raw 1 MB image | historical |
+| `GameTickDemo.digests` | per-tick DGROUP digests | historical oracle |
+| `record_from_vm(rt, …)` | records FROM the VM via `mem.data[DS_BASE+o]` | historical / bridge |
+| `verify_native(demo, …)` | native DGROUP digest vs the recording | historical oracle |
+| `GameTickDemo.keys` | `bytes(mem.data[DS_BASE+o] for o in KBD)` | historical **encoding** of native input |
+| `_inject(state, keys, idle)` | `state.wb(o,v)` **and** `state.data[DS_BASE+o] = v` | historical injection |
+
+So the whole module belongs in bridge/dev tooling, and a **native** input replay (an event stream applied to the
+native `Input` model) is *new work*, not a rescue. A future native save state must be its own format —
+`NativeSaveState` (game model, object identities/refs, level/runtime state, scheduler, renderer-visible native
+state, audio) — and must never be a disguised DGROUP dump. Keep the terminology and file formats for
+**historical oracle snapshot** vs **native save state** distinct and never silently interchangeable.
+
+### P5 acceptance wall
+
+Do not define success by a deny-list entry. Define it by **physical impossibility**:
+
+- `NativeGameState.data` (or any equivalent historical-memory authority) is **gone** from the release runtime;
+- cold boot does not construct a DGROUP image;
+- level loading and transitions do not enter image mode;
+- the renderer does not materialise or consume the historical image;
+- the release runtime imports no bridge, no historical layout serialiser, no DOS snapshot loader;
+- **the game starts and plays with all historical-image modules physically unavailable**;
+- the optional bridge can still serialise the native model into an oracle-comparable historical state, and the
+  canonical deterministic demo stays byte-exact **through that external projection**.
+
+Release-runtime dependency direction: `native model → gameplay → renderer/platform adapters`.
+Optional verification direction: `native model → generated historical projection → oracle comparison`.
+Forbidden: `native runtime → bridge`; `renderer → historical DGROUP image`; `transition code → image mode`;
+`native save state → raw DOS memory dump`.
 
 ## The central tension
 
