@@ -24,6 +24,22 @@ from pre2.native.render import native_render, native_sync_render_state
 from pre2.views.dgroup_view import EffectParticle, IrisView, PlayerGlobals, PlayerView, RenderSlot
 from pre2.views.tables import ByteTable, WordTable
 
+#: sentinel for native_frame_step_tagged's ``store`` default -- distinct from ``None``, which stays the
+#: EXPLICIT "run the tick on the byte image" opt-out (the verify scripts' reference arm depends on that
+#: meaning). Resolved lazily by _default_store() so importing this module costs nothing extra.
+_DEFAULT_STORE = object()
+_DEFAULT_STORE_CACHE = []
+
+
+def _default_store():
+    """The product's default gameplay state of record: the offset-free object graph (Stage 2.5 boot-flip).
+    Cached — the controller is stateless (it re-seeds from the live image every frame), so one instance
+    serves every caller and every frame."""
+    if not _DEFAULT_STORE_CACHE:
+        from pre2.native.object_runtime import ObjectStore
+        _DEFAULT_STORE_CACHE.append(ObjectStore())
+    return _DEFAULT_STORE_CACHE[0]
+
 
 _VIEW_ROWS = 0xB0          # the gameplay viewport height in rows (the HUD band below stays)
 _ROW_BYTES = 0x28
@@ -320,17 +336,26 @@ def native_frame_step(state, dos, display_page: int, *, game_root: str):
 
 
 def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, raster_normal: bool = True,
-                             store=None):
+                             store=_DEFAULT_STORE):
     """Advance the recovered gameplay over ``state`` (in place) and ``yield (planes, page, interpolatable, tx)``.
 
-    ``store`` is an optional gameplay-state-of-record controller (duck-typed: ``store.seed(state)`` before the
-    tick, ``store.fold(state)`` after it). Default ``None`` leaves the shipped byte-image path byte-for-byte
-    unchanged; passing the bridge's object-store controller (pre2/bridge/object_runtime.ObjectStore) runs the
-    gameplay TICK on the offset-free object graph (the north-star state of record) and folds it back for the
-    render. It is INJECTED, never imported here — the product must not depend on the detachable bridge. Proven
-    byte-identical either way: the ONLY code that runs on the object graph is the tick; everything after it (every
-    render and every transition, which mix raw-image access) runs on the materialised image, so the seam is just
-    ``seed`` at entry then ``fold`` the moment the tick returns or raises. See scripts/verify_object_playloop.py.
+    ``store`` is the gameplay-state-of-record controller (duck-typed: ``store.seed(state)`` before the tick,
+    ``store.fold(state)`` after it). **The DEFAULT is now the offset-free OBJECT GRAPH** — the Stage 2.5
+    boot-flip (docs/pre2/offset_free_release_plan.md), landed 2026-07-16: the product's gameplay tick mutates
+    real ``Player``/``Actor``/``Camera``/... dataclasses, and the byte image is only a render/transition buffer.
+    Pass ``store=None`` to opt out and run the tick on the byte image (the pre-flip path — what the verify
+    scripts' reference arm uses to prove the two are identical).
+
+    Until this flip the default was ``None``, so however many modules were converted to named/object access, the
+    deployed product still executed the byte image — the reason offset_free_release_plan.md calls the boot-flip
+    "the NEXT priority" and the raw-offset ratchet "the WRONG single metric". The controller is still resolved
+    lazily and duck-typed, so the bridge can inject its own; it just no longer HAS to, now that the graph's
+    construction ships (pre2/native/graph_layout.py, pre2/native/object_runtime.py).
+
+    Byte-identical either way, and structurally so: the ONLY code that runs on the object graph is the tick;
+    everything after it (every render and every transition, which mix raw-image access) runs on the materialised
+    image, so the seam is just ``seed`` at entry then ``fold`` the moment the tick returns or raises. See
+    scripts/verify_object_playloop.py and tests/test_object_playloop.py's default-path guard.
 
     ``raster_normal=False`` skips the faithful raster for the NORMAL gameplay tick (yields ``planes=None``) — the
     ~7ms saved when the caller presents via the enhanced compositor, which rebuilds the frame itself and needs
@@ -348,6 +373,8 @@ def native_frame_step_tagged(state, dos, display_page: int, *, game_root: str, r
 
     Normally exactly one frame. During the death-respawn transition it yields each death-bounce frame (the whole
     60-frame arc animates) then the checkpoint frames."""
+    if store is _DEFAULT_STORE:            # the shipped default: the object graph is the state of record
+        store = _default_store()
     if store is not None:
         # seed the gameplay state of record from the current image (fresh each frame — picks up whatever the
         # previous frame's render/transition left), tick on it, then fold back to the image for the render.
